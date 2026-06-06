@@ -37,33 +37,23 @@ class Tick:
 class SignalAction(str, enum.Enum):
     ENTER_LONG = "ENTER_LONG"
     ENTER_SHORT = "ENTER_SHORT"
-    EXIT = "EXIT"
+    EXIT = "EXIT"  # close a specific lot (lot_id) or reduce by quantity
     REDUCE = "REDUCE"
 
 
 @dataclass
 class Signal:
-    """A strategy's intent, before override resolution and risk checks."""
+    """A strategy's intent, before override resolution and risk checks.
+
+    Strategies never touch the broker directly — they emit Signals in the order
+    they want them executed (e.g. all exits before entries). The engine resolves
+    overrides, applies risk, and routes each through the broker.
+    """
 
     symbol: str
     action: SignalAction
     quantity: int | None = None
+    lot_id: int | None = None  # for EXIT of a specific lot
     qty_pct: float | None = None  # e.g. exit 50%
     reason: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
-
-
-class AlgoContext:
-    """Runtime context handed to a strategy on each callback.
-
-    Phase 1 will flesh this out: access to positions, funds, the data layer
-    (skas-data), the clock, and the override resolver. Phase 0 is a placeholder
-    so strategy signatures can be written against a stable type.
-    """
-
-    def __init__(self, algo_id: int, params: dict[str, Any]):
-        self.algo_id = algo_id
-        self.params = params
-
-    def get_position(self, symbol: str) -> Any:  # noqa: ANN401 - filled in Phase 1
-        raise NotImplementedError("Position access is implemented in Phase 1")

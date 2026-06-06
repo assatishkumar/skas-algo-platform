@@ -41,6 +41,18 @@ class BrokerOrder:
     tag: str | None = None
 
 
+@dataclass
+class Fill:
+    """The result of an executed order."""
+
+    symbol: str
+    side: OrderSide
+    quantity: int
+    price: float
+    commission: float = 0.0
+    broker_order_id: str | None = None
+
+
 @runtime_checkable
 class BrokerAdapter(Protocol):
     """Uniform interface across BacktestBroker, PaperBroker, and LiveBroker."""

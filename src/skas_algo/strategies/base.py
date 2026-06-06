@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
-from skas_algo.engine.types import AlgoContext, Bar, Signal, Tick
+from skas_algo.engine.context import AlgoContext
+from skas_algo.engine.types import Signal
 
 
 @runtime_checkable
@@ -13,16 +14,12 @@ class Strategy(Protocol):
 
     The same instance is driven by the engine in any mode — only the data feed,
     clock, and broker adapter differ.
+
+    For daily portfolio strategies (SST, SHOP, ...) the engine calls ``on_slice``
+    once per timestamp with the set of symbols printing then; the strategy returns
+    an ordered list of Signals (typically exits first, then entries).
     """
 
-    def initial_state(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Return the strategy's starting state from its parameters."""
-        ...
-
-    def on_bar(self, ctx: AlgoContext, bar: Bar) -> list[Signal]:
-        """Called once per completed bar."""
-        ...
-
-    def on_tick(self, ctx: AlgoContext, tick: Tick) -> list[Signal]:
-        """Called on each live tick (no-op for daily strategies)."""
+    def on_slice(self, ctx: AlgoContext) -> list[Signal]:
+        """Decide actions for the current market slice (ctx.present_symbols())."""
         ...
