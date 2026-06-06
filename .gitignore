@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets & local config (never commit broker creds / TOTP / tokens)
+.env
+.env.*
+*.key
+*.pem
+access_token.txt
+.kite_session_*.json
+secrets/
+
+# Databases / data
+*.db
+*.duckdb
+*.sqlite
+*.sqlite3
+data/
+exports/
+
+# Node / frontend
+node_modules/
+web/dist/
+web/.vite/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.log
