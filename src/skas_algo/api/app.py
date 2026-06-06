@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from skas_algo import __version__
 from skas_algo.config import get_settings
 
-from .routes import health
+from .routes import backtest, health
 
 
 def create_app() -> FastAPI:
@@ -28,6 +28,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router, prefix="/api/v1")
+    app.include_router(backtest.router, prefix="/api/v1")
 
     return app
 

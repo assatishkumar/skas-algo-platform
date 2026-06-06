@@ -106,7 +106,8 @@ class AlgoRun(Base, TimestampMixin):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     params_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
-    metrics: Mapped[dict] = mapped_column(JSON, default=dict)  # CAGR, drawdown, etc.
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)  # scalars + breakdowns
+    trade_log: Mapped[list] = mapped_column(JSON, default=list)  # serialized transactions
 
     algo: Mapped[Algo] = relationship(back_populates="runs")
 

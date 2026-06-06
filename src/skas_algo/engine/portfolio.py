@@ -65,6 +65,27 @@ class Portfolio:
                 return profit
         raise KeyError(f"Lot {lot_id} not found for {symbol}")
 
+    def reduce_lot(self, symbol: str, lot_id: int, units: int, price: float) -> float:
+        """Sell ``units`` from a lot at ``price``; keep the remainder (same lot id).
+
+        Sells the whole lot if ``units`` >= the lot's size. Returns realized profit.
+        Used for partial booking under overrides (e.g. "book 50%, trail the rest").
+        """
+        for lot in self._lots.get(symbol, []):
+            if lot.id == lot_id:
+                if units >= lot.units:
+                    return self.close_lot(symbol, lot_id, price)
+                revenue = units * price
+                profit = revenue - units * lot.price
+                self.cash += revenue
+                self.month_realized += profit
+                lot.units -= units
+                return profit
+        raise KeyError(f"Lot {lot_id} not found for {symbol}")
+
+    def get_lot(self, symbol: str, lot_id: int) -> Lot | None:
+        return next((lot for lot in self._lots.get(symbol, []) if lot.id == lot_id), None)
+
     # ------------------------------------------------------------------ views
     def lots(self, symbol: str) -> list[Lot]:
         return list(self._lots.get(symbol, []))

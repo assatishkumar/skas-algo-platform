@@ -11,6 +11,7 @@ from typing import Any
 
 from .market import MarketView
 from .portfolio import Lot, Portfolio
+from .stops import StopBook
 
 
 class AlgoContext:
@@ -20,11 +21,13 @@ class AlgoContext:
         params: dict[str, Any],
         portfolio: Portfolio,
         market: MarketView,
+        stops: StopBook | None = None,
     ):
         self.algo_id = algo_id
         self.params = params
         self.portfolio = portfolio
         self.market = market
+        self.stops = stops or StopBook()
 
     # ----- portfolio -----
     @property
@@ -32,10 +35,21 @@ class AlgoContext:
         return self.portfolio.cash
 
     def lots(self, symbol: str) -> list[Lot]:
-        return self.portfolio.lots(symbol)
+        """Lots the strategy may act on — excludes lots under a managed stop.
+
+        A lot with an attached trailing/hard stop is controlled by the engine, so
+        the strategy no longer sees it (it won't double-exit the "trailed" remainder).
+        """
+        managed = self.stops.managed_lot_ids()
+        return [lot for lot in self.portfolio.lots(symbol) if lot.id not in managed]
 
     def lot_symbols(self) -> list[str]:
-        return self.portfolio.lot_symbols()
+        managed = self.stops.managed_lot_ids()
+        return [
+            s
+            for s in self.portfolio.lot_symbols()
+            if any(lot.id not in managed for lot in self.portfolio.lots(s))
+        ]
 
     # ----- market (today) -----
     def present_symbols(self) -> list[str]:

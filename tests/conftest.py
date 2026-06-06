@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
-# Configure an in-memory DB before any app module imports settings.
-os.environ["SKAS_DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
+# Use a temp-file SQLite DB (shared across threads/connections, unlike :memory:)
+# so TestClient's worker thread sees the schema. Set before any app import.
+_db_fd, _DB_PATH = tempfile.mkstemp(suffix=".db", prefix="skas_test_")
+os.close(_db_fd)
+os.environ["SKAS_DATABASE_URL"] = f"sqlite:///{_DB_PATH}"
 os.environ["SKAS_ENVIRONMENT"] = "test"
 
 import pytest
@@ -21,6 +25,8 @@ def _create_schema():
     Base.metadata.create_all(get_engine())
     yield
     Base.metadata.drop_all(get_engine())
+    if os.path.exists(_DB_PATH):
+        os.remove(_DB_PATH)
 
 
 @pytest.fixture
