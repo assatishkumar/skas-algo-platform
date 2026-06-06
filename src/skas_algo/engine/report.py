@@ -10,6 +10,7 @@ from typing import Any
 
 import pandas as pd
 
+from .jsonutil import to_native
 from .metrics import compute_metrics
 from .runner import RunResult
 
@@ -89,10 +90,18 @@ def build_report(result: RunResult, initial_capital: float) -> dict[str, Any]:
             "Max Capital Used": ydf["invested_capital"].max(),
         }
 
-    return {
-        "metrics": metrics,
-        "yearly": yearly,
-        "monthly_profit": {int(y): v for y, v in monthly_profit.items()},
-        "monthly_capital": {int(y): v for y, v in monthly_capital.items()},
-        "monthly_equity": {int(y): v for y, v in monthly_equity.items()},
-    }
+    equity_curve = [
+        {"date": row["date"].strftime("%Y-%m-%d"), "equity": float(row["total_equity"])}
+        for row in result.history
+    ]
+
+    return to_native(
+        {
+            "metrics": metrics,
+            "yearly": yearly,
+            "monthly_profit": {int(y): v for y, v in monthly_profit.items()},
+            "monthly_capital": {int(y): v for y, v in monthly_capital.items()},
+            "monthly_equity": {int(y): v for y, v in monthly_equity.items()},
+            "equity_curve": equity_curve,
+        }
+    )

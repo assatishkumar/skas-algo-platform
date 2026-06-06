@@ -85,6 +85,7 @@ def get_run(run_id: int, db: Session = Depends(get_db)) -> dict:
         "strategy_id": algo.strategy_id if algo else None,
         "mode": run.mode.value,
         "report": run.metrics,
+        "trades": run.trade_log or [],
     }
 
 

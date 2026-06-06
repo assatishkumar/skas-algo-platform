@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from skas_algo.api.models import BacktestRequest
 from skas_algo.db.enums import InstrumentClass, TradingMode
 from skas_algo.db.models import Algo, AlgoRun
+from skas_algo.engine.jsonutil import to_native
 from skas_algo.engine.market import PriceLoader
 from skas_algo.engine.overrides import OverrideRule
 from skas_algo.engine.report import build_report
@@ -19,7 +20,7 @@ from skas_algo.strategies.registry import get_strategy
 def _serialize_trades(transactions: list[dict]) -> list[dict]:
     out = []
     for t in transactions:
-        row = dict(t)
+        row = to_native(dict(t))
         row["date"] = t["date"].strftime("%Y-%m-%d")
         out.append(row)
     return out

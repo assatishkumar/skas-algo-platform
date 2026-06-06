@@ -18,13 +18,15 @@ def _ramp_frame() -> pd.DataFrame:
         closes.append(price)
         price += 1.5
     closes = closes[: len(dates)]
+    # float32 mirrors skas-data's real dtype (and guards JSON serialization).
+    closes_f32 = pd.array(closes, dtype="float32")
     return pd.DataFrame(
         {
             "date": dates,
-            "open": closes,
-            "high": closes,
-            "low": closes,
-            "close": closes,
+            "open": closes_f32,
+            "high": closes_f32,
+            "low": closes_f32,
+            "close": closes_f32,
             "volume": [1000] * len(dates),
         }
     )
