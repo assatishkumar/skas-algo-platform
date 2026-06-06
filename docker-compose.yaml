@@ -1,0 +1,26 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      # On the VPS, point this at the postgres service below.
+      SKAS_DATABASE_URL: ${SKAS_DATABASE_URL:-postgresql+psycopg://skas:skas@db:5432/skas_algo}
+      SKAS_ENVIRONMENT: ${SKAS_ENVIRONMENT:-production}
+      SKAS_SECRET_ENCRYPTION_KEY: ${SKAS_SECRET_ENCRYPTION_KEY:-}
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: skas
+      POSTGRES_PASSWORD: skas
+      POSTGRES_DB: skas_algo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:
