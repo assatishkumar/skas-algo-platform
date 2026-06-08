@@ -52,6 +52,14 @@ class BuyLot:
     units: int
 
 
+@dataclass
+class ClosePosition:
+    """Pooled exit: sell all lots of a symbol as one transaction (SST averaged exit)."""
+
+    symbol: str
+    tag: str = "STRATEGY"
+
+
 _PRECEDENCE = {"POSITION": 0, "SYMBOL": 1, "ALGO": 2}
 
 
@@ -85,6 +93,10 @@ class OverrideResolver:
                 actions.append(BuyLot(sig.symbol, sig.quantity or 0))
             elif sig.action is SignalAction.EXIT:
                 actions.extend(self._resolve_exit(sig, ctx))
+            elif sig.action is SignalAction.EXIT_ALL:
+                # Pooled exit (SST averaged target). Overrides don't reshape pooled
+                # exits in this version; it closes the whole position.
+                actions.append(ClosePosition(sig.symbol))
         return actions
 
     def _resolve_exit(self, sig: Signal, ctx: AlgoContext) -> list:

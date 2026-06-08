@@ -17,7 +17,14 @@ from skas_algo.brokers.sim_broker import BacktestBroker
 from skas_algo.db.enums import OrderSide
 from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.market import HistoricalReplayFeed, MarketView, PriceLoader
-from skas_algo.engine.overrides import AttachStop, BuyLot, CloseLot, OverrideResolver, OverrideRule
+from skas_algo.engine.overrides import (
+    AttachStop,
+    BuyLot,
+    CloseLot,
+    ClosePosition,
+    OverrideResolver,
+    OverrideRule,
+)
 from skas_algo.engine.portfolio import Portfolio
 from skas_algo.engine.sim_fill import FillModel
 from skas_algo.engine.stops import StopBook
@@ -139,6 +146,8 @@ class BacktestRunner:
                 tag=action.tag,
                 lots=lots_at_start.get(action.symbol, len(portfolio.lots(action.symbol))),
             )
+        elif isinstance(action, ClosePosition):
+            self._close_position(broker, portfolio, result, ts, action.symbol, action.tag)
         elif isinstance(action, AttachStop):
             stops.attach(action.stop)
         elif isinstance(action, BuyLot):
@@ -151,6 +160,23 @@ class BacktestRunner:
         profit = portfolio.reduce_lot(symbol, lot_id, units, fill.price)
         pnl_pct = (fill.price - entry) / entry if entry else 0.0
         self._record_txn(result, ts, symbol, "SELL", units, fill.price, profit, pnl_pct, lots, tag)
+
+    def _close_position(self, broker, portfolio, result, ts, symbol, tag) -> None:
+        lots = portfolio.lots(symbol)
+        if not lots:
+            return
+        total_units = sum(lot.units for lot in lots)
+        fill = broker.execute(BrokerOrder(symbol, OrderSide.SELL, total_units))
+        n_lots = len(lots)
+        result_close = portfolio.close_position(symbol, fill.price)
+        if result_close is None:
+            return
+        _units, total_cost, profit, _n = result_close
+        avg_cost = total_cost / total_units
+        pnl_pct = (fill.price - avg_cost) / avg_cost if avg_cost else 0.0
+        self._record_txn(
+            result, ts, symbol, "SELL", total_units, fill.price, profit, pnl_pct, n_lots, tag
+        )
 
     def _buy(self, broker, portfolio, result, ts, symbol, units) -> None:
         if units <= 0:

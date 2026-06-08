@@ -29,6 +29,10 @@ export default function NewBacktestPage() {
   const [capital, setCapital] = useState(2500000);
   const [parts, setParts] = useState(50);
   const [target, setTarget] = useState(6);
+  // SST-FIFO tiered targets (tighten as lots accumulate): 1 / 2 / 3+ lots.
+  const [target1, setTarget1] = useState(10);
+  const [target2, setTarget2] = useState(8);
+  const [target3, setTarget3] = useState(6);
   const [maxLots, setMaxLots] = useState(0);
   const [taxRate, setTaxRate] = useState(20);
   const [withdrawalRate, setWithdrawalRate] = useState(0);
@@ -42,6 +46,8 @@ export default function NewBacktestPage() {
   const [ovAtPct, setOvAtPct] = useState(6);
   const [ovBookPct, setOvBookPct] = useState(50);
   const [ovTrailPct, setOvTrailPct] = useState(2);
+
+  const isFifo = strategyId === "sst_fifo";
 
   const mutation = useMutation({
     mutationFn: (body: BacktestRequest) => api.backtest(body),
@@ -70,9 +76,15 @@ export default function NewBacktestPage() {
       capital,
       params: {
         capital_parts: parts,
-        profit_target: target / 100,
         max_lots: maxLots,
         allocation_mode: allocationMode,
+        ...(isFifo
+          ? {
+              profit_target_1: target1 / 100,
+              profit_target_2: target2 / 100,
+              profit_target_3: target3 / 100,
+            }
+          : { profit_target: target / 100 }),
       },
       tax_rate: taxRate / 100,
       withdrawal_rate: withdrawalRate / 100,
@@ -116,9 +128,23 @@ export default function NewBacktestPage() {
             <Field label="Capital parts">
               <input type="number" className={inputClass} value={parts} onChange={(e) => setParts(+e.target.value)} />
             </Field>
-            <Field label="Profit target %">
-              <input type="number" step="0.1" className={inputClass} value={target} onChange={(e) => setTarget(+e.target.value)} />
-            </Field>
+            {isFifo ? (
+              <>
+                <Field label="Target % (1 lot)">
+                  <input type="number" step="0.1" className={inputClass} value={target1} onChange={(e) => setTarget1(+e.target.value)} />
+                </Field>
+                <Field label="Target % (2 lots)">
+                  <input type="number" step="0.1" className={inputClass} value={target2} onChange={(e) => setTarget2(+e.target.value)} />
+                </Field>
+                <Field label="Target % (3+ lots)">
+                  <input type="number" step="0.1" className={inputClass} value={target3} onChange={(e) => setTarget3(+e.target.value)} />
+                </Field>
+              </>
+            ) : (
+              <Field label="Profit target %">
+                <input type="number" step="0.1" className={inputClass} value={target} onChange={(e) => setTarget(+e.target.value)} />
+              </Field>
+            )}
             <Field label="Max lots (0 = unlimited)">
               <input type="number" className={inputClass} value={maxLots} onChange={(e) => setMaxLots(+e.target.value)} />
             </Field>

@@ -38,6 +38,7 @@ class SignalAction(str, enum.Enum):
     ENTER_LONG = "ENTER_LONG"
     ENTER_SHORT = "ENTER_SHORT"
     EXIT = "EXIT"  # close a specific lot (lot_id) or reduce by quantity
+    EXIT_ALL = "EXIT_ALL"  # close the whole position (all lots) as one transaction
     REDUCE = "REDUCE"
 
 

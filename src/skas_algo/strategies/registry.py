@@ -8,11 +8,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from .sst_fifo import SSTFifoStrategy
 from .sst_lifo import SSTLifoStrategy
 
 # strategy_id -> factory(universe, **params) -> strategy instance
 _REGISTRY: dict[str, Callable[..., Any]] = {
     SSTLifoStrategy.strategy_id: SSTLifoStrategy,
+    SSTFifoStrategy.strategy_id: SSTFifoStrategy,
 }
 
 

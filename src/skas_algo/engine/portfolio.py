@@ -86,6 +86,25 @@ class Portfolio:
     def get_lot(self, symbol: str, lot_id: int) -> Lot | None:
         return next((lot for lot in self._lots.get(symbol, []) if lot.id == lot_id), None)
 
+    def close_position(self, symbol: str, price: float) -> tuple[int, float, float, int] | None:
+        """Sell every lot of a symbol at ``price`` in one go (pooled exit).
+
+        Returns (total_units, total_cost, gross_profit, lot_count). Used by SST's
+        averaged/tiered exit where all lots leave together.
+        """
+        lots = self._lots.get(symbol, [])
+        if not lots:
+            return None
+        total_units = sum(lot.units for lot in lots)
+        total_cost = sum(lot.units * lot.price for lot in lots)
+        revenue = total_units * price
+        profit = revenue - total_cost
+        self.cash += revenue
+        self.month_realized += profit
+        n = len(lots)
+        del self._lots[symbol]
+        return total_units, total_cost, profit, n
+
     # ------------------------------------------------------------------ views
     def lots(self, symbol: str) -> list[Lot]:
         return list(self._lots.get(symbol, []))
