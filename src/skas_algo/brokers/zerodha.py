@@ -29,6 +29,7 @@ from .base import BrokerOrder, Funds, Session
 
 KITE_LOGIN_URL = "https://kite.zerodha.com/api/login"
 KITE_TWOFA_URL = "https://kite.zerodha.com/api/twofa"
+HTTP_TIMEOUT = 15  # seconds — never let a login network call hang forever
 
 
 class BrokerLoginError(RuntimeError):
@@ -95,6 +96,7 @@ class ZerodhaAdapter:
         resp = self._http.post(
             KITE_LOGIN_URL,
             data={"user_id": self.creds.user_id, "password": self.creds.password},
+            timeout=HTTP_TIMEOUT,
         )
         body = resp.json()
         if body.get("status") != "success" or "data" not in body:
@@ -126,6 +128,7 @@ class ZerodhaAdapter:
                 "twofa_value": code,
                 "twofa_type": "totp",
             },
+            timeout=HTTP_TIMEOUT,
         )
         body = resp.json()
         if body.get("status") != "success":
@@ -135,7 +138,7 @@ class ZerodhaAdapter:
         """Follow the Kite Connect OAuth redirect to capture the request_token."""
         url = self._kite_client().login_url()
         for _ in range(10):
-            resp = self._http.get(url, allow_redirects=False)
+            resp = self._http.get(url, allow_redirects=False, timeout=HTTP_TIMEOUT)
             location = resp.headers.get("location") or resp.headers.get("Location")
             if location and "request_token=" in location:
                 qs = parse_qs(urlparse(location).query)
