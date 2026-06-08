@@ -31,6 +31,8 @@ class MarketView:
         # symbol -> {date: (close, high_Nd, low_Nd)}  (levels may be NaN early)
         self._series: dict[str, dict[pd.Timestamp, tuple[float, float, float]]] = {}
         self._universe_order: list[str] = []
+        # Most recent close seen per symbol, forward-filled as the cursor advances.
+        self._last_close: dict[str, float] = {}
 
     # ------------------------------------------------------------- building
     def add_symbol(self, symbol: str, df: pd.DataFrame) -> None:
@@ -54,6 +56,11 @@ class MarketView:
     # -------------------------------------------------------------- cursor
     def set_date(self, ts: pd.Timestamp) -> None:
         self._current = ts
+        # Forward-fill the last known close for any symbol printing today.
+        for symbol, series in self._series.items():
+            row = series.get(ts)
+            if row is not None:
+                self._last_close[symbol] = row[0]
 
     @property
     def current_date(self) -> pd.Timestamp:
@@ -87,12 +94,21 @@ class MarketView:
         return self._row(symbol)[2]  # type: ignore[index]
 
     def closes_today(self) -> dict[str, float]:
+        """Prices actually printed today (for stop evaluation / fills)."""
         out: dict[str, float] = {}
         for s in self._universe_order:
             row = self._row(s)
             if row is not None:
                 out[s] = row[0]
         return out
+
+    def mark_prices(self) -> dict[str, float]:
+        """Last known close per symbol (forward-filled) for marking-to-market.
+
+        Unlike closes_today(), this never drops a held position to zero on a day it
+        doesn't print (e.g. a Muhurat/special session) — it carries the prior close.
+        """
+        return dict(self._last_close)
 
 
 class HistoricalReplayFeed:

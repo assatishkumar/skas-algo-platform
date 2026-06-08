@@ -12,6 +12,51 @@ from skas_algo.engine.runner import BacktestRunner
 from skas_algo.strategies.sst_lifo import SSTLifoStrategy
 
 
+def test_mark_prices_forward_fill():
+    """A held symbol that doesn't print today is marked at its last known close,
+    not dropped to zero (fixes the Muhurat/special-session drawdown artifact)."""
+    from skas_algo.engine.market import MarketView
+
+    view = MarketView(lookback=2)
+    d = pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"])
+    view.add_symbol(
+        "AAA",
+        pd.DataFrame(
+            {
+                "date": d,
+                "open": [10, 11, 12],
+                "high": [10, 11, 12],
+                "low": [10, 11, 12],
+                "close": [10.0, 11.0, 12.0],
+                "volume": [1, 1, 1],
+            }
+        ),
+    )
+    # BBB is missing the middle day (a sparse/special session).
+    view.add_symbol(
+        "BBB",
+        pd.DataFrame(
+            {
+                "date": [d[0], d[2]],
+                "open": [20, 22],
+                "high": [20, 22],
+                "low": [20, 22],
+                "close": [20.0, 22.0],
+                "volume": [1, 1],
+            }
+        ),
+    )
+    view.finalize()
+
+    view.set_date(d[0])
+    assert view.mark_prices() == {"AAA": 10.0, "BBB": 20.0}
+    view.set_date(d[1])  # BBB absent today
+    assert view.mark_prices() == {"AAA": 11.0, "BBB": 20.0}  # BBB carried forward
+    assert "BBB" not in view.closes_today()  # but no real print today
+    view.set_date(d[2])
+    assert view.mark_prices() == {"AAA": 12.0, "BBB": 22.0}
+
+
 def test_portfolio_buy_close_and_flush():
     p = Portfolio(cash=1000.0)
     lot = p.buy("X", units=10, price=10.0, when=date(2020, 1, 1))

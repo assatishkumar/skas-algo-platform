@@ -200,7 +200,9 @@ class BacktestRunner:
         )
 
     def _record_history(self, portfolio, view, result, ts) -> None:
-        closes = view.closes_today()
+        # Mark-to-market on last-known closes (forward-filled) so a held position is
+        # never valued at zero on a day it doesn't print (e.g. Muhurat sessions).
+        closes = view.mark_prices()
         holdings = portfolio.holdings_value(closes)
         result.history.append(
             {
