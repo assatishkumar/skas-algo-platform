@@ -1,9 +1,9 @@
-"""The mode-agnostic run loop.
+"""The BACKTEST driver.
 
-Phase 1 implements the BACKTEST driver (SimulatedClock + HistoricalReplayFeed +
-BacktestBroker). The same loop body — managed-stop checks, month flush, strategy
-decision, override resolution, ordered execution through a broker, bookkeeping — is
-what PAPER/LIVE will reuse with a real clock, a live feed, and a live broker.
+Builds the historical market view and replays it day by day, delegating the actual
+stop-check / strategy-decision / execution to the shared SliceExecutor (also used by
+the live paper/live engine). Month flush and equity-curve recording are backtest-side
+bookkeeping kept here.
 """
 
 from __future__ import annotations
@@ -12,19 +12,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol
 
-from skas_algo.brokers.base import BrokerOrder
 from skas_algo.brokers.sim_broker import BacktestBroker
-from skas_algo.db.enums import OrderSide
 from skas_algo.engine.context import AlgoContext
+from skas_algo.engine.execution import SliceExecutor
 from skas_algo.engine.market import HistoricalReplayFeed, MarketView, PriceLoader
-from skas_algo.engine.overrides import (
-    AttachStop,
-    BuyLot,
-    CloseLot,
-    ClosePosition,
-    OverrideResolver,
-    OverrideRule,
-)
+from skas_algo.engine.overrides import OverrideResolver, OverrideRule
 from skas_algo.engine.portfolio import Portfolio
 from skas_algo.engine.sim_fill import FillModel
 from skas_algo.engine.stops import StopBook
@@ -77,6 +69,7 @@ class BacktestRunner:
         stops = StopBook()
         broker = BacktestBroker(price_fn=view.close, fill_model=self.fill_model)
         ctx = AlgoContext(algo_id=None, params={}, portfolio=portfolio, market=view, stops=stops)
+        executor = SliceExecutor(portfolio, stops, self.resolver, broker)
 
         result = RunResult(portfolio=portfolio)
         current_month: tuple[int, int] | None = None
@@ -90,16 +83,9 @@ class BacktestRunner:
                 self._flush(portfolio, result, current_month, ts)
             current_month = this_month
 
-            # --- managed stops first (trailing/hard), independent of the strategy ---
-            self._check_stops(broker, portfolio, stops, view, result, ts)
-
-            # Snapshot lot counts before strategy execution (for SELL log parity).
-            lots_at_start = {s: len(portfolio.lots(s)) for s in portfolio.lot_symbols()}
-
-            # --- strategy decides, overrides reshape, engine executes in order ---
-            signals = self.strategy.on_slice(ctx)
-            for action in self.resolver.resolve(signals, ctx):
-                self._execute(broker, portfolio, stops, result, ts, action, lots_at_start)
+            # --- shared execution path: stops first, then strategy decisions ---
+            result.transactions.extend(executor.check_stops(ts, view.closes_today()))
+            result.transactions.extend(executor.decide_and_execute(ts, self.strategy, ctx))
 
             self._record_history(portfolio, view, result, ts)
 
@@ -107,95 +93,6 @@ class BacktestRunner:
             self._flush(portfolio, result, current_month, view.unified_dates[-1])
 
         return result
-
-    # ------------------------------------------------------------ execution
-    def _check_stops(self, broker, portfolio, stops, view, result, ts) -> None:
-        for stop in stops.evaluate(view.closes_today()):
-            lot = portfolio.get_lot(stop.symbol, stop.lot_id)
-            if lot is None:
-                stops.remove(stop.lot_id)
-                continue
-            self._sell(
-                broker,
-                portfolio,
-                result,
-                ts,
-                stop.symbol,
-                stop.lot_id,
-                lot.units,
-                lot.price,
-                tag="TRAIL",
-                lots=len(portfolio.lots(stop.symbol)),
-            )
-            stops.remove(stop.lot_id)
-
-    def _execute(self, broker, portfolio, stops, result, ts, action, lots_at_start) -> None:
-        if isinstance(action, CloseLot):
-            lot = portfolio.get_lot(action.symbol, action.lot_id)
-            if lot is None:
-                return
-            self._sell(
-                broker,
-                portfolio,
-                result,
-                ts,
-                action.symbol,
-                action.lot_id,
-                action.units,
-                lot.price,
-                tag=action.tag,
-                lots=lots_at_start.get(action.symbol, len(portfolio.lots(action.symbol))),
-            )
-        elif isinstance(action, ClosePosition):
-            self._close_position(broker, portfolio, result, ts, action.symbol, action.tag)
-        elif isinstance(action, AttachStop):
-            stops.attach(action.stop)
-        elif isinstance(action, BuyLot):
-            self._buy(broker, portfolio, result, ts, action.symbol, action.units)
-
-    def _sell(self, broker, portfolio, result, ts, symbol, lot_id, units, entry, tag, lots) -> None:
-        if units <= 0:
-            return
-        fill = broker.execute(BrokerOrder(symbol, OrderSide.SELL, units))
-        profit = portfolio.reduce_lot(symbol, lot_id, units, fill.price)
-        pnl_pct = (fill.price - entry) / entry if entry else 0.0
-        self._record_txn(result, ts, symbol, "SELL", units, fill.price, profit, pnl_pct, lots, tag)
-
-    def _close_position(self, broker, portfolio, result, ts, symbol, tag) -> None:
-        lots = portfolio.lots(symbol)
-        if not lots:
-            return
-        total_units = sum(lot.units for lot in lots)
-        fill = broker.execute(BrokerOrder(symbol, OrderSide.SELL, total_units))
-        n_lots = len(lots)
-        result_close = portfolio.close_position(symbol, fill.price)
-        if result_close is None:
-            return
-        _units, total_cost, profit, _n = result_close
-        avg_cost = total_cost / total_units
-        pnl_pct = (fill.price - avg_cost) / avg_cost if avg_cost else 0.0
-        self._record_txn(
-            result, ts, symbol, "SELL", total_units, fill.price, profit, pnl_pct, n_lots, tag
-        )
-
-    def _buy(self, broker, portfolio, result, ts, symbol, units) -> None:
-        if units <= 0:
-            return
-        label = "BUY" if not portfolio.lots(symbol) else "AVG_BUY"
-        fill = broker.execute(BrokerOrder(symbol, OrderSide.BUY, units))
-        portfolio.buy(symbol, units, fill.price, ts)
-        self._record_txn(
-            result,
-            ts,
-            symbol,
-            label,
-            units,
-            fill.price,
-            0.0,
-            0.0,
-            len(portfolio.lots(symbol)),
-            "STRATEGY",
-        )
 
     # ----------------------------------------------------------- bookkeeping
     def _flush(self, portfolio, result, ym, ts) -> None:
@@ -206,24 +103,6 @@ class BacktestRunner:
                 "withdrawal": flush.withdrawal,
                 "date": ts,
             }
-
-    def _record_txn(
-        self, result, ts, ticker, action, units, price, profit, pnl_pct, lots, tag
-    ) -> None:
-        result.transactions.append(
-            {
-                "date": ts,
-                "ticker": ticker,
-                "action": action,
-                "units": units,
-                "price": price,
-                "amount": units * price,
-                "profit": profit,
-                "pnl_pct": pnl_pct,
-                "lots": lots,
-                "tag": tag,
-            }
-        )
 
     def _record_history(self, portfolio, view, result, ts) -> None:
         # Mark-to-market on last-known closes (forward-filled) so a held position is

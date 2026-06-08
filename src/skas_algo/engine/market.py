@@ -14,11 +14,25 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from datetime import date
+from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
 # A loader returns an OHLC DataFrame (with a 'date' column + 'close') for a symbol.
 PriceLoader = Callable[[str, date, date], "pd.DataFrame | None"]
+
+
+@runtime_checkable
+class MarketLike(Protocol):
+    """Market interface a strategy/engine reads, satisfied by both the backtest
+    MarketView and the LiveMarketView — so the same strategy code runs in any mode."""
+
+    def present_symbols(self) -> list[str]: ...
+    def close(self, symbol: str) -> float: ...
+    def rolling_high(self, symbol: str) -> float: ...
+    def rolling_low(self, symbol: str) -> float: ...
+    def closes_today(self) -> dict[str, float]: ...
+    def mark_prices(self) -> dict[str, float]: ...
 
 
 class MarketView:

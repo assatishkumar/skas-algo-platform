@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .market import MarketView
+from .market import MarketLike
 from .portfolio import Lot, Portfolio
 from .stops import StopBook
 
@@ -20,7 +20,7 @@ class AlgoContext:
         algo_id: int | None,
         params: dict[str, Any],
         portfolio: Portfolio,
-        market: MarketView,
+        market: MarketLike,
         stops: StopBook | None = None,
     ):
         self.algo_id = algo_id
