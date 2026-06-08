@@ -12,6 +12,11 @@ os.close(_db_fd)
 os.environ["SKAS_DATABASE_URL"] = f"sqlite:///{_DB_PATH}"
 os.environ["SKAS_ENVIRONMENT"] = "test"
 
+# A throwaway Fernet key so credential-encryption tests work in isolation.
+from cryptography.fernet import Fernet  # noqa: E402
+
+os.environ.setdefault("SKAS_SECRET_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
 import pytest
 from fastapi.testclient import TestClient
 

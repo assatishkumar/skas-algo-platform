@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     secret_encryption_key: str | None = None
 
+    # --- Alerts (Telegram) ---
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+
+    # --- Live trading safety ---
+    # Master switch. Even with an account armed, no real order is placed unless this
+    # is True. Defaults False so paper/dev never fires real orders by accident.
+    live_trading_enabled: bool = False
+
     # --- Logging ---
     log_level: str = "INFO"
 

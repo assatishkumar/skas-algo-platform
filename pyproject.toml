@@ -25,6 +25,10 @@ dependencies = [
     "pydantic-settings>=2.2.0",
     "python-dotenv>=1.0.0",
     "pandas>=2.0.0",
+    "cryptography>=42.0.0",  # Fernet encryption for broker credentials at rest
+    "pyotp>=2.9.0",          # TOTP 2FA code generation for broker login
+    "requests>=2.31.0",      # Zerodha login flow + Telegram
+    "kiteconnect>=4.2.0",    # Zerodha order/quote API
     # Market data + broker abstraction (sibling project)
     # "skas-data",  # installed via: pip install -e ../skas-data
 ]

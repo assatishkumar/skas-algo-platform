@@ -43,3 +43,24 @@ class RunSummary(BaseModel):
     mode: str
     started_at: str | None
     metrics: dict
+
+
+class BrokerConnectRequest(BaseModel):
+    broker: str = "zerodha"
+    label: str
+    api_key: str
+    api_secret: str
+    user_id: str
+    password: str
+    totp_secret: str
+
+
+class BrokerAccountOut(BaseModel):
+    id: int
+    broker: str
+    label: str
+    user_id: str | None
+    armed: bool
+    has_session: bool
+    session_expires_at: str | None
+    live_trading_enabled: bool

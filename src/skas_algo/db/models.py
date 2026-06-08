@@ -64,6 +64,8 @@ class BrokerAccount(Base, TimestampMixin):
     session_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Must be explicitly armed (plus SKAS_LIVE_TRADING_ENABLED) before a real order fires.
+    armed: Mapped[bool] = mapped_column(Boolean, default=False)
 
     algos: Mapped[list[Algo]] = relationship(back_populates="broker_account")
 
