@@ -21,6 +21,8 @@ def build_report(result: RunResult, initial_capital: float) -> dict[str, Any]:
         return {"metrics": metrics}
 
     daily = pd.DataFrame(result.history)
+    # history dates may be python date (live) or pd.Timestamp (backtest) — normalize.
+    daily["date"] = pd.to_datetime(daily["date"])
     daily["year"] = daily["date"].dt.year
     daily["month"] = daily["date"].dt.month
     years = sorted(daily["year"].unique())

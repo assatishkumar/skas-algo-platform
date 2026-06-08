@@ -53,6 +53,26 @@ class UniverseOut(BaseModel):
     count: int  # symbols available in the cache
 
 
+class LiveStartRequest(BaseModel):
+    strategy_id: str
+    name: str | None = None
+    symbols: list[str] = Field(default_factory=list)
+    universe: str | None = None
+    capital: float = 2_500_000
+    params: dict = Field(default_factory=dict)
+    tax_rate: float = 0.20
+    withdrawal_rate: float = 0.0
+    lookback: int = 20
+    overrides: list[OverrideInput] = Field(default_factory=list)
+    mode: str = "PAPER"
+    quote_source: str = "cache"  # "cache" (offline) | "zerodha" (live LTP)
+    broker_account_id: int | None = None
+    refresh_seconds: int = 30
+    decision_time: str = "15:20"
+    ignore_market_hours: bool = False
+    auto: bool = False  # start the background refresh/decision loop
+
+
 class BrokerConnectRequest(BaseModel):
     broker: str = "zerodha"
     label: str

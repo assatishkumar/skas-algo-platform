@@ -118,6 +118,7 @@ class LiveSession:
                 {
                     "symbol": symbol,
                     "units": units,
+                    "lots": len(lots),
                     "avg_price": cost / units if units else 0.0,
                     "ltp": ltp,
                     "unrealized_pnl": value - cost,
