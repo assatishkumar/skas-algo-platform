@@ -32,7 +32,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": { target: "http://localhost:8080", changeOrigin: true },
+      // ws: true so the live WebSocket (/api/v1/live/ws) is proxied too.
+      "/api": { target: "http://localhost:8080", changeOrigin: true, ws: true },
     },
   },
 });

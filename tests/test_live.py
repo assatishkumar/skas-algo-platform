@@ -124,3 +124,30 @@ def test_live_rest_lifecycle(api_client: TestClient):
         assert api_client.post(f"/api/v1/live/{run_id}/stop").status_code == 200
     # After stop it's removed from the registry.
     assert api_client.get(f"/api/v1/live/{run_id}").status_code == 404
+
+
+def test_live_override_injection(api_client: TestClient):
+    body = {
+        "strategy_id": "sst_lifo",
+        "symbols": ["AAA"],
+        "capital": 100000,
+        "params": {"capital_parts": 10, "profit_target": 0.06},
+        "lookback": 5,
+        "quote_source": "cache",
+        "ignore_market_hours": True,
+    }
+    run_id = api_client.post("/api/v1/live/start", json=body).json()["run_id"]
+    try:
+        resp = api_client.post(
+            f"/api/v1/live/{run_id}/overrides",
+            json={
+                "scope": "ALGO",
+                "target": None,
+                "rule": {"exit": [{"at_pct": 6, "action": "book", "qty_pct": 50},
+                                  {"action": "trail_sl", "trail_pct": 2}]},
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["overrides"] == 1  # injected into the running resolver
+    finally:
+        api_client.post(f"/api/v1/live/{run_id}/stop")

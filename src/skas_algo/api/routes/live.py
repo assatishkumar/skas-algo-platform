@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
-from skas_algo.api.models import LiveStartRequest
+from skas_algo.api.models import LiveStartRequest, OverrideInput
 from skas_algo.data import universes
 from skas_algo.data.provider import get_available_symbols, get_price_loader
 from skas_algo.db.models import BrokerAccount
@@ -122,6 +122,20 @@ async def run_decision(run_id: int) -> dict:
             for e in events
         ],
     }
+
+
+@router.post("/{run_id}/overrides")
+async def add_override(run_id: int, override: OverrideInput) -> dict:
+    """Live intervention: inject an override rule into the running session.
+
+    The resolver reads its mutable rule list on each decision, so this takes effect
+    on the run's next decision (e.g. 'book 50% at 6%, trail the rest').
+    """
+    live = _get(run_id)
+    live.session.resolver.overrides.append(
+        OverrideRule(scope=override.scope, target=override.target, rule=override.rule)
+    )
+    return {"run_id": run_id, "overrides": len(live.session.resolver.overrides)}
 
 
 @router.post("/{run_id}/stop")

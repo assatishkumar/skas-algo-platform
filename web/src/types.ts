@@ -75,6 +75,81 @@ export interface OverrideInput {
   rule: Record<string, unknown>;
 }
 
+export interface LivePosition {
+  symbol: string;
+  units: number;
+  lots: number;
+  avg_price: number;
+  ltp: number | null;
+  unrealized_pnl: number;
+}
+
+export interface LiveRunSnapshot {
+  run_id: number;
+  status: string;
+  name: string;
+  strategy_id: string;
+  cash: number;
+  holdings_value: number;
+  equity: number;
+  realized_taxes: number;
+  positions: LivePosition[];
+}
+
+export interface StartLiveRequest {
+  strategy_id: string;
+  name?: string;
+  symbols?: string[];
+  universe?: string | null;
+  capital: number;
+  params: Record<string, unknown>;
+  tax_rate: number;
+  withdrawal_rate: number;
+  lookback: number;
+  quote_source: string;
+  ignore_market_hours: boolean;
+  auto: boolean;
+}
+
+export interface BrokerAccount {
+  id: number;
+  broker: string;
+  label: string;
+  user_id: string | null;
+  armed: boolean;
+  has_session: boolean;
+  session_expires_at: string | null;
+  live_trading_enabled: boolean;
+}
+
+export interface BrokerConnectRequest {
+  broker: string;
+  label: string;
+  api_key: string;
+  api_secret: string;
+  user_id: string;
+  password: string;
+  totp_secret: string;
+}
+
+export interface LiveTradeEvent {
+  ticker: string;
+  action: string;
+  units: number;
+  price: number;
+  tag: string;
+}
+
+// WebSocket message envelope from /api/v1/live/ws
+export interface LiveWsMessage {
+  type: "snapshot" | "trades" | "stopped";
+  run_id: number;
+  positions?: LivePosition[];
+  cash?: number;
+  equity?: number;
+  events?: LiveTradeEvent[];
+}
+
 export interface Universe {
   name: string;
   label: string;

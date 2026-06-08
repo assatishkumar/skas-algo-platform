@@ -1,4 +1,6 @@
 import { NavLink, Route, Routes } from "react-router-dom";
+import BrokersPage from "./pages/BrokersPage";
+import LivePage from "./pages/LivePage";
 import NewBacktestPage from "./pages/NewBacktestPage";
 import RunDetailPage from "./pages/RunDetailPage";
 import RunsPage from "./pages/RunsPage";
@@ -27,12 +29,16 @@ export default function App() {
           <span className="font-semibold text-brand-light mr-4">SKAS Algo</span>
           <NavItem to="/" label="Runs" />
           <NavItem to="/new" label="New backtest" />
+          <NavItem to="/live" label="Live" />
+          <NavItem to="/brokers" label="Brokers" />
         </div>
       </header>
       <main className="max-w-6xl mx-auto px-4 py-6">
         <Routes>
           <Route path="/" element={<RunsPage />} />
           <Route path="/new" element={<NewBacktestPage />} />
+          <Route path="/live" element={<LivePage />} />
+          <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
         </Routes>
       </main>
