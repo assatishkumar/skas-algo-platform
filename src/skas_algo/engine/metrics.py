@@ -20,10 +20,6 @@ def compute_metrics(result: RunResult, initial_capital: float) -> dict:
     years = (end_date - start_date).days / 365.25
     final_equity = final["total_equity"]
 
-    cagr = 0.0
-    if years > 0 and final_equity > 0:
-        cagr = (final_equity / initial_capital) ** (1 / years) - 1
-
     hwm = 0.0
     max_dd = 0.0
     max_invested = 0.0
@@ -44,8 +40,14 @@ def compute_metrics(result: RunResult, initial_capital: float) -> dict:
     total_withdrawals = portfolio.total_withdrawals if portfolio else 0.0
     cash_balance = portfolio.cash if portfolio else 0.0
 
-    total_value = final_equity + total_withdrawals + total_taxes
+    # Investor-return convention (consistent across Total Return and CAGR):
+    # withdrawals are added back (your distributions, not losses), taxes are a real
+    # cost already reflected in final equity. So both metrics share this base value.
+    total_value = final_equity + total_withdrawals
     total_return = (total_value - initial_capital) / initial_capital * 100
+    cagr = 0.0
+    if years > 0 and total_value > 0:
+        cagr = (total_value / initial_capital) ** (1 / years) - 1
 
     # Average monthly figures over the months the run spans.
     months = max(
