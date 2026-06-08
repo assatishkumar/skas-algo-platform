@@ -122,6 +122,10 @@ def test_metrics_match(reference_run):
         "Win Rate %",
         "Cash Balance",
         "Total Taxes",
+        "Total Withdrawals",
+        "Avg Monthly Profit Booking",
+        "Avg Monthly Profit (Pre-Tax)",
+        "Avg Monthly Profit (Post-Tax)",
     ]:
         assert metrics[key] == pytest.approx(
             ref_metrics[key], rel=1e-9, abs=1e-6

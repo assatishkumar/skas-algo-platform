@@ -47,6 +47,14 @@ def compute_metrics(result: RunResult, initial_capital: float) -> dict:
     total_value = final_equity + total_withdrawals + total_taxes
     total_return = (total_value - initial_capital) / initial_capital * 100
 
+    # Average monthly figures over the months the run spans.
+    months = max(
+        1,
+        (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month) + 1,
+    )
+    gross_profit = sum(t["profit"] for t in sells if t["profit"] > 0)
+    profitable = sum(1 for t in sells if t["profit"] > 0)
+
     return {
         "Total Return %": total_return,
         "CAGR %": cagr * 100,
@@ -58,4 +66,7 @@ def compute_metrics(result: RunResult, initial_capital: float) -> dict:
         "Cash Balance": cash_balance,
         "Total Withdrawals": total_withdrawals,
         "Total Taxes": total_taxes,
+        "Avg Monthly Profit Booking": profitable / months,
+        "Avg Monthly Profit (Pre-Tax)": gross_profit / months,
+        "Avg Monthly Profit (Post-Tax)": (gross_profit - total_taxes) / months,
     }

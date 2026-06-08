@@ -9,6 +9,9 @@ export interface Metrics {
   "Cash Balance": number;
   "Total Withdrawals": number;
   "Total Taxes": number;
+  "Avg Monthly Profit Booking": number;
+  "Avg Monthly Profit (Pre-Tax)": number;
+  "Avg Monthly Profit (Post-Tax)": number;
 }
 
 export interface YearlyRow {

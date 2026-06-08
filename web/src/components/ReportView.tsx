@@ -243,7 +243,11 @@ export default function ReportView({
         <MetricCard label="Total Trades" value={m["Total Trades"]} />
         <MetricCard label="Win Rate" value={pct(m["Win Rate %"])} />
         <MetricCard label="Total Taxes" value={formatInr(m["Total Taxes"])} />
+        <MetricCard label="Total Withdrawals" value={formatInr(m["Total Withdrawals"])} />
         <MetricCard label="Cash Balance" value={formatInr(m["Cash Balance"])} />
+        <MetricCard label="Avg Monthly Bookings" value={m["Avg Monthly Profit Booking"]?.toFixed(2)} />
+        <MetricCard label="Avg Monthly Profit (Pre-Tax)" value={formatInr(m["Avg Monthly Profit (Pre-Tax)"])} />
+        <MetricCard label="Avg Monthly Profit (Post-Tax)" value={formatInr(m["Avg Monthly Profit (Post-Tax)"])} />
       </div>
       <EquityChart report={report} />
       <YearlyTable report={report} />
