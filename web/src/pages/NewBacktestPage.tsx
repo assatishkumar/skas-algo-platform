@@ -33,6 +33,7 @@ export default function NewBacktestPage() {
   const [taxRate, setTaxRate] = useState(20);
   const [withdrawalRate, setWithdrawalRate] = useState(0);
   const [lookback, setLookback] = useState(20);
+  const [allocationMode, setAllocationMode] = useState("fixed");
 
   // Override builder
   const [ovEnabled, setOvEnabled] = useState(false);
@@ -67,7 +68,12 @@ export default function NewBacktestPage() {
       start_date: startDate,
       end_date: endDate,
       capital,
-      params: { capital_parts: parts, profit_target: target / 100, max_lots: maxLots },
+      params: {
+        capital_parts: parts,
+        profit_target: target / 100,
+        max_lots: maxLots,
+        allocation_mode: allocationMode,
+      },
       tax_rate: taxRate / 100,
       withdrawal_rate: withdrawalRate / 100,
       lookback,
@@ -124,6 +130,12 @@ export default function NewBacktestPage() {
             </Field>
             <Field label="Lookback (days)">
               <input type="number" className={inputClass} value={lookback} onChange={(e) => setLookback(+e.target.value)} />
+            </Field>
+            <Field label="Position sizing">
+              <select className={inputClass} value={allocationMode} onChange={(e) => setAllocationMode(e.target.value)}>
+                <option value="fixed">Fixed (capital / parts)</option>
+                <option value="equity_scaled">Equity-scaled (compounds)</option>
+              </select>
             </Field>
           </div>
 

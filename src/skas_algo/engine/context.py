@@ -34,6 +34,10 @@ class AlgoContext:
     def cash(self) -> float:
         return self.portfolio.cash
 
+    def equity(self) -> float:
+        """Total mark-to-market equity: cash + holdings at last-known closes."""
+        return self.portfolio.cash + self.portfolio.holdings_value(self.market.mark_prices())
+
     def lots(self, symbol: str) -> list[Lot]:
         """Lots the strategy may act on — excludes lots under a managed stop.
 

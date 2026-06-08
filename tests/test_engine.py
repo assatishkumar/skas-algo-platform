@@ -57,6 +57,23 @@ def test_mark_prices_forward_fill():
     assert view.mark_prices() == {"AAA": 12.0, "BBB": 22.0}
 
 
+def test_equity_scaled_allocation_tracks_equity():
+    """equity_scaled sizes each lot off current equity; fixed stays at initial/parts."""
+    from skas_algo.engine.context import AlgoContext
+    from skas_algo.engine.market import MarketView
+
+    pf = Portfolio(cash=200_000)  # account has grown from 100k to 200k
+    ctx = AlgoContext(None, {}, pf, MarketView(lookback=1))
+    fixed = SSTLifoStrategy(
+        ["AAA"], initial_capital=100_000, capital_parts=10, allocation_mode="fixed"
+    )
+    scaled = SSTLifoStrategy(
+        ["AAA"], initial_capital=100_000, capital_parts=10, allocation_mode="equity_scaled"
+    )
+    assert fixed._allocation(ctx) == 10_000  # initial_capital / parts (constant)
+    assert scaled._allocation(ctx) == 20_000  # current equity / parts (grows)
+
+
 def test_portfolio_buy_close_and_flush():
     p = Portfolio(cash=1000.0)
     lot = p.buy("X", units=10, price=10.0, when=date(2020, 1, 1))

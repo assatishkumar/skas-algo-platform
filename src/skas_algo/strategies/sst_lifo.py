@@ -29,13 +29,24 @@ class SSTLifoStrategy:
         capital_parts: int = 50,
         profit_target: float = 0.06,
         max_lots: int = 0,  # 0 = unlimited
+        allocation_mode: str = "fixed",  # "fixed" | "equity_scaled"
     ):
         self.universe = universe
         self.profit_target = profit_target
         self.max_lots = max_lots
+        self.capital_parts = capital_parts
+        self.allocation_mode = allocation_mode
+        # Fixed mode: per-lot size is initial_capital/parts for the whole run.
+        # Equity-scaled mode: per-lot size is (current equity)/parts, recomputed each
+        # slice, so bets grow with the account (true geometric compounding).
         self.allocation_amount = initial_capital / capital_parts
         # True => saw a 20-day low, waiting for the 20-day-high breakout to buy.
         self.tracking: dict[str, bool] = {s: False for s in universe}
+
+    def _allocation(self, ctx: AlgoContext) -> float:
+        if self.allocation_mode == "equity_scaled":
+            return ctx.equity() / self.capital_parts
+        return self.allocation_amount
 
     def initial_state(self, params: dict[str, Any]) -> dict[str, Any]:
         return {"tracking": dict(self.tracking)}
@@ -49,6 +60,7 @@ class SSTLifoStrategy:
         # adds this day's sell proceeds before buying. Fills are at the same close,
         # so the engine's resulting cash equals this projection.
         running_cash = ctx.cash
+        allocation = self._allocation(ctx)  # per-lot size for this slice
         sold_counts: dict[str, int] = {}
 
         # --- Step 1: sells — every lot independently, in portfolio order ---
@@ -79,13 +91,13 @@ class SSTLifoStrategy:
             close = ctx.close(ticker)
             if close <= ctx.rolling_high(ticker):
                 continue
-            if running_cash < self.allocation_amount:
+            if running_cash < allocation:
                 continue
             current_lots = len(ctx.lots(ticker)) - sold_counts.get(ticker, 0)
             if self.max_lots > 0 and current_lots >= self.max_lots:
                 self.tracking[ticker] = False
                 continue
-            units = int(self.allocation_amount // close)
+            units = int(allocation // close)
             if units <= 0:
                 continue
             running_cash -= units * close
