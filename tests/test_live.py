@@ -143,8 +143,12 @@ def test_live_override_injection(api_client: TestClient):
             json={
                 "scope": "ALGO",
                 "target": None,
-                "rule": {"exit": [{"at_pct": 6, "action": "book", "qty_pct": 50},
-                                  {"action": "trail_sl", "trail_pct": 2}]},
+                "rule": {
+                    "exit": [
+                        {"at_pct": 6, "action": "book", "qty_pct": 50},
+                        {"action": "trail_sl", "trail_pct": 2},
+                    ]
+                },
             },
         )
         assert resp.status_code == 200, resp.text

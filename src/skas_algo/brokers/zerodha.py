@@ -15,6 +15,7 @@ raises NotArmedError. Forward-testing uses PaperBroker and never reaches this cl
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlparse
@@ -103,8 +104,20 @@ class ZerodhaAdapter:
             raise BrokerLoginError("login response missing request_id")
         return request_id
 
+    def _totp_now(self) -> str:
+        # Authenticator apps show the secret in spaced 4-char groups; strip whitespace
+        # and uppercase before decoding (base32 is A-Z, 2-7).
+        secret = re.sub(r"\s+", "", self.creds.totp_secret or "").upper()
+        try:
+            return pyotp.TOTP(secret).now()
+        except Exception as exc:
+            raise BrokerLoginError(
+                "Invalid TOTP secret — paste the base32 'secret key' shown when you set up "
+                "the external 2FA authenticator (letters A-Z and digits 2-7), not a 6-digit code."
+            ) from exc
+
     def _submit_totp(self, request_id: str) -> None:
-        code = pyotp.TOTP(self.creds.totp_secret).now()
+        code = self._totp_now()
         resp = self._http.post(
             KITE_TWOFA_URL,
             data={

@@ -6,7 +6,12 @@ import pyotp
 import pytest
 
 from skas_algo.brokers.base import BrokerOrder
-from skas_algo.brokers.zerodha import NotArmedError, ZerodhaAdapter, ZerodhaCredentials
+from skas_algo.brokers.zerodha import (
+    BrokerLoginError,
+    NotArmedError,
+    ZerodhaAdapter,
+    ZerodhaCredentials,
+)
 from skas_algo.db.enums import OrderSide
 
 CREDS = ZerodhaCredentials(
@@ -16,6 +21,22 @@ CREDS = ZerodhaCredentials(
     password="pw",
     totp_secret=pyotp.random_base32(),
 )
+
+
+def test_totp_secret_with_spaces_is_sanitized():
+    # Authenticator apps show the secret in spaced groups; it must still work.
+    spaced = "JBSW Y3DP EHPK 3PXP"
+    adapter = ZerodhaAdapter(ZerodhaCredentials("k", "s", "AB1234", "pw", spaced), armed=False)
+    code = adapter._totp_now()
+    assert len(code) == 6 and code.isdigit()
+
+
+def test_invalid_totp_secret_gives_clear_error():
+    adapter = ZerodhaAdapter(
+        ZerodhaCredentials("k", "s", "AB1234", "pw", "not-base32!!"), armed=False
+    )
+    with pytest.raises(BrokerLoginError, match="base32"):
+        adapter._totp_now()
 
 
 def test_place_order_blocked_when_not_armed():
