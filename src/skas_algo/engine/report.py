@@ -90,6 +90,11 @@ def build_report(result: RunResult, initial_capital: float) -> dict[str, Any]:
             "Max Capital Used": ydf["invested_capital"].max(),
         }
 
+    monthly_withdrawals = {y: {m: 0.0 for m in range(1, 13)} for y in years}
+    for (y, m), entry in flush_log.items():
+        if y in monthly_withdrawals:
+            monthly_withdrawals[y][m] = entry["withdrawal"]
+
     equity_curve = [
         {"date": row["date"].strftime("%Y-%m-%d"), "equity": float(row["total_equity"])}
         for row in result.history
@@ -100,6 +105,7 @@ def build_report(result: RunResult, initial_capital: float) -> dict[str, Any]:
             "metrics": metrics,
             "yearly": yearly,
             "monthly_profit": {int(y): v for y, v in monthly_profit.items()},
+            "monthly_withdrawals": {int(y): v for y, v in monthly_withdrawals.items()},
             "monthly_capital": {int(y): v for y, v in monthly_capital.items()},
             "monthly_equity": {int(y): v for y, v in monthly_equity.items()},
             "equity_curve": equity_curve,

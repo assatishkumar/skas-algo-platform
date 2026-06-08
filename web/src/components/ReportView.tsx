@@ -152,6 +152,77 @@ function TradesTable({ trades }: { trades: Trade[] }) {
   );
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+type MonthlyData = Record<string, Record<string, number>>;
+
+function hasAnyValue(data?: MonthlyData): boolean {
+  if (!data) return false;
+  return Object.values(data).some((row) => Object.values(row).some((v) => v !== 0));
+}
+
+function MonthlyGrid({
+  title,
+  data,
+  total,
+  totalLabel = "Total",
+}: {
+  title: string;
+  data?: MonthlyData;
+  total: "sum" | "max" | "eoy";
+  totalLabel?: string;
+}) {
+  const years = Object.keys(data ?? {}).sort();
+  if (!data || years.length === 0) return null;
+
+  const totalOf = (row: Record<string, number>) => {
+    const vals = MONTHS.map((_, i) => row[String(i + 1)] ?? 0);
+    if (total === "max") return Math.max(...vals);
+    if (total === "eoy") return row["12"] ?? 0;
+    return vals.reduce((a, b) => a + b, 0);
+  };
+
+  return (
+    <Card>
+      <div className="text-sm font-medium text-slate-300 mb-3">{title}</div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="text-slate-400 text-left">
+            <tr>
+              <th className="py-1 pr-3">Year</th>
+              {MONTHS.map((mo) => (
+                <th key={mo} className="py-1 px-2 text-right">{mo}</th>
+              ))}
+              <th className="py-1 pl-3 text-right font-semibold">{totalLabel}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {years.map((y) => {
+              const row = data[y];
+              return (
+                <tr key={y} className="border-t border-slate-800">
+                  <td className="py-1 pr-3">{y}</td>
+                  {MONTHS.map((mo, i) => {
+                    const v = row[String(i + 1)] ?? 0;
+                    return (
+                      <td key={mo} className="py-1 px-2 text-right tabular-nums text-slate-300">
+                        {v ? formatInr(v) : "·"}
+                      </td>
+                    );
+                  })}
+                  <td className="py-1 pl-3 text-right font-semibold tabular-nums">
+                    {formatInr(totalOf(row))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 export default function ReportView({
   report,
   trades,
@@ -176,6 +247,22 @@ export default function ReportView({
       </div>
       <EquityChart report={report} />
       <YearlyTable report={report} />
+      <MonthlyGrid title="Monthly profit (booked)" data={report.monthly_profit} total="sum" />
+      {hasAnyValue(report.monthly_withdrawals) && (
+        <MonthlyGrid title="Monthly withdrawals" data={report.monthly_withdrawals} total="sum" />
+      )}
+      <MonthlyGrid
+        title="Monthly capital utilization (max invested)"
+        data={report.monthly_capital}
+        total="max"
+        totalLabel="Peak"
+      />
+      <MonthlyGrid
+        title="Monthly equity (end of month)"
+        data={report.monthly_equity}
+        total="eoy"
+        totalLabel="EoY"
+      />
       <TradesTable trades={trades} />
       {csvUrl && (
         <a

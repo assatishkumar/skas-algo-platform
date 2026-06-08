@@ -30,6 +30,8 @@ export interface Report {
   metrics: Metrics;
   yearly?: Record<string, YearlyRow>;
   monthly_profit?: Record<string, Record<string, number>>;
+  monthly_withdrawals?: Record<string, Record<string, number>>;
+  monthly_capital?: Record<string, Record<string, number>>;
   monthly_equity?: Record<string, Record<string, number>>;
   equity_curve?: EquityPoint[];
 }

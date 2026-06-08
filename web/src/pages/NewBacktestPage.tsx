@@ -31,6 +31,7 @@ export default function NewBacktestPage() {
   const [target, setTarget] = useState(6);
   const [maxLots, setMaxLots] = useState(0);
   const [taxRate, setTaxRate] = useState(20);
+  const [withdrawalRate, setWithdrawalRate] = useState(0);
   const [lookback, setLookback] = useState(20);
 
   // Override builder
@@ -68,7 +69,7 @@ export default function NewBacktestPage() {
       capital,
       params: { capital_parts: parts, profit_target: target / 100, max_lots: maxLots },
       tax_rate: taxRate / 100,
-      withdrawal_rate: 0,
+      withdrawal_rate: withdrawalRate / 100,
       lookback,
       overrides,
     };
@@ -117,6 +118,9 @@ export default function NewBacktestPage() {
             </Field>
             <Field label="Tax rate %">
               <input type="number" className={inputClass} value={taxRate} onChange={(e) => setTaxRate(+e.target.value)} />
+            </Field>
+            <Field label="Withdrawal rate %">
+              <input type="number" step="1" className={inputClass} value={withdrawalRate} onChange={(e) => setWithdrawalRate(+e.target.value)} />
             </Field>
             <Field label="Lookback (days)">
               <input type="number" className={inputClass} value={lookback} onChange={(e) => setLookback(+e.target.value)} />
