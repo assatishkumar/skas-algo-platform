@@ -1,4 +1,11 @@
-import type { BacktestRequest, BacktestResponse, Report, RunSummary, Trade } from "../types";
+import type {
+  BacktestRequest,
+  BacktestResponse,
+  Report,
+  RunSummary,
+  Trade,
+  Universe,
+} from "../types";
 
 const BASE = "/api/v1";
 
@@ -21,6 +28,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   strategies: () => request<{ strategies: string[] }>("/strategies"),
+  universes: () => request<Universe[]>("/universes"),
   runs: () => request<RunSummary[]>("/runs"),
   run: (id: number) =>
     request<{ report: Report; strategy_id: string; trades: Trade[] }>(`/runs/${id}`),

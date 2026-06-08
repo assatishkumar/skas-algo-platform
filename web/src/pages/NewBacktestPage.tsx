@@ -22,10 +22,14 @@ export default function NewBacktestPage() {
   const { data: strategyData } = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const strategies = strategyData?.strategies ?? ["sst_lifo"];
 
+  const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
+  const universes = universeData ?? [];
+
   const [strategyId, setStrategyId] = useState("sst_lifo");
+  const [universe, setUniverse] = useState("nifty50"); // "" = Custom
   const [symbols, setSymbols] = useState("RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK");
-  const [startDate, setStartDate] = useState("2018-01-01");
-  const [endDate, setEndDate] = useState("2022-12-31");
+  const [startDate, setStartDate] = useState("2015-01-01");
+  const [endDate, setEndDate] = useState("2026-06-01");
   const [capital, setCapital] = useState(2500000);
   const [parts, setParts] = useState(50);
   const [target, setTarget] = useState(6);
@@ -68,9 +72,11 @@ export default function NewBacktestPage() {
         },
       });
     }
+    const isCustom = universe === "";
     const body: BacktestRequest = {
       strategy_id: strategyId,
-      symbols: symbols.split(",").map((s) => s.trim()).filter(Boolean),
+      universe: isCustom ? null : universe,
+      symbols: isCustom ? symbols.split(",").map((s) => s.trim()).filter(Boolean) : [],
       start_date: startDate,
       end_date: endDate,
       capital,
@@ -110,9 +116,28 @@ export default function NewBacktestPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Symbols (comma-separated)">
-              <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
+            <Field label="Universe">
+              <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
+                {universes.map((u) => (
+                  <option key={u.name} value={u.name}>
+                    {u.label} ({u.count} available)
+                  </option>
+                ))}
+                <option value="">Custom</option>
+              </select>
             </Field>
+            {universe === "" ? (
+              <Field label="Symbols (comma-separated)">
+                <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
+              </Field>
+            ) : (
+              <Field label="Symbols">
+                <div className={`${inputClass} text-slate-400`}>
+                  {universes.find((u) => u.name === universe)?.count ?? "…"} symbols from{" "}
+                  {universes.find((u) => u.name === universe)?.label ?? universe}
+                </div>
+              </Field>
+            )}
             <Field label="Start date">
               <input type="date" className={inputClass} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </Field>

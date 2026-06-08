@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from skas_algo.api import create_app
-from skas_algo.data.provider import get_price_loader
+from skas_algo.data.provider import get_available_symbols, get_price_loader
 
 
 def _ramp_frame() -> pd.DataFrame:
@@ -37,7 +37,43 @@ def api_client() -> TestClient:
     app = create_app()
     frame = _ramp_frame()
     app.dependency_overrides[get_price_loader] = lambda: (lambda sym, s, e: frame)
+    # Pretend only these symbols have cached data (for universe resolution).
+    app.dependency_overrides[get_available_symbols] = lambda: {"RELIANCE", "TCS", "INFY"}
     return TestClient(app)
+
+
+def test_universes_listed_with_counts(api_client: TestClient):
+    resp = api_client.get("/api/v1/universes")
+    assert resp.status_code == 200
+    by_name = {u["name"]: u for u in resp.json()}
+    assert set(by_name) == {"nifty50", "nifty100", "nifty200"}
+    # Only RELIANCE/TCS/INFY are "available", so counts reflect the intersection.
+    assert by_name["nifty50"]["count"] == 3
+    assert by_name["nifty50"]["label"] == "Nifty 50"
+
+
+def test_backtest_by_universe(api_client: TestClient):
+    body = {
+        "strategy_id": "sst_lifo",
+        "universe": "nifty50",
+        "start_date": "2020-01-01",
+        "end_date": "2021-12-31",
+        "capital": 100000,
+        "params": {"capital_parts": 10, "profit_target": 0.06},
+        "tax_rate": 0.0,
+    }
+    resp = api_client.post("/api/v1/backtest", json=body)
+    assert resp.status_code == 200, resp.text
+    # Ran against the 3 resolved symbols; at least one trade given the ramp.
+    assert resp.json()["report"]["metrics"]["Total Trades"] >= 1
+
+
+def test_backtest_requires_symbols_or_universe(api_client: TestClient):
+    resp = api_client.post(
+        "/api/v1/backtest",
+        json={"strategy_id": "sst_lifo", "start_date": "2020-01-01", "end_date": "2021-12-31"},
+    )
+    assert resp.status_code == 422
 
 
 def test_list_strategies(api_client: TestClient):

@@ -75,9 +75,16 @@ export interface OverrideInput {
   rule: Record<string, unknown>;
 }
 
+export interface Universe {
+  name: string;
+  label: string;
+  count: number;
+}
+
 export interface BacktestRequest {
   strategy_id: string;
   symbols: string[];
+  universe?: string | null;
   start_date: string;
   end_date: string;
   capital: number;

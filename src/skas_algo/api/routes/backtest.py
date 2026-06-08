@@ -11,8 +11,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
-from skas_algo.api.models import BacktestRequest, BacktestResponse, RunSummary
-from skas_algo.data.provider import get_price_loader
+from skas_algo.api.models import (
+    BacktestRequest,
+    BacktestResponse,
+    RunSummary,
+    UniverseOut,
+)
+from skas_algo.data import universes
+from skas_algo.data.provider import get_available_symbols, get_price_loader
 from skas_algo.db.models import Algo, AlgoRun
 from skas_algo.engine.market import PriceLoader
 from skas_algo.services.backtest import run_backtest
@@ -39,14 +45,33 @@ def list_strategies() -> dict:
     return {"strategies": available()}
 
 
+@router.get("/universes", response_model=list[UniverseOut])
+def list_universes(
+    avail: set[str] = Depends(get_available_symbols),
+) -> list[UniverseOut]:
+    return [
+        UniverseOut(
+            name=name, label=universes.label(name), count=len(universes.resolve(name, avail))
+        )
+        for name in universes.UNIVERSES
+    ]
+
+
 @router.post("/backtest", response_model=BacktestResponse)
 def post_backtest(
     req: BacktestRequest,
     db: Session = Depends(get_db),
     loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
 ) -> BacktestResponse:
+    # A named universe expands to its cached symbols; otherwise use explicit symbols.
+    if req.universe:
+        try:
+            req.symbols = universes.resolve(req.universe, avail)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     if not req.symbols:
-        raise HTTPException(status_code=422, detail="symbols must not be empty")
+        raise HTTPException(status_code=422, detail="symbols or a valid universe required")
     try:
         result = run_backtest(db, loader, req)
     except KeyError as exc:  # unknown strategy_id

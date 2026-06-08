@@ -15,7 +15,9 @@ class OverrideInput(BaseModel):
 
 class BacktestRequest(BaseModel):
     strategy_id: str
-    symbols: list[str]
+    # Either an explicit symbol list (Custom) or a named universe (expanded server-side).
+    symbols: list[str] = Field(default_factory=list)
+    universe: str | None = None
     start_date: date
     end_date: date
     capital: float = 2_500_000
@@ -43,6 +45,12 @@ class RunSummary(BaseModel):
     mode: str
     started_at: str | None
     metrics: dict
+
+
+class UniverseOut(BaseModel):
+    name: str
+    label: str
+    count: int  # symbols available in the cache
 
 
 class BrokerConnectRequest(BaseModel):
