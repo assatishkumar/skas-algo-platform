@@ -395,6 +395,60 @@ function OverridePanel({ runId, onDone }: { runId: number; onDone: () => void })
   );
 }
 
+function QuoteSwitch({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () => void }) {
+  const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
+  const sessioned = (accounts ?? []).filter((a) => a.has_session);
+  const [open, setOpen] = useState(false);
+  const [acct, setAcct] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function go(qs: string, id: number | null) {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.liveSetQuoteSource(run.run_id, qs, id);
+      setOpen(false);
+      onChanged();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (run.quote_source === "zerodha") {
+    return (
+      <button onClick={() => go("cache", null)} disabled={busy} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
+        Use cache quotes
+      </button>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      {!open ? (
+        <button onClick={() => setOpen(true)} className="rounded bg-emerald-900 hover:bg-emerald-800 px-3 py-1.5 text-xs">
+          Go live ⚡
+        </button>
+      ) : (
+        <>
+          <select className="rounded bg-slate-800 border border-slate-700 px-2 py-1 text-xs" value={acct ?? ""} onChange={(e) => setAcct(e.target.value ? +e.target.value : null)}>
+            <option value="">account…</option>
+            {sessioned.map((a) => (
+              <option key={a.id} value={a.id}>{a.label}</option>
+            ))}
+          </select>
+          <button onClick={() => go("zerodha", acct)} disabled={!acct || busy} className="rounded bg-emerald-900 hover:bg-emerald-800 px-2 py-1 text-xs disabled:opacity-50">
+            {busy ? "…" : "Use live"}
+          </button>
+          <button onClick={() => setOpen(false)} className="text-slate-500 px-1">×</button>
+        </>
+      )}
+      {err && <span className="text-rose-400 text-xs">{err}</span>}
+    </span>
+  );
+}
+
 function RunCard({
   run,
   version,
@@ -493,6 +547,7 @@ function RunCard({
               {showSignals ? "Hide signals" : "Signals"}
             </button>
             <button onClick={() => setShowOverride((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Intervene…</button>
+            <QuoteSwitch run={run} onChanged={onChanged} />
             <button onClick={() => act(() => api.liveStop(run.run_id))} className="rounded bg-rose-900 hover:bg-rose-800 px-3 py-1.5 text-xs">Stop</button>
           </div>
           {showOverride && <OverridePanel runId={run.run_id} onDone={() => setShowOverride(false)} />}

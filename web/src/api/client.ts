@@ -63,6 +63,11 @@ export const api = {
   liveStop: (id: number) => request<{ stopped: number }>(`/live/${id}/stop`, { method: "POST" }),
   liveWatchlist: (id: number) =>
     request<{ run_id: number; rows: WatchRow[] }>(`/live/${id}/watchlist`),
+  liveSetQuoteSource: (id: number, quote_source: string, broker_account_id?: number | null) =>
+    request<LiveRunSnapshot>(`/live/${id}/quote-source`, {
+      method: "POST",
+      body: JSON.stringify({ quote_source, broker_account_id: broker_account_id ?? null }),
+    }),
   liveAddOverride: (id: number, ov: OverrideInput) =>
     request<{ run_id: number; overrides: number }>(`/live/${id}/overrides`, {
       method: "POST",

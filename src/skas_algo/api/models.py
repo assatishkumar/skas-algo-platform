@@ -85,6 +85,11 @@ class RequestTokenInput(BaseModel):
     request_token: str
 
 
+class QuoteSourceInput(BaseModel):
+    quote_source: str  # "cache" | "zerodha"
+    broker_account_id: int | None = None
+
+
 class BrokerAccountOut(BaseModel):
     id: int
     broker: str
