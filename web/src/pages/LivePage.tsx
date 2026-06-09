@@ -77,6 +77,14 @@ function StartForm({ onStarted, prefill }: { onStarted: () => void; prefill?: Fo
   const [capital, setCapital] = useState(pf?.capital ?? 1000000);
   const [parts, setParts] = useState(10);
   const [target, setTarget] = useState(6);
+  const [target1, setTarget1] = useState(10);
+  const [target2, setTarget2] = useState(8);
+  const [target3, setTarget3] = useState(6);
+  const [maxLots, setMaxLots] = useState(0);
+  const [taxRate, setTaxRate] = useState(20);
+  const [withdrawalRate, setWithdrawalRate] = useState(0);
+  const [lookback, setLookback] = useState(20);
+  const [allocationMode, setAllocationMode] = useState("fixed");
   const [quoteSource, setQuoteSource] = useState("cache");
   const [accountId, setAccountId] = useState<number | null>(null);
   const [ignoreHours, setIgnoreHours] = useState(true);
@@ -88,17 +96,30 @@ function StartForm({ onStarted, prefill }: { onStarted: () => void; prefill?: Fo
     setBusy(true);
     setError(null);
     const isCustom = universe === "";
+    const isFifo = strategyId === "sst_fifo";
     // Prefill carries the backtest's exact strategy params + tax/withdrawal/lookback.
-    const params = pf ? pfStrategyParams : { capital_parts: parts, profit_target: target / 100 };
+    const manualParams = {
+      capital_parts: parts,
+      max_lots: maxLots,
+      allocation_mode: allocationMode,
+      ...(isFifo
+        ? {
+            profit_target_1: target1 / 100,
+            profit_target_2: target2 / 100,
+            profit_target_3: target3 / 100,
+          }
+        : { profit_target: target / 100 }),
+    };
+    const params = pf ? pfStrategyParams : manualParams;
     const body: StartLiveRequest = {
       strategy_id: strategyId,
       universe: isCustom ? null : universe,
       symbols: isCustom ? symbols.split(",").map((s) => s.trim()).filter(Boolean) : [],
       capital,
       params,
-      tax_rate: pf ? (pfTax ?? 0.2) : 0.2,
-      withdrawal_rate: pf ? (pfWd ?? 0) : 0,
-      lookback: pf ? (pfLookback ?? 20) : 20,
+      tax_rate: pf ? (pfTax ?? 0.2) : taxRate / 100,
+      withdrawal_rate: pf ? (pfWd ?? 0) : withdrawalRate / 100,
+      lookback: pf ? (pfLookback ?? 20) : lookback,
       quote_source: quoteSource,
       broker_account_id: quoteSource === "zerodha" ? accountId : null,
       ignore_market_hours: ignoreHours,
@@ -115,6 +136,9 @@ function StartForm({ onStarted, prefill }: { onStarted: () => void; prefill?: Fo
   }
 
   const sessioned = (accounts ?? []).filter((a) => a.has_session);
+  const isFifo = strategyId === "sst_fifo";
+  const labeled = "block";
+  const lbl = "block text-xs text-slate-400 mb-1";
 
   return (
     <Card>
@@ -127,25 +151,84 @@ function StartForm({ onStarted, prefill }: { onStarted: () => void; prefill?: Fo
           {pf.strategy_id} · {(pfSymbols ?? []).length} symbols · params from backtest (editable capital below)
         </div>
       ) : (
-        <div className="grid md:grid-cols-4 gap-3 mb-3">
-          <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>
-            {(strategyData?.strategies ?? ["sst_lifo"]).map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-          <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
-            {(universeData ?? []).map((u) => (
-              <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
-            ))}
-            <option value="">Custom</option>
-          </select>
-          {universe === "" ? (
-            <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
-          ) : (
-            <input className={`${inputClass} text-slate-500`} disabled value="(universe)" />
-          )}
-          <input type="number" className={inputClass} value={parts} onChange={(e) => setParts(+e.target.value)} placeholder="parts" />
-          <input type="number" step="0.1" className={inputClass} value={target} onChange={(e) => setTarget(+e.target.value)} placeholder="target %" />
+        <div className="space-y-3 mb-3">
+          <div className="grid md:grid-cols-3 gap-3">
+            <label className={labeled}>
+              <span className={lbl}>Strategy</span>
+              <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>
+                {(strategyData?.strategies ?? ["sst_lifo"]).map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </label>
+            <label className={labeled}>
+              <span className={lbl}>Universe</span>
+              <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
+                {(universeData ?? []).map((u) => (
+                  <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
+                ))}
+                <option value="">Custom</option>
+              </select>
+            </label>
+            <label className={labeled}>
+              <span className={lbl}>Symbols</span>
+              {universe === "" ? (
+                <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
+              ) : (
+                <input className={`${inputClass} text-slate-500`} disabled value="(from universe)" />
+              )}
+            </label>
+          </div>
+          <div className="grid md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <label className={labeled}>
+              <span className={lbl}>Capital parts</span>
+              <input type="number" className={inputClass} value={parts} onChange={(e) => setParts(+e.target.value)} />
+            </label>
+            {isFifo ? (
+              <>
+                <label className={labeled}>
+                  <span className={lbl}>Target % (1 lot)</span>
+                  <input type="number" step="0.1" className={inputClass} value={target1} onChange={(e) => setTarget1(+e.target.value)} />
+                </label>
+                <label className={labeled}>
+                  <span className={lbl}>Target % (2)</span>
+                  <input type="number" step="0.1" className={inputClass} value={target2} onChange={(e) => setTarget2(+e.target.value)} />
+                </label>
+                <label className={labeled}>
+                  <span className={lbl}>Target % (3+)</span>
+                  <input type="number" step="0.1" className={inputClass} value={target3} onChange={(e) => setTarget3(+e.target.value)} />
+                </label>
+              </>
+            ) : (
+              <label className={labeled}>
+                <span className={lbl}>Profit target %</span>
+                <input type="number" step="0.1" className={inputClass} value={target} onChange={(e) => setTarget(+e.target.value)} />
+              </label>
+            )}
+            <label className={labeled}>
+              <span className={lbl}>Max lots (0=∞)</span>
+              <input type="number" className={inputClass} value={maxLots} onChange={(e) => setMaxLots(+e.target.value)} />
+            </label>
+            <label className={labeled}>
+              <span className={lbl}>Lookback</span>
+              <input type="number" className={inputClass} value={lookback} onChange={(e) => setLookback(+e.target.value)} />
+            </label>
+            <label className={labeled}>
+              <span className={lbl}>Tax rate %</span>
+              <input type="number" className={inputClass} value={taxRate} onChange={(e) => setTaxRate(+e.target.value)} />
+            </label>
+            <label className={labeled}>
+              <span className={lbl}>Withdrawal %</span>
+              <input type="number" className={inputClass} value={withdrawalRate} onChange={(e) => setWithdrawalRate(+e.target.value)} />
+            </label>
+            <label className={labeled}>
+              <span className={lbl}>Position sizing</span>
+              <select className={inputClass} value={allocationMode} onChange={(e) => setAllocationMode(e.target.value)}>
+                <option value="fixed">Fixed</option>
+                <option value="equity_scaled">Equity-scaled</option>
+              </select>
+            </label>
+          </div>
         </div>
       )}
 
