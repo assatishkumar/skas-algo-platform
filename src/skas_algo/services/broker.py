@@ -1,4 +1,9 @@
-"""Broker account management: encrypted credential storage, login, arming."""
+"""Broker account management: encrypted secret storage, request-token session, arming.
+
+Login is out-of-band: the user opens ``login_url`` on Kite, authenticates themselves,
+and pastes the resulting request_token, which ``exchange_token`` swaps for the daily
+access token. Only the api_secret is stored (encrypted) — no password or TOTP.
+"""
 
 from __future__ import annotations
 
@@ -15,25 +20,15 @@ from skas_algo.security import decrypt, encrypt
 
 
 def connect_account(
-    session: Session,
-    *,
-    broker: str,
-    label: str,
-    api_key: str,
-    api_secret: str,
-    user_id: str,
-    password: str,
-    totp_secret: str,
+    session: Session, *, broker: str, label: str, api_key: str, api_secret: str, user_id: str
 ) -> BrokerAccount:
-    """Store a broker account with credentials encrypted at rest."""
+    """Store a broker account; the API secret is encrypted at rest."""
     account = BrokerAccount(
         broker=broker,
         label=label,
         api_key=api_key,
         user_id=user_id,
         enc_api_secret=encrypt(api_secret),
-        enc_password=encrypt(password),
-        enc_totp_secret=encrypt(totp_secret),
     )
     session.add(account)
     session.flush()
@@ -49,28 +44,37 @@ def _credentials(account: BrokerAccount) -> ZerodhaCredentials:
         api_key=account.api_key or "",
         api_secret=decrypt(account.enc_api_secret) or "",
         user_id=account.user_id or "",
-        password=decrypt(account.enc_password) or "",
-        totp_secret=decrypt(account.enc_totp_secret) or "",
     )
 
 
 def make_adapter(account: BrokerAccount) -> ZerodhaAdapter:
-    """Build a live adapter for an account (orders still gated by armed + master switch)."""
-    return ZerodhaAdapter(
+    """Adapter for an account, resuming a stored access token if present.
+
+    Orders are still gated by ``armed`` + SKAS_LIVE_TRADING_ENABLED.
+    """
+    adapter = ZerodhaAdapter(
         _credentials(account),
         armed=account.armed,
         live_enabled=get_settings().live_trading_enabled,
     )
+    token = decrypt(account.session_token)
+    if token:
+        adapter.set_access_token(token)
+    return adapter
 
 
-def login_account(session: Session, account: BrokerAccount) -> BrokerAccount:
-    """Run the broker login flow and persist the session token."""
+def login_url(account: BrokerAccount) -> str:
+    return make_adapter(account).login_url()
+
+
+def exchange_token(session: Session, account: BrokerAccount, request_token: str) -> BrokerAccount:
+    """Exchange a user-supplied request_token for the daily access token; persist it."""
     notifier = build_notifier()
     adapter = make_adapter(account)
     try:
-        sess = adapter.login()
+        sess = adapter.exchange_request_token(request_token)
     except Exception as exc:
-        notifier.send(Alert(f"Broker login failed: {account.label}", str(exc), AlertLevel.ERROR))
+        notifier.send(Alert(f"Broker session failed: {account.label}", str(exc), AlertLevel.ERROR))
         raise
     account.session_token = encrypt(sess.access_token)
     account.session_expires_at = sess.expires_at

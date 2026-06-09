@@ -128,8 +128,6 @@ export interface BrokerConnectRequest {
   api_key: string;
   api_secret: string;
   user_id: string;
-  password: string;
-  totp_secret: string;
 }
 
 export interface LiveTradeEvent {

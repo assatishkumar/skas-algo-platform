@@ -1,39 +1,28 @@
-"""Zerodha (Kite Connect) live broker adapter.
+"""Zerodha (Kite Connect) broker adapter.
 
-Login is TOTP-automated: user_id + password + TOTP secret are posted to Kite's web
-login + 2FA endpoints to obtain a request_token, which is exchanged (with the
-api_secret) for the daily Kite Connect access_token.
+Login is done by the user out-of-band: they open the Kite login URL, authenticate
+(password + 2FA) themselves, and the redirect gives a ``request_token``. The platform
+exchanges that token (+ api_secret) for the daily access token via
+``generate_session`` — the standard, ToS-compliant Kite Connect flow. No password or
+TOTP is stored; only api_key + api_secret (encrypted).
 
-⚠️ ToS: automating Zerodha's username/password login is against the Kite Terms of
-Service. This is provided because it was an explicit project choice; Angel One's
-SmartAPI supports TOTP login officially and is the recommended path to de-risk.
-
-Safety: real orders only fire when the account is *armed* AND live trading is
-enabled at the platform level (SKAS_LIVE_TRADING_ENABLED). Otherwise place_order
-raises NotArmedError. Forward-testing uses PaperBroker and never reaches this class.
+Safety: real orders only fire when the account is *armed* AND live trading is enabled
+at the platform level (SKAS_LIVE_TRADING_ENABLED). Otherwise place_order raises
+NotArmedError. Forward-testing uses PaperBroker and never reaches this class.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from urllib.parse import parse_qs, urlparse
-
-import pyotp
-import requests
 
 from skas_algo.db.enums import OrderSide, OrderType
 
 from .base import BrokerOrder, Funds, Session
 
-KITE_LOGIN_URL = "https://kite.zerodha.com/api/login"
-KITE_TWOFA_URL = "https://kite.zerodha.com/api/twofa"
-HTTP_TIMEOUT = 15  # seconds — never let a login network call hang forever
-
 
 class BrokerLoginError(RuntimeError):
-    """Raised when the automated login flow fails."""
+    """Raised when exchanging the request token fails."""
 
 
 class NotArmedError(RuntimeError):
@@ -44,9 +33,7 @@ class NotArmedError(RuntimeError):
 class ZerodhaCredentials:
     api_key: str
     api_secret: str
-    user_id: str
-    password: str
-    totp_secret: str
+    user_id: str = ""
 
 
 class ZerodhaAdapter:
@@ -58,13 +45,11 @@ class ZerodhaAdapter:
         *,
         armed: bool = False,
         live_enabled: bool = False,
-        http_session: requests.Session | None = None,
         kite=None,
     ):
         self.creds = creds
         self.armed = armed
         self.live_enabled = live_enabled
-        self._http = http_session or requests.Session()
         self._kite = kite  # injectable KiteConnect (lazily built if None)
         self.access_token: str | None = None
 
@@ -77,13 +62,17 @@ class ZerodhaAdapter:
         return self._kite
 
     # ----------------------------------------------------------------- login
-    def login(self) -> Session:
-        """Run the TOTP login flow and return an authenticated Session."""
-        request_id = self._password_login()
-        self._submit_totp(request_id)
-        request_token = self._resolve_request_token()
+    def login_url(self) -> str:
+        """The Kite URL the user visits to authenticate and obtain a request_token."""
+        return self._kite_client().login_url()
+
+    def exchange_request_token(self, request_token: str) -> Session:
+        """Exchange a user-supplied request_token for the daily access token."""
         kite = self._kite_client()
-        data = kite.generate_session(request_token, api_secret=self.creds.api_secret)
+        try:
+            data = kite.generate_session(request_token, api_secret=self.creds.api_secret)
+        except Exception as exc:
+            raise BrokerLoginError(f"request token exchange failed: {exc}") from exc
         self.access_token = data["access_token"]
         kite.set_access_token(self.access_token)
         # Kite access tokens expire at the next ~06:00 IST; treat as end-of-day.
@@ -92,62 +81,10 @@ class ZerodhaAdapter:
             expires_at=datetime.now() + timedelta(hours=12),
         )
 
-    def _password_login(self) -> str:
-        resp = self._http.post(
-            KITE_LOGIN_URL,
-            data={"user_id": self.creds.user_id, "password": self.creds.password},
-            timeout=HTTP_TIMEOUT,
-        )
-        body = resp.json()
-        if body.get("status") != "success" or "data" not in body:
-            raise BrokerLoginError(f"password login failed: {body}")
-        request_id = body["data"].get("request_id")
-        if not request_id:
-            raise BrokerLoginError("login response missing request_id")
-        return request_id
-
-    def _totp_now(self) -> str:
-        # Authenticator apps show the secret in spaced 4-char groups; strip whitespace
-        # and uppercase before decoding (base32 is A-Z, 2-7).
-        secret = re.sub(r"\s+", "", self.creds.totp_secret or "").upper()
-        try:
-            return pyotp.TOTP(secret).now()
-        except Exception as exc:
-            raise BrokerLoginError(
-                "Invalid TOTP secret — paste the base32 'secret key' shown when you set up "
-                "the external 2FA authenticator (letters A-Z and digits 2-7), not a 6-digit code."
-            ) from exc
-
-    def _submit_totp(self, request_id: str) -> None:
-        code = self._totp_now()
-        resp = self._http.post(
-            KITE_TWOFA_URL,
-            data={
-                "user_id": self.creds.user_id,
-                "request_id": request_id,
-                "twofa_value": code,
-                "twofa_type": "totp",
-            },
-            timeout=HTTP_TIMEOUT,
-        )
-        body = resp.json()
-        if body.get("status") != "success":
-            raise BrokerLoginError(f"2FA failed: {body}")
-
-    def _resolve_request_token(self) -> str:
-        """Follow the Kite Connect OAuth redirect to capture the request_token."""
-        url = self._kite_client().login_url()
-        for _ in range(10):
-            resp = self._http.get(url, allow_redirects=False, timeout=HTTP_TIMEOUT)
-            location = resp.headers.get("location") or resp.headers.get("Location")
-            if location and "request_token=" in location:
-                qs = parse_qs(urlparse(location).query)
-                return qs["request_token"][0]
-            if location:
-                url = location
-                continue
-            break
-        raise BrokerLoginError("could not obtain request_token from redirect")
+    def set_access_token(self, token: str) -> None:
+        """Resume a previously-exchanged session (for quotes/orders) without re-login."""
+        self.access_token = token
+        self._kite_client().set_access_token(token)
 
     # ------------------------------------------------------------ execution
     def _ensure_armed(self) -> None:

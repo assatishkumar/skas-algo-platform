@@ -55,11 +55,10 @@ class BrokerAccount(Base, TimestampMixin):
     label: Mapped[str] = mapped_column(String(64))
     api_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # Encrypted blobs (api_secret, password, TOTP secret) — opaque ciphertext.
+    # Only the API secret is stored (encrypted). Login is done by the user out-of-band;
+    # they paste the request_token, which we exchange for the daily access token.
     enc_api_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
-    enc_password: Mapped[str | None] = mapped_column(Text, nullable=True)
-    enc_totp_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Daily session
+    # Daily session (the exchanged access token, encrypted).
     session_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     session_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

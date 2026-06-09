@@ -79,8 +79,10 @@ class BrokerConnectRequest(BaseModel):
     api_key: str
     api_secret: str
     user_id: str
-    password: str
-    totp_secret: str
+
+
+class RequestTokenInput(BaseModel):
+    request_token: str
 
 
 class BrokerAccountOut(BaseModel):

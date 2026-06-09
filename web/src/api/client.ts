@@ -64,7 +64,12 @@ export const brokers = {
   list: () => request<BrokerAccount[]>("/brokers"),
   connect: (body: BrokerConnectRequest) =>
     request<BrokerAccount>("/brokers", { method: "POST", body: JSON.stringify(body) }),
-  login: (id: number) => request<BrokerAccount>(`/brokers/${id}/login`, { method: "POST" }),
+  loginUrl: (id: number) => request<{ login_url: string }>(`/brokers/${id}/login-url`),
+  login: (id: number, requestToken: string) =>
+    request<BrokerAccount>(`/brokers/${id}/login`, {
+      method: "POST",
+      body: JSON.stringify({ request_token: requestToken }),
+    }),
   arm: (id: number) => request<BrokerAccount>(`/brokers/${id}/arm`, { method: "POST" }),
   disarm: (id: number) => request<BrokerAccount>(`/brokers/${id}/disarm`, { method: "POST" }),
   remove: (id: number) => request<{ deleted: number }>(`/brokers/${id}`, { method: "DELETE" }),

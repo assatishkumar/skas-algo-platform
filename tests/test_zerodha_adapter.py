@@ -1,8 +1,7 @@
-"""ZerodhaAdapter: order-arming guard and the TOTP login orchestration (mocked HTTP)."""
+"""ZerodhaAdapter: order-arming guard and request-token session exchange (mocked)."""
 
 from __future__ import annotations
 
-import pyotp
 import pytest
 
 from skas_algo.brokers.base import BrokerOrder
@@ -14,29 +13,7 @@ from skas_algo.brokers.zerodha import (
 )
 from skas_algo.db.enums import OrderSide
 
-CREDS = ZerodhaCredentials(
-    api_key="apikey",
-    api_secret="apisecret",
-    user_id="AB1234",
-    password="pw",
-    totp_secret=pyotp.random_base32(),
-)
-
-
-def test_totp_secret_with_spaces_is_sanitized():
-    # Authenticator apps show the secret in spaced groups; it must still work.
-    spaced = "JBSW Y3DP EHPK 3PXP"
-    adapter = ZerodhaAdapter(ZerodhaCredentials("k", "s", "AB1234", "pw", spaced), armed=False)
-    code = adapter._totp_now()
-    assert len(code) == 6 and code.isdigit()
-
-
-def test_invalid_totp_secret_gives_clear_error():
-    adapter = ZerodhaAdapter(
-        ZerodhaCredentials("k", "s", "AB1234", "pw", "not-base32!!"), armed=False
-    )
-    with pytest.raises(BrokerLoginError, match="base32"):
-        adapter._totp_now()
+CREDS = ZerodhaCredentials(api_key="apikey", api_secret="apisecret", user_id="AB1234")
 
 
 def test_place_order_blocked_when_not_armed():
@@ -49,37 +26,6 @@ def test_place_order_blocked_when_live_disabled():
     adapter = ZerodhaAdapter(CREDS, armed=True, live_enabled=False)
     with pytest.raises(NotArmedError):
         adapter.place_order(BrokerOrder("RELIANCE", OrderSide.BUY, 1))
-
-
-class _Resp:
-    def __init__(self, json_body=None, headers=None):
-        self._json = json_body or {}
-        self.headers = headers or {}
-
-    def json(self):
-        return self._json
-
-
-class _FakeHttp:
-    """Scripts the login -> twofa -> oauth-redirect sequence."""
-
-    def __init__(self):
-        self.calls = []
-
-    def post(self, url, data=None, **kw):
-        self.calls.append(("POST", url, data))
-        if url.endswith("/api/login"):
-            return _Resp({"status": "success", "data": {"request_id": "req-1"}})
-        if url.endswith("/api/twofa"):
-            return _Resp({"status": "success", "data": {}})
-        raise AssertionError(f"unexpected POST {url}")
-
-    def get(self, url, allow_redirects=True, **kw):
-        self.calls.append(("GET", url, None))
-        # Kite redirects to the app's redirect_uri carrying the request_token.
-        return _Resp(
-            headers={"location": "https://app.example/redirect?request_token=RT123&status=success"}
-        )
 
 
 class _FakeKite:
@@ -98,17 +44,25 @@ class _FakeKite:
         self.access_token = token
 
 
-def test_totp_login_flow():
-    http = _FakeHttp()
+def test_login_url():
+    adapter = ZerodhaAdapter(CREDS, kite=_FakeKite())
+    assert "api_key=apikey" in adapter.login_url()
+
+
+def test_exchange_request_token():
     kite = _FakeKite()
-    adapter = ZerodhaAdapter(CREDS, http_session=http, kite=kite)
-
-    session = adapter.login()
-
+    adapter = ZerodhaAdapter(CREDS, kite=kite)
+    session = adapter.exchange_request_token("RT123")
     assert session.access_token == "ACCESS-XYZ"
     assert adapter.access_token == "ACCESS-XYZ"
     assert kite.access_token == "ACCESS-XYZ"
-    # The 2FA POST carried a fresh 6-digit TOTP for the right request_id.
-    twofa = next(c for c in http.calls if c[1].endswith("/api/twofa"))
-    assert twofa[2]["request_id"] == "req-1"
-    assert len(twofa[2]["twofa_value"]) == 6
+
+
+def test_exchange_failure_gives_clear_error():
+    class BadKite:
+        def generate_session(self, *a, **k):
+            raise ValueError("Invalid `request_token`.")
+
+    adapter = ZerodhaAdapter(CREDS, kite=BadKite())
+    with pytest.raises(BrokerLoginError, match="request token exchange failed"):
+        adapter.exchange_request_token("bad")

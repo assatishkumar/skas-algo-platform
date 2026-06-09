@@ -35,12 +35,12 @@ def _quote_source(req: LiveStartRequest, loader: PriceLoader, db: Session):
         account = db.get(BrokerAccount, req.broker_account_id)
         if account is None:
             raise HTTPException(status_code=404, detail="broker account not found")
-        adapter = broker_svc.make_adapter(account)
-        try:
-            adapter.login()
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"broker login failed: {exc}") from exc
-        return ZerodhaQuoteSource(adapter)
+        if not broker_svc.has_valid_session(account):
+            raise HTTPException(
+                status_code=400,
+                detail="broker account has no valid session — log in (paste request token) first",
+            )
+        return ZerodhaQuoteSource(broker_svc.make_adapter(account))
     raise HTTPException(status_code=400, detail=f"unknown quote_source '{req.quote_source}'")
 
 

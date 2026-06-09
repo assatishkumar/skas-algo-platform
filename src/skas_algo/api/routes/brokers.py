@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
-from skas_algo.api.models import BrokerAccountOut, BrokerConnectRequest
+from skas_algo.api.models import BrokerAccountOut, BrokerConnectRequest, RequestTokenInput
 from skas_algo.config import get_settings
 from skas_algo.db.models import BrokerAccount
 from skas_algo.security.crypto import EncryptionKeyMissing
@@ -47,8 +47,6 @@ def connect(req: BrokerConnectRequest, db: Session = Depends(get_db)) -> BrokerA
             api_key=req.api_key,
             api_secret=req.api_secret,
             user_id=req.user_id,
-            password=req.password,
-            totp_secret=req.totp_secret,
         )
     except EncryptionKeyMissing as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -66,13 +64,26 @@ def delete(account_id: int, db: Session = Depends(get_db)) -> dict:
     return {"deleted": account_id}
 
 
-@router.post("/{account_id}/login", response_model=BrokerAccountOut)
-def login(account_id: int, db: Session = Depends(get_db)) -> BrokerAccountOut:
+@router.get("/{account_id}/login-url")
+def login_url(account_id: int, db: Session = Depends(get_db)) -> dict:
+    """The Kite URL to open and authenticate; the redirect yields a request_token."""
     account = _get(db, account_id)
     try:
-        broker_svc.login_account(db, account)
+        return {"login_url": broker_svc.login_url(account)}
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"login failed: {exc}") from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{account_id}/login", response_model=BrokerAccountOut)
+def login(
+    account_id: int, body: RequestTokenInput, db: Session = Depends(get_db)
+) -> BrokerAccountOut:
+    """Exchange the user-supplied request_token for the daily access token."""
+    account = _get(db, account_id)
+    try:
+        broker_svc.exchange_token(db, account, body.request_token.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"token exchange failed: {exc}") from exc
     return _to_out(account)
 
 
