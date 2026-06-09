@@ -109,7 +109,7 @@ def refresh_cache(
     if not symbols:
         raise HTTPException(status_code=422, detail="symbols or a valid universe required")
     try:
-        result = market_data.refresh_cache(account, symbols)
+        result = market_data.refresh_cache(account, symbols, start=body.start_date)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"cache refresh failed: {exc}") from exc
     return {"account_id": account_id, "refreshed": result}

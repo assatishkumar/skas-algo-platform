@@ -117,7 +117,10 @@ export const brokers = {
       method: "POST",
       body: JSON.stringify({ request_token: requestToken }),
     }),
-  refreshCache: (id: number, body: { symbols?: string[]; universe?: string }) =>
+  refreshCache: (
+    id: number,
+    body: { symbols?: string[]; universe?: string; start_date?: string },
+  ) =>
     request<{ account_id: number; refreshed: Record<string, { rows?: number; last_date?: string | null; error?: string }> }>(
       `/brokers/${id}/refresh-cache`,
       { method: "POST", body: JSON.stringify(body) },

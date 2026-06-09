@@ -97,10 +97,15 @@ class QuoteSourceInput(BaseModel):
 
 
 class RefreshCacheInput(BaseModel):
-    """Symbols to refresh on the shared session: an explicit list or a named universe."""
+    """Symbols to refresh on the shared session: an explicit list or a named universe.
+
+    ``start_date`` (ISO) backfills from that date — used by "add symbol" to pull full
+    history for a name not yet cached; omitted, the service fills only recent gaps.
+    """
 
     symbols: list[str] = Field(default_factory=list)
     universe: str | None = None
+    start_date: date | None = None
 
 
 class DeploymentUpdate(BaseModel):

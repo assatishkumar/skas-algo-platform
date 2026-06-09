@@ -151,4 +151,12 @@ def test_refresh_cache_endpoint(client: TestClient, monkeypatch):
     assert resp.status_code == 200, resp.text
     refreshed = resp.json()["refreshed"]
     assert refreshed["AAA"]["rows"] == 1 and refreshed["AAA"]["last_date"] == "2024-01-02"
+
+    # "Add symbol" path: an explicit symbol with a backfill start_date works the same way.
+    add = client.post(
+        f"/api/v1/brokers/{account_id}/refresh-cache",
+        json={"symbols": ["NEWSYM"], "start_date": "2010-01-01"},
+    )
+    assert add.status_code == 200, add.text
+    assert add.json()["refreshed"]["NEWSYM"]["rows"] == 1
     app.dependency_overrides.pop(get_available_symbols, None)

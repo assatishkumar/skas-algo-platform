@@ -108,12 +108,106 @@ function SymbolDetail({ symbol, onRefreshed }: { symbol: string; onRefreshed: ()
   );
 }
 
+function DataToolbar({
+  symbols,
+  accountId,
+  onChanged,
+}: {
+  symbols: DataSymbol[];
+  accountId: number | null;
+  onChanged: (added?: string) => void;
+}) {
+  const [newSym, setNewSym] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addMsg, setAddMsg] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const disabled = accountId == null;
+
+  async function addSymbol() {
+    const sym = newSym.trim().toUpperCase();
+    if (!sym || accountId == null) return;
+    setAdding(true);
+    setAddMsg(null);
+    try {
+      // Full backfill from 2010 for a name not yet cached.
+      const { refreshed } = await brokers.refreshCache(accountId, {
+        symbols: [sym],
+        start_date: "2010-01-01",
+      });
+      const r = refreshed[sym];
+      if (r?.error) setAddMsg(`Error: ${r.error}`);
+      else if (!r?.rows) setAddMsg(`No data found for "${sym}" — check the symbol.`);
+      else {
+        setAddMsg(`Added ${sym} (${r.rows} rows → ${r.last_date}).`);
+        setNewSym("");
+        onChanged(sym);
+      }
+    } catch (e) {
+      setAddMsg((e as Error).message);
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function refreshAll() {
+    if (accountId == null) return;
+    const all = symbols.map((s) => s.symbol);
+    const CHUNK = 15;
+    setProgress({ done: 0, total: all.length });
+    try {
+      for (let i = 0; i < all.length; i += CHUNK) {
+        await brokers.refreshCache(accountId, { symbols: all.slice(i, i + CHUNK) });
+        setProgress({ done: Math.min(i + CHUNK, all.length), total: all.length });
+      }
+      onChanged();
+    } finally {
+      setProgress(null);
+    }
+  }
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <input
+            className="rounded-md bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm w-44 focus:outline-none focus:border-brand"
+            placeholder="Add symbol (e.g. DLF)"
+            value={newSym}
+            onChange={(e) => setNewSym(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addSymbol()}
+            disabled={disabled}
+          />
+          <button
+            onClick={addSymbol}
+            disabled={disabled || adding || !newSym.trim()}
+            className="rounded-md bg-brand hover:bg-brand-light px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+          >
+            {adding ? "Adding…" : "Add"}
+          </button>
+        </div>
+        <button
+          onClick={refreshAll}
+          disabled={disabled || progress != null}
+          className="rounded-md bg-slate-700 hover:bg-slate-600 px-3 py-1.5 text-sm disabled:opacity-50"
+        >
+          {progress ? `Refreshing ${progress.done}/${progress.total}…` : "Refresh all"}
+        </button>
+        {disabled && <span className="text-xs text-slate-500">Log in on Brokers to add/refresh.</span>}
+        {addMsg && <span className="text-xs text-slate-400">{addMsg}</span>}
+      </div>
+    </Card>
+  );
+}
+
 export default function DataPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
 
   const { data: summary } = useQuery({ queryKey: ["data-summary"], queryFn: api.dataSummary });
+  const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
+  const sessionedId = (accounts ?? []).find((a) => a.has_session)?.id ?? null;
   const { data: symbols, isLoading, error } = useQuery({
     queryKey: ["data-symbols"],
     queryFn: api.dataSymbols,
@@ -137,6 +231,15 @@ export default function DataPage() {
   const onRefreshed = () => {
     queryClient.invalidateQueries({ queryKey: ["data-symbols"] });
     if (selected) queryClient.invalidateQueries({ queryKey: ["data-symbol", selected] });
+  };
+
+  const onToolbarChanged = (added?: string) => {
+    queryClient.invalidateQueries({ queryKey: ["data-symbols"] });
+    queryClient.invalidateQueries({ queryKey: ["data-summary"] });
+    if (added) {
+      queryClient.invalidateQueries({ queryKey: ["data-symbol", added] });
+      setSelected(added);
+    }
   };
 
   return (
@@ -165,6 +268,8 @@ export default function DataPage() {
           </div>
         </div>
       </Card>
+
+      <DataToolbar symbols={symbols ?? []} accountId={sessionedId} onChanged={onToolbarChanged} />
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
