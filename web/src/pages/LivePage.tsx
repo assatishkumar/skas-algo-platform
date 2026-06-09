@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
@@ -406,22 +406,50 @@ function RunCard({
 }) {
   const [showOverride, setShowOverride] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
+  const queryClient = useQueryClient();
   const act = async (fn: () => Promise<unknown>) => {
     await fn();
     onChanged();
   };
+  const refresh = async () => {
+    await api.liveRefresh(run.run_id);
+    queryClient.invalidateQueries({ queryKey: ["watchlist", run.run_id] });
+    onChanged();
+  };
   const stopped = run.status === "stopped";
+  const upnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
   return (
     <Card>
       <div className="flex items-center justify-between">
         <div>
           <span className="font-medium">{run.name}</span>{" "}
           <span className="text-xs text-slate-400">#{run.run_id} · {run.strategy_id}</span>{" "}
-          <Badge>{run.status}</Badge>
+          <Badge>{run.status}</Badge>{" "}
+          <Badge>{run.quote_source === "zerodha" ? "live quotes" : "cache quotes"}</Badge>
         </div>
         <div className="flex gap-6 text-right text-sm">
           <div><div className="text-slate-400 text-xs">Equity</div>{formatInr(run.equity)}</div>
           <div><div className="text-slate-400 text-xs">Cash</div>{formatInr(run.cash)}</div>
+        </div>
+      </div>
+
+      {/* Quick summary: deployed capital, parts, positions, unrealized P&L */}
+      <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+        <div className="rounded-md bg-slate-800/40 px-3 py-2">
+          <div className="text-slate-400 text-xs">Deployed</div>
+          {formatInr(run.invested ?? 0)}
+        </div>
+        <div className="rounded-md bg-slate-800/40 px-3 py-2">
+          <div className="text-slate-400 text-xs">Parts deployed</div>
+          {run.open_lots ?? 0}{run.parts_total ? ` / ${run.parts_total}` : ""}
+        </div>
+        <div className="rounded-md bg-slate-800/40 px-3 py-2">
+          <div className="text-slate-400 text-xs">Positions held</div>
+          {run.open_positions ?? 0}
+        </div>
+        <div className="rounded-md bg-slate-800/40 px-3 py-2">
+          <div className="text-slate-400 text-xs">Unrealized P&amp;L</div>
+          <span className={upnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{formatInr(upnl)}</span>
         </div>
       </div>
 
@@ -459,7 +487,7 @@ function RunCard({
       {!stopped && (
         <>
           <div className="mt-3 flex flex-wrap gap-2">
-            <button onClick={() => act(() => api.liveRefresh(run.run_id))} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Refresh</button>
+            <button onClick={refresh} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Refresh</button>
             <button onClick={() => act(() => api.liveRunDecision(run.run_id))} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs">Run decision</button>
             <button onClick={() => setShowSignals((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
               {showSignals ? "Hide signals" : "Signals"}

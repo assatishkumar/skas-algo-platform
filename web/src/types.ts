@@ -92,6 +92,11 @@ export interface LiveRunSnapshot {
   cash: number;
   holdings_value: number;
   equity: number;
+  invested: number;
+  open_positions: number;
+  open_lots: number;
+  parts_total: number | null;
+  quote_source: string;
   realized_taxes: number;
   positions: LivePosition[];
 }

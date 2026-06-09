@@ -160,6 +160,8 @@ class LiveRun:
                 "status": self.status,
                 "name": self.config.name,
                 "strategy_id": self.config.strategy_id,
+                "quote_source": self.config.quote_source,
+                "parts_total": self.config.params.get("capital_parts"),
                 **self.session.snapshot(),
             }
         )

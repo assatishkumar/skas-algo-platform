@@ -160,10 +160,14 @@ class LiveSession:
                 }
             )
         holdings = self.portfolio.holdings_value(closes)
+        symbols_held = self.portfolio.lot_symbols()
         return {
             "cash": self.portfolio.cash,
             "holdings_value": holdings,
             "equity": self.portfolio.cash + holdings,
+            "invested": self.portfolio.invested_capital(),
+            "open_positions": len(symbols_held),
+            "open_lots": sum(len(self.portfolio.lots(s)) for s in symbols_held),
             "realized_taxes": self.portfolio.total_taxes,
             "positions": positions,
         }
