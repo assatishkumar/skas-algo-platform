@@ -97,10 +97,28 @@ def build_report(result: RunResult, initial_capital: float) -> dict[str, Any]:
         if y in monthly_withdrawals:
             monthly_withdrawals[y][m] = entry["withdrawal"]
 
-    equity_curve = [
-        {"date": row["date"].strftime("%Y-%m-%d"), "equity": float(row["total_equity"])}
-        for row in result.history
-    ]
+    # Gross equity adds back taxes + withdrawals as they're flushed, so the strategy
+    # can be compared like-for-like against a gross index buy-and-hold. flush_log is
+    # monthly; history is daily and chronological — accumulate with a moving pointer.
+    flushes = sorted(
+        ((e["date"], e["tax"] + e["withdrawal"]) for e in flush_log.values()),
+        key=lambda x: x[0],
+    )
+    equity_curve = []
+    cum_flush = 0.0
+    fi = 0
+    for row in result.history:
+        while fi < len(flushes) and flushes[fi][0] <= row["date"]:
+            cum_flush += flushes[fi][1]
+            fi += 1
+        eq = float(row["total_equity"])
+        equity_curve.append(
+            {
+                "date": row["date"].strftime("%Y-%m-%d"),
+                "equity": eq,
+                "gross_equity": eq + cum_flush,
+            }
+        )
 
     return to_native(
         {

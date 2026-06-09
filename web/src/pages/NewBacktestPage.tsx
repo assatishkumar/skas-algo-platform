@@ -262,6 +262,7 @@ export default function NewBacktestPage() {
             report={result.report}
             trades={result.trades}
             csvUrl={api.tradesCsvUrl(result.run_id)}
+            runId={result.run_id}
           />
         </div>
       )}

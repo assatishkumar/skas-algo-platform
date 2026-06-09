@@ -27,6 +27,12 @@ export interface YearlyRow {
 export interface EquityPoint {
   date: string;
   equity: number;
+  gross_equity?: number;
+}
+
+export interface BenchmarkPoint {
+  date: string;
+  value: number;
 }
 
 export interface Report {

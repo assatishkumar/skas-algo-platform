@@ -114,7 +114,7 @@ export default function RunDetailPage() {
 
       {data.notes && !editing && <div className="text-sm text-slate-400">{data.notes}</div>}
 
-      <ReportView report={data.report} trades={data.trades} csvUrl={api.tradesCsvUrl(runId)} />
+      <ReportView report={data.report} trades={data.trades} csvUrl={api.tradesCsvUrl(runId)} runId={runId} />
     </div>
   );
 }

@@ -1,6 +1,8 @@
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import {
   CartesianGrid,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -8,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { api } from "../api/client";
 import { formatInr, pct } from "../lib/format";
 import type { Report, Trade } from "../types";
 import { Badge, Card, MetricCard } from "./ui";
@@ -18,13 +21,47 @@ function downsample<T>(arr: T[], maxPoints = 400): T[] {
   return arr.filter((_, i) => i % step === 0 || i === arr.length - 1);
 }
 
-function EquityChart({ report }: { report: Report }) {
-  const data = useMemo(() => downsample(report.equity_curve ?? []), [report.equity_curve]);
+function EquityChart({ report, runId }: { report: Report; runId?: number }) {
+  // Default the benchmark to NIFTY 50; "none" hides it.
+  const [index, setIndex] = useState("NIFTY 50");
+  const hasGross = (report.equity_curve ?? []).some((p) => p.gross_equity != null);
+
+  const { data: benchNames } = useQuery({ queryKey: ["benchmarks"], queryFn: api.benchmarks });
+  const { data: bench } = useQuery({
+    queryKey: ["benchmark", runId, index],
+    queryFn: () => api.runBenchmark(runId!, index),
+    enabled: runId != null && index !== "none",
+  });
+
+  const data = useMemo(() => {
+    const curve = downsample(report.equity_curve ?? []);
+    const byDate = new Map((bench?.points ?? []).map((p) => [p.date, p.value]));
+    return curve.map((p) => ({ ...p, benchmark: byDate.get(p.date) ?? null }));
+  }, [report.equity_curve, bench]);
+
   if (data.length === 0) return null;
+  const options = ["none", ...(benchNames?.benchmarks ?? ["NIFTY 50", "NIFTY 100", "NIFTY 200"])];
+
   return (
     <Card>
-      <div className="text-sm font-medium text-slate-300 mb-3">Equity curve</div>
-      <ResponsiveContainer width="100%" height={260}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-medium text-slate-300">Equity curve</div>
+        {runId != null && (
+          <label className="text-xs text-slate-400 flex items-center gap-1.5">
+            benchmark
+            <select
+              className="rounded bg-slate-800 border border-slate-700 px-1.5 py-0.5"
+              value={index}
+              onChange={(e) => setIndex(e.target.value)}
+            >
+              {options.map((o) => (
+                <option key={o} value={o}>{o === "none" ? "None" : o}</option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+      <ResponsiveContainer width="100%" height={280}>
         <LineChart data={data} margin={{ top: 5, right: 10, bottom: 0, left: 10 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
           <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#94a3b8" }} minTickGap={40} />
@@ -37,9 +74,36 @@ function EquityChart({ report }: { report: Report }) {
             contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
             formatter={(v: number) => formatInr(v)}
           />
-          <Line type="monotone" dataKey="equity" stroke="#14b8a6" dot={false} strokeWidth={2} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Line type="monotone" dataKey="equity" name="Strategy (net)" stroke="#14b8a6" dot={false} strokeWidth={2} />
+          {hasGross && (
+            <Line
+              type="monotone"
+              dataKey="gross_equity"
+              name="Strategy (gross)"
+              stroke="#14b8a6"
+              strokeDasharray="4 3"
+              dot={false}
+              strokeWidth={1.5}
+            />
+          )}
+          {runId != null && index !== "none" && (
+            <Line
+              type="monotone"
+              dataKey="benchmark"
+              name={`${index} (gross B&H)`}
+              stroke="#f59e0b"
+              dot={false}
+              strokeWidth={1.5}
+              connectNulls
+            />
+          )}
         </LineChart>
       </ResponsiveContainer>
+      <div className="mt-2 text-[11px] text-slate-500">
+        Strategy (net) is post-tax &amp; post-withdrawal; gross adds them back for a like-for-like
+        read against the index buy-and-hold.
+      </div>
     </Card>
   );
 }
@@ -227,10 +291,12 @@ export default function ReportView({
   report,
   trades,
   csvUrl,
+  runId,
 }: {
   report: Report;
   trades: Trade[];
   csvUrl?: string;
+  runId?: number;
 }) {
   const m = report.metrics;
   return (
@@ -249,7 +315,7 @@ export default function ReportView({
         <MetricCard label="Avg Monthly Profit (Pre-Tax)" value={formatInr(m["Avg Monthly Profit (Pre-Tax)"])} />
         <MetricCard label="Avg Monthly Profit (Post-Tax)" value={formatInr(m["Avg Monthly Profit (Post-Tax)"])} />
       </div>
-      <EquityChart report={report} />
+      <EquityChart report={report} runId={runId} />
       <YearlyTable report={report} />
       <MonthlyGrid title="Monthly profit (booked)" data={report.monthly_profit} total="sum" />
       {hasAnyValue(report.monthly_withdrawals) && (

@@ -1,6 +1,7 @@
 import type {
   BacktestRequest,
   BacktestResponse,
+  BenchmarkPoint,
   BrokerAccount,
   BrokerConnectRequest,
   Deployment,
@@ -60,6 +61,11 @@ export const api = {
       body: JSON.stringify(body),
     }),
   tradesCsvUrl: (id: number) => `${BASE}/runs/${id}/trades.csv`,
+  benchmarks: () => request<{ benchmarks: string[] }>("/benchmarks"),
+  runBenchmark: (id: number, index: string) =>
+    request<{ index: string; points: BenchmarkPoint[] }>(
+      `/runs/${id}/benchmark?index=${encodeURIComponent(index)}`,
+    ),
 
   // --- live / paper ---
   liveList: () => request<LiveRunSnapshot[]>("/live"),

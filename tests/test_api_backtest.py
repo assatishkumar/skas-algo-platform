@@ -115,6 +115,47 @@ def test_backtest_run_and_reports(api_client: TestClient):
     assert "date,ticker,action" in csv_resp.text
 
 
+def _make_run(api_client: TestClient, **overrides) -> int:
+    body = {
+        "strategy_id": "sst_lifo",
+        "symbols": ["AAA"],
+        "start_date": "2020-01-01",
+        "end_date": "2021-12-31",
+        "capital": 100000,
+        "params": {"capital_parts": 10, "profit_target": 0.06},
+        "tax_rate": 0.0,
+    }
+    body.update(overrides)
+    return api_client.post("/api/v1/backtest", json=body).json()["run_id"]
+
+
+def test_gross_equity_in_curve(api_client: TestClient):
+    # With tax_rate=0 and no withdrawals, gross == net at every point.
+    run_id = _make_run(api_client)
+    curve = api_client.get(f"/api/v1/runs/{run_id}").json()["report"]["equity_curve"]
+    assert curve and all("gross_equity" in p for p in curve)
+    assert all(p["gross_equity"] >= p["equity"] for p in curve)
+    assert curve[-1]["gross_equity"] == pytest.approx(curve[-1]["equity"])
+
+
+def test_benchmark_endpoint(api_client: TestClient):
+    run_id = _make_run(api_client)
+    assert "NIFTY 50" in api_client.get("/api/v1/benchmarks").json()["benchmarks"]
+
+    resp = api_client.get(f"/api/v1/runs/{run_id}/benchmark", params={"index": "NIFTY 50"})
+    assert resp.status_code == 200, resp.text
+    points = resp.json()["points"]
+    # Aligned to the run's equity dates and normalized to the initial capital at t0.
+    curve = api_client.get(f"/api/v1/runs/{run_id}").json()["report"]["equity_curve"]
+    assert len(points) == len(curve)
+    assert points[0]["value"] == pytest.approx(100000, rel=1e-6)
+
+    # Unknown index rejected.
+    assert api_client.get(
+        f"/api/v1/runs/{run_id}/benchmark", params={"index": "FOO"}
+    ).status_code == 400
+
+
 def test_run_management_lifecycle(api_client: TestClient):
     body = {
         "strategy_id": "sst_lifo",

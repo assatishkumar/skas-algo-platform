@@ -24,6 +24,7 @@ from skas_algo.db.enums import TradingMode
 from skas_algo.db.models import Algo, AlgoRun
 from skas_algo.engine.market import PriceLoader
 from skas_algo.services.backtest import run_backtest
+from skas_algo.services.benchmark import BENCHMARK_INDICES, benchmark_series
 from skas_algo.services.runs import delete_algo_cascade
 from skas_algo.strategies.registry import available
 
@@ -46,6 +47,12 @@ _TRADE_COLUMNS = [
 @router.get("/strategies")
 def list_strategies() -> dict:
     return {"strategies": available()}
+
+
+@router.get("/benchmarks")
+def list_benchmarks() -> dict:
+    """Index series available to overlay on the equity curve."""
+    return {"benchmarks": BENCHMARK_INDICES}
 
 
 @router.get("/universes", response_model=list[UniverseOut])
@@ -186,3 +193,24 @@ def get_run_trades_csv(run_id: int, db: Session = Depends(get_db)) -> Response:
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="run_{run_id}_trades.csv"'},
     )
+
+
+@router.get("/runs/{run_id}/benchmark")
+def get_run_benchmark(
+    run_id: int,
+    index: str,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+) -> dict:
+    """Index buy-and-hold of the run's initial capital, aligned to its equity dates."""
+    if index not in BENCHMARK_INDICES:
+        raise HTTPException(status_code=400, detail=f"unknown index {index!r}")
+    run = _get_run(db, run_id)
+    algo = db.get(Algo, run.algo_id)
+    curve = (run.metrics or {}).get("equity_curve", [])
+    dates = [p["date"] for p in curve]
+    try:
+        points = benchmark_series(loader, index, dates, algo.capital if algo else 0.0)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"index": index, "points": points}
