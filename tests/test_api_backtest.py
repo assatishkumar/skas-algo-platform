@@ -129,6 +129,15 @@ def _make_run(api_client: TestClient, **overrides) -> int:
     return api_client.post("/api/v1/backtest", json=body).json()["run_id"]
 
 
+def test_run_persists_full_params(api_client: TestClient):
+    run_id = _make_run(api_client, universe=None)
+    params = api_client.get(f"/api/v1/runs/{run_id}").json()["params"]
+    # The full input set is persisted for display on the detail/compare screens.
+    for k in ("symbols", "start_date", "end_date", "lookback", "tax_rate", "withdrawal_rate"):
+        assert k in params, k
+    assert params["start_date"] == "2020-01-01" and params["end_date"] == "2021-12-31"
+
+
 def test_gross_equity_in_curve(api_client: TestClient):
     # With tax_rate=0 and no withdrawals, gross == net at every point.
     run_id = _make_run(api_client)

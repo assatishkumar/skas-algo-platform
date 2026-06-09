@@ -55,7 +55,10 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
         mode=TradingMode.BACKTEST,
         capital=req.capital,
         params={
+            "universe": req.universe,
             "symbols": req.symbols,
+            "start_date": req.start_date.isoformat(),
+            "end_date": req.end_date.isoformat(),
             "lookback": req.lookback,
             "tax_rate": req.tax_rate,
             "withdrawal_rate": req.withdrawal_rate,

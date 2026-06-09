@@ -3,8 +3,49 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import ReportView from "../components/ReportView";
-import { ErrorBox, Spinner } from "../components/ui";
+import { Card, ErrorBox, Spinner } from "../components/ui";
+import { formatParamValue, orderedParamKeys, paramLabel } from "../lib/params";
 import type { ForwardTestPrefill } from "../types";
+
+function ParametersCard({
+  capital,
+  params,
+  fallbackDates,
+}: {
+  capital: number | null;
+  params: Record<string, unknown>;
+  fallbackDates: { start?: string; end?: string };
+}) {
+  // Merge capital in, and backfill start/end from the equity curve for older runs.
+  const merged: Record<string, unknown> = { capital, ...params };
+  if (merged.start_date == null && fallbackDates.start) merged.start_date = fallbackDates.start;
+  if (merged.end_date == null && fallbackDates.end) merged.end_date = fallbackDates.end;
+
+  const symbols = Array.isArray(merged.symbols) ? (merged.symbols as string[]) : null;
+  const keys = orderedParamKeys(Object.keys(merged));
+
+  return (
+    <Card>
+      <div className="text-sm font-medium text-slate-300 mb-3">Input parameters</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+        {keys.map((k) => (
+          <div key={k} className="rounded-md bg-slate-800/40 px-3 py-2">
+            <div className="text-slate-400 text-xs">{paramLabel(k)}</div>
+            <div>{formatParamValue(k, merged[k])}</div>
+          </div>
+        ))}
+      </div>
+      {symbols && symbols.length > 0 && (
+        <details className="mt-3 text-sm">
+          <summary className="cursor-pointer text-slate-400 hover:text-slate-200">
+            Show {symbols.length} symbols
+          </summary>
+          <div className="mt-2 text-slate-300 text-xs leading-relaxed">{symbols.join(", ")}</div>
+        </details>
+      )}
+    </Card>
+  );
+}
 
 export default function RunDetailPage() {
   const { id } = useParams();
@@ -113,6 +154,15 @@ export default function RunDetailPage() {
       )}
 
       {data.notes && !editing && <div className="text-sm text-slate-400">{data.notes}</div>}
+
+      <ParametersCard
+        capital={data.capital}
+        params={data.params}
+        fallbackDates={{
+          start: data.report.equity_curve?.[0]?.date,
+          end: data.report.equity_curve?.[(data.report.equity_curve?.length ?? 0) - 1]?.date,
+        }}
+      />
 
       <ReportView report={data.report} trades={data.trades} csvUrl={api.tradesCsvUrl(runId)} runId={runId} />
     </div>

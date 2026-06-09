@@ -14,6 +14,7 @@ import {
 import { api } from "../api/client";
 import { Badge, Card, ErrorBox, Spinner } from "../components/ui";
 import { formatInr, pct } from "../lib/format";
+import { formatParamValue, orderedParamKeys, paramLabel } from "../lib/params";
 import type { CompareRun, Metrics } from "../types";
 
 // Distinct colors for up to 5 runs; benchmark is amber.
@@ -53,38 +54,52 @@ function bestIndex(runs: CompareRun[], key: keyof Metrics, better: Better): numb
   return bi >= 0 ? bi : null;
 }
 
-function ParamDiff({ runs }: { runs: CompareRun[] }) {
-  // Show only params whose value differs across the selected runs.
-  const keys = Array.from(new Set(runs.flatMap((r) => Object.keys(r.params ?? {}))));
-  const differing = keys.filter((k) => {
-    const vals = new Set(runs.map((r) => JSON.stringify((r.params ?? {})[k])));
-    return vals.size > 1;
-  });
-  if (differing.length === 0) return null;
+function ParamCompare({ runs }: { runs: CompareRun[] }) {
+  // All input params, capital merged in; rows that differ across runs are flagged.
+  const merged = runs.map((r) => ({ capital: r.capital, ...(r.params ?? {}) }) as Record<string, unknown>);
+  const keys = orderedParamKeys(Array.from(new Set(merged.flatMap((p) => Object.keys(p)))));
+  const [diffOnly, setDiffOnly] = useState(false);
+
+  const differs = (k: string) => new Set(merged.map((p) => JSON.stringify(p[k]))).size > 1;
+  const rows = diffOnly ? keys.filter(differs) : keys;
+
   return (
     <Card>
-      <div className="text-sm font-medium text-slate-300 mb-2">Differing parameters</div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-sm font-medium text-slate-300">Input parameters</div>
+        <label className="text-xs text-slate-400 flex items-center gap-1.5">
+          <input type="checkbox" checked={diffOnly} onChange={(e) => setDiffOnly(e.target.checked)} />
+          differences only
+        </label>
+      </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm tabular-nums">
           <thead className="text-slate-400 text-left">
             <tr>
-              <th className="py-1 pr-4">Param</th>
-              {runs.map((r) => (
-                <th key={r.run_id} className="py-1 pr-4 text-right">{r.name}</th>
+              <th className="py-1 pr-4">Parameter</th>
+              {runs.map((r, i) => (
+                <th key={r.run_id} className="py-1 pr-4 text-right" style={{ color: COLORS[i % COLORS.length] }}>
+                  {r.name}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {differing.map((k) => (
-              <tr key={k} className="border-t border-slate-800">
-                <td className="py-1 pr-4 text-slate-400">{k}</td>
-                {runs.map((r) => (
-                  <td key={r.run_id} className="py-1 pr-4 text-right">
-                    {String((r.params ?? {})[k] ?? "—")}
+            {rows.map((k) => {
+              const diff = differs(k);
+              return (
+                <tr key={k} className={`border-t border-slate-800 ${diff ? "bg-amber-900/10" : ""}`}>
+                  <td className={`py-1.5 pr-4 ${diff ? "text-amber-300" : "text-slate-400"}`}>
+                    {paramLabel(k)}
                   </td>
-                ))}
-              </tr>
-            ))}
+                  {merged.map((p, i) => (
+                    <td key={runs[i].run_id} className="py-1.5 pr-4 text-right">
+                      {formatParamValue(k, p[k])}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -260,7 +275,7 @@ export default function ComparePage() {
         </div>
       </Card>
 
-      <ParamDiff runs={runs} />
+      <ParamCompare runs={runs} />
     </div>
   );
 }
