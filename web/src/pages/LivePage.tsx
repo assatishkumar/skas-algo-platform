@@ -382,7 +382,7 @@ function DeploymentTile({
   }
 
   return (
-    <Card>
+    <Card className={expanded ? "md:col-span-2" : ""}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           {editing ? (
