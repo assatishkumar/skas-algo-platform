@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import ReportView from "../components/ReportView";
-import { Card, ErrorBox } from "../components/ui";
+import { Card, ErrorBox, NumberInput } from "../components/ui";
 import type { BacktestRequest, OverrideInput } from "../types";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -148,39 +148,39 @@ export default function NewBacktestPage() {
 
           <div className="grid md:grid-cols-3 gap-4">
             <Field label="Capital (₹)">
-              <input type="number" className={inputClass} value={capital} onChange={(e) => setCapital(+e.target.value)} />
+              <NumberInput className={inputClass} value={capital} onChange={setCapital} />
             </Field>
             <Field label="Capital parts">
-              <input type="number" className={inputClass} value={parts} onChange={(e) => setParts(+e.target.value)} />
+              <NumberInput className={inputClass} value={parts} onChange={setParts} />
             </Field>
             {isFifo ? (
               <>
                 <Field label="Target % (1 lot)">
-                  <input type="number" step="0.1" className={inputClass} value={target1} onChange={(e) => setTarget1(+e.target.value)} />
+                  <NumberInput step="0.1" className={inputClass} value={target1} onChange={setTarget1} />
                 </Field>
                 <Field label="Target % (2 lots)">
-                  <input type="number" step="0.1" className={inputClass} value={target2} onChange={(e) => setTarget2(+e.target.value)} />
+                  <NumberInput step="0.1" className={inputClass} value={target2} onChange={setTarget2} />
                 </Field>
                 <Field label="Target % (3+ lots)">
-                  <input type="number" step="0.1" className={inputClass} value={target3} onChange={(e) => setTarget3(+e.target.value)} />
+                  <NumberInput step="0.1" className={inputClass} value={target3} onChange={setTarget3} />
                 </Field>
               </>
             ) : (
               <Field label="Profit target %">
-                <input type="number" step="0.1" className={inputClass} value={target} onChange={(e) => setTarget(+e.target.value)} />
+                <NumberInput step="0.1" className={inputClass} value={target} onChange={setTarget} />
               </Field>
             )}
             <Field label="Max lots (0 = unlimited)">
-              <input type="number" className={inputClass} value={maxLots} onChange={(e) => setMaxLots(+e.target.value)} />
+              <NumberInput className={inputClass} value={maxLots} onChange={setMaxLots} />
             </Field>
             <Field label="Tax rate %">
-              <input type="number" className={inputClass} value={taxRate} onChange={(e) => setTaxRate(+e.target.value)} />
+              <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />
             </Field>
             <Field label="Withdrawal rate %">
-              <input type="number" step="1" className={inputClass} value={withdrawalRate} onChange={(e) => setWithdrawalRate(+e.target.value)} />
+              <NumberInput step="1" className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} />
             </Field>
             <Field label="Lookback (days)">
-              <input type="number" className={inputClass} value={lookback} onChange={(e) => setLookback(+e.target.value)} />
+              <NumberInput className={inputClass} value={lookback} onChange={setLookback} />
             </Field>
             <Field label="Position sizing">
               <select className={inputClass} value={allocationMode} onChange={(e) => setAllocationMode(e.target.value)}>
@@ -214,13 +214,13 @@ export default function NewBacktestPage() {
                   />
                 </Field>
                 <Field label="Book at %">
-                  <input type="number" step="0.1" className={inputClass} value={ovAtPct} onChange={(e) => setOvAtPct(+e.target.value)} />
+                  <NumberInput step="0.1" className={inputClass} value={ovAtPct} onChange={setOvAtPct} />
                 </Field>
                 <Field label="Book %">
-                  <input type="number" className={inputClass} value={ovBookPct} onChange={(e) => setOvBookPct(+e.target.value)} />
+                  <NumberInput className={inputClass} value={ovBookPct} onChange={setOvBookPct} />
                 </Field>
                 <Field label="Trail SL %">
-                  <input type="number" step="0.1" className={inputClass} value={ovTrailPct} onChange={(e) => setOvTrailPct(+e.target.value)} />
+                  <NumberInput step="0.1" className={inputClass} value={ovTrailPct} onChange={setOvTrailPct} />
                 </Field>
               </div>
             )}

@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
-import { Badge, Card, ErrorBox } from "../components/ui";
+import { Badge, Card, ErrorBox, NumberInput } from "../components/ui";
 import { formatInr } from "../lib/format";
 import type {
   ForwardTestPrefill,
@@ -284,44 +284,44 @@ function StartForm({ onStarted, prefill }: { onStarted: () => void; prefill?: Fo
           <div className="grid md:grid-cols-3 lg:grid-cols-6 gap-3">
             <label className={labeled}>
               <span className={lbl}>Capital parts</span>
-              <input type="number" className={inputClass} value={parts} onChange={(e) => setParts(+e.target.value)} />
+              <NumberInput className={inputClass} value={parts} onChange={setParts} />
             </label>
             {isFifo ? (
               <>
                 <label className={labeled}>
                   <span className={lbl}>Target % (1 lot)</span>
-                  <input type="number" step="0.1" className={inputClass} value={target1} onChange={(e) => setTarget1(+e.target.value)} />
+                  <NumberInput step="0.1" className={inputClass} value={target1} onChange={setTarget1} />
                 </label>
                 <label className={labeled}>
                   <span className={lbl}>Target % (2)</span>
-                  <input type="number" step="0.1" className={inputClass} value={target2} onChange={(e) => setTarget2(+e.target.value)} />
+                  <NumberInput step="0.1" className={inputClass} value={target2} onChange={setTarget2} />
                 </label>
                 <label className={labeled}>
                   <span className={lbl}>Target % (3+)</span>
-                  <input type="number" step="0.1" className={inputClass} value={target3} onChange={(e) => setTarget3(+e.target.value)} />
+                  <NumberInput step="0.1" className={inputClass} value={target3} onChange={setTarget3} />
                 </label>
               </>
             ) : (
               <label className={labeled}>
                 <span className={lbl}>Profit target %</span>
-                <input type="number" step="0.1" className={inputClass} value={target} onChange={(e) => setTarget(+e.target.value)} />
+                <NumberInput step="0.1" className={inputClass} value={target} onChange={setTarget} />
               </label>
             )}
             <label className={labeled}>
               <span className={lbl}>Max lots (0=∞)</span>
-              <input type="number" className={inputClass} value={maxLots} onChange={(e) => setMaxLots(+e.target.value)} />
+              <NumberInput className={inputClass} value={maxLots} onChange={setMaxLots} />
             </label>
             <label className={labeled}>
               <span className={lbl}>Lookback</span>
-              <input type="number" className={inputClass} value={lookback} onChange={(e) => setLookback(+e.target.value)} />
+              <NumberInput className={inputClass} value={lookback} onChange={setLookback} />
             </label>
             <label className={labeled}>
               <span className={lbl}>Tax rate %</span>
-              <input type="number" className={inputClass} value={taxRate} onChange={(e) => setTaxRate(+e.target.value)} />
+              <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />
             </label>
             <label className={labeled}>
               <span className={lbl}>Withdrawal %</span>
-              <input type="number" className={inputClass} value={withdrawalRate} onChange={(e) => setWithdrawalRate(+e.target.value)} />
+              <NumberInput className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} />
             </label>
             <label className={labeled}>
               <span className={lbl}>Position sizing</span>
@@ -337,7 +337,7 @@ function StartForm({ onStarted, prefill }: { onStarted: () => void; prefill?: Fo
       <div className="grid md:grid-cols-4 gap-3 items-center">
         <label className="block">
           <span className="block text-xs text-slate-400 mb-1">Capital (₹)</span>
-          <input type="number" className={inputClass} value={capital} onChange={(e) => setCapital(+e.target.value)} />
+          <NumberInput className={inputClass} value={capital} onChange={setCapital} />
         </label>
         <label className="block">
           <span className="block text-xs text-slate-400 mb-1">Quotes</span>
@@ -408,11 +408,11 @@ function OverridePanel({ runId, onDone }: { runId: number; onDone: () => void })
   return (
     <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-slate-800 pt-3">
       <span className="text-xs text-slate-400">Intervene: at</span>
-      <input type="number" step="0.1" className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={atPct} onChange={(e) => setAtPct(+e.target.value)} />
+      <NumberInput step="0.1" className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={atPct} onChange={setAtPct} />
       <span className="text-xs text-slate-400">% book</span>
-      <input type="number" className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={bookPct} onChange={(e) => setBookPct(+e.target.value)} />
+      <NumberInput className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={bookPct} onChange={setBookPct} />
       <span className="text-xs text-slate-400">% trail</span>
-      <input type="number" step="0.1" className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={trailPct} onChange={(e) => setTrailPct(+e.target.value)} />
+      <NumberInput step="0.1" className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={trailPct} onChange={setTrailPct} />
       <span className="text-xs text-slate-400">%</span>
       <button onClick={apply} className="rounded bg-slate-700 hover:bg-slate-600 px-3 py-1 text-xs">
         Apply to run

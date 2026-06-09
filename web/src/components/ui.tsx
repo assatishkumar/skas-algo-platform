@@ -1,4 +1,44 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
+
+/** A number input you can actually clear and retype — keeps local text so an empty
+ * field doesn't snap back to 0, and only pushes a parsed number to the parent. */
+export function NumberInput({
+  value,
+  onChange,
+  className = "",
+  step,
+  placeholder,
+  disabled,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  className?: string;
+  step?: string;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [text, setText] = useState(String(value));
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      className={className}
+      step={step}
+      placeholder={placeholder}
+      disabled={disabled}
+      value={text}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setText(raw);
+        if (raw !== "" && !Number.isNaN(Number(raw))) onChange(Number(raw));
+      }}
+      onBlur={() => {
+        if (text === "" || Number.isNaN(Number(text))) setText(String(value));
+      }}
+    />
+  );
+}
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
