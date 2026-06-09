@@ -1,9 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, liveWsUrl } from "../api/client";
+import { useLocation } from "react-router-dom";
+import { api, brokers, liveWsUrl } from "../api/client";
 import { Badge, Card, ErrorBox } from "../components/ui";
 import { formatInr } from "../lib/format";
-import type { LiveRunSnapshot, LiveTradeEvent, LiveWsMessage, StartLiveRequest } from "../types";
+import type {
+  ForwardTestPrefill,
+  LiveRunSnapshot,
+  LiveTradeEvent,
+  LiveWsMessage,
+  StartLiveRequest,
+} from "../types";
 
 const inputClass =
   "w-full rounded-md bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:border-brand";
@@ -48,15 +55,30 @@ function useLiveFeed() {
   return { snapshots, trades, connected, seed };
 }
 
-function StartForm({ onStarted }: { onStarted: () => void }) {
+function StartForm({ onStarted, prefill }: { onStarted: () => void; prefill?: ForwardTestPrefill }) {
   const { data: strategyData } = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
-  const [strategyId, setStrategyId] = useState("sst_lifo");
-  const [universe, setUniverse] = useState("nifty50");
-  const [symbols, setSymbols] = useState("RELIANCE, TCS, INFY");
-  const [capital, setCapital] = useState(1000000);
+  const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
+
+  // Split a backtest's stored params into the non-strategy keys and the strategy params.
+  const pf = prefill;
+  const pfParams = (pf?.params ?? {}) as Record<string, unknown>;
+  const { symbols: pfSymbols, lookback: pfLookback, tax_rate: pfTax, withdrawal_rate: pfWd, ...pfStrategyParams } =
+    pfParams as {
+      symbols?: string[];
+      lookback?: number;
+      tax_rate?: number;
+      withdrawal_rate?: number;
+    };
+
+  const [strategyId, setStrategyId] = useState(pf?.strategy_id ?? "sst_lifo");
+  const [universe, setUniverse] = useState(pf ? "" : "nifty50");
+  const [symbols, setSymbols] = useState((pfSymbols ?? ["RELIANCE", "TCS", "INFY"]).join(", "));
+  const [capital, setCapital] = useState(pf?.capital ?? 1000000);
   const [parts, setParts] = useState(10);
   const [target, setTarget] = useState(6);
+  const [quoteSource, setQuoteSource] = useState("cache");
+  const [accountId, setAccountId] = useState<number | null>(null);
   const [ignoreHours, setIgnoreHours] = useState(true);
   const [auto, setAuto] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,16 +88,19 @@ function StartForm({ onStarted }: { onStarted: () => void }) {
     setBusy(true);
     setError(null);
     const isCustom = universe === "";
+    // Prefill carries the backtest's exact strategy params + tax/withdrawal/lookback.
+    const params = pf ? pfStrategyParams : { capital_parts: parts, profit_target: target / 100 };
     const body: StartLiveRequest = {
       strategy_id: strategyId,
       universe: isCustom ? null : universe,
       symbols: isCustom ? symbols.split(",").map((s) => s.trim()).filter(Boolean) : [],
       capital,
-      params: { capital_parts: parts, profit_target: target / 100 },
-      tax_rate: 0.2,
-      withdrawal_rate: 0,
-      lookback: 20,
-      quote_source: "cache",
+      params,
+      tax_rate: pf ? (pfTax ?? 0.2) : 0.2,
+      withdrawal_rate: pf ? (pfWd ?? 0) : 0,
+      lookback: pf ? (pfLookback ?? 20) : 20,
+      quote_source: quoteSource,
+      broker_account_id: quoteSource === "zerodha" ? accountId : null,
       ignore_market_hours: ignoreHours,
       auto,
     };
@@ -89,47 +114,89 @@ function StartForm({ onStarted }: { onStarted: () => void }) {
     }
   }
 
+  const sessioned = (accounts ?? []).filter((a) => a.has_session);
+
   return (
     <Card>
-      <div className="text-sm font-medium text-slate-300 mb-3">Start a paper algo</div>
-      <div className="grid md:grid-cols-4 gap-3">
-        <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>
-          {(strategyData?.strategies ?? ["sst_lifo"]).map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
-        <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
-          {(universeData ?? []).map((u) => (
-            <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
-          ))}
-          <option value="">Custom</option>
-        </select>
-        {universe === "" ? (
-          <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
-        ) : (
-          <input className={`${inputClass} text-slate-500`} disabled value="(universe)" />
-        )}
-        <input type="number" className={inputClass} value={capital} onChange={(e) => setCapital(+e.target.value)} />
-        <input type="number" className={inputClass} value={parts} onChange={(e) => setParts(+e.target.value)} placeholder="parts" />
-        <input type="number" step="0.1" className={inputClass} value={target} onChange={(e) => setTarget(+e.target.value)} placeholder="target %" />
-        <label className="flex items-center gap-2 text-sm text-slate-300">
-          <input type="checkbox" checked={ignoreHours} onChange={(e) => setIgnoreHours(e.target.checked)} />
-          ignore market hours
-        </label>
-        <label className="flex items-center gap-2 text-sm text-slate-300">
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-          auto loop
-        </label>
+      <div className="text-sm font-medium text-slate-300 mb-3">
+        {pf ? `Forward-test: ${pf.name ?? pf.strategy_id}` : "Start a paper algo"}
       </div>
+
+      {pf ? (
+        <div className="text-sm text-slate-400 mb-3">
+          {pf.strategy_id} · {(pfSymbols ?? []).length} symbols · params from backtest (editable capital below)
+        </div>
+      ) : (
+        <div className="grid md:grid-cols-4 gap-3 mb-3">
+          <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>
+            {(strategyData?.strategies ?? ["sst_lifo"]).map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
+            {(universeData ?? []).map((u) => (
+              <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
+            ))}
+            <option value="">Custom</option>
+          </select>
+          {universe === "" ? (
+            <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
+          ) : (
+            <input className={`${inputClass} text-slate-500`} disabled value="(universe)" />
+          )}
+          <input type="number" className={inputClass} value={parts} onChange={(e) => setParts(+e.target.value)} placeholder="parts" />
+          <input type="number" step="0.1" className={inputClass} value={target} onChange={(e) => setTarget(+e.target.value)} placeholder="target %" />
+        </div>
+      )}
+
+      <div className="grid md:grid-cols-4 gap-3 items-center">
+        <label className="block">
+          <span className="block text-xs text-slate-400 mb-1">Capital (₹)</span>
+          <input type="number" className={inputClass} value={capital} onChange={(e) => setCapital(+e.target.value)} />
+        </label>
+        <label className="block">
+          <span className="block text-xs text-slate-400 mb-1">Quotes</span>
+          <select className={inputClass} value={quoteSource} onChange={(e) => setQuoteSource(e.target.value)}>
+            <option value="cache">Cache (last close, offline)</option>
+            <option value="zerodha">Zerodha (live)</option>
+          </select>
+        </label>
+        {quoteSource === "zerodha" && (
+          <label className="block">
+            <span className="block text-xs text-slate-400 mb-1">Account</span>
+            <select className={inputClass} value={accountId ?? ""} onChange={(e) => setAccountId(e.target.value ? +e.target.value : null)}>
+              <option value="">select…</option>
+              {sessioned.map((a) => (
+                <option key={a.id} value={a.id}>{a.label}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        <div className="flex flex-col gap-1 pt-4">
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input type="checkbox" checked={ignoreHours} onChange={(e) => setIgnoreHours(e.target.checked)} />
+            ignore market hours
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+            auto loop (refresh + daily decision)
+          </label>
+        </div>
+      </div>
+
       <div className="mt-3 flex items-center gap-3">
         <button
           onClick={start}
-          disabled={busy}
+          disabled={busy || (quoteSource === "zerodha" && !accountId)}
           className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50"
         >
-          {busy ? "Starting…" : "Start paper run"}
+          {busy ? "Starting…" : pf ? "Start forward test" : "Start paper run"}
         </button>
-        <span className="text-xs text-slate-500">Quotes: cache (works offline). Paper only — no real orders.</span>
+        <span className="text-xs text-slate-500">
+          {quoteSource === "zerodha"
+            ? "Live quotes · simulated fills · no real orders"
+            : "Cache quotes (works offline) · simulated fills · no real orders"}
+        </span>
       </div>
       {error && <div className="mt-2"><ErrorBox message={error} /></div>}
     </Card>
@@ -237,6 +304,8 @@ function RunCard({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () => vo
 }
 
 export default function LivePage() {
+  const location = useLocation();
+  const prefill = (location.state as { prefill?: ForwardTestPrefill } | null)?.prefill;
   const { snapshots, trades, connected, seed } = useLiveFeed();
   const runs = Object.values(snapshots).sort((a, b) => b.run_id - a.run_id);
   // Keep a stable ref to seed for action callbacks.
@@ -252,7 +321,7 @@ export default function LivePage() {
         </span>
       </div>
 
-      <StartForm onStarted={() => seedRef.current()} />
+      <StartForm key={prefill?.strategy_id ?? "manual"} prefill={prefill} onStarted={() => seedRef.current()} />
 
       {runs.length === 0 ? (
         <Card><div className="text-slate-400">No paper runs. Start one above.</div></Card>

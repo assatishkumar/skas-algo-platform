@@ -36,7 +36,14 @@ export const api = {
   universes: () => request<Universe[]>("/universes"),
   runs: () => request<RunSummary[]>("/runs"),
   run: (id: number) =>
-    request<{ report: Report; strategy_id: string; trades: Trade[] }>(`/runs/${id}`),
+    request<{
+      report: Report;
+      strategy_id: string;
+      name: string | null;
+      capital: number | null;
+      params: Record<string, unknown>;
+      trades: Trade[];
+    }>(`/runs/${id}`),
   backtest: (body: BacktestRequest) =>
     request<BacktestResponse>("/backtest", {
       method: "POST",

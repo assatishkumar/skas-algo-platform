@@ -107,6 +107,7 @@ export interface StartLiveRequest {
   withdrawal_rate: number;
   lookback: number;
   quote_source: string;
+  broker_account_id?: number | null;
   ignore_market_hours: boolean;
   auto: boolean;
 }
@@ -128,6 +129,14 @@ export interface BrokerConnectRequest {
   api_key: string;
   api_secret: string;
   user_id: string;
+}
+
+// Carried via router state from a backtest run into the Live "start" form.
+export interface ForwardTestPrefill {
+  strategy_id: string;
+  name: string | null;
+  capital: number | null;
+  params: Record<string, unknown>; // includes symbols, lookback, tax_rate, withdrawal_rate + strategy params
 }
 
 export interface LiveTradeEvent {
