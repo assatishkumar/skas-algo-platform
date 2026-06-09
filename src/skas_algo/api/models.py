@@ -96,6 +96,13 @@ class QuoteSourceInput(BaseModel):
     broker_account_id: int | None = None
 
 
+class RefreshCacheInput(BaseModel):
+    """Symbols to refresh on the shared session: an explicit list or a named universe."""
+
+    symbols: list[str] = Field(default_factory=list)
+    universe: str | None = None
+
+
 class DeploymentUpdate(BaseModel):
     name: str | None = None
     notes: str | None = None

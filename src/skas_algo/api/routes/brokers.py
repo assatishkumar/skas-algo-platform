@@ -6,11 +6,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
-from skas_algo.api.models import BrokerAccountOut, BrokerConnectRequest, RequestTokenInput
+from skas_algo.api.models import (
+    BrokerAccountOut,
+    BrokerConnectRequest,
+    RefreshCacheInput,
+    RequestTokenInput,
+)
 from skas_algo.config import get_settings
+from skas_algo.data import universes
+from skas_algo.data.provider import get_available_symbols
 from skas_algo.db.models import BrokerAccount
 from skas_algo.security.crypto import EncryptionKeyMissing
-from skas_algo.services import broker as broker_svc
+from skas_algo.services import broker as broker_svc, market_data
 
 router = APIRouter(tags=["brokers"], prefix="/brokers")
 
@@ -85,6 +92,27 @@ def login(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"token exchange failed: {exc}") from exc
     return _to_out(account)
+
+
+@router.post("/{account_id}/refresh-cache")
+def refresh_cache(
+    account_id: int,
+    body: RefreshCacheInput,
+    db: Session = Depends(get_db),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Refresh the historical cache for symbols/a universe using the shared session."""
+    account = _get(db, account_id)
+    if not broker_svc.has_valid_session(account):
+        raise HTTPException(status_code=400, detail="no valid Kite session — log in first")
+    symbols = universes.resolve(body.universe, avail) if body.universe else list(body.symbols)
+    if not symbols:
+        raise HTTPException(status_code=422, detail="symbols or a valid universe required")
+    try:
+        result = market_data.refresh_cache(account, symbols)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"cache refresh failed: {exc}") from exc
+    return {"account_id": account_id, "refreshed": result}
 
 
 @router.post("/{account_id}/arm", response_model=BrokerAccountOut)

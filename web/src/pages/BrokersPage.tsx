@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { brokers } from "../api/client";
+import { api, brokers } from "../api/client";
 import { Badge, Card, ErrorBox, Spinner } from "../components/ui";
 import type { BrokerConnectRequest } from "../types";
 
@@ -66,6 +66,64 @@ function LoginFlow({ id, onDone }: { id: number; onDone: () => void }) {
         >
           {busy ? "Exchanging…" : "Submit token"}
         </button>
+      </div>
+      {err && <ErrorBox message={err} />}
+    </div>
+  );
+}
+
+function RefreshData({ id }: { id: number }) {
+  const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
+  const [universe, setUniverse] = useState("nifty50");
+  const [busy, setBusy] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function refresh() {
+    setBusy(true);
+    setErr(null);
+    setSummary(null);
+    try {
+      const { refreshed } = await brokers.refreshCache(id, { universe });
+      const entries = Object.values(refreshed);
+      const errors = entries.filter((e) => e.error).length;
+      const dates = (entries.map((e) => e.last_date).filter(Boolean) as string[]).sort();
+      const latest = dates.length ? dates[dates.length - 1] : undefined;
+      setSummary(
+        `Refreshed ${entries.length} symbols on the shared session` +
+          (latest ? ` · latest ${latest}` : "") +
+          (errors ? ` · ${errors} errors` : ""),
+      );
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 border-t border-slate-800 pt-3 space-y-2">
+      <div className="text-xs text-slate-400">
+        Update the historical cache using this same Kite login (data + trading share one session).
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          className="rounded bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm"
+          value={universe}
+          onChange={(e) => setUniverse(e.target.value)}
+        >
+          {(universeData ?? []).map((u) => (
+            <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
+          ))}
+        </select>
+        <button
+          onClick={refresh}
+          disabled={busy}
+          className="rounded bg-slate-700 hover:bg-slate-600 px-3 py-1.5 text-xs disabled:opacity-50"
+        >
+          {busy ? "Refreshing…" : "Refresh data"}
+        </button>
+        {summary && <span className="text-xs text-emerald-400">{summary}</span>}
       </div>
       {err && <ErrorBox message={err} />}
     </div>
@@ -155,6 +213,7 @@ export default function BrokersPage() {
             {loginFor === a.id && (
               <LoginFlow id={a.id} onDone={() => { setLoginFor(null); refetch(); }} />
             )}
+            {a.has_session && <RefreshData id={a.id} />}
             {a.armed && !a.live_trading_enabled && (
               <div className="text-xs text-slate-500 mt-2">
                 Armed, but server <code>SKAS_LIVE_TRADING_ENABLED</code> is false — still no real orders.

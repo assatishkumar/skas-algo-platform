@@ -8,11 +8,15 @@ access token. Only the api_secret is stored (encrypted) — no password or TOTP.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from skas_algo.brokers.zerodha import ZerodhaAdapter, ZerodhaCredentials
+from skas_algo.brokers.zerodha import BrokerLoginError, ZerodhaAdapter, ZerodhaCredentials
+
+if TYPE_CHECKING:
+    from skas_data import SkasData
 from skas_algo.config import get_settings
 from skas_algo.db.models import BrokerAccount
 from skas_algo.notify import Alert, AlertLevel, build_notifier
@@ -61,6 +65,24 @@ def make_adapter(account: BrokerAccount) -> ZerodhaAdapter:
     if token:
         adapter.set_access_token(token)
     return adapter
+
+
+def make_data_session(account: BrokerAccount) -> SkasData:
+    """A live skas-data instance bound to this account's *existing* Kite token.
+
+    The platform owns the login; skas-data is a consumer of the same access token, so
+    data (cache refresh, fresh quotes) and trading run on one Kite session — no second
+    login. The token is injected straight onto the kite handle, so skas-data does not
+    write its plaintext session file; the encrypted DB stays the single source of truth.
+    """
+    if not has_valid_session(account):
+        raise BrokerLoginError("no valid Kite session — log in (paste request token) first")
+    from skas_data import SkasData
+    from skas_data.providers.kite_provider import KiteProvider
+
+    provider = KiteProvider(api_key=account.api_key)
+    provider.kite.set_access_token(decrypt(account.session_token))
+    return SkasData(provider=provider)
 
 
 def login_url(account: BrokerAccount) -> str:
