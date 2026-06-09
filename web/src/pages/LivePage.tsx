@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
-import { Badge, Card } from "../components/ui";
+import { Badge, Card, StatusPill, timeAgo } from "../components/ui";
 import { formatInr } from "../lib/format";
 import type {
   Deployment,
@@ -334,32 +334,6 @@ function RunCard({
       )}
     </div>
   );
-}
-
-const STATUS_STYLE: Record<string, string> = {
-  active: "bg-emerald-900/40 text-emerald-300 border border-emerald-700/50",
-  stopped: "bg-slate-700/50 text-slate-300 border border-slate-600/50",
-  archived: "bg-amber-900/30 text-amber-300 border border-amber-700/40",
-};
-
-function StatusPill({ status }: { status: string }) {
-  return (
-    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_STYLE[status] ?? ""}`}>
-      {status}
-    </span>
-  );
-}
-
-function timeAgo(iso: string | null): string {
-  if (!iso) return "—";
-  const then = new Date(iso).getTime();
-  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (secs < 60) return "just now";
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
 }
 
 /** A deployment tile: name, status, key metrics, notes, and per-status actions. */

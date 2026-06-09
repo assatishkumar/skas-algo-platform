@@ -27,6 +27,7 @@ class BacktestRequest(BaseModel):
     withdrawal_rate: float = 0.0
     lookback: int = 20
     name: str | None = None
+    notes: str | None = None
     overrides: list[OverrideInput] = Field(default_factory=list)
 
 
@@ -41,8 +42,10 @@ class RunSummary(BaseModel):
     run_id: int
     algo_id: int
     name: str
+    notes: str | None = None
     strategy_id: str
     mode: str
+    archived: bool = False
     started_at: str | None
     metrics: dict
 

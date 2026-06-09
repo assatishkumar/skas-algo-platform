@@ -49,6 +49,7 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
     # Persist as an Algo + AlgoRun (BACKTEST mode).
     algo = Algo(
         name=req.name or f"{req.strategy_id} backtest",
+        notes=req.notes,
         strategy_id=req.strategy_id,
         instrument_class=InstrumentClass.STOCK,
         mode=TradingMode.BACKTEST,

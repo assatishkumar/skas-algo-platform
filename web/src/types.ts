@@ -56,8 +56,10 @@ export interface RunSummary {
   run_id: number;
   algo_id: number;
   name: string;
+  notes?: string | null;
   strategy_id: string;
   mode: string;
+  archived?: boolean;
   started_at: string | null;
   metrics: Metrics;
 }
@@ -224,5 +226,6 @@ export interface BacktestRequest {
   withdrawal_rate: number;
   lookback: number;
   name?: string;
+  notes?: string;
   overrides: OverrideInput[];
 }

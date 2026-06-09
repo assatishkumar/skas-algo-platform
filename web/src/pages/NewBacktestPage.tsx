@@ -25,6 +25,8 @@ export default function NewBacktestPage() {
   const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
   const universes = universeData ?? [];
 
+  const [name, setName] = useState("");
+  const [notes, setNotes] = useState("");
   const [strategyId, setStrategyId] = useState("sst_lifo");
   const [universe, setUniverse] = useState("nifty50"); // "" = Custom
   const [symbols, setSymbols] = useState("RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK");
@@ -75,6 +77,8 @@ export default function NewBacktestPage() {
     const isCustom = universe === "";
     const body: BacktestRequest = {
       strategy_id: strategyId,
+      name: name.trim() || undefined,
+      notes: notes.trim() || undefined,
       universe: isCustom ? null : universe,
       symbols: isCustom ? symbols.split(",").map((s) => s.trim()).filter(Boolean) : [],
       start_date: startDate,
@@ -108,6 +112,14 @@ export default function NewBacktestPage() {
 
       <Card>
         <form onSubmit={submit} className="space-y-4">
+          <div className="grid md:grid-cols-2 gap-4">
+            <Field label="Name">
+              <input className={inputClass} placeholder="e.g. SST Nifty50 2015-26" value={name} onChange={(e) => setName(e.target.value)} />
+            </Field>
+            <Field label="Notes">
+              <input className={inputClass} placeholder="what you're testing / why" value={notes} onChange={(e) => setNotes(e.target.value)} />
+            </Field>
+          </div>
           <div className="grid md:grid-cols-2 gap-4">
             <Field label="Strategy">
               <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>

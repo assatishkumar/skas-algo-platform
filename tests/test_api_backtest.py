@@ -115,6 +115,65 @@ def test_backtest_run_and_reports(api_client: TestClient):
     assert "date,ticker,action" in csv_resp.text
 
 
+def test_run_management_lifecycle(api_client: TestClient):
+    body = {
+        "strategy_id": "sst_lifo",
+        "name": "My backtest",
+        "notes": "ramp test",
+        "symbols": ["AAA"],
+        "start_date": "2020-01-01",
+        "end_date": "2021-12-31",
+        "capital": 100000,
+        "params": {"capital_parts": 10, "profit_target": 0.06},
+        "tax_rate": 0.0,
+    }
+    run_id = api_client.post("/api/v1/backtest", json=body).json()["run_id"]
+
+    # Name + notes persisted; appears under Active (not archived).
+    active = api_client.get("/api/v1/runs?status=active").json()
+    tile = next(t for t in active if t["run_id"] == run_id)
+    assert tile["name"] == "My backtest"
+    assert tile["notes"] == "ramp test"
+    assert tile["archived"] is False
+    assert tile["mode"] == "BACKTEST"
+
+    # Rename / edit notes.
+    api_client.patch(f"/api/v1/runs/{run_id}", json={"name": "Renamed", "notes": "n2"})
+    detail = api_client.get(f"/api/v1/runs/{run_id}").json()
+    assert detail["name"] == "Renamed" and detail["notes"] == "n2"
+
+    # Archive -> drops out of active, shows under archived; unarchive reverses it.
+    api_client.post(f"/api/v1/runs/{run_id}/archive")
+    assert all(t["run_id"] != run_id for t in api_client.get("/api/v1/runs?status=active").json())
+    assert any(t["run_id"] == run_id for t in api_client.get("/api/v1/runs?status=archived").json())
+    api_client.post(f"/api/v1/runs/{run_id}/unarchive")
+    assert any(t["run_id"] == run_id for t in api_client.get("/api/v1/runs?status=active").json())
+
+    # Delete -> gone everywhere; the AlgoRun row is removed.
+    assert api_client.delete(f"/api/v1/runs/{run_id}").status_code == 200
+    assert all(t["run_id"] != run_id for t in api_client.get("/api/v1/runs").json())
+    assert api_client.get(f"/api/v1/runs/{run_id}").status_code == 404
+
+
+def test_runs_list_excludes_paper(api_client: TestClient):
+    """The Runs list is backtests only — paper/live deployments are managed elsewhere."""
+    from skas_algo.db.base import session_scope
+    from skas_algo.db.enums import TradingMode
+    from skas_algo.db.models import Algo, AlgoRun
+
+    with session_scope() as db:
+        algo = Algo(name="paper one", strategy_id="sst_lifo", mode=TradingMode.PAPER)
+        db.add(algo)
+        db.flush()
+        db.add(AlgoRun(algo_id=algo.id, mode=TradingMode.PAPER))
+        db.flush()
+        paper_run_id = db.query(AlgoRun).filter(AlgoRun.algo_id == algo.id).one().id
+
+    runs = api_client.get("/api/v1/runs").json()
+    assert all(r["mode"] == "BACKTEST" for r in runs)
+    assert all(r["run_id"] != paper_run_id for r in runs)
+
+
 def test_backtest_unknown_strategy(api_client: TestClient):
     body = {
         "strategy_id": "nope",

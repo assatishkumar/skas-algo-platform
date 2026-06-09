@@ -36,12 +36,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   strategies: () => request<{ strategies: string[] }>("/strategies"),
   universes: () => request<Universe[]>("/universes"),
-  runs: () => request<RunSummary[]>("/runs"),
+  runs: (status?: string) =>
+    request<RunSummary[]>(`/runs${status ? `?status=${status}` : ""}`),
+  runUpdate: (id: number, body: { name?: string; notes?: string }) =>
+    request(`/runs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  runArchive: (id: number) => request(`/runs/${id}/archive`, { method: "POST" }),
+  runUnarchive: (id: number) => request(`/runs/${id}/unarchive`, { method: "POST" }),
+  runDelete: (id: number) => request(`/runs/${id}`, { method: "DELETE" }),
   run: (id: number) =>
     request<{
       report: Report;
       strategy_id: string;
       name: string | null;
+      notes: string | null;
+      archived: boolean;
       capital: number | null;
       params: Record<string, unknown>;
       trades: Trade[];

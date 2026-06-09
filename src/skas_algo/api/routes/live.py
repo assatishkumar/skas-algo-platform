@@ -8,7 +8,6 @@ a logged-in account.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,12 +21,13 @@ from skas_algo.api.models import (
 from skas_algo.data import universes
 from skas_algo.data.provider import get_available_symbols, get_price_loader
 from skas_algo.db.enums import TradingMode
-from skas_algo.db.models import Algo, AlgoRun, BrokerAccount, Fill, Order, Position
+from skas_algo.db.models import Algo, AlgoRun, BrokerAccount
 from skas_algo.engine.market import PriceLoader
 from skas_algo.engine.overrides import OverrideRule
 from skas_algo.live.manager import LiveConfig, manager
 from skas_algo.live.quotes import CacheQuoteSource, ZerodhaQuoteSource
 from skas_algo.services import broker as broker_svc
+from skas_algo.services.runs import delete_algo_cascade
 
 router = APIRouter(tags=["live"], prefix="/live")
 
@@ -295,14 +295,7 @@ async def delete_deployment(run_id: int, db: Session = Depends(get_db)) -> dict:
     if run_id in manager.runs:
         manager.stop(run_id)
     run = _get_run(db, run_id)
-    algo_id = run.algo_id
-    order_ids = db.execute(select(Order.id).where(Order.algo_id == algo_id)).scalars().all()
-    if order_ids:
-        db.execute(sa_delete(Fill).where(Fill.order_id.in_(order_ids)))
-    db.execute(sa_delete(Order).where(Order.algo_id == algo_id))
-    db.execute(sa_delete(Position).where(Position.algo_id == algo_id))
-    db.execute(sa_delete(AlgoRun).where(AlgoRun.algo_id == algo_id))
-    db.execute(sa_delete(Algo).where(Algo.id == algo_id))
+    delete_algo_cascade(db, run.algo_id)
     return {"deleted": run_id}
 
 
