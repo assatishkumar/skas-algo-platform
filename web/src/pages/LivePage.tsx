@@ -49,6 +49,7 @@ function SignalsPanel({ runId, version }: { runId: number; version: number }) {
         <div className="text-xs text-slate-400">
           {wouldAct > 0 && <span className="text-amber-400 font-semibold">⚡ would act: {wouldAct}  ·  </span>}
           {Object.entries(counts).map(([s, n]) => `${s}: ${n}`).join("  ·  ") || "no symbols"}
+          <span className="text-slate-600">  —  buy needs a 20-day low (👁) then a breakout; → breakout is % to the 20d high</span>
         </div>
         <label className="text-xs text-slate-400 flex items-center gap-1">
           sort
@@ -86,7 +87,9 @@ function SignalsPanel({ runId, version }: { runId: number; version: number }) {
                 <td className="py-1 pr-3 text-right text-slate-400">{fmt(r.low_20d)}</td>
                 <td className="py-1 pr-3 text-right text-slate-400">{fmt(r.high_20d)}</td>
                 <td className="py-1 pr-3 text-right text-slate-300">
-                  {r.to_breakout_pct == null ? "—" : `+${r.to_breakout_pct.toFixed(1)}%`}
+                  {r.to_breakout_pct == null
+                    ? "—"
+                    : `${r.to_breakout_pct >= 0 ? "+" : ""}${r.to_breakout_pct.toFixed(1)}%`}
                 </td>
                 <td className={`py-1 pr-3 text-right ${(r.pnl_pct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                   {r.pnl_pct == null ? "—" : `${r.pnl_pct >= 0 ? "+" : ""}${r.pnl_pct.toFixed(1)}%`}

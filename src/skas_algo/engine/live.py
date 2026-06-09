@@ -207,6 +207,10 @@ class LiveSession:
                 status = "Tracking → buy on breakout"
             elif ltp is not None and low is not None and ltp <= low:
                 status = "At 20-day low"
+            elif ltp is not None and high is not None and ltp > high:
+                # Above the 20-day high but never made a recent 20-day low -> not a
+                # buy (SST only buys a breakout on a stock it was already tracking).
+                status = "Above 20d high (not tracking)"
             else:
                 status = "Watching"
 
