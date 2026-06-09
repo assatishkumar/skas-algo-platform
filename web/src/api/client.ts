@@ -10,6 +10,7 @@ import type {
   StartLiveRequest,
   Trade,
   Universe,
+  WatchRow,
 } from "../types";
 
 const BASE = "/api/v1";
@@ -60,6 +61,8 @@ export const api = {
   liveRunDecision: (id: number) =>
     request<{ run_id: number; trades: unknown[] }>(`/live/${id}/run-decision`, { method: "POST" }),
   liveStop: (id: number) => request<{ stopped: number }>(`/live/${id}/stop`, { method: "POST" }),
+  liveWatchlist: (id: number) =>
+    request<{ run_id: number; rows: WatchRow[] }>(`/live/${id}/watchlist`),
   liveAddOverride: (id: number, ov: OverrideInput) =>
     request<{ run_id: number; overrides: number }>(`/live/${id}/overrides`, {
       method: "POST",

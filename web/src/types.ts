@@ -147,6 +147,22 @@ export interface LiveTradeEvent {
   tag: string;
 }
 
+export interface WatchRow {
+  symbol: string;
+  ltp: number | null;
+  high_20d: number | null;
+  low_20d: number | null;
+  tracking: boolean;
+  held: boolean;
+  lots: number;
+  units: number;
+  avg_price: number | null;
+  unrealized_pnl: number;
+  pnl_pct: number | null;
+  to_breakout_pct: number | null;
+  status: string;
+}
+
 // WebSocket message envelope from /api/v1/live/ws
 export interface LiveWsMessage {
   type: "snapshot" | "trades" | "stopped";

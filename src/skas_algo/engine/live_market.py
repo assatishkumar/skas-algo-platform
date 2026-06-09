@@ -70,3 +70,21 @@ class LiveMarketView:
             elif self._hist.get(s):
                 out[s] = self._hist[s][-1]
         return out
+
+    # ----------------------------------------------------- introspection
+    def universe(self) -> list[str]:
+        return list(self._order)
+
+    def quote(self, symbol: str) -> float | None:
+        return self._quotes.get(symbol)
+
+    def last_close(self, symbol: str) -> float | None:
+        """Live quote if present, else the last seeded/rolled historical close."""
+        if symbol in self._quotes:
+            return self._quotes[symbol]
+        hist = self._hist.get(symbol)
+        return hist[-1] if hist else None
+
+    def levels(self, symbol: str) -> tuple[float, float] | None:
+        """(rolling_high, rolling_low) from history, or None if insufficient."""
+        return self._rolling(symbol)

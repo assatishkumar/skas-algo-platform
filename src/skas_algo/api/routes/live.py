@@ -98,6 +98,14 @@ async def get_live(run_id: int) -> dict:
     return _get(run_id).snapshot()
 
 
+@router.get("/{run_id}/watchlist")
+async def watchlist(run_id: int) -> dict:
+    """Per-symbol signal status (price, 20-day levels, tracking, holding)."""
+    from skas_algo.engine.jsonutil import to_native
+
+    return {"run_id": run_id, "rows": to_native(_get(run_id).session.watchlist())}
+
+
 @router.post("/{run_id}/refresh")
 async def refresh_live(run_id: int) -> dict:
     live = _get(run_id)

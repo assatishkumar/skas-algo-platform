@@ -133,6 +133,57 @@ class LiveSession:
             "positions": positions,
         }
 
+    def watchlist(self) -> list[dict]:
+        """Per-symbol decision context: price, 20-day levels, tracking, holding, status.
+
+        Lets you see what the algo is 'thinking' for every name in the universe —
+        which it's tracking (waiting for a breakout), holding, or just watching.
+        """
+        tracking = getattr(self.strategy, "tracking", {})
+        rows: list[dict] = []
+        for sym in self.market.universe():
+            ltp = self.market.last_close(sym)
+            levels = self.market.levels(sym)
+            high = levels[0] if levels else None
+            low = levels[1] if levels else None
+            lots = self.portfolio.lots(sym)
+            units = sum(lot.units for lot in lots)
+            cost = sum(lot.units * lot.price for lot in lots)
+            avg = cost / units if units else None
+            held = bool(lots)
+            upnl = (units * ltp - cost) if (held and ltp is not None) else 0.0
+            pnl_pct = ((ltp - avg) / avg * 100) if (held and ltp and avg) else None
+            is_tracking = bool(tracking.get(sym, False))
+
+            if held:
+                status = f"Holding {len(lots)} lot(s)"
+            elif is_tracking and high is not None:
+                status = "Tracking → buy on breakout"
+            elif ltp is not None and low is not None and ltp <= low:
+                status = "At 20-day low"
+            else:
+                status = "Watching"
+
+            to_breakout = ((high - ltp) / ltp * 100) if (high and ltp) else None
+            rows.append(
+                {
+                    "symbol": sym,
+                    "ltp": ltp,
+                    "high_20d": high,
+                    "low_20d": low,
+                    "tracking": is_tracking,
+                    "held": held,
+                    "lots": len(lots),
+                    "units": units,
+                    "avg_price": avg,
+                    "unrealized_pnl": upnl,
+                    "pnl_pct": pnl_pct,
+                    "to_breakout_pct": to_breakout,
+                    "status": status,
+                }
+            )
+        return rows
+
     # ------------------------------------------------------- bookkeeping
     def _flush(self, ym, ts) -> None:
         flush = self.portfolio.flush_month(self.tax_rate, self.withdrawal_rate)

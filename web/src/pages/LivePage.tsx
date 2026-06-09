@@ -10,7 +10,73 @@ import type {
   LiveTradeEvent,
   LiveWsMessage,
   StartLiveRequest,
+  WatchRow,
 } from "../types";
+
+function fmt(n: number | null, d = 2): string {
+  return n == null ? "—" : n.toLocaleString("en-IN", { maximumFractionDigits: d });
+}
+
+function SignalsPanel({ runId, version }: { runId: number; version: number }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["watchlist", runId, version],
+    queryFn: () => api.liveWatchlist(runId),
+  });
+  if (isLoading) return <div className="text-slate-500 text-sm mt-3">Loading signals…</div>;
+  const rows: WatchRow[] = data?.rows ?? [];
+  const rank = (r: WatchRow) => (r.held ? 0 : r.tracking ? 1 : 2);
+  const sorted = [...rows].sort(
+    (a, b) => rank(a) - rank(b) || (a.to_breakout_pct ?? 1e9) - (b.to_breakout_pct ?? 1e9),
+  );
+  const counts: Record<string, number> = {};
+  rows.forEach((r) => (counts[r.status] = (counts[r.status] ?? 0) + 1));
+
+  return (
+    <div className="mt-3 border-t border-slate-800 pt-3">
+      <div className="text-xs text-slate-400 mb-2">
+        {Object.entries(counts).map(([s, n]) => `${s}: ${n}`).join("  ·  ") || "no symbols"}
+        <span className="text-slate-600"> — closest-to-breakout first; refreshes on each quote pull</span>
+      </div>
+      <div className="overflow-x-auto max-h-96 overflow-y-auto">
+        <table className="w-full text-xs tabular-nums">
+          <thead className="text-slate-400 text-left sticky top-0 bg-slate-900">
+            <tr>
+              <th className="py-1 pr-3">Symbol</th>
+              <th className="py-1 pr-3 text-right">LTP</th>
+              <th className="py-1 pr-3 text-right">20d low</th>
+              <th className="py-1 pr-3 text-right">20d high</th>
+              <th className="py-1 pr-3 text-right">→ breakout</th>
+              <th className="py-1 pr-3 text-right">P&amp;L</th>
+              <th className="py-1 pr-3">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r) => (
+              <tr key={r.symbol} className={`border-t border-slate-800 ${r.held ? "bg-slate-800/40" : ""}`}>
+                <td className="py-1 pr-3 font-medium">
+                  {r.symbol} {r.tracking && !r.held && <span title="tracking">👁</span>}
+                </td>
+                <td className="py-1 pr-3 text-right">{fmt(r.ltp)}</td>
+                <td className="py-1 pr-3 text-right text-slate-400">{fmt(r.low_20d)}</td>
+                <td className="py-1 pr-3 text-right text-slate-400">{fmt(r.high_20d)}</td>
+                <td className="py-1 pr-3 text-right text-slate-300">
+                  {r.to_breakout_pct == null ? "—" : `+${r.to_breakout_pct.toFixed(1)}%`}
+                </td>
+                <td className={`py-1 pr-3 text-right ${(r.pnl_pct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                  {r.pnl_pct == null ? "—" : `${r.pnl_pct >= 0 ? "+" : ""}${r.pnl_pct.toFixed(1)}%`}
+                </td>
+                <td className="py-1 pr-3">
+                  {r.status}
+                  {r.held ? ` · ${r.lots} lot${r.lots > 1 ? "s" : ""}` : ""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 const inputClass =
   "w-full rounded-md bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:border-brand";
@@ -18,6 +84,7 @@ const inputClass =
 function useLiveFeed() {
   const [snapshots, setSnapshots] = useState<Record<number, LiveRunSnapshot>>({});
   const [trades, setTrades] = useState<(LiveTradeEvent & { run_id: number })[]>([]);
+  const [versions, setVersions] = useState<Record<number, number>>({});
   const [connected, setConnected] = useState(false);
 
   const seed = useCallback(async () => {
@@ -37,6 +104,7 @@ function useLiveFeed() {
           ...prev,
           [msg.run_id]: { ...prev[msg.run_id], ...msg } as LiveRunSnapshot,
         }));
+        setVersions((prev) => ({ ...prev, [msg.run_id]: (prev[msg.run_id] ?? 0) + 1 }));
       } else if (msg.type === "trades" && msg.events) {
         setTrades((prev) =>
           [...msg.events!.map((ev) => ({ ...ev, run_id: msg.run_id })), ...prev].slice(0, 50),
@@ -52,7 +120,7 @@ function useLiveFeed() {
     return () => ws.close();
   }, [seed]);
 
-  return { snapshots, trades, connected, seed };
+  return { snapshots, trades, versions, connected, seed };
 }
 
 function StartForm({ onStarted, prefill }: { onStarted: () => void; prefill?: ForwardTestPrefill }) {
@@ -319,8 +387,17 @@ function OverridePanel({ runId, onDone }: { runId: number; onDone: () => void })
   );
 }
 
-function RunCard({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () => void }) {
+function RunCard({
+  run,
+  version,
+  onChanged,
+}: {
+  run: LiveRunSnapshot;
+  version: number;
+  onChanged: () => void;
+}) {
   const [showOverride, setShowOverride] = useState(false);
+  const [showSignals, setShowSignals] = useState(false);
   const act = async (fn: () => Promise<unknown>) => {
     await fn();
     onChanged();
@@ -376,10 +453,14 @@ function RunCard({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () => vo
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={() => act(() => api.liveRefresh(run.run_id))} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Refresh</button>
             <button onClick={() => act(() => api.liveRunDecision(run.run_id))} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs">Run decision</button>
+            <button onClick={() => setShowSignals((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
+              {showSignals ? "Hide signals" : "Signals"}
+            </button>
             <button onClick={() => setShowOverride((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Intervene…</button>
             <button onClick={() => act(() => api.liveStop(run.run_id))} className="rounded bg-rose-900 hover:bg-rose-800 px-3 py-1.5 text-xs">Stop</button>
           </div>
           {showOverride && <OverridePanel runId={run.run_id} onDone={() => setShowOverride(false)} />}
+          {showSignals && <SignalsPanel runId={run.run_id} version={version} />}
         </>
       )}
     </Card>
@@ -389,7 +470,7 @@ function RunCard({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () => vo
 export default function LivePage() {
   const location = useLocation();
   const prefill = (location.state as { prefill?: ForwardTestPrefill } | null)?.prefill;
-  const { snapshots, trades, connected, seed } = useLiveFeed();
+  const { snapshots, trades, versions, connected, seed } = useLiveFeed();
   const runs = Object.values(snapshots).sort((a, b) => b.run_id - a.run_id);
   // Keep a stable ref to seed for action callbacks.
   const seedRef = useRef(seed);
@@ -409,7 +490,14 @@ export default function LivePage() {
       {runs.length === 0 ? (
         <Card><div className="text-slate-400">No paper runs. Start one above.</div></Card>
       ) : (
-        runs.map((run) => <RunCard key={run.run_id} run={run} onChanged={() => seedRef.current()} />)
+        runs.map((run) => (
+          <RunCard
+            key={run.run_id}
+            run={run}
+            version={versions[run.run_id] ?? 0}
+            onChanged={() => seedRef.current()}
+          />
+        ))
       )}
 
       {trades.length > 0 && (
