@@ -101,8 +101,17 @@ function EquityChart({ report, runId }: { report: Report; runId?: number }) {
         </LineChart>
       </ResponsiveContainer>
       <div className="mt-2 text-[11px] text-slate-500">
-        Strategy (net) is post-tax &amp; post-withdrawal; gross adds them back for a like-for-like
-        read against the index buy-and-hold.
+        <span className="text-slate-400">Strategy (net)</span> is after taxes &amp; withdrawals —
+        what you actually keep.{" "}
+        {index !== "none" && <>{index} is a gross buy-and-hold (no tax along the way). </>}
+        {hasGross ? (
+          <>
+            <span className="text-slate-400">Strategy (gross)</span> adds taxes &amp; withdrawals
+            back, for a before-tax, like-for-like comparison with the index.
+          </>
+        ) : (
+          <>Re-run this backtest to also plot a before-tax Strategy (gross) line.</>
+        )}
       </div>
     </Card>
   );
