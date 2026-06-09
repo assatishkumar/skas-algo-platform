@@ -512,13 +512,45 @@ export default function LivePage() {
   const seedRef = useRef(seed);
   seedRef.current = seed;
 
+  // Auto-refresh: while the page is open, periodically pull quotes for running runs.
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [intervalSec, setIntervalSec] = useState(15);
+  const runsRef = useRef(runs);
+  runsRef.current = runs;
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => {
+      runsRef.current
+        .filter((r) => r.status !== "stopped")
+        .forEach((r) => api.liveRefresh(r.run_id).catch(() => {}));
+    }, intervalSec * 1000);
+    return () => clearInterval(id);
+  }, [autoRefresh, intervalSec]);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Live (paper)</h1>
-        <span className={`text-xs ${connected ? "text-emerald-400" : "text-slate-500"}`}>
-          {connected ? "● live" : "○ disconnected"}
-        </span>
+        <div className="flex items-center gap-3 text-xs">
+          <label className="flex items-center gap-1.5 text-slate-300">
+            <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+            auto-refresh
+          </label>
+          <select
+            className="rounded bg-slate-800 border border-slate-700 px-1.5 py-0.5"
+            value={intervalSec}
+            onChange={(e) => setIntervalSec(+e.target.value)}
+            disabled={!autoRefresh}
+          >
+            <option value={5}>5s</option>
+            <option value={15}>15s</option>
+            <option value={30}>30s</option>
+            <option value={60}>60s</option>
+          </select>
+          <span className={connected ? "text-emerald-400" : "text-slate-500"}>
+            {connected ? "● live" : "○ disconnected"}
+          </span>
+        </div>
       </div>
 
       <StartForm key={prefill?.strategy_id ?? "manual"} prefill={prefill} onStarted={() => seedRef.current()} />
