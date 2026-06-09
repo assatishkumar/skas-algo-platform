@@ -35,6 +35,16 @@ export interface BenchmarkPoint {
   value: number;
 }
 
+export interface CompareRun {
+  run_id: number;
+  name: string;
+  strategy_id: string;
+  params: Record<string, unknown>;
+  capital: number | null;
+  metrics: Metrics;
+  growth: BenchmarkPoint[];
+}
+
 export interface Report {
   metrics: Metrics;
   yearly?: Record<string, YearlyRow>;
@@ -66,6 +76,7 @@ export interface RunSummary {
   strategy_id: string;
   mode: string;
   archived?: boolean;
+  batch_id?: string | null;
   started_at: string | null;
   metrics: Metrics;
 }

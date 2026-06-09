@@ -4,6 +4,7 @@ import type {
   BenchmarkPoint,
   BrokerAccount,
   BrokerConnectRequest,
+  CompareRun,
   Deployment,
   LiveRunSnapshot,
   OverrideInput,
@@ -41,6 +42,8 @@ export const api = {
     request<RunSummary[]>(`/runs${status ? `?status=${status}` : ""}`),
   runUpdate: (id: number, body: { name?: string; notes?: string }) =>
     request(`/runs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  runsCompare: (ids: number[]) =>
+    request<{ runs: CompareRun[] }>(`/runs/compare?ids=${ids.join(",")}`),
   runArchive: (id: number) => request(`/runs/${id}/archive`, { method: "POST" }),
   runUnarchive: (id: number) => request(`/runs/${id}/unarchive`, { method: "POST" }),
   runDelete: (id: number) => request(`/runs/${id}`, { method: "DELETE" }),

@@ -156,6 +156,26 @@ def test_benchmark_endpoint(api_client: TestClient):
     ).status_code == 400
 
 
+def test_compare_runs(api_client: TestClient):
+    r1 = _make_run(api_client, params={"capital_parts": 10, "profit_target": 0.06})
+    r2 = _make_run(api_client, params={"capital_parts": 10, "profit_target": 0.10})
+
+    resp = api_client.get("/api/v1/runs/compare", params={"ids": f"{r1},{r2}"})
+    assert resp.status_code == 200, resp.text
+    runs = resp.json()["runs"]
+    assert [r["run_id"] for r in runs] == [r1, r2]
+    # Rebased growth starts at 100 for each run.
+    for r in runs:
+        assert r["growth"][0]["value"] == pytest.approx(100.0)
+        assert "Total Return %" in r["metrics"]
+
+    # Bounds: need 2–5, and only backtests.
+    assert api_client.get("/api/v1/runs/compare", params={"ids": str(r1)}).status_code == 422
+    assert api_client.get(
+        "/api/v1/runs/compare", params={"ids": f"{r1},999999"}
+    ).status_code == 422
+
+
 def test_run_management_lifecycle(api_client: TestClient):
     body = {
         "strategy_id": "sst_lifo",

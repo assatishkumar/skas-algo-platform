@@ -7,7 +7,19 @@ import { formatInr, pct } from "../lib/format";
 import type { ForwardTestPrefill, RunSummary } from "../types";
 
 /** A backtest run tile: name, notes, key metrics, and rename/archive/delete actions. */
-function RunTile({ run, onChanged }: { run: RunSummary; onChanged: () => void }) {
+function RunTile({
+  run,
+  onChanged,
+  selectMode = false,
+  selected = false,
+  onSelect,
+}: {
+  run: RunSummary;
+  onChanged: () => void;
+  selectMode?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(run.name);
@@ -43,9 +55,18 @@ function RunTile({ run, onChanged }: { run: RunSummary; onChanged: () => void })
   }
 
   return (
-    <Card>
+    <Card className={selected ? "border-brand" : ""}>
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex items-start gap-2">
+          {selectMode && (
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={selected}
+              onChange={onSelect}
+            />
+          )}
+          <div className="min-w-0">
           {editing ? (
             <input
               className="w-full rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm"
@@ -63,6 +84,7 @@ function RunTile({ run, onChanged }: { run: RunSummary; onChanged: () => void })
             <Badge>{run.mode}</Badge>
             <span>#{run.run_id}</span>
             <span>· {timeAgo(run.started_at)}</span>
+          </div>
           </div>
         </div>
         <div className="text-right text-sm shrink-0">
@@ -162,6 +184,9 @@ const TABS: { key: string; label: string }[] = [
 export default function RunsPage() {
   const [tab, setTab] = useState("active");
   const [search, setSearch] = useState("");
+  const [compareMode, setCompareMode] = useState(false);
+  const [selected, setSelected] = useState<number[]>([]);
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
@@ -170,6 +195,11 @@ export default function RunsPage() {
   });
 
   const onChanged = () => queryClient.invalidateQueries({ queryKey: ["runs"] });
+
+  const toggleSelect = (id: number) =>
+    setSelected((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 5 ? prev : [...prev, id],
+    );
 
   if (isLoading) return <Spinner />;
   if (error) return <ErrorBox message={(error as Error).message} />;
@@ -185,13 +215,43 @@ export default function RunsPage() {
       )
     : runs;
 
+  // Group by batch_id: batched runs render together under a header.
+  const batches = new Map<string, RunSummary[]>();
+  const loose: RunSummary[] = [];
+  for (const r of filtered) {
+    if (r.batch_id) batches.set(r.batch_id, [...(batches.get(r.batch_id) ?? []), r]);
+    else loose.push(r);
+  }
+
+  const tile = (r: RunSummary) => (
+    <RunTile
+      key={r.run_id}
+      run={r}
+      onChanged={onChanged}
+      selectMode={compareMode}
+      selected={selected.includes(r.run_id)}
+      onSelect={() => toggleSelect(r.run_id)}
+    />
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-lg font-semibold">Runs</h1>
-        <Link to="/new" className="rounded-md bg-brand hover:bg-brand-light px-3 py-2 text-sm font-medium">
-          + New backtest
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              setCompareMode((v) => !v);
+              setSelected([]);
+            }}
+            className={`rounded-md px-3 py-2 text-sm font-medium ${compareMode ? "bg-slate-700 text-white" : "bg-slate-800 hover:bg-slate-700 text-slate-300"}`}
+          >
+            {compareMode ? "Cancel compare" : "Compare"}
+          </button>
+          <Link to="/new" className="rounded-md bg-brand hover:bg-brand-light px-3 py-2 text-sm font-medium">
+            + New backtest
+          </Link>
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -214,6 +274,19 @@ export default function RunsPage() {
         />
       </div>
 
+      {compareMode && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-800/50 px-3 py-2 text-sm">
+          <span className="text-slate-300">{selected.length} selected (pick 2–5)</span>
+          <button
+            disabled={selected.length < 2}
+            onClick={() => navigate(`/compare?ids=${selected.join(",")}`)}
+            className="rounded-md bg-brand hover:bg-brand-light px-3 py-1.5 font-medium disabled:opacity-40"
+          >
+            Compare selected →
+          </button>
+        </div>
+      )}
+
       {filtered.length === 0 ? (
         <Card>
           <div className="text-slate-400">
@@ -225,10 +298,22 @@ export default function RunsPage() {
           </div>
         </Card>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {filtered.map((r) => (
-            <RunTile key={r.run_id} run={r} onChanged={onChanged} />
+        <div className="space-y-4">
+          {Array.from(batches.entries()).map(([bid, rs]) => (
+            <div key={bid} className="rounded-lg border border-slate-800 p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium text-slate-300">Batch · {rs.length} runs</div>
+                <button
+                  onClick={() => navigate(`/compare?ids=${rs.slice(0, 5).map((r) => r.run_id).join(",")}`)}
+                  className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs"
+                >
+                  Compare batch →
+                </button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">{rs.map(tile)}</div>
+            </div>
           ))}
+          {loose.length > 0 && <div className="grid gap-3 md:grid-cols-2">{loose.map(tile)}</div>}
         </div>
       )}
     </div>

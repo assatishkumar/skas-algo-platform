@@ -126,6 +126,43 @@ def _get_run(db: Session, run_id: int) -> AlgoRun:
     return run
 
 
+@router.get("/runs/compare")
+def compare_runs(ids: str, db: Session = Depends(get_db)) -> dict:
+    """Compare up to 5 backtest runs: metrics + rebased-to-100 equity curves."""
+    try:
+        run_ids = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="ids must be comma-separated integers") from exc
+    if not 2 <= len(run_ids) <= 5:
+        raise HTTPException(status_code=422, detail="compare between 2 and 5 runs")
+
+    out = []
+    for rid in run_ids:
+        run = db.get(AlgoRun, rid)
+        if run is None or run.mode != TradingMode.BACKTEST:
+            raise HTTPException(status_code=422, detail=f"run {rid} is not a backtest")
+        algo = db.get(Algo, run.algo_id)
+        curve = (run.metrics or {}).get("equity_curve", [])
+        base = curve[0]["equity"] if curve and curve[0]["equity"] else 0.0
+        growth = (
+            [{"date": p["date"], "value": 100.0 * p["equity"] / base} for p in curve]
+            if base
+            else []
+        )
+        out.append(
+            {
+                "run_id": run.id,
+                "name": algo.name if algo else f"run {rid}",
+                "strategy_id": algo.strategy_id if algo else None,
+                "params": algo.params if algo else {},
+                "capital": algo.capital if algo else None,
+                "metrics": (run.metrics or {}).get("metrics", {}),
+                "growth": growth,
+            }
+        )
+    return {"runs": out}
+
+
 @router.patch("/runs/{run_id}")
 def update_run(run_id: int, body: DeploymentUpdate, db: Session = Depends(get_db)) -> dict:
     run = _get_run(db, run_id)
