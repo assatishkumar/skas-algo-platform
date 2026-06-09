@@ -449,7 +449,7 @@ function DeploymentTile({
         {dep.status === "active" ? (
           <>
             <button onClick={onToggle} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
-              {expanded ? "Collapse" : "Open"}
+              {expanded ? "Minimize ▲" : "Open"}
             </button>
             <button
               onClick={() => act(() => api.liveStop(dep.run_id))}
@@ -511,7 +511,17 @@ function DeploymentTile({
 
       {/* Inline live detail for an expanded active deployment */}
       {expanded && dep.status === "active" && snapshot && (
-        <RunCard run={snapshot} version={version} onChanged={onChanged} />
+        <>
+          <RunCard run={snapshot} version={version} onChanged={onChanged} />
+          <div className="mt-3 flex justify-center border-t border-slate-800 pt-3">
+            <button
+              onClick={onToggle}
+              className="rounded bg-slate-800 hover:bg-slate-700 px-4 py-1.5 text-xs"
+            >
+              Minimize ▲
+            </button>
+          </div>
+        </>
       )}
     </Card>
   );
