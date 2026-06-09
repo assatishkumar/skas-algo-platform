@@ -27,7 +27,7 @@ export default function RunDetailPage() {
       params: data!.params,
     };
     // Carry the backtest's exact config into the Live "start" form.
-    navigate("/live", { state: { prefill } });
+    navigate("/live/new", { state: { prefill } });
   }
 
   return (

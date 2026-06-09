@@ -56,6 +56,7 @@ class UniverseOut(BaseModel):
 class LiveStartRequest(BaseModel):
     strategy_id: str
     name: str | None = None
+    notes: str | None = None
     symbols: list[str] = Field(default_factory=list)
     universe: str | None = None
     capital: float = 2_500_000
@@ -88,6 +89,11 @@ class RequestTokenInput(BaseModel):
 class QuoteSourceInput(BaseModel):
     quote_source: str  # "cache" | "zerodha"
     broker_account_id: int | None = None
+
+
+class DeploymentUpdate(BaseModel):
+    name: str | None = None
+    notes: str | None = None
 
 
 class BrokerAccountOut(BaseModel):

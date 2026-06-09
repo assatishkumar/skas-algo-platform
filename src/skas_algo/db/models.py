@@ -76,6 +76,7 @@ class Algo(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     strategy_id: Mapped[str] = mapped_column(String(64))  # e.g. "sst_lifo"
     instrument_class: Mapped[InstrumentClass] = mapped_column(
         Enum(InstrumentClass), default=InstrumentClass.STOCK
@@ -104,6 +105,7 @@ class AlgoRun(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     algo_id: Mapped[int] = mapped_column(ForeignKey("algo.id"))
     mode: Mapped[TradingMode] = mapped_column(Enum(TradingMode))
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     params_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)

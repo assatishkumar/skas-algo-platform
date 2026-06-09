@@ -40,6 +40,7 @@ class LiveConfig:
     name: str
     strategy_id: str
     symbols: list[str]
+    notes: str | None = None
     capital: float = 2_500_000
     params: dict = field(default_factory=dict)
     tax_rate: float = 0.20
@@ -222,6 +223,7 @@ class LiveRunManager:
                 capital=config.capital,
                 mode=config.mode,
                 params=params_snapshot,
+                notes=config.notes,
             )
             run_id, algo_id = run.id, run.algo_id
 

@@ -3,6 +3,7 @@ import type {
   BacktestResponse,
   BrokerAccount,
   BrokerConnectRequest,
+  Deployment,
   LiveRunSnapshot,
   OverrideInput,
   Report,
@@ -73,6 +74,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(ov),
     }),
+  liveDeployments: (status?: string) =>
+    request<Deployment[]>(`/live/deployments${status ? `?status=${status}` : ""}`),
+  liveArchive: (id: number) => request(`/live/${id}/archive`, { method: "POST" }),
+  liveUnarchive: (id: number) => request(`/live/${id}/unarchive`, { method: "POST" }),
+  liveDelete: (id: number) => request(`/live/${id}`, { method: "DELETE" }),
+  liveUpdate: (id: number, body: { name?: string; notes?: string }) =>
+    request(`/live/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
 };
 
 export const brokers = {

@@ -1,5 +1,6 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 import BrokersPage from "./pages/BrokersPage";
+import DeployPage from "./pages/DeployPage";
 import LivePage from "./pages/LivePage";
 import NewBacktestPage from "./pages/NewBacktestPage";
 import RunDetailPage from "./pages/RunDetailPage";
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="/" element={<RunsPage />} />
           <Route path="/new" element={<NewBacktestPage />} />
           <Route path="/live" element={<LivePage />} />
+          <Route path="/live/new" element={<DeployPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
         </Routes>

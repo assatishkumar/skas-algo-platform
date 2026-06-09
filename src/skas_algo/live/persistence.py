@@ -22,9 +22,12 @@ from skas_algo.db.enums import (
 from skas_algo.db.models import Algo, AlgoRun, Fill, Order, Position
 
 
-def start_live_run(session: Session, *, name, strategy_id, capital, mode, params) -> AlgoRun:
+def start_live_run(
+    session: Session, *, name, strategy_id, capital, mode, params, notes=None
+) -> AlgoRun:
     algo = Algo(
         name=name,
+        notes=notes,
         strategy_id=strategy_id,
         instrument_class=InstrumentClass.STOCK,
         mode=TradingMode(mode),

@@ -104,6 +104,7 @@ export interface LiveRunSnapshot {
 export interface StartLiveRequest {
   strategy_id: string;
   name?: string;
+  notes?: string;
   symbols?: string[];
   universe?: string | null;
   capital: number;
@@ -150,6 +151,32 @@ export interface LiveTradeEvent {
   units: number;
   price: number;
   tag: string;
+}
+
+export interface DeploymentMetrics {
+  equity?: number | null;
+  cash?: number | null;
+  invested?: number | null;
+  open_positions?: number;
+  open_lots?: number;
+  parts_total?: number | null;
+  unrealized_pnl?: number;
+  total_return_pct?: number | null;
+  total_trades?: number;
+}
+
+export interface Deployment {
+  run_id: number;
+  algo_id: number;
+  name: string;
+  notes: string | null;
+  strategy_id: string;
+  mode: string;
+  status: "active" | "stopped" | "archived";
+  quote_source: string;
+  started_at: string | null;
+  stopped_at: string | null;
+  metrics: DeploymentMetrics;
 }
 
 export interface WatchRow {

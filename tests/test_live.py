@@ -203,6 +203,55 @@ def test_live_rest_lifecycle(api_client: TestClient):
     assert api_client.get(f"/api/v1/live/{run_id}").status_code == 404
 
 
+def test_deployment_lifecycle(api_client: TestClient):
+    body = {
+        "strategy_id": "sst_lifo",
+        "name": "My SST forward test",
+        "notes": "testing the dip-breakout on a few names",
+        "symbols": ["AAA"],
+        "capital": 100000,
+        "params": {"capital_parts": 10, "profit_target": 0.06},
+        "lookback": 5,
+        "quote_source": "cache",
+        "ignore_market_hours": True,
+    }
+    run_id = api_client.post("/api/v1/live/start", json=body).json()["run_id"]
+
+    # Appears under Active with name + notes.
+    active = api_client.get("/api/v1/live/deployments?status=active").json()
+    tile = next(t for t in active if t["run_id"] == run_id)
+    assert tile["name"] == "My SST forward test"
+    assert tile["notes"].startswith("testing")
+    assert tile["status"] == "active"
+
+    # Edit name/notes.
+    api_client.patch(f"/api/v1/live/{run_id}", json={"name": "Renamed", "notes": "n2"})
+    assert api_client.get(f"/api/v1/live/{run_id}").json()["name"] == "Renamed"
+
+    # Stop -> moves to Stopped.
+    api_client.post(f"/api/v1/live/{run_id}/stop")
+    stopped = api_client.get("/api/v1/live/deployments?status=stopped").json()
+    assert any(t["run_id"] == run_id for t in stopped)
+
+    # Archive -> Archived; unarchive -> back to Stopped.
+    api_client.post(f"/api/v1/live/{run_id}/archive")
+    assert any(
+        t["run_id"] == run_id
+        for t in api_client.get("/api/v1/live/deployments?status=archived").json()
+    )
+    api_client.post(f"/api/v1/live/{run_id}/unarchive")
+    assert any(
+        t["run_id"] == run_id
+        for t in api_client.get("/api/v1/live/deployments?status=stopped").json()
+    )
+
+    # Delete -> gone everywhere, and the AlgoRun row is removed.
+    assert api_client.delete(f"/api/v1/live/{run_id}").status_code == 200
+    assert all(t["run_id"] != run_id for t in api_client.get("/api/v1/live/deployments").json())
+    with session_scope() as s:
+        assert s.get(AlgoRun, run_id) is None
+
+
 def test_live_override_injection(api_client: TestClient):
     body = {
         "strategy_id": "sst_lifo",

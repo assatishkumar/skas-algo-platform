@@ -1,15 +1,14 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
-import { Badge, Card, ErrorBox, NumberInput } from "../components/ui";
+import { Badge, Card } from "../components/ui";
 import { formatInr } from "../lib/format";
 import type {
-  ForwardTestPrefill,
+  Deployment,
   LiveRunSnapshot,
   LiveTradeEvent,
   LiveWsMessage,
-  StartLiveRequest,
   WatchRow,
 } from "../types";
 
@@ -112,9 +111,6 @@ function SignalsPanel({ runId, version }: { runId: number; version: number }) {
   );
 }
 
-const inputClass =
-  "w-full rounded-md bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:border-brand";
-
 function useLiveFeed() {
   const [snapshots, setSnapshots] = useState<Record<number, LiveRunSnapshot>>({});
   const [trades, setTrades] = useState<(LiveTradeEvent & { run_id: number })[]>([]);
@@ -157,237 +153,6 @@ function useLiveFeed() {
   return { snapshots, trades, versions, connected, seed };
 }
 
-function StartForm({ onStarted, prefill }: { onStarted: () => void; prefill?: ForwardTestPrefill }) {
-  const { data: strategyData } = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
-  const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
-  const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
-
-  // Split a backtest's stored params into the non-strategy keys and the strategy params.
-  const pf = prefill;
-  const pfParams = (pf?.params ?? {}) as Record<string, unknown>;
-  const { symbols: pfSymbols, lookback: pfLookback, tax_rate: pfTax, withdrawal_rate: pfWd, ...pfStrategyParams } =
-    pfParams as {
-      symbols?: string[];
-      lookback?: number;
-      tax_rate?: number;
-      withdrawal_rate?: number;
-    };
-
-  const [strategyId, setStrategyId] = useState(pf?.strategy_id ?? "sst_lifo");
-  const [universe, setUniverse] = useState(pf ? "" : "nifty50");
-  const [symbols, setSymbols] = useState((pfSymbols ?? ["RELIANCE", "TCS", "INFY"]).join(", "));
-  const [capital, setCapital] = useState(pf?.capital ?? 1000000);
-  const [parts, setParts] = useState(10);
-  const [target, setTarget] = useState(6);
-  const [target1, setTarget1] = useState(10);
-  const [target2, setTarget2] = useState(8);
-  const [target3, setTarget3] = useState(6);
-  const [maxLots, setMaxLots] = useState(0);
-  const [taxRate, setTaxRate] = useState(20);
-  const [withdrawalRate, setWithdrawalRate] = useState(0);
-  const [lookback, setLookback] = useState(20);
-  const [allocationMode, setAllocationMode] = useState("fixed");
-  const [quoteSource, setQuoteSource] = useState("cache");
-  const [accountId, setAccountId] = useState<number | null>(null);
-  const [ignoreHours, setIgnoreHours] = useState(true);
-  const [auto, setAuto] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function start() {
-    setBusy(true);
-    setError(null);
-    const isCustom = universe === "";
-    const isFifo = strategyId === "sst_fifo";
-    // Prefill carries the backtest's exact strategy params + tax/withdrawal/lookback.
-    const manualParams = {
-      capital_parts: parts,
-      max_lots: maxLots,
-      allocation_mode: allocationMode,
-      ...(isFifo
-        ? {
-            profit_target_1: target1 / 100,
-            profit_target_2: target2 / 100,
-            profit_target_3: target3 / 100,
-          }
-        : { profit_target: target / 100 }),
-    };
-    const params = pf ? pfStrategyParams : manualParams;
-    const body: StartLiveRequest = {
-      strategy_id: strategyId,
-      universe: isCustom ? null : universe,
-      symbols: isCustom ? symbols.split(",").map((s) => s.trim()).filter(Boolean) : [],
-      capital,
-      params,
-      tax_rate: pf ? (pfTax ?? 0.2) : taxRate / 100,
-      withdrawal_rate: pf ? (pfWd ?? 0) : withdrawalRate / 100,
-      lookback: pf ? (pfLookback ?? 20) : lookback,
-      quote_source: quoteSource,
-      broker_account_id: quoteSource === "zerodha" ? accountId : null,
-      ignore_market_hours: ignoreHours,
-      auto,
-    };
-    try {
-      await api.liveStart(body);
-      onStarted();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const sessioned = (accounts ?? []).filter((a) => a.has_session);
-  const isFifo = strategyId === "sst_fifo";
-  const labeled = "block";
-  const lbl = "block text-xs text-slate-400 mb-1";
-
-  return (
-    <Card>
-      <div className="text-sm font-medium text-slate-300 mb-3">
-        {pf ? `Forward-test: ${pf.name ?? pf.strategy_id}` : "Start a paper algo"}
-      </div>
-
-      {pf ? (
-        <div className="text-sm text-slate-400 mb-3">
-          {pf.strategy_id} · {(pfSymbols ?? []).length} symbols · params from backtest (editable capital below)
-        </div>
-      ) : (
-        <div className="space-y-3 mb-3">
-          <div className="grid md:grid-cols-3 gap-3">
-            <label className={labeled}>
-              <span className={lbl}>Strategy</span>
-              <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>
-                {(strategyData?.strategies ?? ["sst_lifo"]).map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </label>
-            <label className={labeled}>
-              <span className={lbl}>Universe</span>
-              <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
-                {(universeData ?? []).map((u) => (
-                  <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
-                ))}
-                <option value="">Custom</option>
-              </select>
-            </label>
-            <label className={labeled}>
-              <span className={lbl}>Symbols</span>
-              {universe === "" ? (
-                <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
-              ) : (
-                <input className={`${inputClass} text-slate-500`} disabled value="(from universe)" />
-              )}
-            </label>
-          </div>
-          <div className="grid md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <label className={labeled}>
-              <span className={lbl}>Capital parts</span>
-              <NumberInput className={inputClass} value={parts} onChange={setParts} />
-            </label>
-            {isFifo ? (
-              <>
-                <label className={labeled}>
-                  <span className={lbl}>Target % (1 lot)</span>
-                  <NumberInput step="0.1" className={inputClass} value={target1} onChange={setTarget1} />
-                </label>
-                <label className={labeled}>
-                  <span className={lbl}>Target % (2)</span>
-                  <NumberInput step="0.1" className={inputClass} value={target2} onChange={setTarget2} />
-                </label>
-                <label className={labeled}>
-                  <span className={lbl}>Target % (3+)</span>
-                  <NumberInput step="0.1" className={inputClass} value={target3} onChange={setTarget3} />
-                </label>
-              </>
-            ) : (
-              <label className={labeled}>
-                <span className={lbl}>Profit target %</span>
-                <NumberInput step="0.1" className={inputClass} value={target} onChange={setTarget} />
-              </label>
-            )}
-            <label className={labeled}>
-              <span className={lbl}>Max lots (0=∞)</span>
-              <NumberInput className={inputClass} value={maxLots} onChange={setMaxLots} />
-            </label>
-            <label className={labeled}>
-              <span className={lbl}>Lookback</span>
-              <NumberInput className={inputClass} value={lookback} onChange={setLookback} />
-            </label>
-            <label className={labeled}>
-              <span className={lbl}>Tax rate %</span>
-              <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />
-            </label>
-            <label className={labeled}>
-              <span className={lbl}>Withdrawal %</span>
-              <NumberInput className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} />
-            </label>
-            <label className={labeled}>
-              <span className={lbl}>Position sizing</span>
-              <select className={inputClass} value={allocationMode} onChange={(e) => setAllocationMode(e.target.value)}>
-                <option value="fixed">Fixed</option>
-                <option value="equity_scaled">Equity-scaled</option>
-              </select>
-            </label>
-          </div>
-        </div>
-      )}
-
-      <div className="grid md:grid-cols-4 gap-3 items-center">
-        <label className="block">
-          <span className="block text-xs text-slate-400 mb-1">Capital (₹)</span>
-          <NumberInput className={inputClass} value={capital} onChange={setCapital} />
-        </label>
-        <label className="block">
-          <span className="block text-xs text-slate-400 mb-1">Quotes</span>
-          <select className={inputClass} value={quoteSource} onChange={(e) => setQuoteSource(e.target.value)}>
-            <option value="cache">Cache (last close, offline)</option>
-            <option value="zerodha">Zerodha (live)</option>
-          </select>
-        </label>
-        {quoteSource === "zerodha" && (
-          <label className="block">
-            <span className="block text-xs text-slate-400 mb-1">Account</span>
-            <select className={inputClass} value={accountId ?? ""} onChange={(e) => setAccountId(e.target.value ? +e.target.value : null)}>
-              <option value="">select…</option>
-              {sessioned.map((a) => (
-                <option key={a.id} value={a.id}>{a.label}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        <div className="flex flex-col gap-1 pt-4">
-          <label className="flex items-center gap-2 text-sm text-slate-300">
-            <input type="checkbox" checked={ignoreHours} onChange={(e) => setIgnoreHours(e.target.checked)} />
-            ignore market hours
-          </label>
-          <label className="flex items-center gap-2 text-sm text-slate-300">
-            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-            auto loop (refresh + daily decision)
-          </label>
-        </div>
-      </div>
-
-      <div className="mt-3 flex items-center gap-3">
-        <button
-          onClick={start}
-          disabled={busy || (quoteSource === "zerodha" && !accountId)}
-          className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50"
-        >
-          {busy ? "Starting…" : pf ? "Start forward test" : "Start paper run"}
-        </button>
-        <span className="text-xs text-slate-500">
-          {quoteSource === "zerodha"
-            ? "Live quotes · simulated fills · no real orders"
-            : "Cache quotes (works offline) · simulated fills · no real orders"}
-        </span>
-      </div>
-      {error && <div className="mt-2"><ErrorBox message={error} /></div>}
-    </Card>
-  );
-}
-
 function OverridePanel({ runId, onDone }: { runId: number; onDone: () => void }) {
   const [atPct, setAtPct] = useState(6);
   const [bookPct, setBookPct] = useState(50);
@@ -408,11 +173,11 @@ function OverridePanel({ runId, onDone }: { runId: number; onDone: () => void })
   return (
     <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-slate-800 pt-3">
       <span className="text-xs text-slate-400">Intervene: at</span>
-      <NumberInput step="0.1" className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={atPct} onChange={setAtPct} />
+      <input type="number" step="0.1" className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={atPct} onChange={(e) => setAtPct(+e.target.value)} />
       <span className="text-xs text-slate-400">% book</span>
-      <NumberInput className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={bookPct} onChange={setBookPct} />
+      <input type="number" className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={bookPct} onChange={(e) => setBookPct(+e.target.value)} />
       <span className="text-xs text-slate-400">% trail</span>
-      <NumberInput step="0.1" className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={trailPct} onChange={setTrailPct} />
+      <input type="number" step="0.1" className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" value={trailPct} onChange={(e) => setTrailPct(+e.target.value)} />
       <span className="text-xs text-slate-400">%</span>
       <button onClick={apply} className="rounded bg-slate-700 hover:bg-slate-600 px-3 py-1 text-xs">
         Apply to run
@@ -475,6 +240,7 @@ function QuoteSwitch({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () =
   );
 }
 
+/** Full live detail for an active deployment — positions, signals, interventions. */
 function RunCard({
   run,
   version,
@@ -499,22 +265,9 @@ function RunCard({
   const stopped = run.status === "stopped";
   const upnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
   return (
-    <Card>
-      <div className="flex items-center justify-between">
-        <div>
-          <span className="font-medium">{run.name}</span>{" "}
-          <span className="text-xs text-slate-400">#{run.run_id} · {run.strategy_id}</span>{" "}
-          <Badge>{run.status}</Badge>{" "}
-          <Badge>{run.quote_source === "zerodha" ? "live quotes" : "cache quotes"}</Badge>
-        </div>
-        <div className="flex gap-6 text-right text-sm">
-          <div><div className="text-slate-400 text-xs">Equity</div>{formatInr(run.equity)}</div>
-          <div><div className="text-slate-400 text-xs">Cash</div>{formatInr(run.cash)}</div>
-        </div>
-      </div>
-
+    <div className="mt-3 border-t border-slate-800 pt-3">
       {/* Quick summary: deployed capital, parts, positions, unrealized P&L */}
-      <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
         <div className="rounded-md bg-slate-800/40 px-3 py-2">
           <div className="text-slate-400 text-xs">Deployed</div>
           {formatInr(run.invested ?? 0)}
@@ -574,79 +327,362 @@ function RunCard({
             </button>
             <button onClick={() => setShowOverride((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Intervene…</button>
             <QuoteSwitch run={run} onChanged={onChanged} />
-            <button onClick={() => act(() => api.liveStop(run.run_id))} className="rounded bg-rose-900 hover:bg-rose-800 px-3 py-1.5 text-xs">Stop</button>
           </div>
           {showOverride && <OverridePanel runId={run.run_id} onDone={() => setShowOverride(false)} />}
           {showSignals && <SignalsPanel runId={run.run_id} version={version} />}
         </>
       )}
+    </div>
+  );
+}
+
+const STATUS_STYLE: Record<string, string> = {
+  active: "bg-emerald-900/40 text-emerald-300 border border-emerald-700/50",
+  stopped: "bg-slate-700/50 text-slate-300 border border-slate-600/50",
+  archived: "bg-amber-900/30 text-amber-300 border border-amber-700/40",
+};
+
+function StatusPill({ status }: { status: string }) {
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_STYLE[status] ?? ""}`}>
+      {status}
+    </span>
+  );
+}
+
+function timeAgo(iso: string | null): string {
+  if (!iso) return "—";
+  const then = new Date(iso).getTime();
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/** A deployment tile: name, status, key metrics, notes, and per-status actions. */
+function DeploymentTile({
+  dep,
+  snapshot,
+  version,
+  expanded,
+  onToggle,
+  onChanged,
+}: {
+  dep: Deployment;
+  snapshot?: LiveRunSnapshot;
+  version: number;
+  expanded: boolean;
+  onToggle: () => void;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(dep.name);
+  const [notes, setNotes] = useState(dep.notes ?? "");
+  const [busy, setBusy] = useState(false);
+
+  const m = dep.metrics ?? {};
+  // Prefer the live snapshot for active tiles (WS-fresh), fall back to tile metrics.
+  const equity = snapshot?.equity ?? m.equity ?? null;
+  const upnl =
+    snapshot != null
+      ? (snapshot.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0)
+      : m.unrealized_pnl;
+  const positions = snapshot?.open_positions ?? m.open_positions ?? 0;
+
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  };
+
+  async function saveEdit() {
+    await act(() => api.liveUpdate(dep.run_id, { name: name.trim(), notes: notes.trim() }));
+    setEditing(false);
+  }
+
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          {editing ? (
+            <input
+              className="w-full rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          ) : (
+            <div className="font-medium truncate">{dep.name}</div>
+          )}
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+            <StatusPill status={dep.status} />
+            <Badge>{dep.strategy_id}</Badge>
+            <Badge>{dep.quote_source === "zerodha" ? "live quotes" : "cache quotes"}</Badge>
+            <span>#{dep.run_id}</span>
+          </div>
+        </div>
+        <div className="text-right text-sm shrink-0">
+          <div className="text-slate-400 text-xs">Equity</div>
+          <div>{equity != null ? formatInr(equity) : "—"}</div>
+        </div>
+      </div>
+
+      {/* Notes (preview + inline edit) */}
+      {editing ? (
+        <textarea
+          className="mt-2 w-full rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm"
+          rows={2}
+          placeholder="notes"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+        />
+      ) : dep.notes ? (
+        <div className="mt-2 text-xs text-slate-400 line-clamp-2">{dep.notes}</div>
+      ) : null}
+
+      {/* Key metrics */}
+      <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
+        <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
+          <div className="text-slate-400 text-[11px]">Positions</div>
+          {positions}
+        </div>
+        <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
+          <div className="text-slate-400 text-[11px]">Unrealized</div>
+          {upnl != null ? (
+            <span className={upnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{formatInr(upnl)}</span>
+          ) : (
+            "—"
+          )}
+        </div>
+        <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
+          <div className="text-slate-400 text-[11px]">{dep.status === "active" ? "Started" : "Return"}</div>
+          {dep.status === "active"
+            ? timeAgo(dep.started_at)
+            : m.total_return_pct != null
+              ? `${m.total_return_pct >= 0 ? "+" : ""}${m.total_return_pct.toFixed(1)}%`
+              : "—"}
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+        {dep.status === "active" ? (
+          <>
+            <button onClick={onToggle} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
+              {expanded ? "Collapse" : "Open"}
+            </button>
+            <button
+              onClick={() => act(() => api.liveStop(dep.run_id))}
+              disabled={busy}
+              className="rounded bg-rose-900 hover:bg-rose-800 px-3 py-1.5 disabled:opacity-50"
+            >
+              Stop
+            </button>
+          </>
+        ) : (
+          <>
+            <Link to={`/runs/${dep.run_id}`} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
+              Report
+            </Link>
+            {dep.status === "stopped" ? (
+              <button
+                onClick={() => act(() => api.liveArchive(dep.run_id))}
+                disabled={busy}
+                className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50"
+              >
+                Archive
+              </button>
+            ) : (
+              <button
+                onClick={() => act(() => api.liveUnarchive(dep.run_id))}
+                disabled={busy}
+                className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50"
+              >
+                Unarchive
+              </button>
+            )}
+            <button
+              onClick={() => {
+                if (confirm(`Delete "${dep.name}" permanently? This removes its report, orders, and positions.`))
+                  act(() => api.liveDelete(dep.run_id));
+              }}
+              disabled={busy}
+              className="rounded bg-rose-950 hover:bg-rose-900 text-rose-300 px-3 py-1.5 disabled:opacity-50"
+            >
+              Delete
+            </button>
+          </>
+        )}
+        {editing ? (
+          <>
+            <button onClick={saveEdit} disabled={busy} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 disabled:opacity-50">
+              Save
+            </button>
+            <button onClick={() => { setEditing(false); setName(dep.name); setNotes(dep.notes ?? ""); }} className="text-slate-500 px-2">
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button onClick={() => setEditing(true)} className="ml-auto text-slate-500 hover:text-slate-300">
+            Edit name/notes
+          </button>
+        )}
+      </div>
+
+      {/* Inline live detail for an expanded active deployment */}
+      {expanded && dep.status === "active" && snapshot && (
+        <RunCard run={snapshot} version={version} onChanged={onChanged} />
+      )}
     </Card>
   );
 }
 
-export default function LivePage() {
-  const location = useLocation();
-  const prefill = (location.state as { prefill?: ForwardTestPrefill } | null)?.prefill;
-  const { snapshots, trades, versions, connected, seed } = useLiveFeed();
-  const runs = Object.values(snapshots).sort((a, b) => b.run_id - a.run_id);
-  // Keep a stable ref to seed for action callbacks.
-  const seedRef = useRef(seed);
-  seedRef.current = seed;
+function PortfolioBar({ deployments }: { deployments: Deployment[] }) {
+  const totals = deployments.reduce(
+    (acc, d) => {
+      acc.equity += d.metrics?.equity ?? 0;
+      acc.invested += d.metrics?.invested ?? 0;
+      acc.upnl += d.metrics?.unrealized_pnl ?? 0;
+      acc.positions += d.metrics?.open_positions ?? 0;
+      return acc;
+    },
+    { equity: 0, invested: 0, upnl: 0, positions: 0 },
+  );
+  return (
+    <Card>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+        <div>
+          <div className="text-slate-400 text-xs">Active deployments</div>
+          <div className="text-lg font-semibold">{deployments.length}</div>
+        </div>
+        <div>
+          <div className="text-slate-400 text-xs">Total equity</div>
+          <div className="text-lg font-semibold">{formatInr(totals.equity)}</div>
+        </div>
+        <div>
+          <div className="text-slate-400 text-xs">Deployed</div>
+          <div className="text-lg font-semibold">{formatInr(totals.invested)}</div>
+        </div>
+        <div>
+          <div className="text-slate-400 text-xs">Unrealized P&amp;L</div>
+          <div className={`text-lg font-semibold ${totals.upnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+            {formatInr(totals.upnl)}
+          </div>
+        </div>
+        <div>
+          <div className="text-slate-400 text-xs">Open positions</div>
+          <div className="text-lg font-semibold">{totals.positions}</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
-  // Auto-refresh: while the page is open, periodically pull quotes for running runs.
-  const [autoRefresh, setAutoRefresh] = useState(false);
-  const [intervalSec, setIntervalSec] = useState(15);
-  const runsRef = useRef(runs);
-  runsRef.current = runs;
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const id = setInterval(() => {
-      runsRef.current
-        .filter((r) => r.status !== "stopped")
-        .forEach((r) => api.liveRefresh(r.run_id).catch(() => {}));
-    }, intervalSec * 1000);
-    return () => clearInterval(id);
-  }, [autoRefresh, intervalSec]);
+const TABS: { key: string; label: string }[] = [
+  { key: "active", label: "Active" },
+  { key: "stopped", label: "Stopped" },
+  { key: "archived", label: "Archived" },
+];
+
+export default function LivePage() {
+  const [tab, setTab] = useState("active");
+  const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const queryClient = useQueryClient();
+
+  // WebSocket feed keeps active tiles fresh (live equity / positions / fills).
+  const { snapshots, trades, versions, connected, seed } = useLiveFeed();
+
+  const { data: deployments = [] } = useQuery({
+    queryKey: ["deployments", tab],
+    queryFn: () => api.liveDeployments(tab),
+    refetchInterval: 15000,
+  });
+
+  const onChanged = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["deployments"] });
+    seed();
+  }, [queryClient, seed]);
+
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? deployments.filter(
+        (d) =>
+          d.name.toLowerCase().includes(q) ||
+          d.strategy_id.toLowerCase().includes(q) ||
+          (d.notes ?? "").toLowerCase().includes(q),
+      )
+    : deployments;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-lg font-semibold">Live (paper)</h1>
         <div className="flex items-center gap-3 text-xs">
-          <label className="flex items-center gap-1.5 text-slate-300">
-            <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
-            auto-refresh
-          </label>
-          <select
-            className="rounded bg-slate-800 border border-slate-700 px-1.5 py-0.5"
-            value={intervalSec}
-            onChange={(e) => setIntervalSec(+e.target.value)}
-            disabled={!autoRefresh}
-          >
-            <option value={5}>5s</option>
-            <option value={15}>15s</option>
-            <option value={30}>30s</option>
-            <option value={60}>60s</option>
-          </select>
           <span className={connected ? "text-emerald-400" : "text-slate-500"}>
             {connected ? "● live" : "○ disconnected"}
           </span>
+          <Link
+            to="/live/new"
+            className="rounded-md bg-brand hover:bg-brand-light px-3 py-1.5 text-sm font-medium"
+          >
+            + Deploy new strategy
+          </Link>
         </div>
       </div>
 
-      <StartForm key={prefill?.strategy_id ?? "manual"} prefill={prefill} onStarted={() => seedRef.current()} />
+      {tab === "active" && filtered.length > 0 && <PortfolioBar deployments={filtered} />}
 
-      {runs.length === 0 ? (
-        <Card><div className="text-slate-400">No paper runs. Start one above.</div></Card>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex gap-1 rounded-lg bg-slate-800/50 p-1 text-sm">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`rounded-md px-3 py-1 ${tab === t.key ? "bg-slate-700 text-white" : "text-slate-400 hover:text-slate-200"}`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <input
+          className="rounded-md bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm w-56 focus:outline-none focus:border-brand"
+          placeholder="Search name / strategy / notes"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+
+      {filtered.length === 0 ? (
+        <Card>
+          <div className="text-slate-400">
+            {tab === "active" ? (
+              <>No active deployments. <Link to="/live/new" className="text-brand hover:underline">Deploy a strategy →</Link></>
+            ) : (
+              `No ${tab} deployments.`
+            )}
+          </div>
+        </Card>
       ) : (
-        runs.map((run) => (
-          <RunCard
-            key={run.run_id}
-            run={run}
-            version={versions[run.run_id] ?? 0}
-            onChanged={() => seedRef.current()}
-          />
-        ))
+        <div className="grid gap-3 md:grid-cols-2">
+          {filtered.map((dep) => (
+            <DeploymentTile
+              key={dep.run_id}
+              dep={dep}
+              snapshot={snapshots[dep.run_id]}
+              version={versions[dep.run_id] ?? 0}
+              expanded={expanded === dep.run_id}
+              onToggle={() => setExpanded((prev) => (prev === dep.run_id ? null : dep.run_id))}
+              onChanged={onChanged}
+            />
+          ))}
+        </div>
       )}
 
       {trades.length > 0 && (
