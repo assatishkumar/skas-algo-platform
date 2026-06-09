@@ -1,10 +1,35 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import ReportView from "../components/ReportView";
 import { Card, ErrorBox, NumberInput } from "../components/ui";
 import type { BacktestRequest, OverrideInput } from "../types";
+
+// Fields a sweep can vary, with how each value maps into the request.
+// unit "pct" values are divided by 100 (like the form); "num" pass through.
+type SweepField = { key: string; label: string; unit: "pct" | "num"; fifoOnly?: boolean; lifoOnly?: boolean };
+const SWEEP_FIELDS: SweepField[] = [
+  { key: "profit_target", label: "Profit target %", unit: "pct", lifoOnly: true },
+  { key: "profit_target_1", label: "Target % (1 lot)", unit: "pct", fifoOnly: true },
+  { key: "profit_target_2", label: "Target % (2 lots)", unit: "pct", fifoOnly: true },
+  { key: "profit_target_3", label: "Target % (3+ lots)", unit: "pct", fifoOnly: true },
+  { key: "capital_parts", label: "Capital parts", unit: "num" },
+  { key: "max_lots", label: "Max lots", unit: "num" },
+  { key: "lookback", label: "Lookback", unit: "num" },
+  { key: "tax_rate", label: "Tax rate %", unit: "pct" },
+  { key: "withdrawal_rate", label: "Withdrawal %", unit: "pct" },
+  { key: "capital", label: "Capital", unit: "num" },
+];
+const TOP_LEVEL = new Set(["lookback", "tax_rate", "withdrawal_rate", "capital"]);
+
+function applySweep(body: BacktestRequest, field: SweepField, raw: number): BacktestRequest {
+  const v = field.unit === "pct" ? raw / 100 : raw;
+  const next = { ...body, params: { ...body.params } };
+  if (TOP_LEVEL.has(field.key)) (next as Record<string, unknown>)[field.key] = v;
+  else next.params[field.key] = v;
+  return next;
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -53,14 +78,21 @@ export default function NewBacktestPage() {
   const [ovBookPct, setOvBookPct] = useState(50);
   const [ovTrailPct, setOvTrailPct] = useState(2);
 
+  // Sweep (multi-run) builder
+  const [sweepMode, setSweepMode] = useState(false);
+  const [sweepField, setSweepField] = useState("profit_target");
+  const [sweepValues, setSweepValues] = useState("4, 6, 8, 10");
+  const [sweepProgress, setSweepProgress] = useState<{ done: number; total: number } | null>(null);
+  const [sweepError, setSweepError] = useState<string | null>(null);
+
+  const navigate = useNavigate();
   const isFifo = strategyId === "sst_fifo";
 
   const mutation = useMutation({
     mutationFn: (body: BacktestRequest) => api.backtest(body),
   });
 
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
+  function buildBody(): BacktestRequest {
     const overrides: OverrideInput[] = [];
     if (ovEnabled) {
       overrides.push({
@@ -75,7 +107,7 @@ export default function NewBacktestPage() {
       });
     }
     const isCustom = universe === "";
-    const body: BacktestRequest = {
+    return {
       strategy_id: strategyId,
       name: name.trim() || undefined,
       notes: notes.trim() || undefined,
@@ -101,10 +133,60 @@ export default function NewBacktestPage() {
       lookback,
       overrides,
     };
-    mutation.mutate(body);
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (sweepMode) {
+      runSweep();
+      return;
+    }
+    mutation.mutate(buildBody());
+  }
+
+  async function runSweep() {
+    const field = SWEEP_FIELDS.find((f) => f.key === sweepField);
+    const values = sweepValues
+      .split(",")
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n))
+      .slice(0, 5);
+    if (!field || values.length < 2) {
+      setSweepError("Enter 2–5 numeric values for the swept parameter.");
+      return;
+    }
+    setSweepError(null);
+    const batchId = crypto.randomUUID().slice(0, 32);
+    const base = buildBody();
+    const baseName = base.name || `${strategyId} backtest`;
+    const runIds: number[] = [];
+    try {
+      for (let i = 0; i < values.length; i++) {
+        setSweepProgress({ done: i, total: values.length });
+        const variant = applySweep(base, field, values[i]);
+        variant.name = `${baseName} (${field.label} ${values[i]})`;
+        variant.batch_id = batchId;
+        const res = await api.backtest(variant);
+        runIds.push(res.run_id);
+      }
+      navigate(`/compare?ids=${runIds.join(",")}`);
+    } catch (e) {
+      setSweepError((e as Error).message);
+    } finally {
+      setSweepProgress(null);
+    }
   }
 
   const result = mutation.data;
+  const sweepableFields = SWEEP_FIELDS.filter(
+    (f) => (!f.fifoOnly || isFifo) && (!f.lifoOnly || !isFifo),
+  );
+  // Keep the swept field valid when the strategy (and thus its params) changes.
+  useEffect(() => {
+    if (!sweepableFields.some((f) => f.key === sweepField)) {
+      setSweepField(isFifo ? "profit_target_1" : "profit_target");
+    }
+  }, [isFifo, sweepField, sweepableFields]);
 
   return (
     <div className="space-y-6">
@@ -238,16 +320,50 @@ export default function NewBacktestPage() {
             )}
           </div>
 
+          <div className="rounded-lg border border-slate-800 p-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={sweepMode} onChange={(e) => setSweepMode(e.target.checked)} />
+              <span className="font-medium">Sweep a parameter (multi-run)</span>
+              <span className="text-slate-500">— run up to 5 variants and compare them</span>
+            </label>
+            {sweepMode && (
+              <div className="grid md:grid-cols-2 gap-3 mt-3">
+                <Field label="Parameter to vary">
+                  <select className={inputClass} value={sweepField} onChange={(e) => setSweepField(e.target.value)}>
+                    {sweepableFields.map((f) => (
+                      <option key={f.key} value={f.key}>{f.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Values (comma-separated, 2–5)">
+                  <input
+                    className={inputClass}
+                    value={sweepValues}
+                    onChange={(e) => setSweepValues(e.target.value)}
+                    placeholder="e.g. 4, 6, 8, 10"
+                  />
+                </Field>
+              </div>
+            )}
+          </div>
+
           <button
             type="submit"
-            disabled={mutation.isPending}
+            disabled={mutation.isPending || sweepProgress != null}
             className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50"
           >
-            {mutation.isPending ? "Running…" : "Run backtest"}
+            {sweepProgress
+              ? `Running ${sweepProgress.done + 1}/${sweepProgress.total}…`
+              : mutation.isPending
+                ? "Running…"
+                : sweepMode
+                  ? "Run sweep"
+                  : "Run backtest"}
           </button>
         </form>
       </Card>
 
+      {sweepError && <ErrorBox message={sweepError} />}
       {mutation.error && <ErrorBox message={(mutation.error as Error).message} />}
 
       {result && (

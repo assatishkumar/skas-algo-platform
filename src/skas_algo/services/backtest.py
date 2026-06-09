@@ -68,6 +68,7 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
     run = AlgoRun(
         algo_id=algo.id,
         mode=TradingMode.BACKTEST,
+        batch_id=req.batch_id,
         started_at=datetime.now(UTC),
         stopped_at=datetime.now(UTC),
         params_snapshot=algo.params,

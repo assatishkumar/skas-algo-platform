@@ -112,6 +112,7 @@ def list_runs(status: str | None = None, db: Session = Depends(get_db)) -> list[
                 strategy_id=algo.strategy_id,
                 mode=run.mode.value,
                 archived=run.archived,
+                batch_id=run.batch_id,
                 started_at=run.started_at.isoformat() if run.started_at else None,
                 metrics=run.metrics.get("metrics", {}) if run.metrics else {},
             )
@@ -207,6 +208,7 @@ def get_run(run_id: int, db: Session = Depends(get_db)) -> dict:
         "name": algo.name if algo else None,
         "notes": algo.notes if algo else None,
         "archived": run.archived,
+        "batch_id": run.batch_id,
         "capital": algo.capital if algo else None,
         "params": algo.params if algo else {},  # symbols, lookback, tax, sizing, etc.
         "mode": run.mode.value,

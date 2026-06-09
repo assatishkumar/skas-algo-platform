@@ -244,5 +244,6 @@ export interface BacktestRequest {
   lookback: number;
   name?: string;
   notes?: string;
+  batch_id?: string;
   overrides: OverrideInput[];
 }

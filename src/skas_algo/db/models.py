@@ -106,6 +106,8 @@ class AlgoRun(Base, TimestampMixin):
     algo_id: Mapped[int] = mapped_column(ForeignKey("algo.id"))
     mode: Mapped[TradingMode] = mapped_column(Enum(TradingMode))
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Shared id for runs produced by one multi-run "sweep" backtest (else null).
+    batch_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     params_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)

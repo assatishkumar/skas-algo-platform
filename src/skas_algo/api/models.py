@@ -28,6 +28,7 @@ class BacktestRequest(BaseModel):
     lookback: int = 20
     name: str | None = None
     notes: str | None = None
+    batch_id: str | None = None  # set by a sweep to group its variant runs
     overrides: list[OverrideInput] = Field(default_factory=list)
 
 
@@ -46,6 +47,7 @@ class RunSummary(BaseModel):
     strategy_id: str
     mode: str
     archived: bool = False
+    batch_id: str | None = None
     started_at: str | None
     metrics: dict
 

@@ -216,6 +216,19 @@ def test_run_management_lifecycle(api_client: TestClient):
     assert api_client.get(f"/api/v1/runs/{run_id}").status_code == 404
 
 
+def test_sweep_batch_grouping(api_client: TestClient):
+    # Simulate a sweep: N backtests sharing one batch_id (as the frontend does).
+    batch = "batch-abc"
+    ids = [
+        _make_run(api_client, batch_id=batch, params={"capital_parts": 10, "profit_target": t})
+        for t in (0.04, 0.06, 0.08)
+    ]
+    runs = {r["run_id"]: r for r in api_client.get("/api/v1/runs").json()}
+    assert all(runs[i]["batch_id"] == batch for i in ids)
+    # Detail endpoint also exposes the batch id.
+    assert api_client.get(f"/api/v1/runs/{ids[0]}").json()["batch_id"] == batch
+
+
 def test_runs_list_excludes_paper(api_client: TestClient):
     """The Runs list is backtests only — paper/live deployments are managed elsewhere."""
     from skas_algo.db.base import session_scope
