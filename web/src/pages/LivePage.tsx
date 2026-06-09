@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
@@ -18,27 +18,50 @@ function fmt(n: number | null, d = 2): string {
 }
 
 function SignalsPanel({ runId, version }: { runId: number; version: number }) {
+  const [sortBy, setSortBy] = useState<"symbol" | "breakout" | "status">("symbol");
   const { data, isLoading } = useQuery({
     queryKey: ["watchlist", runId, version],
     queryFn: () => api.liveWatchlist(runId),
+    // Keep the current rows visible while a refresh fetches, so the table doesn't
+    // unmount/flash (which jumped the scroll position on every refresh).
+    placeholderData: keepPreviousData,
   });
   if (isLoading) return <div className="text-slate-500 text-sm mt-3">Loading signals…</div>;
   const rows: WatchRow[] = data?.rows ?? [];
-  // would-act first, then held, then tracking, then closest-to-breakout.
-  const rank = (r: WatchRow) => (r.signal ? 0 : r.held ? 1 : r.tracking ? 2 : 3);
-  const sorted = [...rows].sort(
-    (a, b) => rank(a) - rank(b) || (a.to_breakout_pct ?? 1e9) - (b.to_breakout_pct ?? 1e9),
-  );
+  // Would-act pinned on top; the rest in a STABLE order (symbol by default) so rows
+  // don't reshuffle as prices wiggle on each refresh.
+  const cmp = (a: WatchRow, b: WatchRow) => {
+    const ra = a.signal ? 0 : 1;
+    const rb = b.signal ? 0 : 1;
+    if (ra !== rb) return ra - rb;
+    if (sortBy === "breakout") return (a.to_breakout_pct ?? 1e9) - (b.to_breakout_pct ?? 1e9);
+    if (sortBy === "status") return a.status.localeCompare(b.status) || a.symbol.localeCompare(b.symbol);
+    return a.symbol.localeCompare(b.symbol);
+  };
+  const sorted = [...rows].sort(cmp);
   const counts: Record<string, number> = {};
   rows.forEach((r) => (counts[r.status] = (counts[r.status] ?? 0) + 1));
   const wouldAct = rows.filter((r) => r.signal).length;
 
   return (
     <div className="mt-3 border-t border-slate-800 pt-3">
-      <div className="text-xs text-slate-400 mb-2">
-        {wouldAct > 0 && <span className="text-amber-400 font-semibold">⚡ would act: {wouldAct}  ·  </span>}
-        {Object.entries(counts).map(([s, n]) => `${s}: ${n}`).join("  ·  ") || "no symbols"}
-        <span className="text-slate-600"> — would-act first; refreshes on each quote pull</span>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs text-slate-400">
+          {wouldAct > 0 && <span className="text-amber-400 font-semibold">⚡ would act: {wouldAct}  ·  </span>}
+          {Object.entries(counts).map(([s, n]) => `${s}: ${n}`).join("  ·  ") || "no symbols"}
+        </div>
+        <label className="text-xs text-slate-400 flex items-center gap-1">
+          sort
+          <select
+            className="rounded bg-slate-800 border border-slate-700 px-1.5 py-0.5"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as "symbol" | "breakout" | "status")}
+          >
+            <option value="symbol">Symbol</option>
+            <option value="breakout">→ breakout</option>
+            <option value="status">Status</option>
+          </select>
+        </label>
       </div>
       <div className="overflow-x-auto max-h-96 overflow-y-auto">
         <table className="w-full text-xs tabular-nums">
@@ -460,15 +483,15 @@ function RunCard({
 }) {
   const [showOverride, setShowOverride] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
-  const queryClient = useQueryClient();
   const act = async (fn: () => Promise<unknown>) => {
     await fn();
     onChanged();
   };
-  const refresh = async () => {
-    await api.liveRefresh(run.run_id);
-    queryClient.invalidateQueries({ queryKey: ["watchlist", run.run_id] });
-    onChanged();
+  // Refresh relies on the WebSocket snapshot to update the card + bump the signals
+  // version (which refetches with keepPreviousData) — no full page re-seed, so the
+  // scroll position and sort order stay put.
+  const refresh = () => {
+    api.liveRefresh(run.run_id).catch(() => {});
   };
   const stopped = run.status === "stopped";
   const upnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
