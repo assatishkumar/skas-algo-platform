@@ -109,6 +109,9 @@ class AlgoRun(Base, TimestampMixin):
     params_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)  # scalars + breakdowns
     trade_log: Mapped[list] = mapped_column(JSON, default=list)  # serialized transactions
+    # Live-session snapshot (portfolio/lots, stops, tracking, overrides) so a running
+    # paper/live run can be rebuilt after a restart. Null for finished/backtest runs.
+    state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     algo: Mapped[Algo] = relationship(back_populates="runs")
 

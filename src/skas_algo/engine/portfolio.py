@@ -130,6 +130,48 @@ class Portfolio:
     def invested_capital(self) -> float:
         return sum(lot.units * lot.price for lots in self._lots.values() for lot in lots)
 
+    # ------------------------------------------------------- (de)serialize
+    def export_state(self) -> dict:
+        return {
+            "cash": self.cash,
+            "month_realized": self.month_realized,
+            "total_taxes": self.total_taxes,
+            "total_withdrawals": self.total_withdrawals,
+            "lots": {
+                sym: [
+                    {
+                        "id": lot.id,
+                        "units": lot.units,
+                        "price": lot.price,
+                        "opened_at": str(lot.opened_at),
+                    }
+                    for lot in lots
+                ]
+                for sym, lots in self._lots.items()
+            },
+        }
+
+    def load_state(self, state: dict) -> None:
+        self.cash = state["cash"]
+        self.month_realized = state.get("month_realized", 0.0)
+        self.total_taxes = state.get("total_taxes", 0.0)
+        self.total_withdrawals = state.get("total_withdrawals", 0.0)
+        self._lots = {}
+        max_id = 0
+        for sym, lots in state.get("lots", {}).items():
+            self._lots[sym] = [
+                Lot(
+                    id=lot["id"],
+                    symbol=sym,
+                    units=lot["units"],
+                    price=lot["price"],
+                    opened_at=lot["opened_at"],
+                )
+                for lot in lots
+            ]
+            max_id = max([max_id, *(lot["id"] for lot in lots)])
+        self._ids = count(max_id + 1)
+
     # --------------------------------------------------------- monthly flush
     def flush_month(self, tax_rate: float, withdrawal_rate: float) -> MonthlyFlush | None:
         """Apply tax (and optional withdrawal) on the month's realized profit."""

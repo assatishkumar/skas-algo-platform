@@ -103,6 +103,41 @@ class LiveSession:
         if self._current_month is not None:
             self._flush(self._current_month, ts)
 
+    # ------------------------------------------------------- (de)serialize
+    def export_state(self) -> dict:
+        """Full session state so a running run can be rebuilt after a restart.
+
+        Market history is NOT persisted — it's re-warmed from the cache on recovery.
+        """
+        return {
+            "portfolio": self.portfolio.export_state(),
+            "stops": self.stops.export(),
+            "strategy": (
+                self.strategy.export_state() if hasattr(self.strategy, "export_state") else {}
+            ),
+            "overrides": [
+                {"scope": o.scope, "target": o.target, "rule": o.rule, "active": o.active}
+                for o in self.resolver.overrides
+            ],
+            "current_month": list(self._current_month) if self._current_month else None,
+        }
+
+    def load_state(self, state: dict) -> None:
+        from skas_algo.engine.overrides import OverrideRule
+
+        self.portfolio.load_state(state["portfolio"])
+        self.stops.load(state.get("stops", []))
+        if hasattr(self.strategy, "load_state"):
+            self.strategy.load_state(state.get("strategy", {}))
+        self.resolver.overrides = [
+            OverrideRule(
+                scope=o["scope"], target=o["target"], rule=o["rule"], active=o.get("active", True)
+            )
+            for o in state.get("overrides", [])
+        ]
+        cm = state.get("current_month")
+        self._current_month = tuple(cm) if cm else None
+
     # ----------------------------------------------------------- views
     def snapshot(self) -> dict:
         """Current positions + cash + mark-to-market equity (for broadcast/persist)."""
@@ -155,6 +190,13 @@ class LiveSession:
             pnl_pct = ((ltp - avg) / avg * 100) if (held and ltp and avg) else None
             is_tracking = bool(tracking.get(sym, False))
 
+            # Would the next decision act on this name? (breakout buy / target sell)
+            signal = ""
+            if held and ltp is not None and self._would_exit(lots, ltp, avg):
+                signal = "SELL"
+            elif is_tracking and high is not None and ltp is not None and ltp > high:
+                signal = "BUY"
+
             if held:
                 status = f"Holding {len(lots)} lot(s)"
             elif is_tracking and high is not None:
@@ -179,10 +221,21 @@ class LiveSession:
                     "unrealized_pnl": upnl,
                     "pnl_pct": pnl_pct,
                     "to_breakout_pct": to_breakout,
+                    "signal": signal,
                     "status": status,
                 }
             )
         return rows
+
+    def _would_exit(self, lots, ltp: float, avg: float | None) -> bool:
+        """Would the held position exit on the next decision (per-lot or pooled target)?"""
+        prof = getattr(self.strategy, "profit_target", None)
+        if prof is not None:  # SST-LIFO: any lot up >= its target
+            return any((ltp - lot.price) / lot.price >= prof for lot in lots)
+        target_fn = getattr(self.strategy, "_target", None)  # SST-FIFO: avg vs tiered target
+        if target_fn is not None and avg:
+            return (ltp - avg) / avg >= target_fn(len(lots))
+        return False
 
     # ------------------------------------------------------- bookkeeping
     def _flush(self, ym, ts) -> None:

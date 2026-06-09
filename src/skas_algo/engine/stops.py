@@ -55,6 +55,34 @@ class StopBook:
     def is_managed(self, lot_id: int) -> bool:
         return lot_id in self._stops
 
+    def export(self) -> list[dict]:
+        return [
+            {
+                "symbol": s.symbol,
+                "lot_id": s.lot_id,
+                "kind": s.kind.value,
+                "trail": s.trail,
+                "stop_price": s.stop_price,
+                "hwm": s.hwm,
+                "reason": s.reason,
+            }
+            for s in self._stops.values()
+        ]
+
+    def load(self, items: list[dict]) -> None:
+        self._stops = {
+            it["lot_id"]: Stop(
+                symbol=it["symbol"],
+                lot_id=it["lot_id"],
+                kind=StopKind(it["kind"]),
+                trail=it.get("trail", 0.0),
+                stop_price=it.get("stop_price", 0.0),
+                hwm=it.get("hwm", 0.0),
+                reason=it.get("reason", ""),
+            )
+            for it in items
+        }
+
     def evaluate(self, price_of: dict[str, float]) -> list[Stop]:
         """Return stops that trigger at today's prices (HWMs are updated in place).
 

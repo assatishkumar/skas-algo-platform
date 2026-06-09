@@ -23,7 +23,13 @@ from skas_algo.engine.report import build_report
 from skas_algo.engine.runner import RunResult
 from skas_algo.strategies.registry import get_strategy
 
-from .persistence import finalize_live_run, record_trades, start_live_run, sync_positions
+from .persistence import (
+    finalize_live_run,
+    persist_state,
+    record_trades,
+    start_live_run,
+    sync_positions,
+)
 from .quotes import IST, QuoteSource, is_market_open, warmup_history
 
 logger = logging.getLogger("skas_algo.live")
@@ -41,9 +47,12 @@ class LiveConfig:
     lookback: int = 20
     overrides: list[OverrideRule] = field(default_factory=list)
     mode: str = "PAPER"
+    quote_source: str = "cache"  # persisted so the run can be rebuilt after a restart
+    broker_account_id: int | None = None
     refresh_seconds: int = 30
     decision_time: str = "15:20"  # IST; daily decision fires at/after this
     ignore_market_hours: bool = False
+    auto: bool = False  # whether the background refresh/decision loop runs
 
 
 def _serialize_event(ev: dict) -> dict:
@@ -95,6 +104,7 @@ class LiveRun:
         with session_scope() as db:
             sync_positions(db, self.algo_id, snap)
         self.broadcaster.publish({"type": "snapshot", "run_id": self.run_id, **snap})
+        self._persist_state()
         return snap
 
     def run_decision(self, ts: datetime | None = None) -> list[dict]:
@@ -116,10 +126,12 @@ class LiveRun:
         self.broadcaster.publish(
             {"type": "snapshot", "run_id": self.run_id, **self.session.snapshot()}
         )
+        self._persist_state()
         return events
 
     def end_day(self) -> None:
         self.session.end_day()
+        self._persist_state()
 
     def stop(self) -> None:
         self.status = "stopped"
@@ -152,6 +164,21 @@ class LiveRun:
             }
         )
 
+    def export_state(self) -> dict:
+        return {
+            **self.session.export_state(),
+            "last_decision_day": (
+                self.last_decision_day.isoformat() if self.last_decision_day else None
+            ),
+        }
+
+    def _persist_state(self) -> None:
+        try:
+            with session_scope() as db:
+                persist_state(db, self.run_id, to_native(self.export_state()))
+        except Exception:  # pragma: no cover - persistence must never break the loop
+            logger.exception("failed to persist state for run %s", self.run_id)
+
 
 class LiveRunManager:
     def __init__(self) -> None:
@@ -177,6 +204,12 @@ class LiveRunManager:
             "lookback": config.lookback,
             "tax_rate": config.tax_rate,
             "withdrawal_rate": config.withdrawal_rate,
+            "quote_source": config.quote_source,
+            "broker_account_id": config.broker_account_id,
+            "auto": config.auto,
+            "refresh_seconds": config.refresh_seconds,
+            "decision_time": config.decision_time,
+            "ignore_market_hours": config.ignore_market_hours,
             **config.params,
         }
         with session_scope() as db:
@@ -192,7 +225,12 @@ class LiveRunManager:
 
         live = LiveRun(run_id, algo_id, config, session, quote_source, self.broadcaster)
         self.runs[run_id] = live
+        live._persist_state()  # initial snapshot so a restart can recover it immediately
         return live
+
+    def register(self, live: LiveRun) -> None:
+        """Register a run rebuilt by recovery (already has its DB row + state)."""
+        self.runs[live.run_id] = live
 
     def get(self, run_id: int) -> LiveRun | None:
         return self.runs.get(run_id)

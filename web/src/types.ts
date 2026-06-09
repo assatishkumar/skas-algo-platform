@@ -160,6 +160,7 @@ export interface WatchRow {
   unrealized_pnl: number;
   pnl_pct: number | null;
   to_breakout_pct: number | null;
+  signal: string; // "BUY" | "SELL" | "" — would the next decision act?
   status: string;
 }
 

@@ -51,6 +51,12 @@ class SSTLifoStrategy:
     def initial_state(self, params: dict[str, Any]) -> dict[str, Any]:
         return {"tracking": dict(self.tracking)}
 
+    def export_state(self) -> dict[str, Any]:
+        return {"tracking": dict(self.tracking)}
+
+    def load_state(self, state: dict[str, Any]) -> None:
+        self.tracking = {**self.tracking, **state.get("tracking", {})}
+
     def on_slice(self, ctx: AlgoContext) -> list[Signal]:
         present = ctx.present_symbols()
         present_set = set(present)

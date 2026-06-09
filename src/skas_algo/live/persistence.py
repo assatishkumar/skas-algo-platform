@@ -104,7 +104,15 @@ def sync_positions(session: Session, algo_id: int, snapshot: dict) -> None:
             row.quantity = 0
 
 
+def persist_state(session: Session, run_id: int, state: dict) -> None:
+    """Save the live session snapshot so the run can be rebuilt after a restart."""
+    run = session.get(AlgoRun, run_id)
+    if run is not None:
+        run.state = state
+
+
 def finalize_live_run(session: Session, run: AlgoRun, *, metrics: dict, trade_log: list) -> None:
     run.stopped_at = datetime.now(UTC)
     run.metrics = metrics
     run.trade_log = trade_log
+    run.state = None  # no longer running

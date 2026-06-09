@@ -24,18 +24,21 @@ function SignalsPanel({ runId, version }: { runId: number; version: number }) {
   });
   if (isLoading) return <div className="text-slate-500 text-sm mt-3">Loading signals…</div>;
   const rows: WatchRow[] = data?.rows ?? [];
-  const rank = (r: WatchRow) => (r.held ? 0 : r.tracking ? 1 : 2);
+  // would-act first, then held, then tracking, then closest-to-breakout.
+  const rank = (r: WatchRow) => (r.signal ? 0 : r.held ? 1 : r.tracking ? 2 : 3);
   const sorted = [...rows].sort(
     (a, b) => rank(a) - rank(b) || (a.to_breakout_pct ?? 1e9) - (b.to_breakout_pct ?? 1e9),
   );
   const counts: Record<string, number> = {};
   rows.forEach((r) => (counts[r.status] = (counts[r.status] ?? 0) + 1));
+  const wouldAct = rows.filter((r) => r.signal).length;
 
   return (
     <div className="mt-3 border-t border-slate-800 pt-3">
       <div className="text-xs text-slate-400 mb-2">
+        {wouldAct > 0 && <span className="text-amber-400 font-semibold">⚡ would act: {wouldAct}  ·  </span>}
         {Object.entries(counts).map(([s, n]) => `${s}: ${n}`).join("  ·  ") || "no symbols"}
-        <span className="text-slate-600"> — closest-to-breakout first; refreshes on each quote pull</span>
+        <span className="text-slate-600"> — would-act first; refreshes on each quote pull</span>
       </div>
       <div className="overflow-x-auto max-h-96 overflow-y-auto">
         <table className="w-full text-xs tabular-nums">
@@ -66,6 +69,11 @@ function SignalsPanel({ runId, version }: { runId: number; version: number }) {
                   {r.pnl_pct == null ? "—" : `${r.pnl_pct >= 0 ? "+" : ""}${r.pnl_pct.toFixed(1)}%`}
                 </td>
                 <td className="py-1 pr-3">
+                  {r.signal && (
+                    <span className={`mr-1 font-semibold ${r.signal === "BUY" ? "text-emerald-400" : "text-amber-400"}`}>
+                      ⚡{r.signal}
+                    </span>
+                  )}
                   {r.status}
                   {r.held ? ` · ${r.lots} lot${r.lots > 1 ? "s" : ""}` : ""}
                 </td>

@@ -69,9 +69,12 @@ async def start_live(
                 OverrideRule(scope=o.scope, target=o.target, rule=o.rule) for o in req.overrides
             ],
             mode=req.mode,
+            quote_source=req.quote_source,
+            broker_account_id=req.broker_account_id if req.quote_source == "zerodha" else None,
             refresh_seconds=req.refresh_seconds,
             decision_time=req.decision_time,
             ignore_market_hours=req.ignore_market_hours,
+            auto=req.auto,
         )
         live = manager.start(config, loader, quote_source)
     except KeyError as exc:  # unknown strategy
