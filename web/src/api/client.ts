@@ -5,6 +5,9 @@ import type {
   BrokerAccount,
   BrokerConnectRequest,
   CompareRun,
+  DataSummary,
+  DataSymbol,
+  DataSymbolDetail,
   Deployment,
   LiveRunSnapshot,
   OverrideInput,
@@ -65,6 +68,10 @@ export const api = {
     }),
   tradesCsvUrl: (id: number) => `${BASE}/runs/${id}/trades.csv`,
   benchmarks: () => request<{ benchmarks: string[] }>("/benchmarks"),
+  dataSummary: () => request<DataSummary>("/data/summary"),
+  dataSymbols: () => request<DataSymbol[]>("/data/symbols"),
+  dataSymbol: (sym: string) =>
+    request<DataSymbolDetail>(`/data/symbols/${encodeURIComponent(sym)}`),
   runBenchmark: (id: number, index: string) =>
     request<{ index: string; points: BenchmarkPoint[] }>(
       `/runs/${id}/benchmark?index=${encodeURIComponent(index)}`,

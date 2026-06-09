@@ -198,6 +198,27 @@ export interface Deployment {
   metrics: DeploymentMetrics;
 }
 
+export interface DataSummary {
+  symbol_count: number;
+  db_path: string | null;
+}
+
+export interface DataSymbol {
+  symbol: string;
+  last_date: string | null;
+  stale_days: number | null;
+  stale: boolean;
+}
+
+export interface DataSymbolDetail {
+  symbol: string;
+  start_date: string | null;
+  end_date: string | null;
+  total_records: number;
+  yearly: { year: number; count: number }[];
+  recent: { date: string; close: number }[];
+}
+
 export interface WatchRow {
   symbol: string;
   ltp: number | null;

@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 import BrokersPage from "./pages/BrokersPage";
 import ComparePage from "./pages/ComparePage";
+import DataPage from "./pages/DataPage";
 import DeployPage from "./pages/DeployPage";
 import LivePage from "./pages/LivePage";
 import NewBacktestPage from "./pages/NewBacktestPage";
@@ -34,6 +35,7 @@ export default function App() {
           <NavItem to="/" label="Runs" />
           <NavItem to="/new" label="New backtest" />
           <NavItem to="/live" label="Live" />
+          <NavItem to="/data" label="Data" />
           <NavItem to="/brokers" label="Brokers" />
         </div>
       </header>
@@ -46,6 +48,7 @@ export default function App() {
           <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
           <Route path="/compare" element={<ComparePage />} />
+          <Route path="/data" element={<DataPage />} />
         </Routes>
       </main>
     </div>
