@@ -68,6 +68,18 @@ def build_options_report(
     cycles: list[dict] = [_cycle(key, legs) for key, legs in groups.items()]
     cycles.sort(key=lambda c: (c["entry_date"], c["expiry"]))
 
+    # --- F&O transaction charges across all option legs (same schedule the engine
+    #     deducted from cash at execution, so the totals reconcile with the equity curve).
+    from .charges import charges_for_txn
+
+    charges = {"brokerage": 0.0, "stt": 0.0, "exchange": 0.0, "sebi": 0.0,
+               "stamp": 0.0, "gst": 0.0, "total": 0.0}
+    for t in txns:
+        if parse(t["ticker"]) is None:
+            continue
+        for k, v in charges_for_txn(t).items():
+            charges[k] += v
+
     # --- portfolio-level series from daily history -------------------------------
     margin_series = [
         {"date": _iso(r["date"]), "margin": float(r["margin_used"])}
@@ -81,7 +93,8 @@ def build_options_report(
     ]
 
     return {
-        "summary": _summary(positions, cycles, metrics, margin_series),
+        "summary": _summary(positions, cycles, metrics, margin_series, charges["total"]),
+        "charges": charges,
         "exit_reasons": _exit_reasons(positions),
         "per_expiry_cycle": _per_expiry(positions),
         "positions": sorted(positions, key=lambda p: (p["entry_date"], p["symbol"])),
@@ -105,6 +118,10 @@ def _round_trip(inst, entry: dict, exit_ev: dict, side: str = "short") -> dict:
         holding = (_as_date(exit_ev["date"]) - _as_date(entry["date"])).days
     # premium_collected is the entry cashflow: + for a short (received), − for a long (paid).
     sign = 1 if side == "short" else -1
+    from .charges import charges_for_txn
+
+    charges = charges_for_txn(entry)["total"] + charges_for_txn(exit_ev)["total"]
+    realized = exit_ev["profit"]
     return {
         "symbol": entry["ticker"],
         "underlying": inst.underlying,
@@ -122,9 +139,11 @@ def _round_trip(inst, entry: dict, exit_ev: dict, side: str = "short") -> dict:
         "lots": _lots_of(units, inst.lot_size),
         "multiplier": mult,
         "holding_days": holding,
-        "realized_pnl": exit_ev["profit"],
+        "realized_pnl": realized,
         "pnl_pct": exit_ev["pnl_pct"] * 100.0,
         "premium_collected": sign * entry_premium * units * mult,
+        "charges": charges,
+        "net_pnl": realized - charges,
     }
 
 
@@ -136,14 +155,19 @@ def _cycle(key: tuple, legs: list[dict]) -> dict:
     ce = next((leg for leg in legs if leg["right"] == "CE"), None)
     pe = next((leg for leg in legs if leg["right"] == "PE"), None)
     ordered = sorted(legs, key=lambda leg: (leg["right"], leg["strike"]))
+    realized = sum(leg["realized_pnl"] for leg in legs)
+    charges = sum(leg["charges"] for leg in legs)
     return {
         "underlying": underlying,
         "entry_date": entry_date,
+        "exit_date": max(leg["exit_date"] for leg in legs),
         "expiry": expiry,
         "legs": [leg["symbol"] for leg in legs],
         "legs_detail": ordered,
         "premium_collected": sum(leg["premium_collected"] for leg in legs),
-        "realized_pnl": sum(leg["realized_pnl"] for leg in legs),
+        "realized_pnl": realized,
+        "charges": charges,
+        "net_pnl": realized - charges,
         "holding_days": max(leg["holding_days"] for leg in legs),
         "exit_reason": next(iter(reasons)) if len(reasons) == 1 else "mixed",
         "ce": ce,
@@ -151,7 +175,7 @@ def _cycle(key: tuple, legs: list[dict]) -> dict:
     }
 
 
-def _summary(positions, cycles, metrics, margin_series) -> dict:
+def _summary(positions, cycles, metrics, margin_series, total_charges: float = 0.0) -> dict:
     n = len(positions)
     collected = sum(p["premium_collected"] for p in positions)
     captured = sum(p["realized_pnl"] for p in positions)
@@ -170,6 +194,8 @@ def _summary(positions, cycles, metrics, margin_series) -> dict:
         "avg_margin_used": (sum(margins) / len(margins)) if margins else 0.0,
         "capital_efficiency": (collected / max_margin) if max_margin else 0.0,
         "avg_premium_per_cycle": (collected / len(cycles)) if cycles else 0.0,
+        "total_charges": total_charges,
+        "net_after_charges": captured - total_charges,
     }
 
 

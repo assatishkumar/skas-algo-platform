@@ -90,7 +90,7 @@ export interface OptionPosition {
   entry_premium: number;
   exit_date: string;
   exit_price: number;
-  exit_action: "COVER" | "SETTLE";
+  exit_action: "COVER" | "SETTLE" | "SELL";
   exit_reason: string; // target | stop | expiry | manual
   units: number;
   lots: number;
@@ -99,9 +99,21 @@ export interface OptionPosition {
   realized_pnl: number;
   pnl_pct: number;
   premium_collected: number;
+  charges?: number;
+  net_pnl?: number;
 }
 
-export interface OptionCycle {
+// underlying spot + India VIX context, added to cycles/positions post-run
+export interface MarketContext {
+  exit_date?: string;
+  underlying_entry?: number | null;
+  underlying_exit?: number | null;
+  underlying_pct?: number | null;
+  vix_entry?: number | null;
+  vix_exit?: number | null;
+}
+
+export interface OptionCycle extends MarketContext {
   underlying: string;
   entry_date: string;
   expiry: string;
@@ -109,10 +121,22 @@ export interface OptionCycle {
   legs_detail?: OptionPosition[]; // all legs (for multi-leg structures); ce/pe kept for straddles
   premium_collected: number;
   realized_pnl: number;
+  charges?: number;
+  net_pnl?: number;
   holding_days: number;
   exit_reason: string;
   ce: OptionPosition | null;
   pe: OptionPosition | null;
+}
+
+export interface ChargeBreakdown {
+  brokerage: number;
+  stt: number;
+  exchange: number;
+  sebi: number;
+  stamp: number;
+  gst: number;
+  total: number;
 }
 
 export interface ExitReasonStat {
@@ -135,7 +159,10 @@ export interface OptionsReportData {
     avg_margin_used: number;
     capital_efficiency: number;
     avg_premium_per_cycle: number;
+    total_charges: number;
+    net_after_charges: number;
   };
+  charges?: ChargeBreakdown;
   exit_reasons: Record<string, ExitReasonStat>;
   per_expiry_cycle: {
     expiry: string;

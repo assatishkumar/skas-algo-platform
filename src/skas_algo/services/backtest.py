@@ -62,11 +62,17 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
                 lot_overrides=req.params.get("contract_specs"),
                 margin_params=req.params.get("margin"),
             )
+        # Options are business income (slab) → no per-trade tax modelled; instead F&O
+        # transaction charges (brokerage + STT + exchange + GST + SEBI + stamp) are
+        # deducted at execution so the equity curve is net of costs.
+        from skas_algo.engine.options.charges import ChargeModel
+
         runner = BacktestRunner(
             strategy=strategy, universe=strategy_universe, loader=loader,
             initial_capital=req.capital, lookback=req.lookback,
-            tax_rate=req.tax_rate, withdrawal_rate=req.withdrawal_rate, overrides=overrides,
+            tax_rate=0.0, withdrawal_rate=req.withdrawal_rate, overrides=overrides,
             market_view=market_view, settler=settler, margin_model=margin_model,
+            charge_model=ChargeModel(),
         )
     else:
         runner = BacktestRunner(
@@ -81,6 +87,11 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
         )
     result = runner.run(req.start_date, req.end_date)
     report = build_report(result, req.capital)
+    if is_deriv and report.get("options"):
+        # Tag each position/cycle with underlying (NIFTY/GOLD) + India VIX at entry/exit.
+        from skas_algo.data.options_provider import enrich_with_market
+
+        enrich_with_market(get_data_cache(), report["options"], underlying.upper())
     trades = _serialize_trades(result.transactions)
 
     # Persist as an Algo + AlgoRun (BACKTEST mode).

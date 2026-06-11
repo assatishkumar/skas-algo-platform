@@ -52,6 +52,7 @@ class BacktestRunner:
         market_view=None,
         settler=None,
         margin_model=None,
+        charge_model=None,
     ):
         self.strategy = strategy
         self.universe = universe
@@ -68,6 +69,7 @@ class BacktestRunner:
         self.market_view = market_view
         self.settler = settler
         self.margin_model = margin_model
+        self.charge_model = charge_model
 
     def run(self, start_date: date, end_date: date) -> RunResult:
         view = self.market_view or HistoricalReplayFeed(self.loader, self.lookback).build(
@@ -77,7 +79,7 @@ class BacktestRunner:
         stops = StopBook()
         broker = BacktestBroker(price_fn=view.close, fill_model=self.fill_model)
         ctx = AlgoContext(algo_id=None, params={}, portfolio=portfolio, market=view, stops=stops)
-        executor = SliceExecutor(portfolio, stops, self.resolver, broker)
+        executor = SliceExecutor(portfolio, stops, self.resolver, broker, charge_model=self.charge_model)
 
         result = RunResult(portfolio=portfolio)
         current_month: tuple[int, int] | None = None

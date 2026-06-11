@@ -15,6 +15,7 @@ from datetime import date, datetime
 from skas_algo.brokers.base import BrokerOrder
 from skas_algo.db.enums import OrderSide
 from skas_algo.engine.context import AlgoContext
+from skas_algo.engine.options.instrument import is_option_symbol
 from skas_algo.engine.overrides import (
     AttachStop,
     BuyLot,
@@ -67,11 +68,27 @@ def trade_event(
 class SliceExecutor:
     """Executes one market slice's stops + strategy decisions through a broker."""
 
-    def __init__(self, portfolio: Portfolio, stops: StopBook, resolver: OverrideResolver, broker):
+    def __init__(self, portfolio: Portfolio, stops: StopBook, resolver: OverrideResolver, broker,
+                 charge_model=None):
         self.portfolio = portfolio
         self.stops = stops
         self.resolver = resolver
         self.broker = broker
+        # Optional F&O charge model (options runs only); None for equities → no deduction,
+        # so the equity path stays byte-identical.
+        self.charge_model = charge_model
+
+    def _charge(self, events: list[dict]) -> list[dict]:
+        """Deduct F&O charges from cash for option trade events (tags each event)."""
+        if self.charge_model is None:
+            return events
+        for ev in events:
+            if is_option_symbol(ev["ticker"]):
+                c = self.charge_model.charge_for(ev)
+                if c:
+                    ev["charge"] = c
+                    self.portfolio.cash -= c
+        return events
 
     def check_stops(self, ts: date | datetime, closes_today: dict[str, float]) -> list[dict]:
         """Evaluate managed (trailing/hard) stops and exit any that trigger."""
@@ -93,7 +110,7 @@ class SliceExecutor:
             if ev:
                 events.append(ev)
             self.stops.remove(stop.lot_id)
-        return events
+        return self._charge(events)
 
     def settle_expiries(self, ts: date | datetime, settler) -> list[dict]:
         """Force-settle any option lots that have reached expiry (shared by all modes).
@@ -103,7 +120,7 @@ class SliceExecutor:
         """
         if settler is None:
             return []
-        return settler.settle(ts, self.portfolio)
+        return self._charge(settler.settle(ts, self.portfolio))
 
     def decide_and_execute(self, ts: date | datetime, strategy, ctx: AlgoContext) -> list[dict]:
         """Run the strategy for this slice, resolve overrides, execute in order."""
@@ -111,7 +128,7 @@ class SliceExecutor:
         events: list[dict] = []
         for action in self.resolver.resolve(strategy.on_slice(ctx), ctx):
             events.extend(self._execute(ts, action, lots_at_start))
-        return events
+        return self._charge(events)
 
     # ------------------------------------------------------------ internals
     def _execute(self, ts, action, lots_at_start) -> list[dict]:

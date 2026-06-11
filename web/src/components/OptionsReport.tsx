@@ -47,9 +47,15 @@ function SummaryTiles({ s }: { s: OptionsReportData["summary"] }) {
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
       <MetricCard label="Premium Collected" value={formatInr(s.total_premium_collected)} />
       <MetricCard
-        label="Premium Captured"
+        label="Premium Captured (gross)"
         value={formatInr(s.total_premium_captured)}
         tone={s.total_premium_captured >= 0 ? "good" : "bad"}
+      />
+      <MetricCard label="F&O Charges" value={formatInr(s.total_charges)} tone="bad" />
+      <MetricCard
+        label="Net P&L (after charges)"
+        value={formatInr(s.net_after_charges)}
+        tone={s.net_after_charges >= 0 ? "good" : "bad"}
       />
       <MetricCard label="Capture %" value={pct(s.premium_capture_pct)} />
       <MetricCard label="Win Rate" value={pct(s.win_rate_pct)} />
@@ -58,8 +64,22 @@ function SummaryTiles({ s }: { s: OptionsReportData["summary"] }) {
       <MetricCard label="Avg Holding (days)" value={s.avg_holding_days.toFixed(1)} />
       <MetricCard label="Avg Premium / Cycle" value={formatInr(s.avg_premium_per_cycle)} />
       <MetricCard label="Max Margin Used" value={formatInr(s.max_margin_used)} />
-      <MetricCard label="Avg Margin Used" value={formatInr(s.avg_margin_used)} />
       <MetricCard label="Capital Efficiency*" value={`${s.capital_efficiency.toFixed(2)}×`} />
+    </div>
+  );
+}
+
+function ChargesLine({ c }: { c: OptionsReportData["charges"] }) {
+  if (!c) return null;
+  const parts: [string, number][] = [
+    ["Brokerage", c.brokerage], ["STT", c.stt], ["Exchange", c.exchange],
+    ["GST", c.gst], ["SEBI", c.sebi], ["Stamp", c.stamp],
+  ];
+  return (
+    <div className="text-[11px] text-slate-500">
+      F&O charges (Zerodha/NSE): {parts.map(([k, v]) => `${k} ${formatInr(v)}`).join(" · ")} ·{" "}
+      <span className="text-slate-400">Total {formatInr(c.total)}</span>. Income tax not modelled
+      (F&O = business income / slab).
     </div>
   );
 }
@@ -209,18 +229,21 @@ function CycleRow({ c }: { c: OptionCycle }) {
     legs.length === 2 && strikes.length === 2 && strikes[0] === strikes[1]
       ? `${strikes[0]} CE+PE`
       : `${legs.length} legs`;
+  const net = c.net_pnl ?? c.realized_pnl;
   return (
     <>
       <tr className="border-t border-slate-800 cursor-pointer hover:bg-slate-800/40" onClick={() => setOpen((v) => !v)}>
         <td className="py-1 pr-3 whitespace-nowrap text-slate-500">{open ? "▾" : "▸"}</td>
         <td className="py-1 pr-4 whitespace-nowrap">{c.entry_date}</td>
         <td className="py-1 pr-4 whitespace-nowrap">{c.expiry}</td>
-        <td className="py-1 pr-4">{c.underlying}</td>
+        <td className="py-1 pr-4"><SpotCell c={c} /></td>
+        <td className="py-1 pr-4"><VixCell c={c} /></td>
         <td className="py-1 pr-4 whitespace-nowrap">{strikeLabel}</td>
         <td className="py-1 pr-4 text-right">{formatInr(c.premium_collected)}</td>
         <td className="py-1 pr-4 text-right">{c.holding_days}</td>
         <td className="py-1 pr-4"><ReasonChip reason={c.exit_reason} /></td>
         <td className={`py-1 pr-4 text-right ${pnlClass(c.realized_pnl)}`}>{formatInr(c.realized_pnl)}</td>
+        <td className={`py-1 pr-4 text-right font-medium ${pnlClass(net)}`}>{formatInr(net)}</td>
       </tr>
       {open &&
         legs.map((leg) => (
@@ -230,16 +253,40 @@ function CycleRow({ c }: { c: OptionCycle }) {
               ↳ {leg.side === "long" ? "BUY" : leg.side === "short" ? "SELL" : ""} {leg.right} {leg.strike}
               {leg.lots > 1 ? ` ×${leg.lots}` : ""}
             </td>
-            <td className="py-1 pr-4">entry {formatInr(leg.entry_premium, 2)} → exit {formatInr(leg.exit_price, 2)}</td>
+            <td className="py-1 pr-4" colSpan={2}>entry {formatInr(leg.entry_premium, 2)} → exit {formatInr(leg.exit_price, 2)}</td>
             <td className="py-1 pr-4 text-right">{formatInr(leg.premium_collected)}</td>
             <td className="py-1 pr-4 text-right">{leg.holding_days}</td>
             <td className="py-1 pr-4"><ReasonChip reason={leg.exit_reason} /></td>
             <td className={`py-1 pr-4 text-right ${pnlClass(leg.realized_pnl)}`}>
               {formatInr(leg.realized_pnl)} ({pct(leg.pnl_pct)})
             </td>
+            <td className={`py-1 pr-4 text-right ${pnlClass(leg.net_pnl ?? leg.realized_pnl)}`}>
+              {formatInr(leg.net_pnl ?? leg.realized_pnl)}
+            </td>
           </tr>
         ))}
     </>
+  );
+}
+
+function SpotCell({ c }: { c: OptionCycle }) {
+  if (c.underlying_entry == null || c.underlying_exit == null)
+    return <span className="text-slate-600">—</span>;
+  const p = c.underlying_pct ?? 0;
+  return (
+    <span className="whitespace-nowrap">
+      {Math.round(c.underlying_entry)}→{Math.round(c.underlying_exit)}{" "}
+      <span className={p >= 0 ? "text-emerald-400" : "text-rose-400"}>({pct(p, 1)})</span>
+    </span>
+  );
+}
+
+function VixCell({ c }: { c: OptionCycle }) {
+  if (c.vix_entry == null || c.vix_exit == null) return <span className="text-slate-600">—</span>;
+  return (
+    <span className="whitespace-nowrap text-slate-300">
+      {c.vix_entry.toFixed(1)}→{c.vix_exit.toFixed(1)}
+    </span>
   );
 }
 
@@ -279,12 +326,14 @@ function PositionsTable({ options }: { options: OptionsReportData }) {
               <th className="py-1 pr-3" />
               <th className="py-1 pr-4">Entry</th>
               <th className="py-1 pr-4">Expiry</th>
-              <th className="py-1 pr-4">Underlying</th>
+              <th className="py-1 pr-4">Spot (entry→exit)</th>
+              <th className="py-1 pr-4">VIX</th>
               <th className="py-1 pr-4">Strikes</th>
               <th className="py-1 pr-4 text-right">Premium</th>
               <th className="py-1 pr-4 text-right">Days</th>
               <th className="py-1 pr-4">Exit</th>
-              <th className="py-1 pr-4 text-right">Realized P&L</th>
+              <th className="py-1 pr-4 text-right">Realized</th>
+              <th className="py-1 pr-4 text-right">Net</th>
             </tr>
           </thead>
           <tbody>
@@ -303,6 +352,7 @@ export default function OptionsReport({ options }: { options: OptionsReportData 
     <div className="space-y-4">
       <div className="text-sm font-semibold text-slate-200">Options analytics</div>
       <SummaryTiles s={options.summary} />
+      <ChargesLine c={options.charges} />
       <PositionsTable options={options} />
       <PremiumDecayChart options={options} />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
