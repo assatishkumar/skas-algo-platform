@@ -19,6 +19,7 @@ expiry is settled to intrinsic by the engine's ExpirySettler.
 from __future__ import annotations
 
 import calendar
+import math
 from datetime import date, timedelta
 
 from skas_algo.engine.options import black_scholes as bs
@@ -44,7 +45,7 @@ class CallRatioMonthlyStrategy:
         universe: list[str] | None = None,
         initial_capital: float = 100_000,
         underlying: str | None = None,
-        strike_mode: str = "points",   # "points" | "percent" (% OTM) | "delta" (target |Δ|)
+        strike_mode: str = "points",   # "points" | "percent" (%OTM) | "delta" (|Δ|) | "sd" (×expected move)
         buy_offset: float = 300,
         sell_offset: float = 600,
         hedge_offset: float = 1600,
@@ -128,20 +129,38 @@ class CallRatioMonthlyStrategy:
                 best, best_err = k, abs(d - target_delta)
         return best
 
+    def _atm_iv(self, ce_rows: dict, spot: float, t: float) -> float | None:
+        """ATM implied vol backed out of the chain (≈ India VIX for a monthly)."""
+        if t <= 0 or not ce_rows:
+            return None
+        atm = self._snap(sorted(ce_rows), spot)
+        row = ce_rows.get(atm)
+        if row is None or _bad(row.close):
+            return None
+        return bs.implied_vol(row.close, spot, atm, t, self.r, "CE")
+
     def _target_strikes(self, spot: float, expiry: date, today: date, ce_rows: dict) -> list:
         """The three base target strikes (buy, sell, hedge) per ``strike_mode``.
 
         - points  : spot + offset (absolute, level-dependent — legacy)
         - percent : spot × (1 + offset/100) (constant moneyness across levels)
         - delta   : the strike whose |Δ| ≈ offset (vol/time/spot-aware)
-        A leg is None if it can't be resolved (delta mode on thin data) → caller skips.
+        - sd      : spot + offset × expected-move, EM = spot·IV·√(dte/365) (constant breach-
+                    probability — pushes strikes further OTM when vol is high)
+        A leg is None if it can't be resolved → caller skips the month.
         """
         offs = (self.buy_offset, self.sell_offset, self.hedge_offset)
         if self.strike_mode == "percent":
             return [spot * (1.0 + o / 100.0) for o in offs]
+        t = max((expiry - today).days, 0) / 365.0
         if self.strike_mode == "delta":
-            t = max((expiry - today).days, 0) / 365.0
             return [self._delta_strike(ce_rows, spot, t, o) for o in offs]
+        if self.strike_mode in ("sd", "expected_move"):
+            iv = self._atm_iv(ce_rows, spot, t)
+            if iv is None:
+                return [None, None, None]
+            em = spot * iv * math.sqrt(t)
+            return [spot + o * em for o in offs]
         return [spot + o for o in offs]  # points (default)
 
     def _maybe_enter(self, ctx, chain, today: date) -> list[Signal]:

@@ -121,7 +121,10 @@ export default function NewBacktestPage() {
   const isCallRatio = strategyId === "call_ratio_monthly";
   const isOptions = strategyId === "short_premium" || isCallRatio;
   const strikeUnit =
-    strikeMode === "delta" ? "Δ" : strikeMode === "points" ? "offset (pts)" : "offset (% OTM)";
+    strikeMode === "delta" ? "Δ"
+    : strikeMode === "sd" ? "× exp.move (σ)"
+    : strikeMode === "points" ? "offset (pts)"
+    : "offset (% OTM)";
 
   // Call Ratio deploys ~₹1L of margin per lot; default the capital so the %-of-capital
   // targets are meaningful (user can still edit).
@@ -133,6 +136,7 @@ export default function NewBacktestPage() {
   useEffect(() => {
     const d =
       strikeMode === "delta" ? [0.36, 0.25, 0.05]
+      : strikeMode === "sd" ? [0.35, 0.7, 1.85] // multiples of the 1σ expected move
       : strikeMode === "points" ? [300, 600, 1600]
       : [1.3, 2.6, 7.0]; // percent (% OTM)
     setBuyOffset(d[0]);
@@ -377,6 +381,7 @@ export default function NewBacktestPage() {
               <Field label="Strike basis">
                 <select className={inputClass} value={strikeMode} onChange={(e) => setStrikeMode(e.target.value)}>
                   <option value="percent">% of spot (level-aware)</option>
+                  <option value="sd">Expected move σ (vol-aware)</option>
                   <option value="delta">Delta (vol-aware)</option>
                   <option value="points">Fixed points</option>
                 </select>
