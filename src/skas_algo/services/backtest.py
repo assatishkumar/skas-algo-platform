@@ -17,6 +17,33 @@ from skas_algo.engine.runner import BacktestRunner
 from skas_algo.strategies.registry import get_strategy
 
 
+def _effective_strategy_params(factory, explicit: dict) -> dict:
+    """The strategy's full effective config: explicit params + signature defaults.
+
+    Walks the factory's MRO so subclass-only params (e.g. Batman's
+    combined_credit_limit_pct behind *args/**kwargs) are captured too. Makes a run
+    self-documenting — defaults applied silently are persisted, not lost.
+    """
+    import inspect
+
+    skip = {"self", "universe", "initial_capital", "lot_overrides"}
+    out: dict = {}
+    classes = factory.__mro__ if isinstance(factory, type) else [factory]
+    for cls in classes:
+        init = cls.__init__ if isinstance(cls, type) else cls
+        try:
+            sig = inspect.signature(init)
+        except (TypeError, ValueError):  # builtins / object.__init__
+            continue
+        for name, p in sig.parameters.items():
+            if (name in skip or name in out
+                    or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+                    or p.default is inspect.Parameter.empty):
+                continue
+            out[name] = explicit.get(name, p.default)
+    return out
+
+
 def _serialize_trades(transactions: list[dict]) -> list[dict]:
     out = []
     for t in transactions:
@@ -112,6 +139,8 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
             "lookback": req.lookback,
             "tax_rate": req.tax_rate,
             "withdrawal_rate": req.withdrawal_rate,
+            # Effective strategy config (defaults included), then explicit overrides.
+            **_effective_strategy_params(factory, req.params),
             **req.params,
         },
     )
