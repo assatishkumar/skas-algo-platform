@@ -119,7 +119,8 @@ export default function NewBacktestPage() {
 
   const navigate = useNavigate();
   const isFifo = strategyId === "sst_fifo";
-  const isCallRatio = strategyId === "call_ratio_monthly";
+  const isCallRatio = strategyId === "call_ratio_monthly" || strategyId === "put_ratio_monthly";
+  const ratioSide = strategyId === "put_ratio_monthly" ? "put" : "call";
   const isOptions = strategyId === "short_premium" || isCallRatio;
   const strikeUnit =
     strikeMode === "delta" ? "Δ"
@@ -370,9 +371,12 @@ export default function NewBacktestPage() {
           {isCallRatio ? (
             <div className="grid md:grid-cols-3 gap-4">
               <div className="md:col-span-3 text-[11px] text-amber-300/90">
-                1:2 call ratio + outer hedge on NIFTY monthly. Entry = last Tuesday of the month for
-                next month's expiry (EOD approximates the 3:16 PM rule). Set capital ≈ ₹1L margin per lot;
-                all %s are on this capital.
+                1:2 {ratioSide} ratio + outer hedge on NIFTY monthly
+                {ratioSide === "put"
+                  ? " (strikes BELOW spot — zero upside risk; watch fast sell-offs)"
+                  : " (strikes ABOVE spot — zero downside risk; watch fast rallies)"}.
+                Entry = last Tuesday of the month for next month's expiry (EOD approximates the 3:16 PM
+                rule). Set capital ≈ ₹1L margin per lot; all %s are on this capital.
               </div>
               <Field label="Capital (₹) — ≈ ₹1L / lot">
                 <NumberInput className={inputClass} value={capital} onChange={setCapital} />

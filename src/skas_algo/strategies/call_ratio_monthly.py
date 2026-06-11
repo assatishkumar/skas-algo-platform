@@ -39,6 +39,7 @@ def _last_weekday_of_month(d: date, weekday: int) -> date:
 
 class CallRatioMonthlyStrategy:
     strategy_id = "call_ratio_monthly"
+    right = "CE"  # PutRatioMonthlyStrategy flips this to "PE" (the downside mirror)
 
     def __init__(
         self,
@@ -83,6 +84,8 @@ class CallRatioMonthlyStrategy:
         self.strike_step = float(strike_step)
         self.r = float(risk_free_rate)
         self.lot_overrides = lot_overrides
+        # +1 for calls (OTM = above spot), −1 for puts (OTM = below spot).
+        self._sign = 1 if self.right == "CE" else -1
 
         # State (persisted for live recovery). Each leg: {symbol, dir, units, entry}.
         self.legs: list[dict] = []
@@ -123,60 +126,62 @@ class CallRatioMonthlyStrategy:
         if len(cands) == 1:
             return cands[0]
         def total_oi(exp: date) -> int:
-            return sum(r.oi for r in chain.chain(self.underlying, today, exp) if r.right == "CE")
+            return sum(r.oi for r in chain.chain(self.underlying, today, exp) if r.right == self.right)
         return max(cands, key=total_oi)
 
     @staticmethod
     def _snap(strikes: list[float], target: float) -> float | None:
         return min(strikes, key=lambda k: abs(k - target)) if strikes else None
 
-    def _delta_strike(self, ce_rows: dict, spot: float, t: float, target_delta: float) -> float | None:
-        """Listed CE strike whose |BS delta| is nearest ``target_delta`` (IV backed out per strike)."""
+    def _delta_strike(self, rows: dict, spot: float, t: float, target_delta: float) -> float | None:
+        """Listed strike (of the traded right) whose |BS delta| is nearest ``target_delta``."""
         best, best_err = None, 1e9
-        for k, row in ce_rows.items():
+        for k, row in rows.items():
             if _bad(row.close) or t <= 0:
                 continue
-            iv = bs.implied_vol(row.close, spot, k, t, self.r, "CE")
+            iv = bs.implied_vol(row.close, spot, k, t, self.r, self.right)
             if iv is None:
                 continue
-            d = abs(bs.delta(spot, k, t, self.r, iv, "CE"))
+            d = abs(bs.delta(spot, k, t, self.r, iv, self.right))
             if abs(d - target_delta) < best_err:
                 best, best_err = k, abs(d - target_delta)
         return best
 
-    def _atm_iv(self, ce_rows: dict, spot: float, t: float) -> float | None:
+    def _atm_iv(self, rows: dict, spot: float, t: float) -> float | None:
         """ATM implied vol backed out of the chain (≈ India VIX for a monthly)."""
-        if t <= 0 or not ce_rows:
+        if t <= 0 or not rows:
             return None
-        atm = self._snap(sorted(ce_rows), spot)
-        row = ce_rows.get(atm)
+        atm = self._snap(sorted(rows), spot)
+        row = rows.get(atm)
         if row is None or _bad(row.close):
             return None
-        return bs.implied_vol(row.close, spot, atm, t, self.r, "CE")
+        return bs.implied_vol(row.close, spot, atm, t, self.r, self.right)
 
-    def _target_strikes(self, spot: float, expiry: date, today: date, ce_rows: dict) -> list:
+    def _target_strikes(self, spot: float, expiry: date, today: date, rows: dict) -> list:
         """The three base target strikes (buy, sell, hedge) per ``strike_mode``.
 
-        - points  : spot + offset (absolute, level-dependent — legacy)
-        - percent : spot × (1 + offset/100) (constant moneyness across levels)
+        Offsets are OTM distances: ABOVE spot for calls, BELOW spot for puts (sign).
+        - points  : spot ± offset (absolute, level-dependent — legacy)
+        - percent : spot × (1 ± offset/100) (constant moneyness across levels)
         - delta   : the strike whose |Δ| ≈ offset (vol/time/spot-aware)
-        - sd      : spot + offset × expected-move, EM = spot·IV·√(dte/365) (constant breach-
+        - sd      : spot ± offset × expected-move, EM = spot·IV·√(dte/365) (constant breach-
                     probability — pushes strikes further OTM when vol is high)
         A leg is None if it can't be resolved → caller skips the month.
         """
+        sg = self._sign
         offs = (self.buy_offset, self.sell_offset, self.hedge_offset)
         if self.strike_mode == "percent":
-            return [spot * (1.0 + o / 100.0) for o in offs]
+            return [spot * (1.0 + sg * o / 100.0) for o in offs]
         t = max((expiry - today).days, 0) / 365.0
         if self.strike_mode == "delta":
-            return [self._delta_strike(ce_rows, spot, t, o) for o in offs]
+            return [self._delta_strike(rows, spot, t, o) for o in offs]
         if self.strike_mode in ("sd", "expected_move"):
-            iv = self._atm_iv(ce_rows, spot, t)
+            iv = self._atm_iv(rows, spot, t)
             if iv is None:
                 return [None, None, None]
             em = spot * iv * math.sqrt(t)
-            return [spot + o * em for o in offs]
-        return [spot + o for o in offs]  # points (default)
+            return [spot + sg * o * em for o in offs]
+        return [spot + sg * o for o in offs]  # points (default)
 
     def _maybe_enter(self, ctx, chain, today: date) -> list[Signal]:
         ym = (today.year, today.month)
@@ -188,27 +193,27 @@ class CallRatioMonthlyStrategy:
         spot = chain.spot(self.underlying, today)
         if expiry is None or spot is None:
             return []
-        # Only consider strikes with open interest — zero-OI contracts never trade and
-        # carry frozen (phantom) bhavcopy closes that aren't executable prices.
-        ce_rows = {r.strike: r for r in chain.chain(self.underlying, today, expiry)
-                   if r.right == "CE" and r.oi > 0}
-        if not ce_rows:
+        # Only consider strikes (of the traded right) with open interest — zero-OI
+        # contracts never trade and carry frozen (phantom) bhavcopy closes.
+        rows = {r.strike: r for r in chain.chain(self.underlying, today, expiry)
+                if r.right == self.right and r.oi > 0}
+        if not rows:
             return []
         # IV filter: low-vol months have thin premiums and poor compensation — skip while
         # the chain's ATM IV (≈ India VIX for a monthly) is below the floor (retries daily
         # within the entry window, so a late-window vol pickup can still qualify).
         if self.min_vix > 0:
             t = max((expiry - today).days, 0) / 365.0
-            iv = self._atm_iv(ce_rows, spot, t)
+            iv = self._atm_iv(rows, spot, t)
             if iv is None or iv * 100.0 < self.min_vix:
                 return []
 
-        ce_strikes = sorted(ce_rows)
+        strike_list = sorted(rows)
         units = self.lots * lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
         limit = self.credit_debit_limit_pct * self.initial_capital
 
         # Level-aware base targets (points / % of spot / delta), then snap to listed strikes.
-        base = self._target_strikes(spot, expiry, today, ce_rows)
+        base = self._target_strikes(spot, expiry, today, rows)
         if any(b is None for b in base):
             return []  # couldn't resolve a leg (e.g. delta on thin data) → skip the month
 
@@ -217,16 +222,18 @@ class CallRatioMonthlyStrategy:
         # shift all legs further OTM in shift_step increments until it fits. If the
         # structure prices to a DEBIT (low IV / thin premiums), SKIP the month — debit
         # months were shown to be the strategy's losers; being flat is the edge.
-        atm = self._snap(ce_strikes, spot)
+        # "Further OTM" = higher strikes for calls, lower strikes for puts (sign).
+        atm = self._snap(strike_list, spot)
         chosen = None
         for i in range(self.max_shifts + 1):
-            shift = i * self.shift_step
-            bk = self._snap(ce_strikes, base[0] + shift)
-            sk = self._snap(ce_strikes, base[1] + shift)
-            hk = self._snap(ce_strikes, base[2] + shift)
-            buy, sell, hedge = ce_rows.get(bk), ce_rows.get(sk), ce_rows.get(hk)
+            shift = self._sign * i * self.shift_step
+            bk = self._snap(strike_list, base[0] + shift)
+            sk = self._snap(strike_list, base[1] + shift)
+            hk = self._snap(strike_list, base[2] + shift)
+            buy, sell, hedge = rows.get(bk), rows.get(sk), rows.get(hk)
             if (buy is None or sell is None or hedge is None or len({bk, sk, hk}) < 3
-                    or bk < atm or _bad(buy.close) or _bad(sell.close) or _bad(hedge.close)):
+                    or (bk - atm) * self._sign < 0  # buy leg must stay ATM-or-OTM
+                    or _bad(buy.close) or _bad(sell.close) or _bad(hedge.close)):
                 continue
             net = (2 * sell.close - buy.close - hedge.close) * units  # +ve = credit received
             if 0 <= net <= limit:
@@ -238,6 +245,7 @@ class CallRatioMonthlyStrategy:
             return []  # no credit ≤ 1% of capital available → skip the month
 
         buy, sell, hedge = chosen
+        reason = "call_ratio" if self.right == "CE" else "put_ratio"
         self.legs = [
             {"symbol": buy.symbol, "dir": 1, "units": units, "entry": buy.close},
             {"symbol": sell.symbol, "dir": -1, "units": 2 * units, "entry": sell.close},
@@ -247,10 +255,10 @@ class CallRatioMonthlyStrategy:
         self.entry_date = today
         self.last_entry_month = ym
         return [
-            Signal(buy.symbol, SignalAction.ENTER_LONG, quantity=units, reason="call_ratio"),
+            Signal(buy.symbol, SignalAction.ENTER_LONG, quantity=units, reason=reason),
             Signal(sell.symbol, SignalAction.ENTER_SHORT, quantity=2 * units,
-                   reason="call_ratio", meta={"multiplier": 1}),
-            Signal(hedge.symbol, SignalAction.ENTER_LONG, quantity=units, reason="call_ratio"),
+                   reason=reason, meta={"multiplier": 1}),
+            Signal(hedge.symbol, SignalAction.ENTER_LONG, quantity=units, reason=reason),
         ]
 
     def _manage(self, ctx) -> list[Signal]:
@@ -308,3 +316,16 @@ class CallRatioMonthlyStrategy:
         self.entry_expiry = date.fromisoformat(ee) if ee else None
         self.entry_date = date.fromisoformat(ed) if ed else None
         self.last_entry_month = tuple(lem) if lem else None
+
+
+class PutRatioMonthlyStrategy(CallRatioMonthlyStrategy):
+    """1:2 PUT ratio spread + outer hedge — the downside mirror of the call ratio.
+
+    BUY 1 put ~offset below spot, SELL 2 puts further below, BUY 1 far put hedge.
+    Zero UPSIDE risk (all puts expire worthless on rallies → keep the credit); risk is
+    a fast SELL-OFF toward the short strikes, capped beyond the hedge. Same entry
+    timing, credit gate (skip debit months), and exits as the call version.
+    """
+
+    strategy_id = "put_ratio_monthly"
+    right = "PE"

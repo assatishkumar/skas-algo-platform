@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from .call_ratio_monthly import CallRatioMonthlyStrategy
+from .call_ratio_monthly import CallRatioMonthlyStrategy, PutRatioMonthlyStrategy
 from .short_premium import ShortPremiumStrategy
 from .sst_fifo import SSTFifoStrategy
 from .sst_lifo import SSTLifoStrategy
@@ -19,6 +19,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     SSTFifoStrategy.strategy_id: SSTFifoStrategy,
     ShortPremiumStrategy.strategy_id: ShortPremiumStrategy,
     CallRatioMonthlyStrategy.strategy_id: CallRatioMonthlyStrategy,
+    PutRatioMonthlyStrategy.strategy_id: PutRatioMonthlyStrategy,
 }
 
 

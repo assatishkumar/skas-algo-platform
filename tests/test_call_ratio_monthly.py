@@ -17,7 +17,10 @@ from skas_algo.engine.options.chain import ChainRow
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.options.report import build_options_report
 from skas_algo.engine.runner import BacktestRunner
-from skas_algo.strategies.call_ratio_monthly import CallRatioMonthlyStrategy
+from skas_algo.strategies.call_ratio_monthly import (
+    CallRatioMonthlyStrategy,
+    PutRatioMonthlyStrategy,
+)
 
 SPOT = 21000.0
 EXPIRY = date(2024, 2, 29)  # Feb 2024 monthly (last Thursday)
@@ -35,16 +38,22 @@ def _biz_days(start: date, end: date) -> list[date]:
 CALENDAR = _biz_days(date(2024, 1, 25), date(2024, 2, 23))  # entry Jan 30 (last Tue), time-exit mid-Feb
 
 
+def _prem(strike: float, dte: int, right: str = "CE") -> float:
+    """A smooth OTM premium decaying with moneyness and time (small net credit at base).
+    Distance is above spot for CE, below spot for PE — symmetric curves."""
+    dist = (strike - SPOT) if right == "CE" else (SPOT - strike)
+    return round(100.0 * math.exp(-dist / 800.0) * max(0.05, dte / 30.0), 2)
+
+
 def _ce(strike: float, dte: int) -> float:
-    """A smooth OTM call premium that decays with moneyness and time (gives a small net credit)."""
-    return round(100.0 * math.exp(-(strike - SPOT) / 800.0) * max(0.05, dte / 30.0), 2)
+    return _prem(strike, dte, "CE")
 
 
 class FakeCRSD:
     def __init__(self, calendar):
         self.cal = calendar
         self.index = pd.DataFrame({"date": calendar, "close": [SPOT] * len(calendar)})
-        self.strikes = [20000.0 + 50 * i for i in range(0, 120)]  # 20000..25950
+        self.strikes = [20000.0 + 50 * i for i in range(-40, 120)]  # 18000..25950
 
     def get_prices(self, symbol, start_date=None, end_date=None, asset_type="stock"):
         df = self.index
@@ -57,12 +66,13 @@ class FakeCRSD:
     def get_option_chain(self, underlying, on_date, expiry=None):
         dte = (EXPIRY - on_date).days
         rows = [dict(trade_date=on_date, symbol="NIFTY", expiry_date=EXPIRY, strike_price=k,
-                     option_type="CE", close=_ce(k, dte), settle_price=_ce(k, dte), open_interest=1000)
-                for k in self.strikes]
+                     option_type=right, close=_prem(k, dte, right),
+                     settle_price=_prem(k, dte, right), open_interest=1000)
+                for k in self.strikes for right in ("CE", "PE")]
         return pd.DataFrame(rows)
 
     def get_option_series(self, underlying, expiry, strike, option_type, start_date=None, end_date=None):
-        rows = [{"trade_date": d, "close": _ce(float(strike), (EXPIRY - d).days)}
+        rows = [{"trade_date": d, "close": _prem(float(strike), (EXPIRY - d).days, option_type.upper())}
                 for d in self.cal
                 if (start_date is None or d >= start_date) and (end_date is None or d <= end_date)]
         return pd.DataFrame(rows)
@@ -98,6 +108,29 @@ def test_entry_structure_and_time_exit():
     assert shorts[0]["units"] == 2 * 50  # 2 lots short; NIFTY lot was 50 for a Feb-2024 expiry
 
     # It closed (time exit before expiry → SELL on the longs, COVER on the short; not SETTLE).
+    assert any(t["action"] == "COVER" for t in txns)
+    assert any(t["action"] == "SELL" for t in txns)
+
+
+def test_put_ratio_mirrors_below_spot():
+    strat = PutRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
+    )
+    result = _run(strat)
+    txns = result.transactions
+    buys = [t for t in txns if t["action"] == "BUY"]
+    shorts = [t for t in txns if t["action"] == "SHORT"]
+
+    assert len(buys) == 2 and len(shorts) == 1, [(t["action"], t["ticker"]) for t in txns]
+    assert all(t["ticker"].endswith("|PE") for t in buys + shorts)
+    near_k = max(int(t["ticker"].split("|")[2]) for t in buys)
+    hedge_k = min(int(t["ticker"].split("|")[2]) for t in buys)
+    sell_k = int(shorts[0]["ticker"].split("|")[2])
+    # spot−300 / −600 / −1600: the downside mirror of the call structure.
+    assert near_k == 20700 and sell_k == 20400 and hedge_k == 19400
+    assert shorts[0]["units"] == 2 * 50
+
+    # Closed via time exit (spot flat → puts decayed; SELL longs + COVER short).
     assert any(t["action"] == "COVER" for t in txns)
     assert any(t["action"] == "SELL" for t in txns)
 
