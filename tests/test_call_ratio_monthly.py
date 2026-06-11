@@ -169,6 +169,55 @@ def test_skips_month_on_large_net_debit():
     assert out == [] and strat.legs == []  # net debit (~6,300) > 1% of 1L → no trade
 
 
+def test_stale_mark_guard_blocks_exit_until_all_legs_print():
+    s = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=100_000)
+    s.legs = [
+        {"symbol": "NIFTY|2024-02-29|21300|CE", "dir": 1, "units": 75, "entry": 100.0},
+        {"symbol": "NIFTY|2024-02-29|21600|CE", "dir": -1, "units": 150, "entry": 60.0},
+        {"symbol": "NIFTY|2024-02-29|22600|CE", "dir": 1, "units": 75, "entry": 20.0},
+    ]
+    s.entry_date = date(2024, 1, 30)
+    # Marks that would massively breach the stop (long leg collapsed).
+    closes = {s.legs[0]["symbol"]: 10.0, s.legs[1]["symbol"]: 60.0, s.legs[2]["symbol"]: 20.0}
+
+    class Ctx:
+        def __init__(self, stale_symbol=None):
+            self._stale = stale_symbol
+            self.market = self
+        def has_print(self, sym): return sym != self._stale
+        def lots(self, sym): return [object()]
+        def close(self, sym): return closes[sym]
+        def today(self): return date(2024, 2, 5)
+        def option_chain(self): return object()
+
+    # One leg unprinted (the short stuck at entry) → no exit, manage next slice.
+    assert s.on_slice(Ctx(stale_symbol=s.legs[1]["symbol"])) == []
+    assert s.legs  # still holding
+    # All legs printed → the stop fires.
+    out = s.on_slice(Ctx())
+    assert len(out) == 3 and all(sig.reason == "stop" for sig in out)
+
+
+def test_min_vix_filter_skips_low_iv_months():
+    from skas_algo.engine.options import black_scholes as bs
+    spot, t, r = 21000.0, 30 / 365.0, 0.065
+    prem = {spot + 50 * i: max(bs.price(spot, spot + 50 * i, t, r, 0.12, "CE"), 0.05)
+            for i in range(-20, 60)}  # chain priced at 12% IV
+    chain = _StubChain(spot, EXPIRY, prem)
+    kw = dict(universe=["NIFTY"], initial_capital=100_000, credit_debit_limit_pct=99)
+    assert CallRatioMonthlyStrategy(min_vix=15, **kw).on_slice(_StubCtx(chain, date(2024, 1, 30))) == []
+    assert CallRatioMonthlyStrategy(min_vix=10, **kw).on_slice(_StubCtx(chain, date(2024, 1, 30)))
+
+
+def test_require_credit_skips_debit_entries():
+    # Small net debit (−2/unit), inside the 1% gate: trades normally, skipped with require_credit.
+    prem = {21000.0: 60.0, 21300.0: 20.0, 21600.0: 12.0, 22600.0: 6.0}
+    chain = _StubChain(21000.0, EXPIRY, prem)
+    kw = dict(universe=["NIFTY"], initial_capital=100_000)
+    assert CallRatioMonthlyStrategy(require_credit=True, **kw).on_slice(_StubCtx(chain, date(2024, 1, 30))) == []
+    assert CallRatioMonthlyStrategy(require_credit=False, **kw).on_slice(_StubCtx(chain, date(2024, 1, 30)))
+
+
 class _StubChain:
     def __init__(self, spot, expiry, prem):
         self._spot, self._expiry, self._prem = spot, expiry, prem

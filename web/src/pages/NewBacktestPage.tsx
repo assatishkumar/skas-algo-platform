@@ -100,6 +100,8 @@ export default function NewBacktestPage() {
   const [crProfitPct, setCrProfitPct] = useState(2.5);
   const [crStopPct, setCrStopPct] = useState(3);
   const [maxHoldingDays, setMaxHoldingDays] = useState(20);
+  const [minVix, setMinVix] = useState(0); // 0 = off; skip entry if ATM IV% (≈VIX) below
+  const [requireCredit, setRequireCredit] = useState(false);
 
   // Override builder
   const [ovEnabled, setOvEnabled] = useState(false);
@@ -188,6 +190,8 @@ export default function NewBacktestPage() {
             profit_target_pct: crProfitPct / 100,
             stop_loss_pct: crStopPct / 100,
             max_holding_days: maxHoldingDays,
+            min_vix: minVix,
+            require_credit: requireCredit,
           }
         : {
             underlying,
@@ -406,6 +410,15 @@ export default function NewBacktestPage() {
               </Field>
               <Field label="Max holding days">
                 <NumberInput className={inputClass} value={maxHoldingDays} onChange={setMaxHoldingDays} />
+              </Field>
+              <Field label="Min entry IV % (≈VIX, 0 = off)">
+                <NumberInput step="0.5" className={inputClass} value={minVix} onChange={setMinVix} />
+              </Field>
+              <Field label="Require net credit">
+                <label className={`${inputClass} flex items-center gap-2 cursor-pointer`}>
+                  <input type="checkbox" checked={requireCredit} onChange={(e) => setRequireCredit(e.target.checked)} />
+                  <span className="text-slate-300 text-sm">skip debit entries</span>
+                </label>
               </Field>
               <Field label="Tax rate %">
                 <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />

@@ -56,6 +56,8 @@ class CallRatioMonthlyStrategy:
         profit_target_pct: float = 0.025,        # exit at +2.5% of capital
         stop_loss_pct: float = 0.03,             # exit at −3% of capital
         max_holding_days: int = 20,              # hard time exit (avoid end-of-month gamma)
+        min_vix: float = 0.0,                     # skip entry if ATM IV% (≈ India VIX) below this
+        require_credit: bool = False,             # skip entry unless net cashflow is a credit
         min_dte: int = 18,                        # selects the *next* month's monthly expiry
         entry_weekday: int = 1,                   # Tuesday
         strike_step: float = 50,                  # informational; strikes are snapped to listings
@@ -76,6 +78,8 @@ class CallRatioMonthlyStrategy:
         self.profit_target_pct = float(profit_target_pct)
         self.stop_loss_pct = float(stop_loss_pct)
         self.max_holding_days = int(max_holding_days)
+        self.min_vix = float(min_vix)
+        self.require_credit = bool(require_credit)
         self.min_dte = int(min_dte)
         self.entry_weekday = int(entry_weekday)
         self.strike_step = float(strike_step)
@@ -99,17 +103,30 @@ class CallRatioMonthlyStrategy:
 
     # ------------------------------------------------------------------ helpers
     def _next_monthly_expiry(self, chain, today: date) -> date | None:
-        """The nearest monthly expiry at least ``min_dte`` out (monthly = last expiry of a month)."""
+        """The nearest monthly expiry at least ``min_dte`` out.
+
+        "Monthly" = the most LIQUID expiry of its calendar month (highest total open
+        interest on today's chain), not simply the latest date — exchanges sometimes list
+        odd late-month expiries whose contracts never trade but still carry frozen
+        bhavcopy closes (e.g. NIFTY 2025-04-30 vs the real 2025-04-24 monthly); picking
+        by date would enter phantom, un-executable positions.
+        """
         exps = chain.expiries(self.underlying, today)
         if not exps:
             return None
-        by_month: dict[tuple[int, int], date] = {}
+        by_month: dict[tuple[int, int], list[date]] = {}
         for e in exps:
-            key = (e.year, e.month)
-            if key not in by_month or e > by_month[key]:
-                by_month[key] = e
-        cands = sorted(e for e in by_month.values() if (e - today).days >= self.min_dte)
-        return cands[0] if cands else None
+            if (e - today).days >= self.min_dte:
+                by_month.setdefault((e.year, e.month), []).append(e)
+        if not by_month:
+            return None
+        month = min(by_month)  # nearest qualifying month
+        cands = by_month[month]
+        if len(cands) == 1:
+            return cands[0]
+        def total_oi(exp: date) -> int:
+            return sum(r.oi for r in chain.chain(self.underlying, today, exp) if r.right == "CE")
+        return max(cands, key=total_oi)
 
     @staticmethod
     def _snap(strikes: list[float], target: float) -> float | None:
@@ -173,9 +190,21 @@ class CallRatioMonthlyStrategy:
         spot = chain.spot(self.underlying, today)
         if expiry is None or spot is None:
             return []
-        ce_rows = {r.strike: r for r in chain.chain(self.underlying, today, expiry) if r.right == "CE"}
+        # Only consider strikes with open interest — zero-OI contracts never trade and
+        # carry frozen (phantom) bhavcopy closes that aren't executable prices.
+        ce_rows = {r.strike: r for r in chain.chain(self.underlying, today, expiry)
+                   if r.right == "CE" and r.oi > 0}
         if not ce_rows:
             return []
+        # IV filter: low-vol months have thin premiums and poor compensation — skip while
+        # the chain's ATM IV (≈ India VIX for a monthly) is below the floor (retries daily
+        # within the entry window, so a late-window vol pickup can still qualify).
+        if self.min_vix > 0:
+            t = max((expiry - today).days, 0) / 365.0
+            iv = self._atm_iv(ce_rows, spot, t)
+            if iv is None or iv * 100.0 < self.min_vix:
+                return []
+
         ce_strikes = sorted(ce_rows)
         units = self.lots * lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
         limit = self.credit_debit_limit_pct * self.initial_capital
@@ -203,6 +232,8 @@ class CallRatioMonthlyStrategy:
                 continue
             if -net > limit:
                 return []  # net debit too large → low-IV month, skip
+            if self.require_credit and net < 0:
+                return []  # debit entries lose on average — skip (shifting OTM only shrinks credit)
             chosen = (buy, sell, hedge)
             break
         if chosen is None:
@@ -229,6 +260,14 @@ class CallRatioMonthlyStrategy:
         if not any(ctx.lots(leg["symbol"]) for leg in self.legs):
             self._flat()
             return []
+        # Stale-mark guard: ctx.close() forward-fills a leg that didn't print today, which
+        # can fire the MTM stop (and fill the exit) on a phantom price — e.g. the long leg
+        # marks down while an unprinted short stays at its entry price. Only evaluate
+        # exits when EVERY leg has a fresh print; otherwise manage on the next slice.
+        market = getattr(ctx, "market", None)
+        if market is not None and hasattr(market, "has_print"):
+            if not all(market.has_print(leg["symbol"]) for leg in self.legs):
+                return []
         try:
             pnl = sum(leg["dir"] * (ctx.close(leg["symbol"]) - leg["entry"]) * leg["units"]
                       for leg in self.legs)
