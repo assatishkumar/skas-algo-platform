@@ -101,6 +101,7 @@ export default function NewBacktestPage() {
   const [crStopPct, setCrStopPct] = useState(3);
   const [maxHoldingDays, setMaxHoldingDays] = useState(20);
   const [minVix, setMinVix] = useState(0); // 0 = off; skip entry if ATM IV% (≈VIX) below
+  const [combinedCreditPct, setCombinedCreditPct] = useState(2); // batman: cap on both wings' credit
 
   // Override builder
   const [ovEnabled, setOvEnabled] = useState(false);
@@ -194,6 +195,7 @@ export default function NewBacktestPage() {
             stop_loss_pct: crStopPct / 100,
             max_holding_days: maxHoldingDays,
             min_vix: minVix,
+            ...(ratioSide === "batman" ? { combined_credit_limit_pct: combinedCreditPct / 100 } : {}),
           }
         : {
             underlying,
@@ -405,9 +407,14 @@ export default function NewBacktestPage() {
               <Field label={`Hedge ${strikeUnit} (caps upside)`}>
                 <NumberInput step="0.05" className={inputClass} value={hedgeOffset} onChange={setHedgeOffset} />
               </Field>
-              <Field label="Max net credit % (of capital)">
+              <Field label={ratioSide === "batman" ? "Max credit % per wing" : "Max net credit % (of capital)"}>
                 <NumberInput step="0.1" className={inputClass} value={creditLimitPct} onChange={setCreditLimitPct} />
               </Field>
+              {ratioSide === "batman" && (
+                <Field label="Max COMBINED credit % (both wings)">
+                  <NumberInput step="0.1" className={inputClass} value={combinedCreditPct} onChange={setCombinedCreditPct} />
+                </Field>
+              )}
               <Field label="Profit target % (of capital)">
                 <NumberInput step="0.1" className={inputClass} value={crProfitPct} onChange={setCrProfitPct} />
               </Field>

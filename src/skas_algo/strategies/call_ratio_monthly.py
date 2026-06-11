@@ -363,9 +363,33 @@ class BatmanRatioMonthlyStrategy(CallRatioMonthlyStrategy):
     strategy_id = "batman_ratio_monthly"
     entry_reason = "batman"
 
+    def __init__(self, *args, combined_credit_limit_pct: float = 0.02, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Cap on the COMBINED (both wings) net credit, as a fraction of capital. The
+        # per-wing cap (credit_debit_limit_pct, 1%) still applies, so the default 2%
+        # changes nothing; a tighter combined cap re-shifts BOTH wings further OTM.
+        self.combined_credit_limit_pct = float(combined_credit_limit_pct)
+
+    @staticmethod
+    def _wing_credit(side: tuple, units: int) -> float:
+        buy, sell, hedge = side
+        return (2 * sell.close - buy.close - hedge.close) * units
+
     def _entry_sides(self, chain, today, expiry, spot, units, limit) -> list | None:
-        ce = self._build_side(chain, today, expiry, spot, units, limit, "CE")
-        pe = self._build_side(chain, today, expiry, spot, units, limit, "PE")
+        combined_limit = self.combined_credit_limit_pct * self.initial_capital
+        # Round 1: each wing under its own cap (≤ the combined cap, in case it's tighter).
+        wing_limit = min(limit, combined_limit)
+        ce = self._build_side(chain, today, expiry, spot, units, wing_limit, "CE")
+        pe = self._build_side(chain, today, expiry, spot, units, wing_limit, "PE")
         if ce is None or pe is None:
             return None  # both wings or nothing
+        if self._wing_credit(ce, units) + self._wing_credit(pe, units) <= combined_limit:
+            return [ce, pe]
+        # Round 2: combined credit too rich → rebuild with half the combined cap per
+        # wing (guarantees the sum fits); wings shift further OTM or the month skips.
+        wing_limit = combined_limit / 2.0
+        ce = self._build_side(chain, today, expiry, spot, units, wing_limit, "CE")
+        pe = self._build_side(chain, today, expiry, spot, units, wing_limit, "PE")
+        if ce is None or pe is None:
+            return None
         return [ce, pe]

@@ -156,6 +156,25 @@ def test_batman_enters_both_wings():
     assert any(t["action"] == "COVER" for t in txns) and any(t["action"] == "SELL" for t in txns)
 
 
+def test_batman_combined_credit_cap_reshifts_both_wings():
+    # Base wings: credit ≈ ₹610 each (fits the 1% per-wing cap of ₹2,000) → combined
+    # ₹1,220. A combined cap of 0.5% (₹1,000) must rebuild both wings further OTM
+    # (half-cap per wing = ₹500 → 2 extra shifts each) so the sum fits.
+    strat = BatmanRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=200_000, max_holding_days=15, min_dte=18,
+        combined_credit_limit_pct=0.005,
+    )
+    result = _run(strat)
+    entries = [t for t in result.transactions if t["action"] in ("BUY", "SHORT")]
+    ce = sorted(int(t["ticker"].split("|")[2]) for t in entries if t["ticker"].endswith("|CE"))
+    pe = sorted(int(t["ticker"].split("|")[2]) for t in entries if t["ticker"].endswith("|PE"))
+    assert ce == [21500, 21800, 22800]  # base +200 OTM
+    assert pe == [19200, 20200, 20500]  # base −200 OTM
+    # Combined entry credit respects the cap: Σ over wings of (2S−B−H)·units ≤ ₹1,000.
+    credit = sum(-t["amount"] if t["action"] == "BUY" else t["amount"] for t in entries)
+    assert 0 <= credit <= 1000, credit
+
+
 def test_batman_requires_both_wings():
     # A CE-only chain (no PE rows) must skip — a single qualifying wing is not a Batman.
     prem = {21000.0 + 50 * i: 50.0 for i in range(-40, 80)}
