@@ -119,8 +119,11 @@ export default function NewBacktestPage() {
 
   const navigate = useNavigate();
   const isFifo = strategyId === "sst_fifo";
-  const isCallRatio = strategyId === "call_ratio_monthly" || strategyId === "put_ratio_monthly";
-  const ratioSide = strategyId === "put_ratio_monthly" ? "put" : "call";
+  const isCallRatio = ["call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly"].includes(strategyId);
+  const ratioSide =
+    strategyId === "put_ratio_monthly" ? "put"
+    : strategyId === "batman_ratio_monthly" ? "batman"
+    : "call";
   const isOptions = strategyId === "short_premium" || isCallRatio;
   const strikeUnit =
     strikeMode === "delta" ? "Δ"
@@ -128,11 +131,11 @@ export default function NewBacktestPage() {
     : strikeMode === "points" ? "offset (pts)"
     : "offset (% OTM)";
 
-  // Call Ratio deploys ~₹1L of margin per lot; default the capital so the %-of-capital
-  // targets are meaningful (user can still edit).
+  // Ratio strategies deploy ~₹1L of margin per lot per wing; default the capital so the
+  // %-of-capital targets are meaningful (Batman = both wings ≈ 2×). User can still edit.
   useEffect(() => {
-    if (isCallRatio) setCapital(100000);
-  }, [isCallRatio]);
+    if (isCallRatio) setCapital(ratioSide === "batman" ? 200000 : 100000);
+  }, [isCallRatio, ratioSide]);
 
   // Reset the buy/sell/hedge offsets to sensible defaults for the chosen strike basis.
   useEffect(() => {
@@ -371,12 +374,13 @@ export default function NewBacktestPage() {
           {isCallRatio ? (
             <div className="grid md:grid-cols-3 gap-4">
               <div className="md:col-span-3 text-[11px] text-amber-300/90">
-                1:2 {ratioSide} ratio + outer hedge on NIFTY monthly
-                {ratioSide === "put"
-                  ? " (strikes BELOW spot — zero upside risk; watch fast sell-offs)"
-                  : " (strikes ABOVE spot — zero downside risk; watch fast rallies)"}.
+                {ratioSide === "batman"
+                  ? "Batman: BOTH 1:2 ratio wings (call above + put below spot, each hedged; 6 legs). Both wings must qualify for credit or the month is skipped; one combined target/stop/time exit. Risk = a fast move EITHER way; margin ≈ ₹2L per lot."
+                  : ratioSide === "put"
+                    ? "1:2 put ratio + outer hedge on NIFTY monthly (strikes BELOW spot — zero upside risk; watch fast sell-offs)."
+                    : "1:2 call ratio + outer hedge on NIFTY monthly (strikes ABOVE spot — zero downside risk; watch fast rallies)."}{" "}
                 Entry = last Tuesday of the month for next month's expiry (EOD approximates the 3:16 PM
-                rule). Set capital ≈ ₹1L margin per lot; all %s are on this capital.
+                rule). All %s are on this capital.
               </div>
               <Field label="Capital (₹) — ≈ ₹1L / lot">
                 <NumberInput className={inputClass} value={capital} onChange={setCapital} />

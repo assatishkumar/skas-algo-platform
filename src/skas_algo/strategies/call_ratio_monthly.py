@@ -40,6 +40,7 @@ def _last_weekday_of_month(d: date, weekday: int) -> date:
 class CallRatioMonthlyStrategy:
     strategy_id = "call_ratio_monthly"
     right = "CE"  # PutRatioMonthlyStrategy flips this to "PE" (the downside mirror)
+    entry_reason = "call_ratio"
 
     def __init__(
         self,
@@ -133,21 +134,23 @@ class CallRatioMonthlyStrategy:
     def _snap(strikes: list[float], target: float) -> float | None:
         return min(strikes, key=lambda k: abs(k - target)) if strikes else None
 
-    def _delta_strike(self, rows: dict, spot: float, t: float, target_delta: float) -> float | None:
-        """Listed strike (of the traded right) whose |BS delta| is nearest ``target_delta``."""
+    def _delta_strike(self, rows: dict, spot: float, t: float, target_delta: float,
+                      right: str | None = None) -> float | None:
+        """Listed strike (of ``right``) whose |BS delta| is nearest ``target_delta``."""
+        right = right or self.right
         best, best_err = None, 1e9
         for k, row in rows.items():
             if _bad(row.close) or t <= 0:
                 continue
-            iv = bs.implied_vol(row.close, spot, k, t, self.r, self.right)
+            iv = bs.implied_vol(row.close, spot, k, t, self.r, right)
             if iv is None:
                 continue
-            d = abs(bs.delta(spot, k, t, self.r, iv, self.right))
+            d = abs(bs.delta(spot, k, t, self.r, iv, right))
             if abs(d - target_delta) < best_err:
                 best, best_err = k, abs(d - target_delta)
         return best
 
-    def _atm_iv(self, rows: dict, spot: float, t: float) -> float | None:
+    def _atm_iv(self, rows: dict, spot: float, t: float, right: str | None = None) -> float | None:
         """ATM implied vol backed out of the chain (≈ India VIX for a monthly)."""
         if t <= 0 or not rows:
             return None
@@ -155,9 +158,10 @@ class CallRatioMonthlyStrategy:
         row = rows.get(atm)
         if row is None or _bad(row.close):
             return None
-        return bs.implied_vol(row.close, spot, atm, t, self.r, self.right)
+        return bs.implied_vol(row.close, spot, atm, t, self.r, right or self.right)
 
-    def _target_strikes(self, spot: float, expiry: date, today: date, rows: dict) -> list:
+    def _target_strikes(self, spot: float, expiry: date, today: date, rows: dict,
+                        right: str | None = None) -> list:
         """The three base target strikes (buy, sell, hedge) per ``strike_mode``.
 
         Offsets are OTM distances: ABOVE spot for calls, BELOW spot for puts (sign).
@@ -168,15 +172,16 @@ class CallRatioMonthlyStrategy:
                     probability — pushes strikes further OTM when vol is high)
         A leg is None if it can't be resolved → caller skips the month.
         """
-        sg = self._sign
+        right = right or self.right
+        sg = 1 if right == "CE" else -1
         offs = (self.buy_offset, self.sell_offset, self.hedge_offset)
         if self.strike_mode == "percent":
             return [spot * (1.0 + sg * o / 100.0) for o in offs]
         t = max((expiry - today).days, 0) / 365.0
         if self.strike_mode == "delta":
-            return [self._delta_strike(rows, spot, t, o) for o in offs]
+            return [self._delta_strike(rows, spot, t, o, right) for o in offs]
         if self.strike_mode in ("sd", "expected_move"):
-            iv = self._atm_iv(rows, spot, t)
+            iv = self._atm_iv(rows, spot, t, right)
             if iv is None:
                 return [None, None, None]
             em = spot * iv * math.sqrt(t)
@@ -193,73 +198,82 @@ class CallRatioMonthlyStrategy:
         spot = chain.spot(self.underlying, today)
         if expiry is None or spot is None:
             return []
-        # Only consider strikes (of the traded right) with open interest — zero-OI
-        # contracts never trade and carry frozen (phantom) bhavcopy closes.
-        rows = {r.strike: r for r in chain.chain(self.underlying, today, expiry)
-                if r.right == self.right and r.oi > 0}
-        if not rows:
-            return []
-        # IV filter: low-vol months have thin premiums and poor compensation — skip while
-        # the chain's ATM IV (≈ India VIX for a monthly) is below the floor (retries daily
-        # within the entry window, so a late-window vol pickup can still qualify).
-        if self.min_vix > 0:
-            t = max((expiry - today).days, 0) / 365.0
-            iv = self._atm_iv(rows, spot, t)
-            if iv is None or iv * 100.0 < self.min_vix:
-                return []
-
-        strike_list = sorted(rows)
         units = self.lots * lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
         limit = self.credit_debit_limit_pct * self.initial_capital
 
-        # Level-aware base targets (points / % of spot / delta), then snap to listed strikes.
-        base = self._target_strikes(spot, expiry, today, rows)
-        if any(b is None for b in base):
-            return []  # couldn't resolve a leg (e.g. delta on thin data) → skip the month
+        sides = self._entry_sides(chain, today, expiry, spot, units, limit)
+        if not sides:
+            return []  # one (or more) required side didn't qualify → skip the month
 
-        # Entry rule: the structure must be a NET CREDIT, never more than the limit
-        # (1% of capital). If the credit at the base strikes is too rich (high IV),
-        # shift all legs further OTM in shift_step increments until it fits. If the
-        # structure prices to a DEBIT (low IV / thin premiums), SKIP the month — debit
-        # months were shown to be the strategy's losers; being flat is the edge.
-        # "Further OTM" = higher strikes for calls, lower strikes for puts (sign).
+        self.legs = []
+        signals: list[Signal] = []
+        for buy, sell, hedge in sides:
+            self.legs += [
+                {"symbol": buy.symbol, "dir": 1, "units": units, "entry": buy.close},
+                {"symbol": sell.symbol, "dir": -1, "units": 2 * units, "entry": sell.close},
+                {"symbol": hedge.symbol, "dir": 1, "units": units, "entry": hedge.close},
+            ]
+            signals += [
+                Signal(buy.symbol, SignalAction.ENTER_LONG, quantity=units, reason=self.entry_reason),
+                Signal(sell.symbol, SignalAction.ENTER_SHORT, quantity=2 * units,
+                       reason=self.entry_reason, meta={"multiplier": 1}),
+                Signal(hedge.symbol, SignalAction.ENTER_LONG, quantity=units, reason=self.entry_reason),
+            ]
+        self.entry_expiry = expiry
+        self.entry_date = today
+        self.last_entry_month = ym
+        return signals
+
+    def _entry_sides(self, chain, today, expiry, spot, units, limit) -> list | None:
+        """The (buy, sell, hedge) structures to enter — one side for a single ratio;
+        Batman overrides this to require BOTH wings. None/empty → skip the month."""
+        side = self._build_side(chain, today, expiry, spot, units, limit, self.right)
+        return [side] if side is not None else None
+
+    def _build_side(self, chain, today, expiry, spot, units, limit, right) -> tuple | None:
+        """Pick one wing's (buy, sell, hedge) ChainRows for ``right``, or None.
+
+        Only OI>0 strikes are considered (zero-OI contracts carry frozen phantom
+        closes). Entry rule: the wing must be a NET CREDIT ≤ ``limit`` (1% of capital);
+        a too-rich credit shifts all legs further OTM (higher strikes for calls, lower
+        for puts); a DEBIT (low IV / thin premiums) skips — debit months were shown to
+        be the losers, being flat is the edge.
+        """
+        sign = 1 if right == "CE" else -1
+        rows = {r.strike: r for r in chain.chain(self.underlying, today, expiry)
+                if r.right == right and r.oi > 0}
+        if not rows:
+            return None
+        # IV floor: skip while the chain's ATM IV (≈ India VIX) is below min_vix
+        # (retried daily within the entry window — a late vol pickup can still qualify).
+        if self.min_vix > 0:
+            t = max((expiry - today).days, 0) / 365.0
+            iv = self._atm_iv(rows, spot, t, right)
+            if iv is None or iv * 100.0 < self.min_vix:
+                return None
+
+        base = self._target_strikes(spot, expiry, today, rows, right)
+        if any(b is None for b in base):
+            return None  # couldn't resolve a leg (e.g. delta on thin data)
+
+        strike_list = sorted(rows)
         atm = self._snap(strike_list, spot)
-        chosen = None
         for i in range(self.max_shifts + 1):
-            shift = self._sign * i * self.shift_step
+            shift = sign * i * self.shift_step
             bk = self._snap(strike_list, base[0] + shift)
             sk = self._snap(strike_list, base[1] + shift)
             hk = self._snap(strike_list, base[2] + shift)
             buy, sell, hedge = rows.get(bk), rows.get(sk), rows.get(hk)
             if (buy is None or sell is None or hedge is None or len({bk, sk, hk}) < 3
-                    or (bk - atm) * self._sign < 0  # buy leg must stay ATM-or-OTM
+                    or (bk - atm) * sign < 0  # buy leg must stay ATM-or-OTM
                     or _bad(buy.close) or _bad(sell.close) or _bad(hedge.close)):
                 continue
             net = (2 * sell.close - buy.close - hedge.close) * units  # +ve = credit received
             if 0 <= net <= limit:
-                chosen = (buy, sell, hedge)
-                break
+                return (buy, sell, hedge)
             if net < 0:
-                break  # debit month → skip (further OTM only thins premium more)
-        if chosen is None:
-            return []  # no credit ≤ 1% of capital available → skip the month
-
-        buy, sell, hedge = chosen
-        reason = "call_ratio" if self.right == "CE" else "put_ratio"
-        self.legs = [
-            {"symbol": buy.symbol, "dir": 1, "units": units, "entry": buy.close},
-            {"symbol": sell.symbol, "dir": -1, "units": 2 * units, "entry": sell.close},
-            {"symbol": hedge.symbol, "dir": 1, "units": units, "entry": hedge.close},
-        ]
-        self.entry_expiry = expiry
-        self.entry_date = today
-        self.last_entry_month = ym
-        return [
-            Signal(buy.symbol, SignalAction.ENTER_LONG, quantity=units, reason=reason),
-            Signal(sell.symbol, SignalAction.ENTER_SHORT, quantity=2 * units,
-                   reason=reason, meta={"multiplier": 1}),
-            Signal(hedge.symbol, SignalAction.ENTER_LONG, quantity=units, reason=reason),
-        ]
+                break  # debit → further OTM only thins premium more
+        return None
 
     def _manage(self, ctx) -> list[Signal]:
         # If the engine already closed our legs (expiry settlement), reset and wait for next month.
@@ -329,3 +343,29 @@ class PutRatioMonthlyStrategy(CallRatioMonthlyStrategy):
 
     strategy_id = "put_ratio_monthly"
     right = "PE"
+    entry_reason = "put_ratio"
+
+
+class BatmanRatioMonthlyStrategy(CallRatioMonthlyStrategy):
+    """"Batman": BOTH ratio wings in one position — a 1:2 call ratio spread above spot
+    AND a 1:2 put ratio spread below spot, each with its outer hedge (6 legs; the payoff
+    tent on each side draws the silhouette).
+
+    Each wing is constructed exactly like its standalone strategy (own credit search,
+    NET CREDIT ≤ 1% of capital per wing, debit wing → skip). BOTH wings must qualify or
+    the month is skipped — a single qualifying wing is just the plain ratio strategy.
+    Management is COMBINED: one profit-target / stop-loss / time exit on the 6-leg MTM
+    P&L. Profit zone is the whole band between the short strikes (theta from both
+    sides); risk is a fast move in EITHER direction, capped beyond the hedges.
+    Margin ≈ 2× a single ratio (~₹2L per lot-set) — size capital accordingly.
+    """
+
+    strategy_id = "batman_ratio_monthly"
+    entry_reason = "batman"
+
+    def _entry_sides(self, chain, today, expiry, spot, units, limit) -> list | None:
+        ce = self._build_side(chain, today, expiry, spot, units, limit, "CE")
+        pe = self._build_side(chain, today, expiry, spot, units, limit, "PE")
+        if ce is None or pe is None:
+            return None  # both wings or nothing
+        return [ce, pe]

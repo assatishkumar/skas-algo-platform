@@ -18,6 +18,7 @@ from skas_algo.engine.options.instrument import make
 from skas_algo.engine.options.report import build_options_report
 from skas_algo.engine.runner import BacktestRunner
 from skas_algo.strategies.call_ratio_monthly import (
+    BatmanRatioMonthlyStrategy,
     CallRatioMonthlyStrategy,
     PutRatioMonthlyStrategy,
 )
@@ -133,6 +134,36 @@ def test_put_ratio_mirrors_below_spot():
     # Closed via time exit (spot flat → puts decayed; SELL longs + COVER short).
     assert any(t["action"] == "COVER" for t in txns)
     assert any(t["action"] == "SELL" for t in txns)
+
+
+def test_batman_enters_both_wings():
+    strat = BatmanRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=200_000, max_holding_days=15, min_dte=18,
+    )
+    result = _run(strat)
+    txns = result.transactions
+    buys = [t for t in txns if t["action"] == "BUY"]
+    shorts = [t for t in txns if t["action"] == "SHORT"]
+
+    # 6 legs: 2 longs + 1 short (×2 units) per wing.
+    assert len(buys) == 4 and len(shorts) == 2, [(t["action"], t["ticker"]) for t in txns]
+    ce = sorted(int(t["ticker"].split("|")[2]) for t in buys + shorts if t["ticker"].endswith("|CE"))
+    pe = sorted(int(t["ticker"].split("|")[2]) for t in buys + shorts if t["ticker"].endswith("|PE"))
+    assert ce == [21300, 21600, 22600]  # call wing above spot
+    assert pe == [19400, 20400, 20700]  # put wing below spot
+    assert all(t["units"] == 2 * 50 for t in shorts)
+    # One combined exit closes everything (time exit; spot flat → both wings decay).
+    assert any(t["action"] == "COVER" for t in txns) and any(t["action"] == "SELL" for t in txns)
+
+
+def test_batman_requires_both_wings():
+    # A CE-only chain (no PE rows) must skip — a single qualifying wing is not a Batman.
+    prem = {21000.0 + 50 * i: 50.0 for i in range(-40, 80)}
+    chain = _StubChain(21000.0, EXPIRY, prem)  # emits CE rows only
+    s = BatmanRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=200_000,
+                                   credit_debit_limit_pct=99)
+    assert s.on_slice(_StubCtx(chain, date(2024, 1, 30))) == []
+    assert s.legs == []
 
 
 def test_report_reconstructs_all_three_legs():
