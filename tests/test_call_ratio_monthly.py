@@ -116,6 +116,50 @@ def test_report_reconstructs_all_three_legs():
     assert sides == ["long", "long", "short"]
 
 
+def test_percent_mode_scales_strikes_with_spot():
+    # % of spot keeps moneyness constant: the buy→sell strike gap scales with the index level.
+    def legs_at(spot):
+        chain = _StubChain(spot, EXPIRY, {spot + 50 * i: 50.0 for i in range(-40, 80)})
+        s = CallRatioMonthlyStrategy(
+            universe=["NIFTY"], initial_capital=100_000, strike_mode="percent",
+            buy_offset=1.3, sell_offset=2.6, hedge_offset=7.0,
+            credit_debit_limit_pct=99,  # premiums flat → net≈0, never gated
+        )
+        out = s.on_slice(_StubCtx(chain, date(2024, 1, 30)))
+        assert out, f"no entry at spot {spot}"
+        ks = sorted({int(sig.symbol.split("|")[2]) for sig in out})
+        return ks[0], ks[-1]  # (buy, hedge)
+
+    lo_buy, lo_hedge = legs_at(10000)
+    hi_buy, hi_hedge = legs_at(24000)
+    # buy ≈ +1.3%: 10130→snap & 24312→snap; the buy→hedge span scales ~2.4x with the level.
+    assert (hi_hedge - hi_buy) > 1.8 * (lo_hedge - lo_buy)
+    assert hi_buy > lo_buy and hi_hedge > lo_hedge
+
+
+def test_delta_mode_picks_near_target_deltas():
+    import math
+    from skas_algo.engine.options import black_scholes as bs
+    spot, t, r = 21000.0, 30 / 365.0, 0.065
+    # Build a chain priced at a known IV so deltas are well-defined.
+    prem = {}
+    for i in range(-20, 60):
+        k = spot + 50 * i
+        prem[k] = max(bs.price(spot, k, t, r, 0.15, "CE"), 0.05)
+    chain = _StubChain(spot, EXPIRY, prem)
+    s = CallRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=100_000, strike_mode="delta",
+        buy_offset=0.36, sell_offset=0.25, hedge_offset=0.05, credit_debit_limit_pct=99,
+    )
+    out = s.on_slice(_StubCtx(chain, date(2024, 1, 30)))
+    assert out and len(out) == 3
+    ks = sorted(int(sig.symbol.split("|")[2]) for sig in out)
+    deltas = [abs(bs.delta(spot, k, t, r, 0.15, "CE")) for k in ks]
+    # hedge (highest strike) ~0.05, buy (lowest) ~0.36 — monotonic & in the ballpark.
+    assert deltas[0] > deltas[1] > deltas[2]
+    assert 0.25 <= deltas[0] <= 0.5 and deltas[2] < 0.15
+
+
 def test_skips_month_on_large_net_debit():
     # Premiums where the body (sells) is far cheaper than buy+hedge → big net debit → skip.
     prem = {21300.0: 120.0, 21600.0: 8.0, 22600.0: 4.0}

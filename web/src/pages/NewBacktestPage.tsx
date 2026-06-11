@@ -91,9 +91,10 @@ export default function NewBacktestPage() {
   const [strikeStep, setStrikeStep] = useState(0);
 
   // Call Ratio Monthly params
-  const [buyOffset, setBuyOffset] = useState(300);
-  const [sellOffset, setSellOffset] = useState(600);
-  const [hedgeOffset, setHedgeOffset] = useState(1600);
+  const [strikeMode, setStrikeMode] = useState("percent"); // percent | delta | points
+  const [buyOffset, setBuyOffset] = useState(1.3);
+  const [sellOffset, setSellOffset] = useState(2.6);
+  const [hedgeOffset, setHedgeOffset] = useState(7.0);
   const [crLots, setCrLots] = useState(1);
   const [creditLimitPct, setCreditLimitPct] = useState(1); // % of capital
   const [crProfitPct, setCrProfitPct] = useState(2.5);
@@ -119,12 +120,25 @@ export default function NewBacktestPage() {
   const isFifo = strategyId === "sst_fifo";
   const isCallRatio = strategyId === "call_ratio_monthly";
   const isOptions = strategyId === "short_premium" || isCallRatio;
+  const strikeUnit =
+    strikeMode === "delta" ? "Δ" : strikeMode === "points" ? "offset (pts)" : "offset (% OTM)";
 
   // Call Ratio deploys ~₹1L of margin per lot; default the capital so the %-of-capital
   // targets are meaningful (user can still edit).
   useEffect(() => {
     if (isCallRatio) setCapital(100000);
   }, [isCallRatio]);
+
+  // Reset the buy/sell/hedge offsets to sensible defaults for the chosen strike basis.
+  useEffect(() => {
+    const d =
+      strikeMode === "delta" ? [0.36, 0.25, 0.05]
+      : strikeMode === "points" ? [300, 600, 1600]
+      : [1.3, 2.6, 7.0]; // percent (% OTM)
+    setBuyOffset(d[0]);
+    setSellOffset(d[1]);
+    setHedgeOffset(d[2]);
+  }, [strikeMode]);
 
   // Available cached range for the selected instrument class / underlying — used to
   // default the date pickers so a backtest spans what's actually in the cache.
@@ -161,6 +175,7 @@ export default function NewBacktestPage() {
       const params: Record<string, unknown> = isCallRatio
         ? {
             underlying,
+            strike_mode: strikeMode,
             buy_offset: buyOffset,
             sell_offset: sellOffset,
             hedge_offset: hedgeOffset,
@@ -359,14 +374,21 @@ export default function NewBacktestPage() {
               <Field label="Lots (1 buy : 2 sell : 1 hedge)">
                 <NumberInput className={inputClass} value={crLots} onChange={setCrLots} />
               </Field>
-              <Field label="Buy offset (pts OTM from spot)">
-                <NumberInput className={inputClass} value={buyOffset} onChange={setBuyOffset} />
+              <Field label="Strike basis">
+                <select className={inputClass} value={strikeMode} onChange={(e) => setStrikeMode(e.target.value)}>
+                  <option value="percent">% of spot (level-aware)</option>
+                  <option value="delta">Delta (vol-aware)</option>
+                  <option value="points">Fixed points</option>
+                </select>
               </Field>
-              <Field label="Sell offset (pts OTM, ×2 lots)">
-                <NumberInput className={inputClass} value={sellOffset} onChange={setSellOffset} />
+              <Field label={`Buy ${strikeUnit} (near, ×1)`}>
+                <NumberInput step="0.05" className={inputClass} value={buyOffset} onChange={setBuyOffset} />
               </Field>
-              <Field label="Hedge offset (pts OTM, caps upside)">
-                <NumberInput className={inputClass} value={hedgeOffset} onChange={setHedgeOffset} />
+              <Field label={`Sell ${strikeUnit} (body, ×2)`}>
+                <NumberInput step="0.05" className={inputClass} value={sellOffset} onChange={setSellOffset} />
+              </Field>
+              <Field label={`Hedge ${strikeUnit} (caps upside)`}>
+                <NumberInput step="0.05" className={inputClass} value={hedgeOffset} onChange={setHedgeOffset} />
               </Field>
               <Field label="Max credit/debit % (of capital)">
                 <NumberInput step="0.1" className={inputClass} value={creditLimitPct} onChange={setCreditLimitPct} />

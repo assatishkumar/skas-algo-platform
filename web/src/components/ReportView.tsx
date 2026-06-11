@@ -309,27 +309,38 @@ export default function ReportView({
   runId?: number;
 }) {
   const m = report.metrics;
+  const netMonthly = m["Avg Monthly Net P&L (Post-Tax)"] ?? 0;
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <MetricCard label="Total Return" value={pct(m["Total Return %"])} tone={m["Total Return %"] >= 0 ? "good" : "bad"} />
-        <MetricCard label="CAGR" value={pct(m["CAGR %"])} />
-        <MetricCard label="Final Equity" value={formatInr(m["Final Equity"])} />
-        <MetricCard label="Max Drawdown" value={pct(m["Max Drawdown %"])} tone="bad" />
-        <MetricCard label="Total Trades" value={m["Total Trades"]} />
-        <MetricCard label="Win Rate" value={pct(m["Win Rate %"])} />
-        <MetricCard label="Total Taxes" value={formatInr(m["Total Taxes"])} />
-        <MetricCard label="Total Withdrawals" value={formatInr(m["Total Withdrawals"])} />
-        <MetricCard label="Cash Balance" value={formatInr(m["Cash Balance"])} />
-        <MetricCard label="Avg Monthly Bookings" value={m["Avg Monthly Profit Booking"]?.toFixed(2)} />
-        <MetricCard
-          label="Avg Monthly Net P&L"
-          value={formatInr(m["Avg Monthly Net P&L (Post-Tax)"])}
-          tone={(m["Avg Monthly Net P&L (Post-Tax)"] ?? 0) >= 0 ? "good" : "bad"}
-        />
-        <MetricCard label="Avg Winners' Profit (Pre-Tax)" value={formatInr(m["Avg Monthly Profit (Pre-Tax)"])} />
-        <MetricCard label="Avg Winners' Profit (Post-Tax)" value={formatInr(m["Avg Monthly Profit (Post-Tax)"])} />
-      </div>
+      {report.options ? (
+        // Options runs: a curated headline row (the equity-style grid below is replaced by
+        // the options-specific tiles in <OptionsReport/>).
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <MetricCard label="Total Return" value={pct(m["Total Return %"])} tone={m["Total Return %"] >= 0 ? "good" : "bad"} />
+          <MetricCard label="CAGR" value={pct(m["CAGR %"])} />
+          <MetricCard label="Final Equity" value={formatInr(m["Final Equity"])} />
+          <MetricCard label="Max Drawdown" value={pct(m["Max Drawdown %"])} tone="bad" />
+          <MetricCard label="Avg Monthly Net P&L" value={formatInr(netMonthly)} tone={netMonthly >= 0 ? "good" : "bad"} />
+          <MetricCard label="F&O Charges" value={formatInr(report.options.summary.total_charges)} tone="bad" />
+          <MetricCard label="Avg Holding (days)" value={report.options.summary.avg_holding_days.toFixed(1)} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <MetricCard label="Total Return" value={pct(m["Total Return %"])} tone={m["Total Return %"] >= 0 ? "good" : "bad"} />
+          <MetricCard label="CAGR" value={pct(m["CAGR %"])} />
+          <MetricCard label="Final Equity" value={formatInr(m["Final Equity"])} />
+          <MetricCard label="Max Drawdown" value={pct(m["Max Drawdown %"])} tone="bad" />
+          <MetricCard label="Total Trades" value={m["Total Trades"]} />
+          <MetricCard label="Win Rate" value={pct(m["Win Rate %"])} />
+          <MetricCard label="Total Taxes" value={formatInr(m["Total Taxes"])} />
+          <MetricCard label="Total Withdrawals" value={formatInr(m["Total Withdrawals"])} />
+          <MetricCard label="Cash Balance" value={formatInr(m["Cash Balance"])} />
+          <MetricCard label="Avg Monthly Bookings" value={m["Avg Monthly Profit Booking"]?.toFixed(2)} />
+          <MetricCard label="Avg Monthly Net P&L" value={formatInr(netMonthly)} tone={netMonthly >= 0 ? "good" : "bad"} />
+          <MetricCard label="Avg Winners' Profit (Pre-Tax)" value={formatInr(m["Avg Monthly Profit (Pre-Tax)"])} />
+          <MetricCard label="Avg Winners' Profit (Post-Tax)" value={formatInr(m["Avg Monthly Profit (Post-Tax)"])} />
+        </div>
+      )}
       {report.options && <OptionsReport options={report.options} />}
       <EquityChart report={report} runId={runId} />
       <YearlyTable report={report} />

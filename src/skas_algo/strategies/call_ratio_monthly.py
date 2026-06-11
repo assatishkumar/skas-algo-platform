@@ -21,6 +21,7 @@ from __future__ import annotations
 import calendar
 from datetime import date, timedelta
 
+from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.types import Signal, SignalAction
 
@@ -43,6 +44,7 @@ class CallRatioMonthlyStrategy:
         universe: list[str] | None = None,
         initial_capital: float = 100_000,
         underlying: str | None = None,
+        strike_mode: str = "points",   # "points" | "percent" (% OTM) | "delta" (target |Δ|)
         buy_offset: float = 300,
         sell_offset: float = 600,
         hedge_offset: float = 1600,
@@ -62,6 +64,7 @@ class CallRatioMonthlyStrategy:
     ):
         self.underlying = (underlying or (universe[0] if universe else "NIFTY")).upper()
         self.initial_capital = float(initial_capital)
+        self.strike_mode = strike_mode
         self.buy_offset = float(buy_offset)
         self.sell_offset = float(sell_offset)
         self.hedge_offset = float(hedge_offset)
@@ -111,6 +114,36 @@ class CallRatioMonthlyStrategy:
     def _snap(strikes: list[float], target: float) -> float | None:
         return min(strikes, key=lambda k: abs(k - target)) if strikes else None
 
+    def _delta_strike(self, ce_rows: dict, spot: float, t: float, target_delta: float) -> float | None:
+        """Listed CE strike whose |BS delta| is nearest ``target_delta`` (IV backed out per strike)."""
+        best, best_err = None, 1e9
+        for k, row in ce_rows.items():
+            if _bad(row.close) or t <= 0:
+                continue
+            iv = bs.implied_vol(row.close, spot, k, t, self.r, "CE")
+            if iv is None:
+                continue
+            d = abs(bs.delta(spot, k, t, self.r, iv, "CE"))
+            if abs(d - target_delta) < best_err:
+                best, best_err = k, abs(d - target_delta)
+        return best
+
+    def _target_strikes(self, spot: float, expiry: date, today: date, ce_rows: dict) -> list:
+        """The three base target strikes (buy, sell, hedge) per ``strike_mode``.
+
+        - points  : spot + offset (absolute, level-dependent — legacy)
+        - percent : spot × (1 + offset/100) (constant moneyness across levels)
+        - delta   : the strike whose |Δ| ≈ offset (vol/time/spot-aware)
+        A leg is None if it can't be resolved (delta mode on thin data) → caller skips.
+        """
+        offs = (self.buy_offset, self.sell_offset, self.hedge_offset)
+        if self.strike_mode == "percent":
+            return [spot * (1.0 + o / 100.0) for o in offs]
+        if self.strike_mode == "delta":
+            t = max((expiry - today).days, 0) / 365.0
+            return [self._delta_strike(ce_rows, spot, t, o) for o in offs]
+        return [spot + o for o in offs]  # points (default)
+
     def _maybe_enter(self, ctx, chain, today: date) -> list[Signal]:
         ym = (today.year, today.month)
         if self.last_entry_month == ym:
@@ -128,13 +161,18 @@ class CallRatioMonthlyStrategy:
         units = self.lots * lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
         limit = self.credit_debit_limit_pct * self.initial_capital
 
+        # Level-aware base targets (points / % of spot / delta), then snap to listed strikes.
+        base = self._target_strikes(spot, expiry, today, ce_rows)
+        if any(b is None for b in base):
+            return []  # couldn't resolve a leg (e.g. delta on thin data) → skip the month
+
         # Pick strikes; if net credit is too rich (high IV) shift all legs further OTM and retry.
         chosen = None
         shift = 0.0
         for _ in range(self.max_shifts + 1):
-            bk = self._snap(ce_strikes, spot + self.buy_offset + shift)
-            sk = self._snap(ce_strikes, spot + self.sell_offset + shift)
-            hk = self._snap(ce_strikes, spot + self.hedge_offset + shift)
+            bk = self._snap(ce_strikes, base[0] + shift)
+            sk = self._snap(ce_strikes, base[1] + shift)
+            hk = self._snap(ce_strikes, base[2] + shift)
             buy, sell, hedge = ce_rows.get(bk), ce_rows.get(sk), ce_rows.get(hk)
             if (buy is None or sell is None or hedge is None or len({bk, sk, hk}) < 3
                     or _bad(buy.close) or _bad(sell.close) or _bad(hedge.close)):
@@ -201,6 +239,7 @@ class CallRatioMonthlyStrategy:
     def export_state(self) -> dict:
         return {
             "legs": list(self.legs),
+            "strike_mode": self.strike_mode,
             "entry_expiry": self.entry_expiry.isoformat() if self.entry_expiry else None,
             "entry_date": self.entry_date.isoformat() if self.entry_date else None,
             "last_entry_month": list(self.last_entry_month) if self.last_entry_month else None,
@@ -208,6 +247,7 @@ class CallRatioMonthlyStrategy:
 
     def load_state(self, state: dict) -> None:
         self.legs = list(state.get("legs", []))
+        self.strike_mode = state.get("strike_mode", self.strike_mode)
         ee, ed, lem = state.get("entry_expiry"), state.get("entry_date"), state.get("last_entry_month")
         self.entry_expiry = date.fromisoformat(ee) if ee else None
         self.entry_date = date.fromisoformat(ed) if ed else None
