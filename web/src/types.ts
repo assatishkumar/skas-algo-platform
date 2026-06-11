@@ -154,6 +154,7 @@ export interface OptionsReportData {
     avg_holding_days: number;
     num_positions: number;
     num_cycles: number;
+    winning_cycles?: number;
     win_rate_pct: number;
     max_margin_used: number;
     avg_margin_used: number;

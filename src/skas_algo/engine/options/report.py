@@ -177,9 +177,14 @@ def _cycle(key: tuple, legs: list[dict]) -> dict:
 
 def _summary(positions, cycles, metrics, margin_series, total_charges: float = 0.0) -> dict:
     n = len(positions)
+    nc = len(cycles)
     collected = sum(p["premium_collected"] for p in positions)
     captured = sum(p["realized_pnl"] for p in positions)
-    wins = sum(1 for p in positions if p["realized_pnl"] > 0)
+    # Win rate is per POSITION (cycle/structure), not per leg: a cycle is a win if it hit
+    # its profit target or otherwise closed in net profit (time-exit in the green). Stops
+    # are losses. (Leg-level P&L is misleading — the long legs of a ratio spread usually
+    # lose while the short body wins.)
+    cyc_wins = sum(1 for c in cycles if c.get("exit_reason") == "target" or c.get("net_pnl", 0.0) > 0)
     max_margin = float(metrics.get("Max Margin Used", 0.0) or 0.0)
     margins = [m["margin"] for m in margin_series if m["margin"] > 0]
     return {
@@ -188,8 +193,9 @@ def _summary(positions, cycles, metrics, margin_series, total_charges: float = 0
         "premium_capture_pct": (captured / collected * 100.0) if collected else 0.0,
         "avg_holding_days": (sum(p["holding_days"] for p in positions) / n) if n else 0.0,
         "num_positions": n,
-        "num_cycles": len(cycles),
-        "win_rate_pct": (wins / n * 100.0) if n else 0.0,
+        "num_cycles": nc,
+        "winning_cycles": cyc_wins,
+        "win_rate_pct": (cyc_wins / nc * 100.0) if nc else 0.0,
         "max_margin_used": max_margin,
         "avg_margin_used": (sum(margins) / len(margins)) if margins else 0.0,
         "capital_efficiency": (collected / max_margin) if max_margin else 0.0,

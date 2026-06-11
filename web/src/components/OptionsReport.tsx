@@ -58,7 +58,10 @@ function SummaryTiles({ s }: { s: OptionsReportData["summary"] }) {
         tone={s.net_after_charges >= 0 ? "good" : "bad"}
       />
       <MetricCard label="Capture %" value={pct(s.premium_capture_pct)} />
-      <MetricCard label="Win Rate" value={pct(s.win_rate_pct)} />
+      <MetricCard
+        label="Win Rate (cycles)"
+        value={`${pct(s.win_rate_pct)}${s.winning_cycles != null ? ` · ${s.winning_cycles}/${s.num_cycles}` : ""}`}
+      />
       <MetricCard label="Cycles" value={s.num_cycles} />
       <MetricCard label="Legs Traded" value={s.num_positions} />
       <MetricCard label="Avg Holding (days)" value={s.avg_holding_days.toFixed(1)} />
@@ -241,7 +244,10 @@ function CycleRow({ c }: { c: OptionCycle }) {
         <td className="py-1 pr-4 whitespace-nowrap">{strikeLabel}</td>
         <td className="py-1 pr-4 text-right">{formatInr(c.premium_collected)}</td>
         <td className="py-1 pr-4 text-right">{c.holding_days}</td>
-        <td className="py-1 pr-4"><ReasonChip reason={c.exit_reason} /></td>
+        <td className="py-1 pr-4 whitespace-nowrap">
+          <ReasonChip reason={c.exit_reason} />
+          {c.exit_date && <span className="text-slate-500 ml-1.5">{c.exit_date}</span>}
+        </td>
         <td className={`py-1 pr-4 text-right ${pnlClass(c.realized_pnl)}`}>{formatInr(c.realized_pnl)}</td>
         <td className={`py-1 pr-4 text-right font-medium ${pnlClass(net)}`}>{formatInr(net)}</td>
       </tr>

@@ -333,7 +333,18 @@ export default function ReportView({
       {report.options && <OptionsReport options={report.options} />}
       <EquityChart report={report} runId={runId} />
       <YearlyTable report={report} />
-      <MonthlyGrid title="Monthly profit (booked)" data={report.monthly_profit} total="sum" />
+      <MonthlyGrid
+        title={report.options ? "Monthly profit (booked on exit date)" : "Monthly profit (booked)"}
+        data={report.monthly_profit}
+        total="sum"
+      />
+      {report.options && (
+        <div className="text-[11px] text-slate-500 -mt-2">
+          Booked in the month a position <span className="text-slate-400">exits</span> (the Positions table is
+          sorted by <span className="text-slate-400">entry</span> date) — so a cycle entered late one month
+          books the next, and multiple cycles closing in the same month net together here.
+        </div>
+      )}
       {hasAnyValue(report.monthly_withdrawals) && (
         <MonthlyGrid title="Monthly withdrawals" data={report.monthly_withdrawals} total="sum" />
       )}
