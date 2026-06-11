@@ -86,14 +86,14 @@ def test_short_straddle_enters_and_settles():
     assert len(settles) == 2, actions
 
     # ATM straddle entry premium 120+110=230/unit; spot pins at 21000 -> both expire
-    # worthless -> short keeps full premium = 230 * 75 lot.
+    # worthless -> short keeps full premium = 230 × lot 50 (NIFTY lot for a Jan-2024 expiry).
     realized = sum(t["profit"] for t in result.transactions)
-    assert realized == (120 + 110) * 75
+    assert realized == (120 + 110) * 50
 
     # Margin was tracked while the position was open.
     assert margin_model.max_margin_used > 0
     # Final equity = initial + premium captured (tax_rate=0).
-    assert result.history[-1]["total_equity"] == 2_000_000 + (120 + 110) * 75
+    assert result.history[-1]["total_equity"] == 2_000_000 + (120 + 110) * 50
 
 
 def inst_strike(symbol: str) -> int:

@@ -57,9 +57,6 @@ class CallRatioMonthlyStrategy:
         stop_loss_pct: float = 0.03,             # exit at −3% of capital
         max_holding_days: int = 20,              # hard time exit (avoid end-of-month gamma)
         min_vix: float = 0.0,                     # skip entry if ATM IV% (≈ India VIX) below this
-        require_credit: bool = True,              # kept for back-compat; a credit is now ALWAYS required
-        adjust_for_credit: bool = True,           # debit month: shift strikes CLOSER to find a credit
-        #   (False → only shift further OTM; skip the month if the base prices to a debit)
         min_dte: int = 18,                        # selects the *next* month's monthly expiry
         entry_weekday: int = 1,                   # Tuesday
         strike_step: float = 50,                  # informational; strikes are snapped to listings
@@ -81,8 +78,6 @@ class CallRatioMonthlyStrategy:
         self.stop_loss_pct = float(stop_loss_pct)
         self.max_holding_days = int(max_holding_days)
         self.min_vix = float(min_vix)
-        self.require_credit = bool(require_credit)
-        self.adjust_for_credit = bool(adjust_for_credit)
         self.min_dte = int(min_dte)
         self.entry_weekday = int(entry_weekday)
         self.strike_step = float(strike_step)
@@ -217,17 +212,14 @@ class CallRatioMonthlyStrategy:
         if any(b is None for b in base):
             return []  # couldn't resolve a leg (e.g. delta on thin data) → skip the month
 
-        # Entry rule: the structure must be a NET CREDIT, but never more than the limit
-        # (1% of capital). Search shifts of ±shift_step around the base strikes — further
-        # OTM thins a too-rich credit (high IV); CLOSER to spot turns a debit into a
-        # credit (low IV) — preferring the structure nearest the base (ties → further
-        # OTM). The buy leg is floored at ATM so the structure never goes ITM. If no
-        # shift yields 0 ≤ credit ≤ limit, skip the month.
+        # Entry rule: the structure must be a NET CREDIT, never more than the limit
+        # (1% of capital). If the credit at the base strikes is too rich (high IV),
+        # shift all legs further OTM in shift_step increments until it fits. If the
+        # structure prices to a DEBIT (low IV / thin premiums), SKIP the month — debit
+        # months were shown to be the strategy's losers; being flat is the edge.
         atm = self._snap(ce_strikes, spot)
         chosen = None
-        steps = (sorted(range(-self.max_shifts, self.max_shifts + 1), key=lambda i: (abs(i), -i))
-                 if self.adjust_for_credit else list(range(0, self.max_shifts + 1)))
-        for i in steps:
+        for i in range(self.max_shifts + 1):
             shift = i * self.shift_step
             bk = self._snap(ce_strikes, base[0] + shift)
             sk = self._snap(ce_strikes, base[1] + shift)
@@ -240,10 +232,10 @@ class CallRatioMonthlyStrategy:
             if 0 <= net <= limit:
                 chosen = (buy, sell, hedge)
                 break
-            if not self.adjust_for_credit and net < 0:
-                break  # skip-mode: a debit ends the OTM walk (further OTM only thins premium)
+            if net < 0:
+                break  # debit month → skip (further OTM only thins premium more)
         if chosen is None:
-            return []  # no credit ≤ 1% reachable within the shift budget → skip the month
+            return []  # no credit ≤ 1% of capital available → skip the month
 
         buy, sell, hedge = chosen
         self.legs = [

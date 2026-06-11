@@ -145,3 +145,32 @@ def test_executor_open_and_close_short_events():
     assert close_ev[0]["action"] == "COVER"
     assert close_ev[0]["profit"] == (100 - 40) * 75
     assert ex.portfolio.lots(CE) == []
+
+
+def test_nifty_lot_size_history():
+    """SEBI lot-size revisions (user-confirmed 2026-06) are picked by date."""
+    from skas_algo.engine.options.contract_specs import lot_size_for
+
+    assert lot_size_for("NIFTY", date(2023, 6, 15)) == 50
+    assert lot_size_for("NIFTY", date(2024, 4, 25)) == 50   # last day of 50
+    assert lot_size_for("NIFTY", date(2024, 4, 26)) == 25   # halved
+    assert lot_size_for("NIFTY", date(2024, 11, 19)) == 25
+    assert lot_size_for("NIFTY", date(2024, 11, 20)) == 75  # SEBI ₹15L floor
+    assert lot_size_for("NIFTY", date(2025, 12, 30)) == 75
+    assert lot_size_for("NIFTY", date(2026, 1, 1)) == 65    # reduced again
+
+
+def test_nifty_expiry_weekday_history():
+    """Thursday for years; SEBI moved NSE expiries to Tuesday from 2025-09-01."""
+    from skas_algo.engine.options.contract_specs import (
+        expected_monthly_expiry,
+        expiry_weekday_for,
+    )
+
+    assert expiry_weekday_for("NIFTY", date(2024, 6, 1), "monthly") == 3   # Thursday
+    assert expiry_weekday_for("NIFTY", date(2025, 9, 1), "monthly") == 1   # Tuesday
+    assert expiry_weekday_for("BANKNIFTY", date(2024, 1, 1), "weekly") == 2  # Wednesday era
+    assert expiry_weekday_for("BANKNIFTY", date(2025, 1, 1), "weekly") is None  # discontinued
+    # Last Thursday of June 2024 vs last Tuesday of October 2025.
+    assert expected_monthly_expiry("NIFTY", 2024, 6) == date(2024, 6, 27)
+    assert expected_monthly_expiry("NIFTY", 2025, 10) == date(2025, 10, 28)

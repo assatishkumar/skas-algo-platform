@@ -101,7 +101,6 @@ export default function NewBacktestPage() {
   const [crStopPct, setCrStopPct] = useState(3);
   const [maxHoldingDays, setMaxHoldingDays] = useState(20);
   const [minVix, setMinVix] = useState(0); // 0 = off; skip entry if ATM IV% (≈VIX) below
-  const [adjustForCredit, setAdjustForCredit] = useState(true); // debit month: shift closer vs skip
 
   // Override builder
   const [ovEnabled, setOvEnabled] = useState(false);
@@ -191,7 +190,6 @@ export default function NewBacktestPage() {
             stop_loss_pct: crStopPct / 100,
             max_holding_days: maxHoldingDays,
             min_vix: minVix,
-            adjust_for_credit: adjustForCredit,
           }
         : {
             underlying,
@@ -414,21 +412,11 @@ export default function NewBacktestPage() {
               <Field label="Min entry IV % (≈VIX, 0 = off)">
                 <NumberInput step="0.5" className={inputClass} value={minVix} onChange={setMinVix} />
               </Field>
-              <Field label="Debit month behaviour">
-                <select
-                  className={inputClass}
-                  value={adjustForCredit ? "adjust" : "skip"}
-                  onChange={(e) => setAdjustForCredit(e.target.value === "adjust")}
-                >
-                  <option value="adjust">Shift strikes closer to find credit</option>
-                  <option value="skip">Skip the month (no debit trades)</option>
-                </select>
-              </Field>
               <div className="md:col-span-3 text-[11px] text-slate-500 -mt-2">
                 Entry always requires a <span className="text-slate-400">net credit</span> ≤ the max above
-                (strikes auto-shift further OTM when the credit is too rich). On debit months, "shift closer"
-                hunts for a credit nearer the money — note: backtests show this trades the thin-premium months
-                that "skip" avoids, at materially worse P&L.
+                (strikes auto-shift further OTM when the credit is too rich). Debit months (low IV / thin
+                premiums) are <span className="text-slate-400">skipped</span>. NIFTY lot sizes are historical
+                (50 → 25 → 75 → 65 per SEBI revisions).
               </div>
               <Field label="Tax rate %">
                 <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />
