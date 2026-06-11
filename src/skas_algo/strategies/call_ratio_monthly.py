@@ -50,14 +50,16 @@ class CallRatioMonthlyStrategy:
         sell_offset: float = 600,
         hedge_offset: float = 1600,
         lots: int = 1,
-        credit_debit_limit_pct: float = 0.01,   # |net credit/debit| ≤ this × capital
-        shift_step: float = 100,                 # high-IV: shift all strikes this many pts OTM
-        max_shifts: int = 10,
+        credit_debit_limit_pct: float = 0.01,   # max net CREDIT = this × capital (credit required)
+        shift_step: float = 100,                 # strike-adjust step (searched ± both directions)
+        max_shifts: int = 10,                    # search up to ±max_shifts × shift_step
         profit_target_pct: float = 0.025,        # exit at +2.5% of capital
         stop_loss_pct: float = 0.03,             # exit at −3% of capital
         max_holding_days: int = 20,              # hard time exit (avoid end-of-month gamma)
         min_vix: float = 0.0,                     # skip entry if ATM IV% (≈ India VIX) below this
-        require_credit: bool = False,             # skip entry unless net cashflow is a credit
+        require_credit: bool = True,              # kept for back-compat; a credit is now ALWAYS required
+        adjust_for_credit: bool = True,           # debit month: shift strikes CLOSER to find a credit
+        #   (False → only shift further OTM; skip the month if the base prices to a debit)
         min_dte: int = 18,                        # selects the *next* month's monthly expiry
         entry_weekday: int = 1,                   # Tuesday
         strike_step: float = 50,                  # informational; strikes are snapped to listings
@@ -80,6 +82,7 @@ class CallRatioMonthlyStrategy:
         self.max_holding_days = int(max_holding_days)
         self.min_vix = float(min_vix)
         self.require_credit = bool(require_credit)
+        self.adjust_for_credit = bool(adjust_for_credit)
         self.min_dte = int(min_dte)
         self.entry_weekday = int(entry_weekday)
         self.strike_step = float(strike_step)
@@ -214,30 +217,33 @@ class CallRatioMonthlyStrategy:
         if any(b is None for b in base):
             return []  # couldn't resolve a leg (e.g. delta on thin data) → skip the month
 
-        # Pick strikes; if net credit is too rich (high IV) shift all legs further OTM and retry.
+        # Entry rule: the structure must be a NET CREDIT, but never more than the limit
+        # (1% of capital). Search shifts of ±shift_step around the base strikes — further
+        # OTM thins a too-rich credit (high IV); CLOSER to spot turns a debit into a
+        # credit (low IV) — preferring the structure nearest the base (ties → further
+        # OTM). The buy leg is floored at ATM so the structure never goes ITM. If no
+        # shift yields 0 ≤ credit ≤ limit, skip the month.
+        atm = self._snap(ce_strikes, spot)
         chosen = None
-        shift = 0.0
-        for _ in range(self.max_shifts + 1):
+        steps = (sorted(range(-self.max_shifts, self.max_shifts + 1), key=lambda i: (abs(i), -i))
+                 if self.adjust_for_credit else list(range(0, self.max_shifts + 1)))
+        for i in steps:
+            shift = i * self.shift_step
             bk = self._snap(ce_strikes, base[0] + shift)
             sk = self._snap(ce_strikes, base[1] + shift)
             hk = self._snap(ce_strikes, base[2] + shift)
             buy, sell, hedge = ce_rows.get(bk), ce_rows.get(sk), ce_rows.get(hk)
             if (buy is None or sell is None or hedge is None or len({bk, sk, hk}) < 3
-                    or _bad(buy.close) or _bad(sell.close) or _bad(hedge.close)):
-                shift += self.shift_step
+                    or bk < atm or _bad(buy.close) or _bad(sell.close) or _bad(hedge.close)):
                 continue
             net = (2 * sell.close - buy.close - hedge.close) * units  # +ve = credit received
-            if net > limit:
-                shift += self.shift_step  # high IV → push OTM to thin the credit
-                continue
-            if -net > limit:
-                return []  # net debit too large → low-IV month, skip
-            if self.require_credit and net < 0:
-                return []  # debit entries lose on average — skip (shifting OTM only shrinks credit)
-            chosen = (buy, sell, hedge)
-            break
+            if 0 <= net <= limit:
+                chosen = (buy, sell, hedge)
+                break
+            if not self.adjust_for_credit and net < 0:
+                break  # skip-mode: a debit ends the OTM walk (further OTM only thins premium)
         if chosen is None:
-            return []
+            return []  # no credit ≤ 1% reachable within the shift budget → skip the month
 
         buy, sell, hedge = chosen
         self.legs = [

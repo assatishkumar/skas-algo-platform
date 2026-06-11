@@ -209,13 +209,40 @@ def test_min_vix_filter_skips_low_iv_months():
     assert CallRatioMonthlyStrategy(min_vix=10, **kw).on_slice(_StubCtx(chain, date(2024, 1, 30)))
 
 
-def test_require_credit_skips_debit_entries():
-    # Small net debit (−2/unit), inside the 1% gate: trades normally, skipped with require_credit.
-    prem = {21000.0: 60.0, 21300.0: 20.0, 21600.0: 12.0, 22600.0: 6.0}
+def test_debit_structure_shifts_closer_to_find_credit():
+    # Base strikes (21300/21600/22600) price to a net DEBIT (−18/unit); the +100 shift is
+    # also a debit; the −100 shift (21200/21500/22500) yields a small credit within the
+    # 1% cap → the strategy should adjust CLOSER and enter there.
+    prem = {21000.0: 130.0, 21100.0: 115.0, 21200.0: 100.0, 21300.0: 90.0, 21400.0: 75.0,
+            21500.0: 58.0, 21600.0: 40.0, 21700.0: 30.0, 22300.0: 12.0, 22400.0: 10.0,
+            22500.0: 9.0, 22600.0: 8.0, 22700.0: 6.5}
     chain = _StubChain(21000.0, EXPIRY, prem)
-    kw = dict(universe=["NIFTY"], initial_capital=100_000)
-    assert CallRatioMonthlyStrategy(require_credit=True, **kw).on_slice(_StubCtx(chain, date(2024, 1, 30))) == []
-    assert CallRatioMonthlyStrategy(require_credit=False, **kw).on_slice(_StubCtx(chain, date(2024, 1, 30)))
+    s = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=100_000)
+    out = s.on_slice(_StubCtx(chain, date(2024, 1, 30)))
+    assert out, "expected an entry via the closer shift"
+    ks = sorted(int(sig.symbol.split("|")[2]) for sig in out)
+    assert ks == [21200, 21500, 22500]  # shifted −100 from base
+    net = (2 * 58.0 - 100.0 - 9.0) * 75  # = +525, within the ₹1,000 (1%) cap
+    assert 0 <= net <= 1000
+
+    # With adjust_for_credit=False the same debit month is skipped instead.
+    s2 = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=100_000, adjust_for_credit=False)
+    assert s2.on_slice(_StubCtx(chain, date(2024, 1, 30))) == []
+
+
+def test_credit_cap_never_exceeded():
+    # Rich credit at base (high IV): must shift further OTM until credit ≤ 1% of capital.
+    # Premiums decay slowly → base credit is way over the cap; far shifts thin it out.
+    prem = {21000.0 + 100 * i: max(400.0 - 28.0 * i, 1.0) for i in range(0, 30)}
+    chain = _StubChain(21000.0, EXPIRY, prem)
+    s = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=100_000)
+    out = s.on_slice(_StubCtx(chain, date(2024, 1, 30)))
+    if out:  # if any structure qualified, its net credit must respect the cap
+        ks = {int(sig.symbol.split("|")[2]): sig for sig in out}
+        strikes = sorted(ks)
+        b, sl, h = (prem[float(k)] for k in strikes)
+        net = (2 * sl - b - h) * 75
+        assert 0 <= net <= 1000, f"credit {net} exceeds 1% cap"
 
 
 class _StubChain:

@@ -101,7 +101,7 @@ export default function NewBacktestPage() {
   const [crStopPct, setCrStopPct] = useState(3);
   const [maxHoldingDays, setMaxHoldingDays] = useState(20);
   const [minVix, setMinVix] = useState(0); // 0 = off; skip entry if ATM IV% (≈VIX) below
-  const [requireCredit, setRequireCredit] = useState(false);
+  const [adjustForCredit, setAdjustForCredit] = useState(true); // debit month: shift closer vs skip
 
   // Override builder
   const [ovEnabled, setOvEnabled] = useState(false);
@@ -191,7 +191,7 @@ export default function NewBacktestPage() {
             stop_loss_pct: crStopPct / 100,
             max_holding_days: maxHoldingDays,
             min_vix: minVix,
-            require_credit: requireCredit,
+            adjust_for_credit: adjustForCredit,
           }
         : {
             underlying,
@@ -399,7 +399,7 @@ export default function NewBacktestPage() {
               <Field label={`Hedge ${strikeUnit} (caps upside)`}>
                 <NumberInput step="0.05" className={inputClass} value={hedgeOffset} onChange={setHedgeOffset} />
               </Field>
-              <Field label="Max credit/debit % (of capital)">
+              <Field label="Max net credit % (of capital)">
                 <NumberInput step="0.1" className={inputClass} value={creditLimitPct} onChange={setCreditLimitPct} />
               </Field>
               <Field label="Profit target % (of capital)">
@@ -414,12 +414,22 @@ export default function NewBacktestPage() {
               <Field label="Min entry IV % (≈VIX, 0 = off)">
                 <NumberInput step="0.5" className={inputClass} value={minVix} onChange={setMinVix} />
               </Field>
-              <Field label="Require net credit">
-                <label className={`${inputClass} flex items-center gap-2 cursor-pointer`}>
-                  <input type="checkbox" checked={requireCredit} onChange={(e) => setRequireCredit(e.target.checked)} />
-                  <span className="text-slate-300 text-sm">skip debit entries</span>
-                </label>
+              <Field label="Debit month behaviour">
+                <select
+                  className={inputClass}
+                  value={adjustForCredit ? "adjust" : "skip"}
+                  onChange={(e) => setAdjustForCredit(e.target.value === "adjust")}
+                >
+                  <option value="adjust">Shift strikes closer to find credit</option>
+                  <option value="skip">Skip the month (no debit trades)</option>
+                </select>
               </Field>
+              <div className="md:col-span-3 text-[11px] text-slate-500 -mt-2">
+                Entry always requires a <span className="text-slate-400">net credit</span> ≤ the max above
+                (strikes auto-shift further OTM when the credit is too rich). On debit months, "shift closer"
+                hunts for a credit nearer the money — note: backtests show this trades the thin-premium months
+                that "skip" avoids, at materially worse P&L.
+              </div>
               <Field label="Tax rate %">
                 <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />
               </Field>
