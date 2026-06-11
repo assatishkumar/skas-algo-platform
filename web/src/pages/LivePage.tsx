@@ -81,6 +81,7 @@ function SignalsPanel({ runId, version }: { runId: number; version: number }) {
               <tr key={r.symbol} className={`border-t border-slate-800 ${r.held ? "bg-slate-800/40" : ""}`}>
                 <td className="py-1 pr-3 font-medium">
                   {r.symbol} {r.tracking && !r.held && <span title="tracking">👁</span>}
+                  {r.excluded && <span title="excluded — no new entries" className="ml-1">🚫</span>}
                 </td>
                 <td className="py-1 pr-3 text-right">{fmt(r.ltp)}</td>
                 <td className="py-1 pr-3 text-right text-slate-400">{fmt(r.low_20d)}</td>
@@ -241,6 +242,129 @@ function QuoteSwitch({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () =
 }
 
 /** Full live detail for an active deployment — positions, signals, interventions. */
+/** Edit a running deployment's loop controls + exclusion list (no new entries). */
+function ControlsPanel({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () => void }) {
+  const [auto, setAuto] = useState(run.auto);
+  const [ignore, setIgnore] = useState(run.ignore_market_hours);
+  const [refresh, setRefresh] = useState(String(run.refresh_seconds));
+  const [excluded, setExcluded] = useState<string[]>(run.excluded_symbols ?? []);
+  const [add, setAdd] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const universe = run.universe ?? [];
+  const available = universe.filter((s) => !excluded.includes(s));
+
+  const dirty =
+    auto !== run.auto ||
+    ignore !== run.ignore_market_hours ||
+    Number(refresh) !== run.refresh_seconds ||
+    excluded.slice().sort().join(",") !== (run.excluded_symbols ?? []).slice().sort().join(",");
+
+  function addExcluded() {
+    const sym = add.trim().toUpperCase();
+    if (!sym) return;
+    // Only allow names actually in this deployment's universe.
+    if (universe.length && !universe.includes(sym)) {
+      setMsg(`"${sym}" is not in this deployment's universe.`);
+      return;
+    }
+    if (!excluded.includes(sym)) setExcluded([...excluded, sym].sort());
+    setAdd("");
+    setMsg(null);
+  }
+
+  async function save() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await api.liveSetControls(run.run_id, {
+        auto,
+        ignore_market_hours: ignore,
+        refresh_seconds: Math.max(5, Number(refresh) || run.refresh_seconds),
+        excluded_symbols: excluded,
+      });
+      onChanged();
+      setMsg("Saved.");
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/40 p-3 text-sm">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+          auto loop (refresh + daily decision)
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={ignore} onChange={(e) => setIgnore(e.target.checked)} />
+          ignore market hours
+        </label>
+        <label className="flex items-center gap-2">
+          refresh every
+          <input
+            type="number"
+            min={5}
+            value={refresh}
+            onChange={(e) => setRefresh(e.target.value)}
+            className="w-20 rounded bg-slate-800 border border-slate-700 px-2 py-1"
+          />
+          s
+        </label>
+        <span className="text-xs text-slate-500">daily decision at {run.decision_time} IST</span>
+      </div>
+
+      <div className="mt-3">
+        <div className="text-xs text-slate-400 mb-1">
+          Excluded (no new entries; open positions keep being managed)
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {excluded.length === 0 && <span className="text-xs text-slate-500">None excluded.</span>}
+          {excluded.map((s) => (
+            <span key={s} className="inline-flex items-center gap-1 rounded-full bg-amber-900/30 border border-amber-700/40 text-amber-300 px-2 py-0.5 text-xs">
+              {s}
+              <button onClick={() => setExcluded(excluded.filter((x) => x !== s))} className="hover:text-amber-100">×</button>
+            </span>
+          ))}
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <input
+            list={`uni-${run.run_id}`}
+            value={add}
+            onChange={(e) => setAdd(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addExcluded()}
+            placeholder="Exclude symbol…"
+            className="w-48 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-xs"
+          />
+          <datalist id={`uni-${run.run_id}`}>
+            {available.map((s) => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
+          <button onClick={addExcluded} disabled={!add.trim()} className="rounded bg-slate-700 hover:bg-slate-600 px-3 py-1 text-xs disabled:opacity-50">
+            Exclude
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center gap-3">
+        <button
+          onClick={save}
+          disabled={busy || !dirty}
+          className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save controls"}
+        </button>
+        {msg && <span className="text-xs text-slate-400">{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
 function RunCard({
   run,
   version,
@@ -252,6 +376,7 @@ function RunCard({
 }) {
   const [showOverride, setShowOverride] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
+  const [showControls, setShowControls] = useState(false);
   const act = async (fn: () => Promise<unknown>) => {
     await fn();
     onChanged();
@@ -325,9 +450,22 @@ function RunCard({
             <button onClick={() => setShowSignals((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
               {showSignals ? "Hide signals" : "Signals"}
             </button>
+            <button onClick={() => setShowControls((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
+              {showControls ? "Hide controls" : "Controls"}
+            </button>
             <button onClick={() => setShowOverride((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Intervene…</button>
+            {run.on_cache_fallback && (
+              <button
+                onClick={() => act(() => api.liveReconnectQuotes(run.run_id))}
+                title="This run wanted live Zerodha quotes but is on cache fallback. Reconnect now that you're logged in."
+                className="rounded bg-amber-700 hover:bg-amber-600 px-3 py-1.5 text-xs"
+              >
+                Reconnect to live quotes
+              </button>
+            )}
             <QuoteSwitch run={run} onChanged={onChanged} />
           </div>
+          {showControls && <ControlsPanel run={run} onChanged={onChanged} />}
           {showOverride && <OverridePanel runId={run.run_id} onDone={() => setShowOverride(false)} />}
           {showSignals && <SignalsPanel runId={run.run_id} version={version} />}
         </>
@@ -382,7 +520,7 @@ function DeploymentTile({
   }
 
   return (
-    <Card className={expanded ? "md:col-span-2" : ""}>
+    <Card className={`flex flex-col ${expanded ? "md:col-span-2" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           {editing ? (
@@ -423,29 +561,33 @@ function DeploymentTile({
       {/* Key metrics */}
       <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
         <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          <div className="text-slate-400 text-[11px]">Positions</div>
-          {positions}
+          <div className="text-slate-400 text-[11px] mb-0.5">Positions</div>
+          <div className="font-medium tabular-nums">{positions}</div>
         </div>
         <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          <div className="text-slate-400 text-[11px]">Unrealized</div>
-          {upnl != null ? (
-            <span className={upnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{formatInr(upnl)}</span>
-          ) : (
-            "—"
-          )}
+          <div className="text-slate-400 text-[11px] mb-0.5">Unrealized</div>
+          <div className="font-medium tabular-nums">
+            {upnl != null ? (
+              <span className={upnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{formatInr(upnl)}</span>
+            ) : (
+              "—"
+            )}
+          </div>
         </div>
         <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          <div className="text-slate-400 text-[11px]">{dep.status === "active" ? "Started" : "Return"}</div>
-          {dep.status === "active"
-            ? timeAgo(dep.started_at)
-            : m.total_return_pct != null
-              ? `${m.total_return_pct >= 0 ? "+" : ""}${m.total_return_pct.toFixed(1)}%`
-              : "—"}
+          <div className="text-slate-400 text-[11px] mb-0.5">{dep.status === "active" ? "Started" : "Return"}</div>
+          <div className="font-medium tabular-nums">
+            {dep.status === "active"
+              ? timeAgo(dep.started_at)
+              : m.total_return_pct != null
+                ? `${m.total_return_pct >= 0 ? "+" : ""}${m.total_return_pct.toFixed(1)}%`
+                : "—"}
+          </div>
         </div>
       </div>
 
       {/* Actions */}
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+      <div className="mt-auto pt-3 flex flex-wrap items-center gap-2 text-xs">
         {dep.status === "active" ? (
           <>
             <button onClick={onToggle} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">

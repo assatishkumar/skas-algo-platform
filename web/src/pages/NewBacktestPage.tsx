@@ -8,15 +8,24 @@ import type { BacktestRequest, OverrideInput } from "../types";
 
 // Fields a sweep can vary, with how each value maps into the request.
 // unit "pct" values are divided by 100 (like the form); "num" pass through.
-type SweepField = { key: string; label: string; unit: "pct" | "num"; fifoOnly?: boolean; lifoOnly?: boolean };
+type SweepField = {
+  key: string; label: string; unit: "pct" | "num";
+  fifoOnly?: boolean; lifoOnly?: boolean; optionsOnly?: boolean; stockOnly?: boolean;
+};
 const SWEEP_FIELDS: SweepField[] = [
   { key: "profit_target", label: "Profit target %", unit: "pct", lifoOnly: true },
   { key: "profit_target_1", label: "Target % (1 lot)", unit: "pct", fifoOnly: true },
   { key: "profit_target_2", label: "Target % (2 lots)", unit: "pct", fifoOnly: true },
   { key: "profit_target_3", label: "Target % (3+ lots)", unit: "pct", fifoOnly: true },
-  { key: "capital_parts", label: "Capital parts", unit: "num" },
-  { key: "max_lots", label: "Max lots", unit: "num" },
-  { key: "lookback", label: "Lookback", unit: "num" },
+  { key: "capital_parts", label: "Capital parts", unit: "num", stockOnly: true },
+  { key: "max_lots", label: "Max lots", unit: "num", stockOnly: true },
+  { key: "lookback", label: "Lookback", unit: "num", stockOnly: true },
+  // Options (short_premium) sweepable params
+  { key: "dte_target", label: "Enter at DTE", unit: "num", optionsOnly: true },
+  { key: "lots", label: "Lots", unit: "num", optionsOnly: true },
+  { key: "stop_loss_pct", label: "Stop loss %", unit: "pct", optionsOnly: true },
+  { key: "profit_target_pct", label: "Profit target %", unit: "pct", optionsOnly: true },
+  { key: "strike_step", label: "Strike step (pts)", unit: "num", optionsOnly: true },
   { key: "tax_rate", label: "Tax rate %", unit: "pct" },
   { key: "withdrawal_rate", label: "Withdrawal %", unit: "pct" },
   { key: "capital", label: "Capital", unit: "num" },
@@ -57,6 +66,8 @@ export default function NewBacktestPage() {
   const [symbols, setSymbols] = useState("RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK");
   const [startDate, setStartDate] = useState("2015-01-01");
   const [endDate, setEndDate] = useState("2026-06-01");
+  // Once the user hand-edits a date, stop auto-prefilling from cached coverage.
+  const [datesTouched, setDatesTouched] = useState(false);
   const [capital, setCapital] = useState(2500000);
   const [parts, setParts] = useState(50);
   const [target, setTarget] = useState(6);
@@ -69,6 +80,25 @@ export default function NewBacktestPage() {
   const [withdrawalRate, setWithdrawalRate] = useState(0);
   const [lookback, setLookback] = useState(20);
   const [allocationMode, setAllocationMode] = useState("fixed");
+
+  // Options (short_premium) params
+  const [underlying, setUnderlying] = useState("NIFTY");
+  const [structure, setStructure] = useState("straddle");
+  const [dteTarget, setDteTarget] = useState(2);
+  const [lots, setLots] = useState(1);
+  const [stopLossPct, setStopLossPct] = useState(50);
+  const [profitTargetPct, setProfitTargetPct] = useState(50);
+  const [strikeStep, setStrikeStep] = useState(0);
+
+  // Call Ratio Monthly params
+  const [buyOffset, setBuyOffset] = useState(300);
+  const [sellOffset, setSellOffset] = useState(600);
+  const [hedgeOffset, setHedgeOffset] = useState(1600);
+  const [crLots, setCrLots] = useState(1);
+  const [creditLimitPct, setCreditLimitPct] = useState(1); // % of capital
+  const [crProfitPct, setCrProfitPct] = useState(2.5);
+  const [crStopPct, setCrStopPct] = useState(3);
+  const [maxHoldingDays, setMaxHoldingDays] = useState(20);
 
   // Override builder
   const [ovEnabled, setOvEnabled] = useState(false);
@@ -87,6 +117,27 @@ export default function NewBacktestPage() {
 
   const navigate = useNavigate();
   const isFifo = strategyId === "sst_fifo";
+  const isCallRatio = strategyId === "call_ratio_monthly";
+  const isOptions = strategyId === "short_premium" || isCallRatio;
+
+  // Call Ratio deploys ~₹1L of margin per lot; default the capital so the %-of-capital
+  // targets are meaningful (user can still edit).
+  useEffect(() => {
+    if (isCallRatio) setCapital(100000);
+  }, [isCallRatio]);
+
+  // Available cached range for the selected instrument class / underlying — used to
+  // default the date pickers so a backtest spans what's actually in the cache.
+  const { data: coverage } = useQuery({
+    queryKey: ["coverage", isOptions ? "DERIV" : "STOCK", isOptions ? underlying : null],
+    queryFn: () =>
+      api.dataCoverage(isOptions ? "DERIV" : "STOCK", isOptions ? underlying : undefined),
+  });
+  useEffect(() => {
+    if (datesTouched) return;
+    if (coverage?.start_date) setStartDate(coverage.start_date);
+    if (coverage?.end_date) setEndDate(coverage.end_date);
+  }, [coverage, datesTouched]);
 
   const mutation = useMutation({
     mutationFn: (body: BacktestRequest) => api.backtest(body),
@@ -105,6 +156,46 @@ export default function NewBacktestPage() {
           ],
         },
       });
+    }
+    if (isOptions) {
+      const params: Record<string, unknown> = isCallRatio
+        ? {
+            underlying,
+            buy_offset: buyOffset,
+            sell_offset: sellOffset,
+            hedge_offset: hedgeOffset,
+            lots: crLots,
+            credit_debit_limit_pct: creditLimitPct / 100,
+            profit_target_pct: crProfitPct / 100,
+            stop_loss_pct: crStopPct / 100,
+            max_holding_days: maxHoldingDays,
+          }
+        : {
+            underlying,
+            structure,
+            dte_target: dteTarget,
+            lots,
+            stop_loss_pct: stopLossPct / 100,
+            profit_target_pct: profitTargetPct / 100,
+            ...(structure === "strangle" && strikeStep > 0 ? { strike_step: strikeStep } : {}),
+          };
+      return {
+        strategy_id: strategyId,
+        name: name.trim() || undefined,
+        notes: notes.trim() || undefined,
+        instrument_class: "DERIV",
+        underlying,
+        universe: null,
+        symbols: [],
+        start_date: startDate,
+        end_date: endDate,
+        capital,
+        params,
+        tax_rate: taxRate / 100,
+        withdrawal_rate: withdrawalRate / 100,
+        lookback,
+        overrides: [],
+      };
     }
     const isCustom = universe === "";
     return {
@@ -179,14 +270,17 @@ export default function NewBacktestPage() {
 
   const result = mutation.data;
   const sweepableFields = SWEEP_FIELDS.filter(
-    (f) => (!f.fifoOnly || isFifo) && (!f.lifoOnly || !isFifo),
+    (f) =>
+      (!f.optionsOnly || isOptions) &&
+      (!f.stockOnly || !isOptions) &&
+      (isOptions || ((!f.fifoOnly || isFifo) && (!f.lifoOnly || !isFifo))),
   );
   // Keep the swept field valid when the strategy (and thus its params) changes.
   useEffect(() => {
     if (!sweepableFields.some((f) => f.key === sweepField)) {
-      setSweepField(isFifo ? "profit_target_1" : "profit_target");
+      setSweepField(isOptions ? "profit_target_pct" : isFifo ? "profit_target_1" : "profit_target");
     }
-  }, [isFifo, sweepField, sweepableFields]);
+  }, [isFifo, isOptions, sweepField, sweepableFields]);
 
   return (
     <div className="space-y-6">
@@ -210,36 +304,125 @@ export default function NewBacktestPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Universe">
-              <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
-                {universes.map((u) => (
-                  <option key={u.name} value={u.name}>
-                    {u.label} ({u.count} available)
-                  </option>
-                ))}
-                <option value="">Custom</option>
-              </select>
-            </Field>
-            {universe === "" ? (
-              <Field label="Symbols (comma-separated)">
-                <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
+            {isOptions ? (
+              <Field label="Underlying">
+                <select className={inputClass} value={underlying} onChange={(e) => setUnderlying(e.target.value)}>
+                  <option value="NIFTY">NIFTY</option>
+                  <option value="BANKNIFTY">BANKNIFTY</option>
+                  <option value="GOLD">GOLD (synthetic)</option>
+                </select>
               </Field>
             ) : (
-              <Field label="Symbols">
-                <div className={`${inputClass} text-slate-400`}>
-                  {universes.find((u) => u.name === universe)?.count ?? "…"} symbols from{" "}
-                  {universes.find((u) => u.name === universe)?.label ?? universe}
-                </div>
-              </Field>
+              <>
+                <Field label="Universe">
+                  <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
+                    {universes.map((u) => (
+                      <option key={u.name} value={u.name}>
+                        {u.label} ({u.count} available)
+                      </option>
+                    ))}
+                    <option value="">Custom</option>
+                  </select>
+                </Field>
+                {universe === "" ? (
+                  <Field label="Symbols (comma-separated)">
+                    <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
+                  </Field>
+                ) : (
+                  <Field label="Symbols">
+                    <div className={`${inputClass} text-slate-400`}>
+                      {universes.find((u) => u.name === universe)?.count ?? "…"} symbols from{" "}
+                      {universes.find((u) => u.name === universe)?.label ?? universe}
+                    </div>
+                  </Field>
+                )}
+              </>
             )}
             <Field label="Start date">
-              <input type="date" className={inputClass} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <input type="date" className={inputClass} value={startDate} onChange={(e) => { setDatesTouched(true); setStartDate(e.target.value); }} />
             </Field>
             <Field label="End date">
-              <input type="date" className={inputClass} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              <input type="date" className={inputClass} value={endDate} onChange={(e) => { setDatesTouched(true); setEndDate(e.target.value); }} />
             </Field>
           </div>
 
+          {isCallRatio ? (
+            <div className="grid md:grid-cols-3 gap-4">
+              <div className="md:col-span-3 text-[11px] text-amber-300/90">
+                1:2 call ratio + outer hedge on NIFTY monthly. Entry = last Tuesday of the month for
+                next month's expiry (EOD approximates the 3:16 PM rule). Set capital ≈ ₹1L margin per lot;
+                all %s are on this capital.
+              </div>
+              <Field label="Capital (₹) — ≈ ₹1L / lot">
+                <NumberInput className={inputClass} value={capital} onChange={setCapital} />
+              </Field>
+              <Field label="Lots (1 buy : 2 sell : 1 hedge)">
+                <NumberInput className={inputClass} value={crLots} onChange={setCrLots} />
+              </Field>
+              <Field label="Buy offset (pts OTM from spot)">
+                <NumberInput className={inputClass} value={buyOffset} onChange={setBuyOffset} />
+              </Field>
+              <Field label="Sell offset (pts OTM, ×2 lots)">
+                <NumberInput className={inputClass} value={sellOffset} onChange={setSellOffset} />
+              </Field>
+              <Field label="Hedge offset (pts OTM, caps upside)">
+                <NumberInput className={inputClass} value={hedgeOffset} onChange={setHedgeOffset} />
+              </Field>
+              <Field label="Max credit/debit % (of capital)">
+                <NumberInput step="0.1" className={inputClass} value={creditLimitPct} onChange={setCreditLimitPct} />
+              </Field>
+              <Field label="Profit target % (of capital)">
+                <NumberInput step="0.1" className={inputClass} value={crProfitPct} onChange={setCrProfitPct} />
+              </Field>
+              <Field label="Stop loss % (of capital)">
+                <NumberInput step="0.1" className={inputClass} value={crStopPct} onChange={setCrStopPct} />
+              </Field>
+              <Field label="Max holding days">
+                <NumberInput className={inputClass} value={maxHoldingDays} onChange={setMaxHoldingDays} />
+              </Field>
+              <Field label="Tax rate %">
+                <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />
+              </Field>
+              <Field label="Withdrawal rate %">
+                <NumberInput step="1" className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} />
+              </Field>
+            </div>
+          ) : isOptions ? (
+            <div className="grid md:grid-cols-3 gap-4">
+              <Field label="Capital (₹)">
+                <NumberInput className={inputClass} value={capital} onChange={setCapital} />
+              </Field>
+              <Field label="Structure">
+                <select className={inputClass} value={structure} onChange={(e) => setStructure(e.target.value)}>
+                  <option value="straddle">Short straddle (ATM CE+PE)</option>
+                  <option value="strangle">Short strangle (OTM CE+PE)</option>
+                </select>
+              </Field>
+              <Field label="Lots">
+                <NumberInput className={inputClass} value={lots} onChange={setLots} />
+              </Field>
+              <Field label="Enter at DTE (days to expiry)">
+                <NumberInput className={inputClass} value={dteTarget} onChange={setDteTarget} />
+              </Field>
+              <Field label="Stop loss % (of entry premium)">
+                <NumberInput className={inputClass} value={stopLossPct} onChange={setStopLossPct} />
+              </Field>
+              <Field label="Profit target % (premium decay)">
+                <NumberInput className={inputClass} value={profitTargetPct} onChange={setProfitTargetPct} />
+              </Field>
+              {structure === "strangle" && (
+                <Field label="Strike step (points OTM, 0 = ATM/delta)">
+                  <NumberInput className={inputClass} value={strikeStep} onChange={setStrikeStep} />
+                </Field>
+              )}
+              <Field label="Tax rate %">
+                <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />
+              </Field>
+              <Field label="Withdrawal rate %">
+                <NumberInput step="1" className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} />
+              </Field>
+            </div>
+          ) : (
           <div className="grid md:grid-cols-3 gap-4">
             <Field label="Capital (₹)">
               <NumberInput className={inputClass} value={capital} onChange={setCapital} />
@@ -283,7 +466,9 @@ export default function NewBacktestPage() {
               </select>
             </Field>
           </div>
+          )}
 
+          {!isOptions && (
           <div className="rounded-lg border border-slate-800 p-3">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={ovEnabled} onChange={(e) => setOvEnabled(e.target.checked)} />
@@ -319,6 +504,7 @@ export default function NewBacktestPage() {
               </div>
             )}
           </div>
+          )}
 
           <div className="rounded-lg border border-slate-800 p-3">
             <label className="flex items-center gap-2 text-sm">

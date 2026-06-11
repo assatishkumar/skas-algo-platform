@@ -67,3 +67,16 @@ class AlgoContext:
 
     def rolling_low(self, symbol: str) -> float:
         return self.market.rolling_low(symbol)
+
+    # ----- options (no-ops / None for non-options runs) -----
+    def today(self):
+        """Current trading date (a ``datetime.date``). Used by options strategies."""
+        cur = getattr(self.market, "current_date", None)
+        if cur is not None:
+            return cur.date() if hasattr(cur, "date") else cur
+        from datetime import date as _date
+        return _date.today()
+
+    def option_chain(self):
+        """The OptionChainView for this run, or None for equity runs."""
+        return getattr(self.market, "chain", None)

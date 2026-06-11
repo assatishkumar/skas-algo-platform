@@ -43,6 +43,49 @@ def test_broadcaster_pubsub():
     assert q.empty()
 
 
+def test_promote_quote_source_revives_cache_fallback(monkeypatch):
+    """A cache-fallback run wanting Zerodha is promoted to live quotes once a session exists."""
+    from datetime import UTC, datetime, timedelta
+
+    from skas_algo.brokers.zerodha import ZerodhaAdapter
+    from skas_algo.db.base import session_scope as scope
+    from skas_algo.db.models import BrokerAccount
+    from skas_algo.live.manager import LiveConfig, LiveRun, manager
+    from skas_algo.live.quotes import ZerodhaQuoteSource
+    from skas_algo.security import encrypt
+    from skas_algo.services import broker as broker_svc
+
+    with scope() as s:
+        acct = BrokerAccount(broker="zerodha", label="promo", user_id="AB1",
+                             enc_api_secret=encrypt("sec"), api_key="k")
+        s.add(acct)
+        s.flush()
+        acct_id = acct.id
+
+    cfg = LiveConfig(name="promo", strategy_id="sst_lifo", symbols=["AAA"], capital=100_000,
+                     quote_source="zerodha", broker_account_id=acct_id)
+
+    class _StubSession:
+        excluded_symbols = []
+
+        def snapshot(self):
+            return {}
+
+    live = LiveRun(9911, 1, cfg, session=_StubSession(), quote_source=FakeQuoteSource(),
+                   broadcaster=manager.broadcaster)
+    live.on_cache_fallback = True
+    manager.runs[9911] = live
+    try:
+        monkeypatch.setattr(broker_svc, "has_valid_session", lambda a: True)
+        monkeypatch.setattr(broker_svc, "make_adapter", lambda a: object())
+        with scope() as s:
+            assert manager.promote_quote_source(9911, s) is True
+        assert live.on_cache_fallback is False
+        assert isinstance(live.quote_source, ZerodhaQuoteSource)
+    finally:
+        manager.runs.pop(9911, None)
+
+
 def test_paper_run_persists_trades_and_positions():
     fake = FakeQuoteSource()
     config = LiveConfig(
@@ -92,6 +135,96 @@ def test_paper_run_persists_trades_and_positions():
         run = db.get(AlgoRun, live.run_id)
         assert run.stopped_at is not None
         assert run.metrics["metrics"]["Total Trades"] >= 1
+
+
+def test_start_ignores_backtest_bookkeeping_params():
+    """Forward-testing replays a backtest's params, which carry universe/start_date/
+    end_date bookkeeping. start() must drop those rather than pass them to the strategy
+    constructor (which would collide with the explicit universe= arg)."""
+    config = LiveConfig(
+        name="from-backtest",
+        strategy_id="sst_fifo",
+        symbols=["AAA"],
+        capital=100_000,
+        params={
+            "capital_parts": 10,
+            "profit_target_1": 0.10,
+            "universe": "nifty_200",
+            "start_date": "2020-01-01",
+            "end_date": "2024-01-01",
+        },
+        lookback=5,
+        ignore_market_hours=True,
+    )
+    live = manager.start(config, _flat_loader, FakeQuoteSource())
+    try:
+        assert live.run_id is not None
+    finally:
+        manager.stop(live.run_id)
+
+
+def test_excluded_symbol_blocks_new_entry():
+    """An excluded symbol gets no new entries even on a breakout that would buy."""
+    fake = FakeQuoteSource()
+    config = LiveConfig(
+        name="excl-test",
+        strategy_id="sst_lifo",
+        symbols=["AAA"],
+        capital=100_000,
+        params={"capital_parts": 10, "profit_target": 0.06},
+        lookback=5,
+        tax_rate=0.0,
+        ignore_market_hours=True,
+        excluded_symbols=["AAA"],
+    )
+    live = manager.start(config, _flat_loader, fake)
+    try:
+        # Same dip-then-breakout sequence that buys in the persists test...
+        fake.price = 95.0
+        live.refresh()
+        live.run_decision(date(2024, 1, 2))
+        live.end_day()
+        fake.price = 110.0
+        live.refresh()
+        events = live.run_decision(date(2024, 1, 3))
+        # ...but AAA is excluded, so no BUY is produced.
+        assert not any(e["action"] == "BUY" for e in events)
+        row = next(r for r in live.session.watchlist() if r["symbol"] == "AAA")
+        assert row["excluded"] is True
+    finally:
+        manager.stop(live.run_id)
+
+
+def test_update_controls_toggles_and_persists():
+    """update_controls edits the live config, exclusion set, and params_snapshot."""
+    config = LiveConfig(
+        name="ctrl-test",
+        strategy_id="sst_lifo",
+        symbols=["AAA", "BBB"],
+        capital=100_000,
+        params={"capital_parts": 10, "profit_target": 0.06},
+        lookback=5,
+        ignore_market_hours=False,
+        refresh_seconds=30,
+    )
+    live = manager.start(config, _flat_loader, FakeQuoteSource())
+    try:
+        manager.update_controls(
+            live.run_id,
+            ignore_market_hours=True,
+            refresh_seconds=120,
+            excluded_symbols=["bbb"],  # lower-case → normalized
+        )
+        assert live.config.ignore_market_hours is True
+        assert live.config.refresh_seconds == 120
+        assert live.session.excluded_symbols == ["BBB"]
+        with session_scope() as db:
+            snap = db.get(AlgoRun, live.run_id).params_snapshot
+            assert snap["ignore_market_hours"] is True
+            assert snap["refresh_seconds"] == 120
+            assert snap["excluded_symbols"] == ["BBB"]
+    finally:
+        manager.stop(live.run_id)
 
 
 def test_session_state_roundtrip():

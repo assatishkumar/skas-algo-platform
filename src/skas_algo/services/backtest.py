@@ -27,21 +27,58 @@ def _serialize_trades(transactions: list[dict]) -> list[dict]:
 
 
 def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) -> dict:
+    is_deriv = req.instrument_class.upper() == "DERIV"
+    underlying = (req.underlying or req.params.get("underlying")
+                  or (req.symbols[0] if req.symbols else "NIFTY"))
+
     factory = get_strategy(req.strategy_id)
-    strategy = factory(universe=list(req.symbols), initial_capital=req.capital, **req.params)
+    strategy_universe = [underlying] if is_deriv else list(req.symbols)
+    strategy = factory(universe=strategy_universe, initial_capital=req.capital, **req.params)
 
     overrides = [OverrideRule(scope=o.scope, target=o.target, rule=o.rule) for o in req.overrides]
 
-    runner = BacktestRunner(
-        strategy=strategy,
-        universe=list(req.symbols),
-        loader=loader,
-        initial_capital=req.capital,
-        lookback=req.lookback,
-        tax_rate=req.tax_rate,
-        withdrawal_rate=req.withdrawal_rate,
-        overrides=overrides,
-    )
+    if is_deriv:
+        # Options run: build the chain/lazy-market/settlement/margin stack and drive the
+        # SAME runner with a prebuilt view. GOLD has no traded-option data, so its chain is
+        # synthesized via Black-Scholes (realized vol); NIFTY/BANKNIFTY read the real cache.
+        from skas_algo.data.provider import get_data_cache
+        from skas_algo.data.synthetic_options import build_synthetic_options_run, is_synthetic
+
+        sd = get_data_cache()
+        synthetic = is_synthetic(underlying) or bool(req.params.get("synthetic"))
+        if synthetic:
+            opt_kwargs = {k: req.params[k] for k in ("r", "vol_window", "strike_step", "strike_count")
+                          if k in req.params}
+            market_view, _chain, settler, margin_model = build_synthetic_options_run(
+                sd, underlying.upper(), req.start_date, req.end_date,
+                lot_overrides=req.params.get("contract_specs"),
+                margin_params=req.params.get("margin"), **opt_kwargs,
+            )
+        else:
+            from skas_algo.data.options_provider import build_options_run
+
+            market_view, _chain, settler, margin_model = build_options_run(
+                sd, underlying.upper(), req.start_date, req.end_date,
+                lot_overrides=req.params.get("contract_specs"),
+                margin_params=req.params.get("margin"),
+            )
+        runner = BacktestRunner(
+            strategy=strategy, universe=strategy_universe, loader=loader,
+            initial_capital=req.capital, lookback=req.lookback,
+            tax_rate=req.tax_rate, withdrawal_rate=req.withdrawal_rate, overrides=overrides,
+            market_view=market_view, settler=settler, margin_model=margin_model,
+        )
+    else:
+        runner = BacktestRunner(
+            strategy=strategy,
+            universe=list(req.symbols),
+            loader=loader,
+            initial_capital=req.capital,
+            lookback=req.lookback,
+            tax_rate=req.tax_rate,
+            withdrawal_rate=req.withdrawal_rate,
+            overrides=overrides,
+        )
     result = runner.run(req.start_date, req.end_date)
     report = build_report(result, req.capital)
     trades = _serialize_trades(result.transactions)
@@ -51,12 +88,14 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
         name=req.name or f"{req.strategy_id} backtest",
         notes=req.notes,
         strategy_id=req.strategy_id,
-        instrument_class=InstrumentClass.STOCK,
+        instrument_class=InstrumentClass.DERIV if is_deriv else InstrumentClass.STOCK,
         mode=TradingMode.BACKTEST,
         capital=req.capital,
         params={
             "universe": req.universe,
             "symbols": req.symbols,
+            "instrument_class": req.instrument_class,
+            "underlying": underlying if is_deriv else None,
             "start_date": req.start_date.isoformat(),
             "end_date": req.end_date.isoformat(),
             "lookback": req.lookback,

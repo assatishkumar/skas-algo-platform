@@ -41,3 +41,23 @@ def refresh_cache(
         except Exception as exc:  # one bad symbol shouldn't abort the batch
             out[sym] = {"error": str(exc)}
     return out
+
+
+def refresh_gold(
+    account: BrokerAccount,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+    store_as: str = "GOLD",
+) -> dict:
+    """Fetch the MCX GOLD futures series on the shared session and cache it as ``store_as``
+    (so the synthetic GOLD option chain has its underlying). Returns rows + last_date."""
+    end = end or datetime.now(UTC).date()
+    start = start or date(2020, 1, 1)
+    sd = broker_svc.make_data_session(account)
+    df = sd.fetch_gold_futures(start, end, store_as=store_as)
+    if df is None or len(df) == 0:
+        return {"rows": 0, "last_date": None}
+    last = df.iloc[-1]["date"]
+    last_iso = last.date().isoformat() if hasattr(last, "date") else str(last)
+    return {"rows": int(len(df)), "last_date": last_iso}

@@ -38,7 +38,7 @@ def build_report(result: RunResult, initial_capital: float) -> dict[str, Any]:
 
     monthly_profit = {y: {m: 0.0 for m in range(1, 13)} for y in years}
     for t in result.transactions:
-        if t["action"] == "SELL":
+        if t["action"] in ("SELL", "COVER", "SETTLE"):  # realized-P&L events (see metrics.py)
             y, m = t["date"].year, t["date"].month
             if y in monthly_profit:
                 monthly_profit[y][m] += t["profit"]
@@ -120,14 +120,22 @@ def build_report(result: RunResult, initial_capital: float) -> dict[str, Any]:
             }
         )
 
-    return to_native(
-        {
-            "metrics": metrics,
-            "yearly": yearly,
-            "monthly_profit": {int(y): v for y, v in monthly_profit.items()},
-            "monthly_withdrawals": {int(y): v for y, v in monthly_withdrawals.items()},
-            "monthly_capital": {int(y): v for y, v in monthly_capital.items()},
-            "monthly_equity": {int(y): v for y, v in monthly_equity.items()},
-            "equity_curve": equity_curve,
-        }
-    )
+    report: dict[str, Any] = {
+        "metrics": metrics,
+        "yearly": yearly,
+        "monthly_profit": {int(y): v for y, v in monthly_profit.items()},
+        "monthly_withdrawals": {int(y): v for y, v in monthly_withdrawals.items()},
+        "monthly_capital": {int(y): v for y, v in monthly_capital.items()},
+        "monthly_equity": {int(y): v for y, v in monthly_equity.items()},
+        "equity_curve": equity_curve,
+    }
+
+    # Additive options analytics — returns None (and adds no key) for equity runs, so
+    # the report stays byte-identical when there are no option symbols.
+    from .options.report import build_options_report
+
+    options = build_options_report(result, initial_capital, metrics)
+    if options is not None:
+        report["options"] = options
+
+    return to_native(report)

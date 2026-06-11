@@ -12,6 +12,11 @@ export interface Metrics {
   "Avg Monthly Profit Booking": number;
   "Avg Monthly Profit (Pre-Tax)": number;
   "Avg Monthly Profit (Post-Tax)": number;
+  // Net realized P&L (winners − losers). Optional: runs saved before this field exists
+  // render "—".
+  "Net Realized P&L"?: number;
+  "Avg Monthly Net P&L (Pre-Tax)"?: number;
+  "Avg Monthly Net P&L (Post-Tax)"?: number;
 }
 
 export interface YearlyRow {
@@ -53,6 +58,7 @@ export interface Report {
   monthly_capital?: Record<string, Record<string, number>>;
   monthly_equity?: Record<string, Record<string, number>>;
   equity_curve?: EquityPoint[];
+  options?: OptionsReportData; // present only for DERIV (options) runs
 }
 
 export interface Trade {
@@ -66,6 +72,82 @@ export interface Trade {
   pnl_pct: number;
   lots: number;
   tag: string;
+  // Options-only enrichment (absent on equity trades)
+  exit_reason?: string;
+  entry_premium?: number;
+  holding_days?: number;
+}
+
+// ---- Options report (additive; only populated for DERIV runs) ----
+export interface OptionPosition {
+  symbol: string;
+  underlying: string;
+  strike: number;
+  right: "CE" | "PE";
+  side?: "long" | "short";
+  expiry: string;
+  entry_date: string;
+  entry_premium: number;
+  exit_date: string;
+  exit_price: number;
+  exit_action: "COVER" | "SETTLE";
+  exit_reason: string; // target | stop | expiry | manual
+  units: number;
+  lots: number;
+  multiplier: number;
+  holding_days: number;
+  realized_pnl: number;
+  pnl_pct: number;
+  premium_collected: number;
+}
+
+export interface OptionCycle {
+  underlying: string;
+  entry_date: string;
+  expiry: string;
+  legs: string[];
+  legs_detail?: OptionPosition[]; // all legs (for multi-leg structures); ce/pe kept for straddles
+  premium_collected: number;
+  realized_pnl: number;
+  holding_days: number;
+  exit_reason: string;
+  ce: OptionPosition | null;
+  pe: OptionPosition | null;
+}
+
+export interface ExitReasonStat {
+  count: number;
+  pnl: number;
+  wins: number;
+  losses: number;
+}
+
+export interface OptionsReportData {
+  summary: {
+    total_premium_collected: number;
+    total_premium_captured: number;
+    premium_capture_pct: number;
+    avg_holding_days: number;
+    num_positions: number;
+    num_cycles: number;
+    win_rate_pct: number;
+    max_margin_used: number;
+    avg_margin_used: number;
+    capital_efficiency: number;
+    avg_premium_per_cycle: number;
+  };
+  exit_reasons: Record<string, ExitReasonStat>;
+  per_expiry_cycle: {
+    expiry: string;
+    entries: number;
+    premium_collected: number;
+    realized_pnl: number;
+    win: boolean;
+  }[];
+  positions: OptionPosition[];
+  cycles: OptionCycle[];
+  margin_series: { date: string; margin: number }[];
+  premium_curve: { date: string; premium: number }[];
 }
 
 export interface RunSummary {
@@ -116,8 +198,23 @@ export interface LiveRunSnapshot {
   open_lots: number;
   parts_total: number | null;
   quote_source: string;
+  on_cache_fallback?: boolean;
   realized_taxes: number;
   positions: LivePosition[];
+  // live controls + exclusion editing
+  auto: boolean;
+  ignore_market_hours: boolean;
+  refresh_seconds: number;
+  decision_time: string;
+  universe: string[];
+  excluded_symbols: string[];
+}
+
+export interface LiveControlsInput {
+  auto?: boolean;
+  ignore_market_hours?: boolean;
+  refresh_seconds?: number;
+  excluded_symbols?: string[];
 }
 
 export interface StartLiveRequest {
@@ -203,6 +300,13 @@ export interface DataSummary {
   db_path: string | null;
 }
 
+export interface DataCoverage {
+  instrument_class: string;
+  underlying?: string | null;
+  start_date: string | null;
+  end_date: string | null;
+}
+
 export interface DataSymbol {
   symbol: string;
   last_date: string | null;
@@ -219,12 +323,84 @@ export interface DataSymbolDetail {
   recent: { date: string; close: number }[];
 }
 
+// ---- Data tab: options & futures ----
+export interface UnderlyingList {
+  supported: string[];
+  available: string[];
+}
+
+export interface DerivCoverage {
+  symbol: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  total_records: number;
+  trading_days: number;
+}
+
+export interface OptionsExpiries {
+  underlying: string;
+  date: string | null;
+  expiries: string[];
+}
+
+export interface OptionChainLeg {
+  ltp: number | null;
+  close: number | null;
+  oi: number | null;
+  change_in_oi: number | null;
+  iv?: number | null;
+  delta?: number | null;
+  gamma?: number | null;
+  theta?: number | null;
+  vega?: number | null;
+}
+
+export interface OptionChainRow {
+  strike: number;
+  ce: OptionChainLeg | null;
+  pe: OptionChainLeg | null;
+}
+
+export interface OptionChain {
+  underlying: string;
+  date: string;
+  expiry: string;
+  spot: number | null;
+  atm_strike: number | null;
+  rows: OptionChainRow[];
+  synthetic?: boolean; // GOLD: Black-Scholes model prices, not market premiums
+}
+
+export interface RefreshResult {
+  underlyings: string[];
+  days_saved: number;
+  rows_saved: number;
+  errors: string[];
+}
+
+export interface FuturesPoint {
+  date: string | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  settle: number | null;
+  oi: number | null;
+  expiry: string | null;
+}
+
+export interface FuturesSeries {
+  underlying: string;
+  points: FuturesPoint[];
+}
+
 export interface WatchRow {
   symbol: string;
   ltp: number | null;
   high_20d: number | null;
   low_20d: number | null;
   tracking: boolean;
+  excluded: boolean;
   held: boolean;
   lots: number;
   units: number;
@@ -256,6 +432,8 @@ export interface BacktestRequest {
   strategy_id: string;
   symbols: string[];
   universe?: string | null;
+  instrument_class?: string; // "STOCK" (default) | "DERIV"
+  underlying?: string | null; // DERIV: NIFTY / BANKNIFTY
   start_date: string;
   end_date: string;
   capital: number;

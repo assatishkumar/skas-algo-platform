@@ -15,13 +15,33 @@ from datetime import date, datetime
 from skas_algo.brokers.base import BrokerOrder
 from skas_algo.db.enums import OrderSide
 from skas_algo.engine.context import AlgoContext
-from skas_algo.engine.overrides import AttachStop, BuyLot, CloseLot, ClosePosition, OverrideResolver
+from skas_algo.engine.overrides import (
+    AttachStop,
+    BuyLot,
+    CloseLot,
+    ClosePosition,
+    CloseShort,
+    OpenShort,
+    OverrideResolver,
+)
 from skas_algo.engine.portfolio import Portfolio
 from skas_algo.engine.stops import StopBook
 
 
-def trade_event(ts, ticker, action, units, price, profit, pnl_pct, lots, tag) -> dict:
-    return {
+def _as_date(d) -> date:
+    """Coerce a date / datetime / serialized-string timestamp to a plain date."""
+    if isinstance(d, datetime):
+        return d.date()
+    if isinstance(d, str):
+        return date.fromisoformat(d[:10])
+    return d
+
+
+def trade_event(
+    ts, ticker, action, units, price, profit, pnl_pct, lots, tag,
+    *, exit_reason=None, entry_premium=None, holding_days=None,
+) -> dict:
+    ev = {
         "date": ts,
         "ticker": ticker,
         "action": action,
@@ -33,6 +53,15 @@ def trade_event(ts, ticker, action, units, price, profit, pnl_pct, lots, tag) ->
         "lots": lots,
         "tag": tag,
     }
+    # Options-only enrichment. These keys are inserted ONLY when supplied, so equity
+    # trade events keep exactly the 10 keys the SST parity tests inspect.
+    if exit_reason is not None:
+        ev["exit_reason"] = exit_reason
+    if entry_premium is not None:
+        ev["entry_premium"] = entry_premium
+    if holding_days is not None:
+        ev["holding_days"] = holding_days
+    return ev
 
 
 class SliceExecutor:
@@ -66,6 +95,16 @@ class SliceExecutor:
             self.stops.remove(stop.lot_id)
         return events
 
+    def settle_expiries(self, ts: date | datetime, settler) -> list[dict]:
+        """Force-settle any option lots that have reached expiry (shared by all modes).
+
+        ``settler`` is an ExpirySettler (or None → no-op, the equity path). Kept here
+        so the backtest runner and the live session settle identically.
+        """
+        if settler is None:
+            return []
+        return settler.settle(ts, self.portfolio)
+
     def decide_and_execute(self, ts: date | datetime, strategy, ctx: AlgoContext) -> list[dict]:
         """Run the strategy for this slice, resolve overrides, execute in order."""
         lots_at_start = {s: len(self.portfolio.lots(s)) for s in self.portfolio.lot_symbols()}
@@ -91,13 +130,24 @@ class SliceExecutor:
             )
             return [ev] if ev else []
         if isinstance(action, ClosePosition):
-            ev = self._close_position(ts, action.symbol, action.tag)
+            ev = self._close_position(ts, action.symbol, action.tag, action.reason)
             return [ev] if ev else []
         if isinstance(action, AttachStop):
             self.stops.attach(action.stop)
             return []
         if isinstance(action, BuyLot):
             ev = self._buy(ts, action.symbol, action.units)
+            return [ev] if ev else []
+        if isinstance(action, OpenShort):
+            ev = self._sell_to_open(ts, action.symbol, action.units, action.multiplier)
+            return [ev] if ev else []
+        if isinstance(action, CloseShort):
+            lot = self.portfolio.get_lot(action.symbol, action.lot_id)
+            if lot is None:
+                return []
+            ev = self._buy_to_close(
+                ts, action.symbol, action.lot_id, lot, action.tag, action.reason
+            )
             return [ev] if ev else []
         return []
 
@@ -109,7 +159,7 @@ class SliceExecutor:
         pnl_pct = (fill.price - entry) / entry if entry else 0.0
         return trade_event(ts, symbol, "SELL", units, fill.price, profit, pnl_pct, lots, tag)
 
-    def _close_position(self, ts, symbol, tag) -> dict | None:
+    def _close_position(self, ts, symbol, tag, reason="") -> dict | None:
         lots = self.portfolio.lots(symbol)
         if not lots:
             return None
@@ -122,8 +172,10 @@ class SliceExecutor:
         _units, total_cost, profit, _n = closed
         avg_cost = total_cost / total_units
         pnl_pct = (fill.price - avg_cost) / avg_cost if avg_cost else 0.0
+        # exit_reason inserted only when non-empty → equity SST SELL events stay byte-identical.
         return trade_event(
-            ts, symbol, "SELL", total_units, fill.price, profit, pnl_pct, n_lots, tag
+            ts, symbol, "SELL", total_units, fill.price, profit, pnl_pct, n_lots, tag,
+            exit_reason=(reason or None),
         )
 
     def _buy(self, ts, symbol, units) -> dict | None:
@@ -142,4 +194,28 @@ class SliceExecutor:
             0.0,
             len(self.portfolio.lots(symbol)),
             "STRATEGY",
+        )
+
+    def _sell_to_open(self, ts, symbol, units, multiplier) -> dict | None:
+        """Write (sell-to-open) a short lot at the option's market price."""
+        if units <= 0:
+            return None
+        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.SELL, units))
+        self.portfolio.sell_to_open(symbol, units, fill.price, ts, multiplier)
+        return trade_event(
+            ts, symbol, "SHORT", units, fill.price, 0.0, 0.0,
+            len(self.portfolio.lots(symbol)), "STRATEGY",
+        )
+
+    def _buy_to_close(self, ts, symbol, lot_id, lot, tag, reason="") -> dict | None:
+        """Buy-to-close a short lot; profit = (entry − exit)·units·multiplier."""
+        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.BUY, lot.units))
+        profit = self.portfolio.buy_to_close(symbol, lot_id, fill.price)
+        pnl_pct = (lot.price - fill.price) / lot.price if lot.price else 0.0
+        return trade_event(
+            ts, symbol, "COVER", lot.units, fill.price, profit, pnl_pct,
+            len(self.portfolio.lots(symbol)), tag,
+            exit_reason=(reason or "manual"),
+            entry_premium=lot.price,
+            holding_days=(_as_date(ts) - _as_date(lot.opened_at)).days,
         )

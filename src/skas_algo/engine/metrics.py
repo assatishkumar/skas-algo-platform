@@ -23,14 +23,19 @@ def compute_metrics(result: RunResult, initial_capital: float) -> dict:
     hwm = 0.0
     max_dd = 0.0
     max_invested = 0.0
+    max_margin = 0.0  # peak short-option margin blocked (options runs only)
     for day in history:
         eq = day["total_equity"]
         hwm = max(hwm, eq)
         dd = (hwm - eq) / hwm if hwm > 0 else 0.0
         max_dd = max(max_dd, dd)
         max_invested = max(max_invested, day.get("invested_capital", 0.0))
+        max_margin = max(max_margin, day.get("margin_used", 0.0))
 
-    sells = [t for t in result.transactions if t["action"] == "SELL"]
+    # Realized-P&L events: long sells, short buy-to-close (COVER), and expiry settlement
+    # (SETTLE). For an equity-only run there are no COVER/SETTLE events, so this is
+    # identical to filtering on "SELL" alone (parity preserved).
+    sells = [t for t in result.transactions if t["action"] in ("SELL", "COVER", "SETTLE")]
     wins = sum(1 for t in sells if t["profit"] > 0)
     total_trades = len(sells)
     win_rate = (wins / total_trades * 100) if total_trades else 0.0
@@ -54,8 +59,13 @@ def compute_metrics(result: RunResult, initial_capital: float) -> dict:
         1,
         (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month) + 1,
     )
+    # NOTE: gross_profit/profitable count WINNERS ONLY (parity with SST). On a losing
+    # run these "Avg Monthly Profit*" figures still look positive — misleading on their
+    # own — so we ALSO expose net realized P&L (winners minus losers) below. The gross
+    # keys are kept byte-identical because test_sst_parity pins them.
     gross_profit = sum(t["profit"] for t in sells if t["profit"] > 0)
     profitable = sum(1 for t in sells if t["profit"] > 0)
+    net_profit = sum(t["profit"] for t in sells)  # winners + losers = honest figure
 
     return {
         "Total Return %": total_return,
@@ -63,6 +73,7 @@ def compute_metrics(result: RunResult, initial_capital: float) -> dict:
         "Final Equity": final_equity,
         "Max Drawdown %": max_dd * 100,
         "Max Capital Used": max_invested,
+        "Max Margin Used": max_margin,
         "Total Trades": total_trades,
         "Win Rate %": win_rate,
         "Cash Balance": cash_balance,
@@ -71,4 +82,8 @@ def compute_metrics(result: RunResult, initial_capital: float) -> dict:
         "Avg Monthly Profit Booking": profitable / months,
         "Avg Monthly Profit (Pre-Tax)": gross_profit / months,
         "Avg Monthly Profit (Post-Tax)": (gross_profit - total_taxes) / months,
+        # Net realized P&L (winners − losers) — the figures the dashboard surfaces.
+        "Net Realized P&L": net_profit,
+        "Avg Monthly Net P&L (Pre-Tax)": net_profit / months,
+        "Avg Monthly Net P&L (Post-Tax)": (net_profit - total_taxes) / months,
     }

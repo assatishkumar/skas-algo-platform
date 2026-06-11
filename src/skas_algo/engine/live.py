@@ -36,6 +36,7 @@ class LiveSession:
         tax_rate: float = 0.20,
         withdrawal_rate: float = 0.0,
         overrides: list[OverrideRule] | None = None,
+        excluded_symbols: list[str] | None = None,
         fill_model: FillModel | None = None,
         broker=None,
         algo_id: int | None = None,
@@ -52,7 +53,7 @@ class LiveSession:
         self.broker = broker or PaperBroker(
             price_fn=self.market.close, fill_model=fill_model or FillModel()
         )
-        self.resolver = OverrideResolver(overrides)
+        self.resolver = OverrideResolver(overrides, excluded=set(excluded_symbols or []))
         self.ctx = AlgoContext(
             algo_id=algo_id,
             params={},
@@ -80,6 +81,15 @@ class LiveSession:
     def update_quotes(self, quotes: dict[str, float]) -> None:
         for symbol, price in quotes.items():
             self.market.update_quote(symbol, price)
+
+    # --------------------------------------------------------- exclusions
+    @property
+    def excluded_symbols(self) -> list[str]:
+        return sorted(self.resolver.excluded)
+
+    def set_excluded(self, symbols: list[str]) -> None:
+        """Replace the no-new-entry blocklist (open positions keep being managed)."""
+        self.resolver.excluded = {s.strip().upper() for s in symbols if s.strip()}
 
     def run_decision(self, ts: date | datetime) -> list[dict]:
         """One decision cycle: month flush, managed stops, strategy + overrides."""
@@ -179,6 +189,7 @@ class LiveSession:
         which it's tracking (waiting for a breakout), holding, or just watching.
         """
         tracking = getattr(self.strategy, "tracking", {})
+        excluded = self.resolver.excluded
         rows: list[dict] = []
         for sym in self.market.universe():
             ltp = self.market.last_close(sym)
@@ -194,15 +205,19 @@ class LiveSession:
             pnl_pct = ((ltp - avg) / avg * 100) if (held and ltp and avg) else None
             is_tracking = bool(tracking.get(sym, False))
 
+            is_excluded = sym in excluded
             # Would the next decision act on this name? (breakout buy / target sell)
             signal = ""
             if held and ltp is not None and self._would_exit(lots, ltp, avg):
                 signal = "SELL"
             elif is_tracking and high is not None and ltp is not None and ltp > high:
-                signal = "BUY"
+                # Excluded names won't be bought, even on a breakout.
+                signal = "" if is_excluded else "BUY"
 
-            if held:
-                status = f"Holding {len(lots)} lot(s)"
+            if is_excluded and not held:
+                status = "Excluded — no new entries"
+            elif held:
+                status = f"Holding {len(lots)} lot(s)" + (" · excluded" if is_excluded else "")
             elif is_tracking and high is not None:
                 status = "Tracking → buy on breakout"
             elif ltp is not None and low is not None and ltp <= low:
@@ -222,6 +237,7 @@ class LiveSession:
                     "high_20d": high,
                     "low_20d": low,
                     "tracking": is_tracking,
+                    "excluded": is_excluded,
                     "held": held,
                     "lots": len(lots),
                     "units": units,

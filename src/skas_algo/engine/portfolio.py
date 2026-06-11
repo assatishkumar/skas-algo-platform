@@ -15,13 +15,21 @@ from itertools import count
 
 @dataclass
 class Lot:
-    """One purchase lot of a symbol."""
+    """One lot of a symbol.
+
+    ``direction`` is +1 for a long (bought) lot and -1 for a short (sold-to-open) lot;
+    ``multiplier`` is the contract multiplier (1 for equities and index options, where
+    the lot size is carried in ``units``). Both default so every existing long-equity
+    lot is constructed and valued exactly as before.
+    """
 
     id: int
     symbol: str
     units: int
     price: float
     opened_at: date | datetime
+    direction: int = 1
+    multiplier: int = 1
 
 
 @dataclass
@@ -49,6 +57,30 @@ class Portfolio:
         lot = Lot(id=next(self._ids), symbol=symbol, units=units, price=price, opened_at=when)
         self._lots.setdefault(symbol, []).append(lot)
         return lot
+
+    def sell_to_open(self, symbol: str, units: int, price: float, when: date | datetime,
+                     multiplier: int = 1) -> Lot:
+        """Open a SHORT lot, receiving premium into cash (used for option writing)."""
+        self.cash += units * price * multiplier
+        lot = Lot(id=next(self._ids), symbol=symbol, units=units, price=price,
+                  opened_at=when, direction=-1, multiplier=multiplier)
+        self._lots.setdefault(symbol, []).append(lot)
+        return lot
+
+    def buy_to_close(self, symbol: str, lot_id: int, price: float) -> float:
+        """Buy back a short lot at ``price``; return realized profit (entry − exit)·units·mult."""
+        lots = self._lots.get(symbol, [])
+        for i, lot in enumerate(lots):
+            if lot.id == lot_id:
+                cost = lot.units * price * lot.multiplier
+                profit = (lot.price - price) * lot.units * lot.multiplier
+                self.cash -= cost
+                self.month_realized += profit
+                lots.pop(i)
+                if not lots:
+                    del self._lots[symbol]
+                return profit
+        raise KeyError(f"Short lot {lot_id} not found for {symbol}")
 
     def close_lot(self, symbol: str, lot_id: int, price: float) -> float:
         """Sell an entire lot at ``price``; return realized profit (gross)."""
@@ -124,11 +156,16 @@ class Portfolio:
         total = 0.0
         for symbol, lots in self._lots.items():
             if symbol in closes:
-                total += sum(lot.units for lot in lots) * closes[symbol]
+                # Long lots are assets (+), short lots are liabilities to buy back (−).
+                # For a long equity lot (direction=1, multiplier=1) this is units*close.
+                total += sum(lot.direction * lot.units * closes[symbol] * lot.multiplier
+                             for lot in lots)
         return total
 
     def invested_capital(self) -> float:
-        return sum(lot.units * lot.price for lots in self._lots.values() for lot in lots)
+        # Long cost basis (deployed capital). Shorts use margin, tracked separately.
+        return sum(lot.units * lot.price * lot.multiplier
+                   for lots in self._lots.values() for lot in lots if lot.direction == 1)
 
     # ------------------------------------------------------- (de)serialize
     def export_state(self) -> dict:
@@ -144,6 +181,8 @@ class Portfolio:
                         "units": lot.units,
                         "price": lot.price,
                         "opened_at": str(lot.opened_at),
+                        "direction": lot.direction,
+                        "multiplier": lot.multiplier,
                     }
                     for lot in lots
                 ]
@@ -166,6 +205,8 @@ class Portfolio:
                     units=lot["units"],
                     price=lot["price"],
                     opened_at=lot["opened_at"],
+                    direction=lot.get("direction", 1),
+                    multiplier=lot.get("multiplier", 1),
                 )
                 for lot in lots
             ]

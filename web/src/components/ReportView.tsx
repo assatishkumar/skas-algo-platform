@@ -14,6 +14,7 @@ import { api } from "../api/client";
 import { formatInr, pct } from "../lib/format";
 import type { Report, Trade } from "../types";
 import { Badge, Card, MetricCard } from "./ui";
+import OptionsReport from "./OptionsReport";
 
 function downsample<T>(arr: T[], maxPoints = 400): T[] {
   if (arr.length <= maxPoints) return arr;
@@ -211,7 +212,7 @@ function TradesTable({ trades }: { trades: Trade[] }) {
                 <td className="py-1 pr-4 text-right">{t.units}</td>
                 <td className="py-1 pr-4 text-right">{formatInr(t.price, 2)}</td>
                 <td className={`py-1 pr-4 text-right ${t.profit > 0 ? "text-emerald-400" : t.profit < 0 ? "text-rose-400" : "text-slate-400"}`}>
-                  {t.action === "SELL" ? formatInr(t.profit) : "—"}
+                  {["SELL", "COVER", "SETTLE"].includes(t.action) ? formatInr(t.profit) : "—"}
                 </td>
                 <td className="py-1 pr-4">
                   <Badge>{t.tag}</Badge>
@@ -321,21 +322,29 @@ export default function ReportView({
         <MetricCard label="Total Withdrawals" value={formatInr(m["Total Withdrawals"])} />
         <MetricCard label="Cash Balance" value={formatInr(m["Cash Balance"])} />
         <MetricCard label="Avg Monthly Bookings" value={m["Avg Monthly Profit Booking"]?.toFixed(2)} />
-        <MetricCard label="Avg Monthly Profit (Pre-Tax)" value={formatInr(m["Avg Monthly Profit (Pre-Tax)"])} />
-        <MetricCard label="Avg Monthly Profit (Post-Tax)" value={formatInr(m["Avg Monthly Profit (Post-Tax)"])} />
+        <MetricCard
+          label="Avg Monthly Net P&L"
+          value={formatInr(m["Avg Monthly Net P&L (Post-Tax)"])}
+          tone={(m["Avg Monthly Net P&L (Post-Tax)"] ?? 0) >= 0 ? "good" : "bad"}
+        />
+        <MetricCard label="Avg Winners' Profit (Pre-Tax)" value={formatInr(m["Avg Monthly Profit (Pre-Tax)"])} />
+        <MetricCard label="Avg Winners' Profit (Post-Tax)" value={formatInr(m["Avg Monthly Profit (Post-Tax)"])} />
       </div>
+      {report.options && <OptionsReport options={report.options} />}
       <EquityChart report={report} runId={runId} />
       <YearlyTable report={report} />
       <MonthlyGrid title="Monthly profit (booked)" data={report.monthly_profit} total="sum" />
       {hasAnyValue(report.monthly_withdrawals) && (
         <MonthlyGrid title="Monthly withdrawals" data={report.monthly_withdrawals} total="sum" />
       )}
-      <MonthlyGrid
-        title="Monthly capital utilization (max invested)"
-        data={report.monthly_capital}
-        total="max"
-        totalLabel="Peak"
-      />
+      {!report.options && (
+        <MonthlyGrid
+          title="Monthly capital utilization (max invested)"
+          data={report.monthly_capital}
+          total="max"
+          totalLabel="Peak"
+        />
+      )}
       <MonthlyGrid
         title="Monthly equity (end of month)"
         data={report.monthly_equity}

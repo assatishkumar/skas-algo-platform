@@ -181,11 +181,21 @@ const TABS: { key: string; label: string }[] = [
   { key: "archived", label: "Archived" },
 ];
 
+const STRATEGY_LABELS: Record<string, string> = {
+  sst_lifo: "SST (LIFO)",
+  sst_fifo: "SST (FIFO)",
+  short_premium: "Short Premium (options)",
+};
+const strategyLabel = (id: string) => STRATEGY_LABELS[id] ?? id;
+
 export default function RunsPage() {
   const [tab, setTab] = useState("active");
   const [search, setSearch] = useState("");
   const [compareMode, setCompareMode] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
+  // Per-strategy collapse: a group is open if explicitly toggled, else the first group
+  // (most recent strategy) defaults open and the rest collapsed.
+  const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -215,12 +225,15 @@ export default function RunsPage() {
       )
     : runs;
 
-  // Group by batch_id: batched runs render together under a header.
-  const batches = new Map<string, RunSummary[]>();
-  const loose: RunSummary[] = [];
+  // Group by strategy first (collapsible sections), preserving most-recent-first order.
+  const strategyOrder: string[] = [];
+  const byStrategy = new Map<string, RunSummary[]>();
   for (const r of filtered) {
-    if (r.batch_id) batches.set(r.batch_id, [...(batches.get(r.batch_id) ?? []), r]);
-    else loose.push(r);
+    if (!byStrategy.has(r.strategy_id)) {
+      byStrategy.set(r.strategy_id, []);
+      strategyOrder.push(r.strategy_id);
+    }
+    byStrategy.get(r.strategy_id)!.push(r);
   }
 
   const tile = (r: RunSummary) => (
@@ -233,6 +246,35 @@ export default function RunsPage() {
       onSelect={() => toggleSelect(r.run_id)}
     />
   );
+
+  // Within a strategy: nest the existing batch grouping, then loose runs.
+  const renderGroupedRuns = (rs: RunSummary[]) => {
+    const batches = new Map<string, RunSummary[]>();
+    const loose: RunSummary[] = [];
+    for (const r of rs) {
+      if (r.batch_id) batches.set(r.batch_id, [...(batches.get(r.batch_id) ?? []), r]);
+      else loose.push(r);
+    }
+    return (
+      <div className="space-y-3">
+        {Array.from(batches.entries()).map(([bid, brs]) => (
+          <div key={bid} className="rounded-lg border border-slate-800 p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium text-slate-300">Batch · {brs.length} runs</div>
+              <button
+                onClick={() => navigate(`/compare?ids=${brs.slice(0, 5).map((r) => r.run_id).join(",")}`)}
+                className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs"
+              >
+                Compare batch →
+              </button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">{brs.map(tile)}</div>
+          </div>
+        ))}
+        {loose.length > 0 && <div className="grid gap-3 md:grid-cols-2">{loose.map(tile)}</div>}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -298,22 +340,30 @@ export default function RunsPage() {
           </div>
         </Card>
       ) : (
-        <div className="space-y-4">
-          {Array.from(batches.entries()).map(([bid, rs]) => (
-            <div key={bid} className="rounded-lg border border-slate-800 p-3 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-medium text-slate-300">Batch · {rs.length} runs</div>
+        <div className="space-y-3">
+          {strategyOrder.map((sid, i) => {
+            const rs = byStrategy.get(sid)!;
+            const open = openMap[sid] ?? i === 0;
+            const best = Math.max(...rs.map((r) => r.metrics["Total Return %"] ?? -Infinity));
+            return (
+              <div key={sid} className="rounded-lg border border-slate-800">
                 <button
-                  onClick={() => navigate(`/compare?ids=${rs.slice(0, 5).map((r) => r.run_id).join(",")}`)}
-                  className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs"
+                  onClick={() => setOpenMap((m) => ({ ...m, [sid]: !(m[sid] ?? i === 0) }))}
+                  className="w-full flex items-center justify-between gap-3 px-3 py-2.5 hover:bg-slate-800/40"
                 >
-                  Compare batch →
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-slate-500">{open ? "▾" : "▸"}</span>
+                    <span className="font-medium truncate">{strategyLabel(sid)}</span>
+                    <Badge>{rs.length} run{rs.length === 1 ? "" : "s"}</Badge>
+                  </div>
+                  <div className="text-xs text-slate-400 shrink-0">
+                    best <span className={best >= 0 ? "text-emerald-400" : "text-rose-400"}>{pct(best)}</span>
+                  </div>
                 </button>
+                {open && <div className="px-3 pb-3">{renderGroupedRuns(rs)}</div>}
               </div>
-              <div className="grid gap-3 md:grid-cols-2">{rs.map(tile)}</div>
-            </div>
-          ))}
-          {loose.length > 0 && <div className="grid gap-3 md:grid-cols-2">{loose.map(tile)}</div>}
+            );
+          })}
         </div>
       )}
     </div>

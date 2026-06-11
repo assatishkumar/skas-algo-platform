@@ -47,6 +47,7 @@ class LiveConfig:
     withdrawal_rate: float = 0.0
     lookback: int = 20
     overrides: list[OverrideRule] = field(default_factory=list)
+    excluded_symbols: list[str] = field(default_factory=list)  # blocked from new entries
     mode: str = "PAPER"
     quote_source: str = "cache"  # persisted so the run can be rebuilt after a restart
     broker_account_id: int | None = None
@@ -93,6 +94,9 @@ class LiveRun:
         self.session: LiveSession = session
         self.quote_source: QuoteSource = quote_source
         self.broadcaster: Broadcaster = broadcaster
+        # True when the run wants Zerodha live quotes but is degraded to cache (e.g.
+        # recovered while logged out). A later login can promote it back to live.
+        self.on_cache_fallback = False
         self.last_decision_day = None
         self.status = "running"
 
@@ -162,7 +166,15 @@ class LiveRun:
                 "name": self.config.name,
                 "strategy_id": self.config.strategy_id,
                 "quote_source": self.config.quote_source,
+                "on_cache_fallback": self.on_cache_fallback,
                 "parts_total": self.config.params.get("capital_parts"),
+                # Live controls + exclusion editing surface for the UI.
+                "auto": self.config.auto,
+                "ignore_market_hours": self.config.ignore_market_hours,
+                "refresh_seconds": self.config.refresh_seconds,
+                "decision_time": self.config.decision_time,
+                "universe": list(self.config.symbols),
+                "excluded_symbols": self.session.excluded_symbols,
                 **self.session.snapshot(),
             }
         )
@@ -191,7 +203,14 @@ class LiveRunManager:
 
     def start(self, config: LiveConfig, loader: PriceLoader, quote_source: QuoteSource) -> LiveRun:
         factory = get_strategy(config.strategy_id)
-        strategy = factory(universe=config.symbols, initial_capital=config.capital, **config.params)
+        # `universe`/`initial_capital` are passed explicitly; `start_date`/`end_date` are
+        # backtest bookkeeping the run carries in its params. Drop them so they don't
+        # collide with the constructor args or get rejected as unknown kwargs.
+        reserved = {"universe", "initial_capital", "start_date", "end_date"}
+        strategy_params = {k: v for k, v in config.params.items() if k not in reserved}
+        strategy = factory(
+            universe=config.symbols, initial_capital=config.capital, **strategy_params
+        )
         session = LiveSession(
             strategy,
             initial_capital=config.capital,
@@ -199,6 +218,7 @@ class LiveRunManager:
             tax_rate=config.tax_rate,
             withdrawal_rate=config.withdrawal_rate,
             overrides=config.overrides,
+            excluded_symbols=config.excluded_symbols,
         )
         session.warmup(warmup_history(loader, config.symbols, config.lookback))
 
@@ -213,6 +233,7 @@ class LiveRunManager:
             "refresh_seconds": config.refresh_seconds,
             "decision_time": config.decision_time,
             "ignore_market_hours": config.ignore_market_hours,
+            "excluded_symbols": config.excluded_symbols,
             **config.params,
         }
         with session_scope() as db:
@@ -250,6 +271,79 @@ class LiveRunManager:
         if live is not None:
             live.stop()
         return live
+
+    def update_controls(
+        self,
+        run_id: int,
+        *,
+        auto: bool | None = None,
+        ignore_market_hours: bool | None = None,
+        refresh_seconds: int | None = None,
+        excluded_symbols: list[str] | None = None,
+    ) -> LiveRun:
+        """Mutate a running deployment's loop controls / exclusion list, in place.
+
+        Applies to the in-memory run immediately (the loop reads config each tick),
+        toggles the background loop on/off to match ``auto``, and persists the new
+        values into the run's params_snapshot so a restart recovers them.
+        """
+        live = self.runs[run_id]
+        cfg = live.config
+        if ignore_market_hours is not None:
+            cfg.ignore_market_hours = ignore_market_hours
+        if refresh_seconds is not None:
+            cfg.refresh_seconds = max(5, int(refresh_seconds))
+        if excluded_symbols is not None:
+            live.session.set_excluded(excluded_symbols)
+            cfg.excluded_symbols = live.session.excluded_symbols
+        if auto is not None:
+            cfg.auto = auto
+            running = run_id in self._tasks and not self._tasks[run_id].done()
+            if auto and not running:
+                self.start_loop(run_id)
+            elif not auto and running:
+                self._tasks.pop(run_id).cancel()
+
+        with session_scope() as db:
+            run = db.get(AlgoRun, run_id)
+            if run is not None:
+                snap = dict(run.params_snapshot or {})
+                snap.update(
+                    auto=cfg.auto,
+                    ignore_market_hours=cfg.ignore_market_hours,
+                    refresh_seconds=cfg.refresh_seconds,
+                    excluded_symbols=cfg.excluded_symbols,
+                )
+                run.params_snapshot = snap
+        self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
+        return live
+
+    def promote_quote_source(self, run_id: int, db) -> bool:
+        """Upgrade a cache-fallback run back to live Zerodha quotes if a session exists.
+
+        Returns True if promoted. Used by the reconnect endpoint and auto-called when a
+        broker login succeeds, so a run no longer stays stuck on cache after you log in.
+        """
+        live = self.runs.get(run_id)
+        if live is None or not live.on_cache_fallback or not live.config.broker_account_id:
+            return False
+        from skas_algo.db.models import BrokerAccount
+        from skas_algo.live.quotes import ZerodhaQuoteSource
+        from skas_algo.services import broker as broker_svc
+
+        account = db.get(BrokerAccount, live.config.broker_account_id)
+        if account is None or not broker_svc.has_valid_session(account):
+            return False
+        live.quote_source = ZerodhaQuoteSource(broker_svc.make_adapter(account))
+        live.on_cache_fallback = False
+        self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
+        return True
+
+    def promote_account_runs(self, account_id: int, db) -> list[int]:
+        """Promote every cache-fallback run on this account (called after a login)."""
+        return [rid for rid, live in self.runs.items()
+                if live.on_cache_fallback and live.config.broker_account_id == account_id
+                and self.promote_quote_source(rid, db)]
 
     # ----------------------------------------------------- async driver
     def start_loop(self, run_id: int) -> None:

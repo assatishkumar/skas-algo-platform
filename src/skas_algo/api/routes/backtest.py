@@ -17,6 +17,7 @@ from skas_algo.api.models import (
     DeploymentUpdate,
     RunSummary,
     UniverseOut,
+    iso_utc,
 )
 from skas_algo.data import universes
 from skas_algo.data.provider import get_available_symbols, get_price_loader
@@ -74,14 +75,20 @@ def post_backtest(
     loader: PriceLoader = Depends(get_price_loader),
     avail: set[str] = Depends(get_available_symbols),
 ) -> BacktestResponse:
-    # A named universe expands to its cached symbols; otherwise use explicit symbols.
-    if req.universe:
-        try:
-            req.symbols = universes.resolve(req.universe, avail)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if not req.symbols:
-        raise HTTPException(status_code=422, detail="symbols or a valid universe required")
+    # Options (DERIV) runs trade a dynamic option chain for an underlying, so they
+    # need neither explicit symbols nor a named equity universe.
+    is_deriv = req.instrument_class.upper() == "DERIV"
+    if not is_deriv:
+        # A named universe expands to its cached symbols; otherwise use explicit symbols.
+        if req.universe:
+            try:
+                req.symbols = universes.resolve(req.universe, avail)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not req.symbols:
+            raise HTTPException(status_code=422, detail="symbols or a valid universe required")
+    elif not (req.underlying or req.params.get("underlying")):
+        raise HTTPException(status_code=422, detail="underlying required for a DERIV backtest")
     try:
         result = run_backtest(db, loader, req)
     except KeyError as exc:  # unknown strategy_id
@@ -113,7 +120,7 @@ def list_runs(status: str | None = None, db: Session = Depends(get_db)) -> list[
                 mode=run.mode.value,
                 archived=run.archived,
                 batch_id=run.batch_id,
-                started_at=run.started_at.isoformat() if run.started_at else None,
+                started_at=iso_utc(run.started_at),
                 metrics=run.metrics.get("metrics", {}) if run.metrics else {},
             )
         )

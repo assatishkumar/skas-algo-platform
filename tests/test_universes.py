@@ -9,8 +9,8 @@ from skas_algo.data import universes
 
 def test_lists_present_and_sized():
     assert len(universes.NIFTY_50) == 50
-    assert len(universes.NIFTY_100) == 105
-    assert len(universes.NIFTY_200) == 195  # user-provided list (5 short of 200)
+    assert len(universes.NIFTY_100) == 109  # user-provided (2025/26 index revisions)
+    assert len(universes.NIFTY_200) == 199  # user-provided list (1 short of 200)
     # No duplicates in any universe.
     for name in universes.UNIVERSES:
         symbols = universes.UNIVERSES[name][1]
@@ -25,15 +25,15 @@ def test_resolve_without_cache_returns_full_list():
 def test_resolve_intersects_and_preserves_order():
     available = {"RELIANCE", "TCS", "INFY"}  # only 3 of Nifty 50 present
     resolved = universes.resolve("nifty50", available)
-    assert resolved == ["RELIANCE", "TCS", "INFY"]  # list order, not set order
+    assert resolved == ["INFY", "RELIANCE", "TCS"]  # list order (alphabetical), not set order
     # Every resolved symbol is both in the universe and available.
     assert all(s in available and s in universes.NIFTY_50 for s in resolved)
 
 
 def test_resolve_drops_missing_symbols():
-    available = set(universes.NIFTY_100) - {"ZOMATO", "IDFC"}
+    available = set(universes.NIFTY_100) - {"YESBANK", "ABB"}
     resolved = universes.resolve("nifty100", available)
-    assert "ZOMATO" not in resolved and "IDFC" not in resolved
+    assert "YESBANK" not in resolved and "ABB" not in resolved
     assert len(resolved) == len(universes.NIFTY_100) - 2
 
 

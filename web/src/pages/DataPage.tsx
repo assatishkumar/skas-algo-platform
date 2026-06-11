@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -12,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { api, brokers } from "../api/client";
+import { FuturesDataSection, OptionsDataSection } from "../components/DerivData";
 import { Card, ErrorBox, Spinner } from "../components/ui";
 import type { DataSymbol } from "../types";
 
@@ -119,34 +121,69 @@ function DataToolbar({
 }) {
   const [newSym, setNewSym] = useState("");
   const [adding, setAdding] = useState(false);
+  const [addProgress, setAddProgress] = useState<{ done: number; total: number } | null>(null);
   const [addMsg, setAddMsg] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   const disabled = accountId == null;
 
-  async function addSymbol() {
-    const sym = newSym.trim().toUpperCase();
-    if (!sym || accountId == null) return;
+  async function addSymbols() {
+    if (accountId == null) return;
+    // Accept a comma / space / newline separated list, e.g. "TCS, INFY".
+    const requested = Array.from(
+      new Set(
+        newSym
+          .split(/[\s,]+/)
+          .map((s) => s.trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    );
+    if (requested.length === 0) return;
+
+    const cached = new Set(symbols.map((s) => s.symbol.toUpperCase()));
+    const skipped = requested.filter((s) => cached.has(s));
+    const toAdd = requested.filter((s) => !cached.has(s));
+
+    if (toAdd.length === 0) {
+      setAddMsg(`All ${requested.length} already cached — nothing to add.`);
+      return;
+    }
+
     setAdding(true);
     setAddMsg(null);
+    const added: string[] = [];
+    const failed: string[] = [];
+    const CHUNK = 15;
+    setAddProgress({ done: 0, total: toAdd.length });
     try {
-      // Full backfill from 2010 for a name not yet cached.
-      const { refreshed } = await brokers.refreshCache(accountId, {
-        symbols: [sym],
-        start_date: "2010-01-01",
-      });
-      const r = refreshed[sym];
-      if (r?.error) setAddMsg(`Error: ${r.error}`);
-      else if (!r?.rows) setAddMsg(`No data found for "${sym}" — check the symbol.`);
-      else {
-        setAddMsg(`Added ${sym} (${r.rows} rows → ${r.last_date}).`);
+      for (let i = 0; i < toAdd.length; i += CHUNK) {
+        // Full backfill from 2010 for names not yet cached.
+        const { refreshed } = await brokers.refreshCache(accountId, {
+          symbols: toAdd.slice(i, i + CHUNK),
+          start_date: "2010-01-01",
+        });
+        for (const [sym, r] of Object.entries(refreshed)) {
+          if (r?.error || !r?.rows) failed.push(sym);
+          else added.push(sym);
+        }
+        setAddProgress({ done: Math.min(i + CHUNK, toAdd.length), total: toAdd.length });
+      }
+
+      const parts: string[] = [];
+      if (added.length) parts.push(`Added ${added.length} (${added.join(", ")})`);
+      if (skipped.length) parts.push(`skipped ${skipped.length} already cached`);
+      if (failed.length) parts.push(`no data for ${failed.length} (${failed.join(", ")})`);
+      setAddMsg(parts.join(" · "));
+
+      if (added.length) {
         setNewSym("");
-        onChanged(sym);
+        onChanged(added[0]);
       }
     } catch (e) {
       setAddMsg((e as Error).message);
     } finally {
       setAdding(false);
+      setAddProgress(null);
     }
   }
 
@@ -171,19 +208,19 @@ function DataToolbar({
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
           <input
-            className="rounded-md bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm w-44 focus:outline-none focus:border-brand"
-            placeholder="Add symbol (e.g. DLF)"
+            className="rounded-md bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm w-72 focus:outline-none focus:border-brand"
+            placeholder="Add symbols (e.g. TCS, INFY)"
             value={newSym}
             onChange={(e) => setNewSym(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addSymbol()}
+            onKeyDown={(e) => e.key === "Enter" && addSymbols()}
             disabled={disabled}
           />
           <button
-            onClick={addSymbol}
+            onClick={addSymbols}
             disabled={disabled || adding || !newSym.trim()}
             className="rounded-md bg-brand hover:bg-brand-light px-3 py-1.5 text-sm font-medium disabled:opacity-50"
           >
-            {adding ? "Adding…" : "Add"}
+            {addProgress ? `Adding ${addProgress.done}/${addProgress.total}…` : adding ? "Adding…" : "Add"}
           </button>
         </div>
         <button
@@ -200,7 +237,7 @@ function DataToolbar({
   );
 }
 
-export default function DataPage() {
+function StocksDataSection() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -244,8 +281,6 @@ export default function DataPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-semibold">Data</h1>
-
       <Card>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
           <div>
@@ -317,6 +352,44 @@ export default function DataPage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+const TABS = [
+  { key: "stocks", label: "Stocks" },
+  { key: "options", label: "Options" },
+  { key: "futures", label: "Futures" },
+];
+
+export default function DataPage() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") ?? "stocks";
+  return (
+    <div className="space-y-4">
+      <h1 className="text-lg font-semibold">Data</h1>
+      <div className="flex gap-1 border-b border-slate-800">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setParams(t.key === "stocks" ? {} : { tab: t.key })}
+            className={`px-4 py-2 text-sm font-medium -mb-px border-b-2 ${
+              tab === t.key
+                ? "border-brand text-white"
+                : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === "options" ? (
+        <OptionsDataSection />
+      ) : tab === "futures" ? (
+        <FuturesDataSection />
+      ) : (
+        <StocksDataSection />
+      )}
     </div>
   );
 }

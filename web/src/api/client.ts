@@ -5,10 +5,18 @@ import type {
   BrokerAccount,
   BrokerConnectRequest,
   CompareRun,
+  DataCoverage,
   DataSummary,
   DataSymbol,
   DataSymbolDetail,
   Deployment,
+  DerivCoverage,
+  FuturesSeries,
+  LiveControlsInput,
+  OptionChain,
+  OptionsExpiries,
+  RefreshResult,
+  UnderlyingList,
   LiveRunSnapshot,
   OverrideInput,
   Report,
@@ -69,6 +77,11 @@ export const api = {
   tradesCsvUrl: (id: number) => `${BASE}/runs/${id}/trades.csv`,
   benchmarks: () => request<{ benchmarks: string[] }>("/benchmarks"),
   dataSummary: () => request<DataSummary>("/data/summary"),
+  dataCoverage: (instrumentClass: string, underlying?: string) =>
+    request<DataCoverage>(
+      `/data/coverage?instrument_class=${instrumentClass}` +
+        (underlying ? `&underlying=${encodeURIComponent(underlying)}` : ""),
+    ),
   dataSymbols: () => request<DataSymbol[]>("/data/symbols"),
   dataSymbol: (sym: string) =>
     request<DataSymbolDetail>(`/data/symbols/${encodeURIComponent(sym)}`),
@@ -76,6 +89,28 @@ export const api = {
     request<{ index: string; points: BenchmarkPoint[] }>(
       `/runs/${id}/benchmark?index=${encodeURIComponent(index)}`,
     ),
+
+  // --- options & futures data (no broker session needed) ---
+  optionsUnderlyings: () => request<UnderlyingList>("/data/options/underlyings"),
+  optionsCoverage: (u: string) =>
+    request<DerivCoverage>(`/data/options/${encodeURIComponent(u)}/coverage`),
+  optionsExpiries: (u: string, date?: string) =>
+    request<OptionsExpiries>(
+      `/data/options/${encodeURIComponent(u)}/expiries${date ? `?date=${date}` : ""}`,
+    ),
+  optionsChain: (u: string, date: string, expiry: string, greeks = false) =>
+    request<OptionChain>(
+      `/data/options/${encodeURIComponent(u)}/chain?date=${date}&expiry=${expiry}&greeks=${greeks}`,
+    ),
+  optionsRefresh: (body: { underlyings: string[]; start_date: string; end_date: string }) =>
+    request<RefreshResult>("/data/options/refresh", { method: "POST", body: JSON.stringify(body) }),
+  futuresUnderlyings: () => request<UnderlyingList>("/data/futures/underlyings"),
+  futuresCoverage: (u: string) =>
+    request<DerivCoverage>(`/data/futures/${encodeURIComponent(u)}/coverage`),
+  futuresSeries: (u: string) =>
+    request<FuturesSeries>(`/data/futures/${encodeURIComponent(u)}/series`),
+  futuresRefresh: (body: { underlyings: string[]; start_date: string; end_date: string }) =>
+    request<RefreshResult>("/data/futures/refresh", { method: "POST", body: JSON.stringify(body) }),
 
   // --- live / paper ---
   liveList: () => request<LiveRunSnapshot[]>("/live"),
@@ -92,6 +127,13 @@ export const api = {
     request<LiveRunSnapshot>(`/live/${id}/quote-source`, {
       method: "POST",
       body: JSON.stringify({ quote_source, broker_account_id: broker_account_id ?? null }),
+    }),
+  liveReconnectQuotes: (id: number) =>
+    request<LiveRunSnapshot>(`/live/${id}/reconnect-quotes`, { method: "POST" }),
+  liveSetControls: (id: number, body: LiveControlsInput) =>
+    request<LiveRunSnapshot>(`/live/${id}/controls`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
   liveAddOverride: (id: number, ov: OverrideInput) =>
     request<{ run_id: number; overrides: number }>(`/live/${id}/overrides`, {
@@ -123,6 +165,12 @@ export const brokers = {
   ) =>
     request<{ account_id: number; refreshed: Record<string, { rows?: number; last_date?: string | null; error?: string }> }>(
       `/brokers/${id}/refresh-cache`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  // Fetch & cache the MCX GOLD futures series (underlying for the synthetic GOLD chain).
+  refreshGold: (id: number, body: { start_date?: string }) =>
+    request<{ account_id: number; refreshed: Record<string, { rows?: number; last_date?: string | null; error?: string }> }>(
+      `/brokers/${id}/refresh-gold`,
       { method: "POST", body: JSON.stringify(body) },
     ),
   arm: (id: number) => request<BrokerAccount>(`/brokers/${id}/arm`, { method: "POST" }),

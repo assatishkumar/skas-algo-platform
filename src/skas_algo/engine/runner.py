@@ -49,6 +49,9 @@ class BacktestRunner:
         fill_model: FillModel | None = None,
         overrides: list[OverrideRule] | None = None,
         verbose: bool = False,
+        market_view=None,
+        settler=None,
+        margin_model=None,
     ):
         self.strategy = strategy
         self.universe = universe
@@ -60,9 +63,14 @@ class BacktestRunner:
         self.fill_model = fill_model or FillModel()
         self.resolver = OverrideResolver(overrides)
         self.verbose = verbose
+        # Options runs pass a prebuilt (lazy) market view + expiry settler + margin
+        # model; all default None so the equity path is byte-identical.
+        self.market_view = market_view
+        self.settler = settler
+        self.margin_model = margin_model
 
     def run(self, start_date: date, end_date: date) -> RunResult:
-        view: MarketView = HistoricalReplayFeed(self.loader, self.lookback).build(
+        view = self.market_view or HistoricalReplayFeed(self.loader, self.lookback).build(
             self.universe, start_date, end_date, verbose=self.verbose
         )
         portfolio = Portfolio(cash=self.initial_capital)
@@ -82,6 +90,11 @@ class BacktestRunner:
             if current_month is not None and this_month != current_month:
                 self._flush(portfolio, result, current_month, ts)
             current_month = this_month
+
+            # --- expiry settlement (options): realize expired contracts first so the
+            #     strategy sees a flat book and can re-enter the next cycle ---
+            if self.settler is not None:
+                result.transactions.extend(executor.settle_expiries(ts, self.settler))
 
             # --- shared execution path: stops first, then strategy decisions ---
             result.transactions.extend(executor.check_stops(ts, view.closes_today()))
@@ -109,12 +122,28 @@ class BacktestRunner:
         # never valued at zero on a day it doesn't print (e.g. Muhurat sessions).
         closes = view.mark_prices()
         holdings = portfolio.holdings_value(closes)
-        result.history.append(
-            {
-                "date": ts,
-                "cash": portfolio.cash,
-                "holdings_value": holdings,
-                "invested_capital": portfolio.invested_capital(),
-                "total_equity": portfolio.cash + holdings,
-            }
-        )
+        row = {
+            "date": ts,
+            "cash": portfolio.cash,
+            "holdings_value": holdings,
+            "invested_capital": portfolio.invested_capital(),
+            "total_equity": portfolio.cash + holdings,
+        }
+        if self.margin_model is not None:
+            d = ts.date() if hasattr(ts, "date") else ts
+            row["margin_used"] = self.margin_model.margin_used(portfolio, d)
+        # Options runs: record the mark-to-market of open option lots so the report can
+        # draw a premium-decay curve. Gated on settler (options-only) → equity rows
+        # are unchanged and mode-equivalence holds.
+        if self.settler is not None:
+            from skas_algo.engine.options.instrument import parse as _parse_opt
+
+            open_premium = 0.0
+            for sym in portfolio.lot_symbols():
+                if sym in closes and _parse_opt(sym) is not None:
+                    mark = closes[sym]
+                    open_premium += sum(
+                        lot.units * mark * lot.multiplier for lot in portfolio.lots(sym)
+                    )
+            row["open_premium"] = open_premium
+        result.history.append(row)

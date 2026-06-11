@@ -34,6 +34,12 @@ _NON_STRATEGY_KEYS = {
     "refresh_seconds",
     "decision_time",
     "ignore_market_hours",
+    "excluded_symbols",
+    # passed explicitly below; also backtest bookkeeping a forward-tested run carries.
+    "universe",
+    "initial_capital",
+    "start_date",
+    "end_date",
 }
 
 
@@ -83,6 +89,7 @@ def _rebuild(db, run: AlgoRun, loader) -> None:
         lookback=lookback,
         tax_rate=params.get("tax_rate", 0.20),
         withdrawal_rate=params.get("withdrawal_rate", 0.0),
+        excluded_symbols=params.get("excluded_symbols", []),
     )
     session.warmup(warmup_history(loader, symbols, lookback))
     if run.state:
@@ -104,10 +111,12 @@ def _rebuild(db, run: AlgoRun, loader) -> None:
         decision_time=params.get("decision_time", "15:20"),
         ignore_market_hours=params.get("ignore_market_hours", False),
         auto=params.get("auto", False),
+        excluded_symbols=params.get("excluded_symbols", []),
     )
 
-    quote_source = _quote_source(db, config, loader)
+    quote_source, on_cache_fallback = _quote_source(db, config, loader)
     live = LiveRun(run.id, run.algo_id, config, session, quote_source, manager.broadcaster)
+    live.on_cache_fallback = on_cache_fallback
 
     last = (run.state or {}).get("last_decision_day")
     if last:
@@ -122,13 +131,18 @@ def _rebuild(db, run: AlgoRun, loader) -> None:
 
 
 def _quote_source(db, config: LiveConfig, loader):
-    """Zerodha if a valid session exists, else fall back to cache (degraded)."""
+    """Zerodha if a valid session exists, else fall back to cache (degraded).
+
+    Returns ``(quote_source, on_cache_fallback)`` — the flag is True when the run
+    wanted Zerodha but had to degrade to cache, so a later login can promote it.
+    """
     if config.quote_source == "zerodha" and config.broker_account_id:
         account = db.get(BrokerAccount, config.broker_account_id)
         if account is not None and broker_svc.has_valid_session(account):
-            return ZerodhaQuoteSource(broker_svc.make_adapter(account))
+            return ZerodhaQuoteSource(broker_svc.make_adapter(account)), False
         logger.warning(
             "run for account %s has no valid session; recovering with cache quotes",
             config.broker_account_id,
         )
-    return CacheQuoteSource(loader)
+        return CacheQuoteSource(loader), True
+    return CacheQuoteSource(loader), False

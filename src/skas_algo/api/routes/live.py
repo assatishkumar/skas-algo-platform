@@ -14,9 +14,11 @@ from sqlalchemy.orm import Session
 from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
     DeploymentUpdate,
+    LiveControlsInput,
     LiveStartRequest,
     OverrideInput,
     QuoteSourceInput,
+    iso_utc,
 )
 from skas_algo.data import universes
 from skas_algo.data.provider import get_available_symbols, get_price_loader
@@ -138,8 +140,8 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             "mode": run.mode.value,
             "status": st,
             "quote_source": (run.params_snapshot or {}).get("quote_source", "cache"),
-            "started_at": run.started_at.isoformat() if run.started_at else None,
-            "stopped_at": run.stopped_at.isoformat() if run.stopped_at else None,
+            "started_at": iso_utc(run.started_at),
+            "stopped_at": iso_utc(run.stopped_at),
         }
         live = manager.get(run.id)
         if live is not None and st == "active":
@@ -202,6 +204,18 @@ async def set_quote_source(
     return live.snapshot()
 
 
+@router.post("/{run_id}/reconnect-quotes")
+async def reconnect_quotes(run_id: int, db: Session = Depends(get_db)) -> dict:
+    """Promote a cache-fallback run back to live Zerodha quotes (needs a valid session)."""
+    live = _get(run_id)
+    if not manager.promote_quote_source(run_id, db):
+        raise HTTPException(
+            status_code=400,
+            detail="cannot reconnect — run isn't on cache fallback or no valid session",
+        )
+    return live.snapshot()
+
+
 @router.post("/{run_id}/refresh")
 async def refresh_live(run_id: int) -> dict:
     live = _get(run_id)
@@ -226,6 +240,24 @@ async def run_decision(run_id: int) -> dict:
             for e in events
         ],
     }
+
+
+@router.post("/{run_id}/controls")
+async def set_controls(run_id: int, body: LiveControlsInput) -> dict:
+    """Edit a running deployment's loop controls and exclusion list, in place.
+
+    Any field left null is unchanged. ``excluded_symbols`` replaces the blocklist;
+    excluded names get no new entries while open positions keep being managed.
+    """
+    _get(run_id)
+    live = manager.update_controls(
+        run_id,
+        auto=body.auto,
+        ignore_market_hours=body.ignore_market_hours,
+        refresh_seconds=body.refresh_seconds,
+        excluded_symbols=body.excluded_symbols,
+    )
+    return live.snapshot()
 
 
 @router.post("/{run_id}/overrides")

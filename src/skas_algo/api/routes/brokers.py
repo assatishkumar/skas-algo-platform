@@ -91,6 +91,10 @@ def login(
         broker_svc.exchange_token(db, account, body.request_token.strip())
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"token exchange failed: {exc}") from exc
+    # A fresh session can revive any live run that had degraded to cache quotes.
+    db.flush()
+    from skas_algo.live.manager import manager
+    manager.promote_account_runs(account_id, db)
     return _to_out(account)
 
 
@@ -113,6 +117,23 @@ def refresh_cache(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"cache refresh failed: {exc}") from exc
     return {"account_id": account_id, "refreshed": result}
+
+
+@router.post("/{account_id}/refresh-gold")
+def refresh_gold(
+    account_id: int,
+    body: RefreshCacheInput,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Fetch & cache the MCX GOLD futures series (underlying for the synthetic GOLD chain)."""
+    account = _get(db, account_id)
+    if not broker_svc.has_valid_session(account):
+        raise HTTPException(status_code=400, detail="no valid Kite session — log in first")
+    try:
+        result = market_data.refresh_gold(account, start=body.start_date)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GOLD refresh failed: {exc}") from exc
+    return {"account_id": account_id, "refreshed": {"GOLD": result}}
 
 
 @router.post("/{account_id}/arm", response_model=BrokerAccountOut)

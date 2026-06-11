@@ -58,15 +58,46 @@ class ClosePosition:
 
     symbol: str
     tag: str = "STRATEGY"
+    # Why the position is being closed ("target"/"stop"/"time"/"" → none). Carried for the
+    # options report's long legs; equity SST leaves it "" so its SELL event is unchanged.
+    reason: str = ""
+
+
+@dataclass
+class OpenShort:
+    """Sell-to-open a short lot (option writing)."""
+
+    symbol: str
+    units: int
+    multiplier: int = 1
+
+
+@dataclass
+class CloseShort:
+    """Buy-to-close a specific short lot."""
+
+    symbol: str
+    lot_id: int
+    tag: str = "STRATEGY"
+    # Why the short is being closed ("target"/"stop"/"" → "manual"). Carried so the
+    # options report can attribute each exit; equity exits never construct CloseShort.
+    reason: str = ""
 
 
 _PRECEDENCE = {"POSITION": 0, "SYMBOL": 1, "ALGO": 2}
 
 
 class OverrideResolver:
-    def __init__(self, overrides: list[OverrideRule] | None = None):
+    def __init__(
+        self,
+        overrides: list[OverrideRule] | None = None,
+        excluded: set[str] | None = None,
+    ):
         # A mutable list so live intervention can append/replace rules at runtime.
         self.overrides = overrides if overrides is not None else []
+        # Symbols blocked from NEW entries; open positions keep being managed/exited.
+        # Mutable so a live deployment's exclusion list can be edited at runtime.
+        self.excluded: set[str] = excluded if excluded is not None else set()
 
     def _match(self, symbol: str, lot_id: int) -> dict[str, Any] | None:
         """Most specific active rule for this lot: POSITION > SYMBOL > ALGO."""
@@ -90,19 +121,37 @@ class OverrideResolver:
         actions: list = []
         for sig in signals:
             if sig.action is SignalAction.ENTER_LONG:
+                if sig.symbol in self.excluded:
+                    continue  # excluded: no new entries (existing lots still managed)
                 actions.append(BuyLot(sig.symbol, sig.quantity or 0))
+            elif sig.action is SignalAction.ENTER_SHORT:
+                if sig.symbol in self.excluded:
+                    continue
+                actions.append(
+                    OpenShort(sig.symbol, sig.quantity or 0, sig.meta.get("multiplier", 1))
+                )
             elif sig.action is SignalAction.EXIT:
                 actions.extend(self._resolve_exit(sig, ctx))
             elif sig.action is SignalAction.EXIT_ALL:
-                # Pooled exit (SST averaged target). Overrides don't reshape pooled
-                # exits in this version; it closes the whole position.
-                actions.append(ClosePosition(sig.symbol))
+                # Short symbols buy-to-close each lot; long symbols use the pooled
+                # SST exit (unchanged). Overrides don't reshape pooled/short exits here.
+                lots = ctx.portfolio.lots(sig.symbol)
+                if lots and all(lot.direction == -1 for lot in lots):
+                    actions.extend(
+                        CloseShort(sig.symbol, lot.id, reason=sig.reason) for lot in lots
+                    )
+                else:
+                    actions.append(ClosePosition(sig.symbol, reason=sig.reason))
         return actions
 
     def _resolve_exit(self, sig: Signal, ctx: AlgoContext) -> list:
         lot = ctx.portfolio.get_lot(sig.symbol, sig.lot_id) if sig.lot_id else None
         if lot is None:
             return []
+        if lot.direction == -1:
+            # Short lot: buy-to-close (the long-only book/trail reshaping below
+            # doesn't apply to written options in this version).
+            return [CloseShort(sig.symbol, lot.id, tag="STRATEGY", reason=sig.reason)]
         rule = self._match(sig.symbol, lot.id)
         exit_rules = (rule or {}).get("exit") if rule else None
         if not exit_rules:

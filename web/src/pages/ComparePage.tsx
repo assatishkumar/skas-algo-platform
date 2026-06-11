@@ -264,7 +264,7 @@ export default function ComparePage() {
                         key={r.run_id}
                         className={`py-1.5 pr-4 text-right ${i === bi ? "text-emerald-400 font-semibold" : ""}`}
                       >
-                        {row.fmt(r.metrics[row.key])}
+                        {row.fmt(r.metrics[row.key] ?? 0)}
                       </td>
                     ))}
                   </tr>

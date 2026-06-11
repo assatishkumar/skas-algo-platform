@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 from pydantic import BaseModel, Field
+
+
+def iso_utc(dt: datetime | None) -> str | None:
+    """Serialize a datetime as a UTC ISO string the browser parses unambiguously.
+
+    Stored timestamps are UTC, but SQLite drops tzinfo on read, yielding a naive
+    datetime whose ``.isoformat()`` has no offset — which the browser then treats as
+    *local* time (off by the local UTC offset). Attach UTC for naive values so the
+    emitted string always carries an offset.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.isoformat()
 
 
 class OverrideInput(BaseModel):
@@ -18,6 +33,10 @@ class BacktestRequest(BaseModel):
     # Either an explicit symbol list (Custom) or a named universe (expanded server-side).
     symbols: list[str] = Field(default_factory=list)
     universe: str | None = None
+    # "STOCK" (equity, default) or "DERIV" (index options). DERIV uses the options
+    # data + chain + expiry-settlement engine instead of the equity loader.
+    instrument_class: str = "STOCK"
+    underlying: str | None = None  # DERIV: NIFTY / BANKNIFTY (else taken from params/symbols)
     start_date: date
     end_date: date
     capital: float = 2_500_000
@@ -94,6 +113,15 @@ class RequestTokenInput(BaseModel):
 class QuoteSourceInput(BaseModel):
     quote_source: str  # "cache" | "zerodha"
     broker_account_id: int | None = None
+
+
+class LiveControlsInput(BaseModel):
+    """Edit a running deployment's loop controls + exclusion list. Null = unchanged."""
+
+    auto: bool | None = None
+    ignore_market_hours: bool | None = None
+    refresh_seconds: int | None = None
+    excluded_symbols: list[str] | None = None  # replaces the no-new-entry blocklist
 
 
 class RefreshCacheInput(BaseModel):
