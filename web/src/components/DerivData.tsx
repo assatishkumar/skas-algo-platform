@@ -18,11 +18,11 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 
 type UnderlyingItem = { key: string; label: string; disabled: boolean; hint: string };
 
-// Options support real NIFTY/BANKNIFTY (bhavcopy) + synthetic GOLD (Black-Scholes).
+// Options support real NIFTY/BANKNIFTY (bhavcopy) + synthetic GOLD (Black-76, GOLDM specs).
 const OPT_UNDERLYINGS: UnderlyingItem[] = [
   { key: "NIFTY", label: "NIFTY", disabled: false, hint: "" },
   { key: "BANKNIFTY", label: "BANKNIFTY", disabled: false, hint: "" },
-  { key: "GOLD", label: "GOLD", disabled: false, hint: "synthetic — Black-Scholes from realized vol" },
+  { key: "GOLD", label: "GOLD", disabled: false, hint: "synthetic — Black-76 from realized vol, GOLDM specs (100 g, 500-pt strikes)" },
 ];
 // Futures are NSE FUTIDX only; GOLDM (MCX) needs a separate feed.
 const FUT_UNDERLYINGS: UnderlyingItem[] = [
@@ -366,8 +366,9 @@ export function OptionsDataSection() {
       <UnderlyingSelector value={underlying} onChange={setUnderlying} items={OPT_UNDERLYINGS} />
       {isGold && (
         <div className="text-[11px] text-amber-300/90">
-          GOLD is on MCX (no NSE bhavcopy) — its chain is <b>synthetic</b>: Black-Scholes priced from the
-          realized volatility of the cached GOLD futures series. Useful for mechanics, not market premiums.
+          GOLD is on MCX (no NSE bhavcopy) — its chain is <b>synthetic</b>: Black-76 (options on futures)
+          priced from the realized volatility of the cached GOLD futures series × an implied-vol premium,
+          on GOLDM specs (100 g lot, ₹500 strikes, expiry ~26th). Useful for mechanics, not market premiums.
         </div>
       )}
       <CoverageCard underlying={underlying} kind="options" refreshKey={refreshKey} />

@@ -74,7 +74,8 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
         sd = get_data_cache()
         synthetic = is_synthetic(underlying) or bool(req.params.get("synthetic"))
         if synthetic:
-            opt_kwargs = {k: req.params[k] for k in ("r", "vol_window", "strike_step", "strike_count")
+            opt_kwargs = {k: req.params[k]
+                          for k in ("r", "vol_window", "strike_step", "strike_count", "vol_premium")
                           if k in req.params}
             market_view, _chain, settler, margin_model = build_synthetic_options_run(
                 sd, underlying.upper(), req.start_date, req.end_date,

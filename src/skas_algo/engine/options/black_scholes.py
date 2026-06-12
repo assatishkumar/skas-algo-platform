@@ -129,6 +129,23 @@ def greeks(spot, strike, t, r, sigma, right, q: float = 0.0) -> dict:
     }
 
 
+def black76_price(future: float, strike: float, t: float, r: float, sigma: float,
+                  right: str) -> float:
+    """Black-76: European option on a FUTURES price (MCX GOLD/GOLDM).
+
+    A futures price already embeds the cost of carry, so the forward must equal the
+    futures (no r-drift) — algebraically BS with q=r. Using plain BS here biases
+    calls rich / puts cheap by ~F·(e^{rt}−1). At t<=0 returns intrinsic.
+    """
+    return price(future, strike, t, r, sigma, right, q=r)
+
+
+def black76_implied_vol(observed_price: float, future: float, strike: float, t: float,
+                        r: float, right: str, **kwargs) -> float | None:
+    """Implied vol under Black-76 (see ``black76_price``)."""
+    return implied_vol(observed_price, future, strike, t, r, right, q=r, **kwargs)
+
+
 def implied_vol(observed_price: float, spot: float, strike: float, t: float, r: float,
                 right: str, q: float = 0.0,
                 lo: float = 1e-4, hi: float = 5.0, tol: float = 1e-6,

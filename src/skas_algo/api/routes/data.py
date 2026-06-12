@@ -227,8 +227,12 @@ def options_expiries(underlying: str, date: str | None = None, cache=Depends(get
     return {"underlying": u, "date": date, "expiries": [_iso(e) for e in exps]}
 
 
-def _pivot_chain(df, on: date, expiry: date, spot: float | None, with_greeks: bool, r: float) -> list[dict]:
-    """Pivot a (strike × CE/PE) option chain into one row per strike."""
+def _pivot_chain(df, on: date, expiry: date, spot: float | None, with_greeks: bool, r: float,
+                 q: float = 0.0) -> list[dict]:
+    """Pivot a (strike × CE/PE) option chain into one row per strike.
+
+    ``q=r`` switches the IV/greeks convention to Black-76 — used for synthetic
+    futures-options chains (GOLD), which are generated under that model."""
     if df is None or len(df) == 0:
         return []
     t = max((expiry - on).days, 0) / 365.0
@@ -249,9 +253,9 @@ def _pivot_chain(df, on: date, expiry: date, spot: float | None, with_greeks: bo
             }
             if with_greeks and spot and t > 0:
                 px = ltp or close
-                iv = implied_vol(px, spot, float(strike), t, r, ot) if px else None
+                iv = implied_vol(px, spot, float(strike), t, r, ot, q=q) if px else None
                 if iv:
-                    g = greeks(spot, float(strike), t, r, iv, ot)
+                    g = greeks(spot, float(strike), t, r, iv, ot, q=q)
                     leg.update({"iv": iv, "delta": g["delta"], "gamma": g["gamma"],
                                 "theta": g["theta"], "vega": g["vega"]})
                 else:
@@ -279,7 +283,7 @@ def options_chain(
     else:
         df = cache.get_option_chain(u, on, expiry=exp)
         spot = make_spot_provider(cache)(u, on)
-    rows = _pivot_chain(df, on, exp, spot, greeks, r)
+    rows = _pivot_chain(df, on, exp, spot, greeks, r, q=r if synthetic else 0.0)
     atm = None
     if spot is not None and rows:
         atm = min(rows, key=lambda x: abs(x["strike"] - spot))["strike"]

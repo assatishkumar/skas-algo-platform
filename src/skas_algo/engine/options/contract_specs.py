@@ -29,9 +29,10 @@ _LOT_SIZES: dict[str, list[tuple[date, int]]] = {
     "BANKNIFTY": [(date(2000, 1, 1), 35)],
     "FINNIFTY": [(date(2000, 1, 1), 65)],
     "MIDCPNIFTY": [(date(2000, 1, 1), 140)],
-    # GOLD (MCX) is synthetic; multiplier used for sizing/margin — NEEDS-CONFIRM vs MCX
-    # (GOLD 1kg vs GOLDM 100g). Overridable via params["contract_specs"].
-    "GOLD": [(date(2000, 1, 1), 100)],
+    # GOLD (MCX, synthetic) models GOLDM: 100 g quoted ₹/10g → multiplier 10 (verified
+    # against live chain Jun-2026; big GOLD 1kg would be 100). Overridable via
+    # params["contract_specs"].
+    "GOLD": [(date(2000, 1, 1), 10)],
 }
 
 

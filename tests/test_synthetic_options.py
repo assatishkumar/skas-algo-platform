@@ -15,9 +15,11 @@ import pandas as pd
 from skas_algo.data.synthetic_options import (
     GOLD_STRIKE_STEP,
     build_synthetic_options_run,
+    gold_monthly_expiries,
     synthetic_chain_df,
 )
-from skas_algo.engine.options.black_scholes import implied_vol
+from skas_algo.engine.options.black_scholes import black76_implied_vol
+from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.runner import BacktestRunner
 from skas_algo.strategies.short_premium import ShortPremiumStrategy
 
@@ -31,7 +33,7 @@ def _biz_days(start: date, n: int) -> list[date]:
     return days
 
 
-CALENDAR = _biz_days(date(2024, 1, 15), 21)  # through mid-Feb; expiry 2024-02-05 lands inside
+CALENDAR = _biz_days(date(2024, 1, 15), 21)  # through mid-Feb; expiry 2024-01-26 lands inside
 
 
 class FakeGoldSD:
@@ -57,8 +59,31 @@ def test_synthetic_chain_round_trips_iv():
     atm = round(spot / GOLD_STRIKE_STEP) * GOLD_STRIKE_STEP
     ce = df[(df.option_type == "CE") & (df.strike_price == atm)].iloc[0]
     t = (exp - on).days / 365.0
-    iv = implied_vol(float(ce.close), spot, atm, t, 0.065, "CE")
-    assert iv is not None and abs(iv - vol) < 0.01  # BS price → IV recovers the input vol
+    iv = black76_implied_vol(float(ce.close), spot, atm, t, 0.065, "CE")
+    assert iv is not None and abs(iv - vol) < 0.01  # Black-76 price → IV recovers the input vol
+
+
+def test_synthetic_chain_black76_parity_and_oi():
+    """Options on futures: C - P = e^{-rt}(F - K) (no carry drift), and rows are tradable."""
+    on, exp, spot, vol, r = date(2024, 1, 15), date(2024, 2, 5), 62000.0, 0.18, 0.065
+    df = synthetic_chain_df("GOLD", on, exp, spot, vol)
+    k = 62500.0  # F < K → calls must be CHEAPER than puts
+    ce = float(df[(df.option_type == "CE") & (df.strike_price == k)].close.iloc[0])
+    pe = float(df[(df.option_type == "PE") & (df.strike_price == k)].close.iloc[0])
+    t = (exp - on).days / 365.0
+    assert abs((ce - pe) - math.exp(-r * t) * (spot - k)) < 1e-6
+    assert (df.open_interest > 0).all()  # nominal OI so oi>0 liquidity guards don't skip
+
+
+def test_gold_expiry_calendar():
+    # GOLDM options expire in the LAST week of the month (e.g. 26 Jun 2026), not the 5th.
+    assert gold_monthly_expiries(date(2026, 6, 12), ahead=1) == [date(2026, 6, 26)]
+    # Weekend rollback: 26 Jul 2026 is a Sunday → prior business day (Fri 24 Jul).
+    assert gold_monthly_expiries(date(2026, 7, 1), ahead=1) == [date(2026, 7, 24)]
+
+
+def test_gold_lot_size_is_goldm():
+    assert lot_size_for("GOLD", date(2026, 6, 12)) == 10  # GOLDM: 100 g at ₹/10g quote
 
 
 def test_synthetic_gold_backtest_enters_and_settles():

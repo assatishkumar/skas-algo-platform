@@ -40,6 +40,8 @@ const LABELS: Record<string, string> = {
   structure: "Structure",
   dte_target: "DTE target",
   strangle_delta: "Strangle delta",
+  vol_premium: "Implied/realized vol ×",
+  vol_window: "Realized-vol window (days)",
 };
 
 const ORDER = [
