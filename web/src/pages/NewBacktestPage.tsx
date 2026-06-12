@@ -102,6 +102,10 @@ export default function NewBacktestPage() {
   const [maxHoldingDays, setMaxHoldingDays] = useState(20);
   const [minVix, setMinVix] = useState(0); // 0 = off; skip entry if ATM IV% (≈VIX) below
   const [combinedCreditPct, setCombinedCreditPct] = useState(2); // batman: cap on both wings' credit
+  const [tailOffset, setTailOffset] = useState(0); // 0 = off; extra far "disaster" hedge per wing
+  const [tailLots, setTailLots] = useState(1); // tail size as a fraction of lots
+  const [tailSide, setTailSide] = useState("both"); // both | put | call (batman wings)
+  const [minCreditPct, setMinCreditPct] = useState(0); // credit floor; negative allows a small debit
 
   // Override builder
   const [ovEnabled, setOvEnabled] = useState(false);
@@ -196,6 +200,10 @@ export default function NewBacktestPage() {
             max_holding_days: maxHoldingDays,
             min_vix: minVix,
             ...(ratioSide === "batman" ? { combined_credit_limit_pct: combinedCreditPct / 100 } : {}),
+            ...(tailOffset > 0
+              ? { tail_hedge_offset: tailOffset, tail_hedge_lots: tailLots, tail_hedge_side: tailSide }
+              : {}),
+            ...(minCreditPct !== 0 ? { min_credit_pct: minCreditPct / 100 } : {}),
           }
         : {
             underlying,
@@ -427,6 +435,36 @@ export default function NewBacktestPage() {
               <Field label="Min entry IV % (≈VIX, 0 = off)">
                 <NumberInput step="0.5" className={inputClass} value={minVix} onChange={setMinVix} />
               </Field>
+              <Field label={`Tail hedge ${strikeUnit} (0 = off)`}>
+                <NumberInput step="0.05" className={inputClass} value={tailOffset} onChange={setTailOffset} />
+              </Field>
+              {tailOffset > 0 && (
+                <Field label="Tail hedge lots (× lots)">
+                  <NumberInput step="0.5" className={inputClass} value={tailLots} onChange={setTailLots} />
+                </Field>
+              )}
+              {tailOffset > 0 && ratioSide === "batman" && (
+                <Field label="Tail hedge wings">
+                  <select className={inputClass} value={tailSide} onChange={(e) => setTailSide(e.target.value)}>
+                    <option value="both">Both wings</option>
+                    <option value="put">Put wing only (crash protection)</option>
+                    <option value="call">Call wing only</option>
+                  </select>
+                </Field>
+              )}
+              {tailOffset > 0 && (
+                <Field label="Min credit % (negative = allow debit)">
+                  <NumberInput step="0.1" className={inputClass} value={minCreditPct} onChange={setMinCreditPct} />
+                </Field>
+              )}
+              {tailOffset > 0 && (
+                <div className="md:col-span-3 text-[11px] text-slate-500 -mt-2">
+                  The tail is an extra far long per wing: its vega/gamma convexity cushions{" "}
+                  <span className="text-slate-400">gap moves the MTM stop can't catch</span>, and beyond it
+                  the wing turns net long. Its cost counts against the entry credit — a negative min credit
+                  lets the strategy pay a small debit for the insurance instead of skipping the month.
+                </div>
+              )}
               <div className="md:col-span-3 text-[11px] text-slate-500 -mt-2">
                 Entry always requires a <span className="text-slate-400">net credit</span> ≤ the max above
                 (strikes auto-shift further OTM when the credit is too rich). Debit months (low IV / thin

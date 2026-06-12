@@ -4,6 +4,10 @@ Structure (all CE, next month's monthly expiry):
   * BUY  1× at ~spot+buy_offset   (long, near)
   * SELL 2× at ~spot+sell_offset  (short body)
   * BUY  1× at ~spot+hedge_offset (long, far hedge — caps upside loss)
+  * BUY  tail_hedge_lots× at ~spot+tail_hedge_offset (OPTIONAL far 'disaster' hedge —
+    its long vega/gamma cushions gap moves the MTM stop can't catch; beyond it the
+    wing turns net long, so a violent enough move becomes profit. Cost counts against
+    the entry credit; min_credit_pct < 0 allows paying a small debit for it.)
 
 Net is balanced (long 2 / short 2 contracts) → **zero downside risk** (all calls; if NIFTY
 falls they expire worthless and you keep/pay the small net credit/debit), risk is upside-only
@@ -63,6 +67,10 @@ class CallRatioMonthlyStrategy:
         entry_weekday: int = 1,                   # Tuesday
         strike_step: float = 50,                  # informational; strikes are snapped to listings
         risk_free_rate: float = 0.065,
+        tail_hedge_offset: float = 0.0,  # 0=off; extra far long per wing (same units as offsets)
+        tail_hedge_lots: float = 1.0,    # tail size as a fraction of ``lots`` (whole-lot rounded)
+        tail_hedge_side: str = "both",   # "both" | "call" | "put" — which wings carry the tail
+        min_credit_pct: float = 0.0,     # credit floor ×capital (negative = allow a small debit)
         lot_overrides: dict | None = None,
         **_ignored,
     ):
@@ -84,6 +92,10 @@ class CallRatioMonthlyStrategy:
         self.entry_weekday = int(entry_weekday)
         self.strike_step = float(strike_step)
         self.r = float(risk_free_rate)
+        self.tail_hedge_offset = float(tail_hedge_offset)
+        self.tail_hedge_lots = float(tail_hedge_lots)
+        self.tail_hedge_side = str(tail_hedge_side).lower()
+        self.min_credit_pct = float(min_credit_pct)
         self.lot_overrides = lot_overrides
         # +1 for calls (OTM = above spot), −1 for puts (OTM = below spot).
         self._sign = 1 if self.right == "CE" else -1
@@ -134,6 +146,21 @@ class CallRatioMonthlyStrategy:
     def _snap(strikes: list[float], target: float) -> float | None:
         return min(strikes, key=lambda k: abs(k - target)) if strikes else None
 
+    def _wing_has_tail(self, right: str) -> bool:
+        """Does this wing carry the extra far 'disaster' hedge? (tail_hedge_side gates
+        which wings — the put wing is where crash/vega convexity pays.)"""
+        if self.tail_hedge_offset <= 0:
+            return False
+        return self.tail_hedge_side == "both" or (
+            self.tail_hedge_side == ("call" if right == "CE" else "put"))
+
+    def _tail_units(self, units: int) -> int:
+        """Tail leg units: tail_hedge_lots × lots, rounded half-up to whole lots."""
+        if self.tail_hedge_offset <= 0:
+            return 0
+        lot = units // self.lots
+        return int(math.floor(self.lots * self.tail_hedge_lots + 0.5)) * lot
+
     def _delta_strike(self, rows: dict, spot: float, t: float, target_delta: float,
                       right: str | None = None) -> float | None:
         """Listed strike (of ``right``) whose |BS delta| is nearest ``target_delta``."""
@@ -175,6 +202,8 @@ class CallRatioMonthlyStrategy:
         right = right or self.right
         sg = 1 if right == "CE" else -1
         offs = (self.buy_offset, self.sell_offset, self.hedge_offset)
+        if self._wing_has_tail(right):
+            offs += (self.tail_hedge_offset,)  # 4th base strike: the far tail hedge
         if self.strike_mode == "percent":
             return [spot * (1.0 + sg * o / 100.0) for o in offs]
         t = max((expiry - today).days, 0) / 365.0
@@ -207,37 +236,53 @@ class CallRatioMonthlyStrategy:
 
         self.legs = []
         signals: list[Signal] = []
-        for buy, sell, hedge in sides:
-            self.legs += [
+        t_units = self._tail_units(units)
+        for buy, sell, hedge, tail in sides:
+            side_legs = [
                 {"symbol": buy.symbol, "dir": 1, "units": units, "entry": buy.close},
                 {"symbol": sell.symbol, "dir": -1, "units": 2 * units, "entry": sell.close},
                 {"symbol": hedge.symbol, "dir": 1, "units": units, "entry": hedge.close},
             ]
-            signals += [
+            side_sigs = [
                 Signal(buy.symbol, SignalAction.ENTER_LONG, quantity=units, reason=self.entry_reason),
                 Signal(sell.symbol, SignalAction.ENTER_SHORT, quantity=2 * units,
                        reason=self.entry_reason, meta={"multiplier": 1}),
                 Signal(hedge.symbol, SignalAction.ENTER_LONG, quantity=units, reason=self.entry_reason),
             ]
+            if tail is not None and t_units:
+                if tail.symbol == hedge.symbol:
+                    # Tail landed on the hedge strike → one doubled-up hedge leg (two
+                    # legs on the same symbol would double-fire EXIT_ALL).
+                    side_legs[2]["units"] += t_units
+                    side_sigs[2] = Signal(hedge.symbol, SignalAction.ENTER_LONG,
+                                          quantity=units + t_units, reason=self.entry_reason)
+                else:
+                    side_legs.append(
+                        {"symbol": tail.symbol, "dir": 1, "units": t_units, "entry": tail.close})
+                    side_sigs.append(Signal(tail.symbol, SignalAction.ENTER_LONG,
+                                            quantity=t_units, reason=self.entry_reason))
+            self.legs += side_legs
+            signals += side_sigs
         self.entry_expiry = expiry
         self.entry_date = today
         self.last_entry_month = ym
         return signals
 
     def _entry_sides(self, chain, today, expiry, spot, units, limit) -> list | None:
-        """The (buy, sell, hedge) structures to enter — one side for a single ratio;
-        Batman overrides this to require BOTH wings. None/empty → skip the month."""
+        """The (buy, sell, hedge, tail) structures to enter — one side for a single
+        ratio; Batman overrides this to require BOTH wings. None/empty → skip the month."""
         side = self._build_side(chain, today, expiry, spot, units, limit, self.right)
         return [side] if side is not None else None
 
     def _build_side(self, chain, today, expiry, spot, units, limit, right) -> tuple | None:
-        """Pick one wing's (buy, sell, hedge) ChainRows for ``right``, or None.
+        """Pick one wing's (buy, sell, hedge, tail) ChainRows for ``right``, or None.
+        ``tail`` is the optional far disaster hedge (None when disabled for this wing).
 
         Only OI>0 strikes are considered (zero-OI contracts carry frozen phantom
-        closes). Entry rule: the wing must be a NET CREDIT ≤ ``limit`` (1% of capital);
-        a too-rich credit shifts all legs further OTM (higher strikes for calls, lower
-        for puts); a DEBIT (low IV / thin premiums) skips — debit months were shown to
-        be the losers, being flat is the edge.
+        closes). Entry rule: the wing's net (credit minus tail cost) must lie in
+        [min_credit_pct, limit] × capital; a too-rich credit shifts all legs further
+        OTM (higher strikes for calls, lower for puts); below the floor (debit) skips —
+        debit months were shown to be the losers, being flat is the edge.
         """
         sign = 1 if right == "CE" else -1
         rows = {r.strike: r for r in chain.chain(self.underlying, today, expiry)
@@ -252,10 +297,13 @@ class CallRatioMonthlyStrategy:
             if iv is None or iv * 100.0 < self.min_vix:
                 return None
 
+        with_tail = self._wing_has_tail(right)
         base = self._target_strikes(spot, expiry, today, rows, right)
-        if any(b is None for b in base):
-            return None  # couldn't resolve a leg (e.g. delta on thin data)
+        if any(b is None for b in base[:3]):
+            return None  # couldn't resolve a core leg (e.g. delta on thin data)
+        t_units = self._tail_units(units) if with_tail else 0
 
+        floor_amt = self.min_credit_pct * self.initial_capital
         strike_list = sorted(rows)
         atm = self._snap(strike_list, spot)
         for i in range(self.max_shifts + 1):
@@ -268,10 +316,27 @@ class CallRatioMonthlyStrategy:
                     or (bk - atm) * sign < 0  # buy leg must stay ATM-or-OTM
                     or _bad(buy.close) or _bad(sell.close) or _bad(hedge.close)):
                 continue
+            tail = None
+            if t_units:
+                # Tail target. Snapping degrades gracefully: a chain that doesn't extend
+                # that far OTM (e.g. NIFTY 2020) snaps to its last listed strike; a tail
+                # AT the hedge strike means a deliberate double-hedge (legs merge); only
+                # a strictly-inside tail is pushed to the nearest strike beyond the hedge.
+                tk = self._snap(strike_list, base[3] + shift) if len(base) > 3 and base[3] else None
+                if tk is None:
+                    tk = hk
+                elif (tk - hk) * sign < 0:
+                    beyond = [k for k in strike_list if (k - hk) * sign > 0]
+                    tk = (min(beyond) if sign > 0 else max(beyond)) if beyond else hk
+                tail = rows.get(tk)
+                if tail is None or _bad(tail.close):
+                    tail = hedge  # same-strike merge: hedge is simply doubled up
             net = (2 * sell.close - buy.close - hedge.close) * units  # +ve = credit received
-            if 0 <= net <= limit:
-                return (buy, sell, hedge)
-            if net < 0:
+            if tail is not None:
+                net -= tail.close * t_units
+            if floor_amt <= net <= limit:
+                return (buy, sell, hedge, tail)
+            if net < floor_amt:
                 break  # debit → further OTM only thins premium more
         return None
 
@@ -370,10 +435,12 @@ class BatmanRatioMonthlyStrategy(CallRatioMonthlyStrategy):
         # changes nothing; a tighter combined cap re-shifts BOTH wings further OTM.
         self.combined_credit_limit_pct = float(combined_credit_limit_pct)
 
-    @staticmethod
-    def _wing_credit(side: tuple, units: int) -> float:
-        buy, sell, hedge = side
-        return (2 * sell.close - buy.close - hedge.close) * units
+    def _wing_credit(self, side: tuple, units: int) -> float:
+        buy, sell, hedge, tail = side
+        net = (2 * sell.close - buy.close - hedge.close) * units
+        if tail is not None:
+            net -= tail.close * self._tail_units(units)
+        return net
 
     def _entry_sides(self, chain, today, expiry, spot, units, limit) -> list | None:
         combined_limit = self.combined_credit_limit_pct * self.initial_capital

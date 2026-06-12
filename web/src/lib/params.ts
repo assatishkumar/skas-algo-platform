@@ -27,6 +27,10 @@ const LABELS: Record<string, string> = {
   lots: "Lots",
   credit_debit_limit_pct: "Max credit % / wing",
   combined_credit_limit_pct: "Max combined credit %",
+  min_credit_pct: "Min credit %",
+  tail_hedge_offset: "Tail hedge offset",
+  tail_hedge_lots: "Tail hedge lots ×",
+  tail_hedge_side: "Tail hedge wings",
   shift_step: "Shift step (pts)",
   max_shifts: "Max shifts",
   profit_target_pct: "Profit target",
@@ -59,6 +63,10 @@ const ORDER = [
   "hedge_offset",
   "credit_debit_limit_pct",
   "combined_credit_limit_pct",
+  "min_credit_pct",
+  "tail_hedge_offset",
+  "tail_hedge_lots",
+  "tail_hedge_side",
   "profit_target_pct",
   "stop_loss_pct",
   "max_holding_days",
@@ -85,6 +93,7 @@ const PCT_KEYS = new Set([
   "profit_target_3",
   "credit_debit_limit_pct",
   "combined_credit_limit_pct",
+  "min_credit_pct",
   "profit_target_pct",
   "stop_loss_pct",
   "risk_free_rate",
@@ -109,6 +118,7 @@ export function formatParamValue(key: string, value: unknown): string {
   if (key === "allocation_mode") return value === "equity_scaled" ? "Equity-scaled" : "Fixed";
   if (key === "entry_weekday" && typeof value === "number") return WEEKDAYS[value] ?? String(value);
   if (key === "min_vix" && value === 0) return "off";
+  if (key === "tail_hedge_offset" && value === 0) return "off";
   return String(value);
 }
 

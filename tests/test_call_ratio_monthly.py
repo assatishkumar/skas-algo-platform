@@ -349,3 +349,63 @@ class _StubCtx:
 
     def lots(self, symbol):
         return []
+
+
+# ---------------------------------------------------------------- tail hedge
+def test_tail_hedge_adds_fourth_leg():
+    """tail_hedge_offset adds one extra far long per wing, cost counted in the credit."""
+    strat = CallRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
+        tail_hedge_offset=2100,
+    )
+    result = _run(strat)
+    buys = [t for t in result.transactions if t["action"] == "BUY"]
+    assert len(buys) == 3, [(t["action"], t["ticker"]) for t in result.transactions]
+    strikes = sorted(int(t["ticker"].split("|")[2]) for t in buys)
+    assert strikes == [21300, 22600, 23100]  # near, hedge, tail (spot+2100)
+    tail = next(t for t in buys if t["ticker"].split("|")[2] == "23100")
+    assert tail["units"] == 50  # tail_hedge_lots=1.0 → same lots as the wing
+
+
+def test_tail_hedge_on_hedge_strike_doubles_hedge():
+    """A tail AT the hedge strike merges into one doubled hedge leg (no duplicate
+    symbol legs); the extra cost makes the wing a debit, allowed via min_credit_pct."""
+    strat = CallRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
+        tail_hedge_offset=1600, min_credit_pct=-0.01,
+    )
+    result = _run(strat)
+    buys = [t for t in result.transactions if t["action"] == "BUY"]
+    assert len(buys) == 2, [(t["action"], t["ticker"]) for t in result.transactions]
+    hedge = next(t for t in buys if t["ticker"].split("|")[2] == "22600")
+    assert hedge["units"] == 100  # 1 hedge lot + 1 tail lot merged
+
+
+def test_tail_hedge_put_side_only_on_batman():
+    """tail_hedge_side='put' tails only the PE wing: 7 legs total (CE 3 + PE 4)."""
+    strat = BatmanRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
+        tail_hedge_offset=2100, tail_hedge_side="put",
+    )
+    result = _run(strat)
+    entries = [t for t in result.transactions if t["action"] in ("BUY", "SHORT")]
+    assert len(entries) == 7, [(t["action"], t["ticker"]) for t in entries]
+    pe_buys = sorted(int(t["ticker"].split("|")[2]) for t in entries
+                     if t["action"] == "BUY" and t["ticker"].endswith("|PE"))
+    ce_buys = sorted(int(t["ticker"].split("|")[2]) for t in entries
+                     if t["action"] == "BUY" and t["ticker"].endswith("|CE"))
+    assert pe_buys == [18900, 19400, 20700]  # tail spot−2100, hedge −1600, near −300
+    assert ce_buys == [21300, 22600]  # call wing untailed
+
+
+def test_tail_hedge_snaps_to_last_listed_strike():
+    """A tail beyond the listed chain (offset 6000 → 27000 > max 25950) snaps to the
+    farthest listed strike rather than skipping the month."""
+    strat = CallRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
+        tail_hedge_offset=6000,
+    )
+    result = _run(strat)
+    buys = [t for t in result.transactions if t["action"] == "BUY"]
+    strikes = sorted(int(t["ticker"].split("|")[2]) for t in buys)
+    assert strikes == [21300, 22600, 25950], strikes
