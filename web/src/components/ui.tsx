@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 /** A number input you can actually clear and retype — keeps local text so an empty
- * field doesn't snap back to 0, and only pushes a parsed number to the parent. */
+ * field doesn't snap back to 0, and only pushes a parsed number to the parent.
+ * PROGRAMMATIC ``value`` changes (template prefill, per-mode defaults) must reach the
+ * DOM, so the text re-syncs whenever the prop changes while the field isn't focused —
+ * only the user's own in-progress typing may hold the displayed text. */
 export function NumberInput({
   value,
   onChange,
@@ -19,6 +22,11 @@ export function NumberInput({
   disabled?: boolean;
 }) {
   const [text, setText] = useState(String(value));
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current && Number(text) !== value) setText(String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
   return (
     <input
       type="number"
@@ -33,8 +41,13 @@ export function NumberInput({
         setText(raw);
         if (raw !== "" && !Number.isNaN(Number(raw))) onChange(Number(raw));
       }}
+      onFocus={() => {
+        focused.current = true;
+      }}
       onBlur={() => {
+        focused.current = false;
         if (text === "" || Number.isNaN(Number(text))) setText(String(value));
+        else if (Number(text) !== value) setText(String(value));
       }}
     />
   );

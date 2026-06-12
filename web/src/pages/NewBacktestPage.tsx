@@ -483,7 +483,7 @@ export default function NewBacktestPage() {
           </div>
 
           {isCallRatio ? (
-            <div className="grid md:grid-cols-3 gap-4">
+            <div key="ratio-params" className="grid md:grid-cols-3 gap-4">
               <div className="md:col-span-3 text-[11px] text-amber-300/90">
                 {ratioSide === "batman"
                   ? "Batman: BOTH 1:2 ratio wings (call above + put below spot, each hedged; 6 legs). Both wings must qualify for credit or the month is skipped; one combined target/stop/time exit. Risk = a fast move EITHER way; margin ≈ ₹2L per lot."
@@ -580,7 +580,7 @@ export default function NewBacktestPage() {
               </Field>
             </div>
           ) : isOptions ? (
-            <div className="grid md:grid-cols-3 gap-4">
+            <div key="options-params" className="grid md:grid-cols-3 gap-4">
               <Field label="Capital (₹)">
                 <NumberInput className={inputClass} value={capital} onChange={setCapital} />
               </Field>
@@ -615,7 +615,7 @@ export default function NewBacktestPage() {
               </Field>
             </div>
           ) : (
-          <div className="grid md:grid-cols-3 gap-4">
+          <div key="equity-params" className="grid md:grid-cols-3 gap-4">
             <Field label="Capital (₹)">
               <NumberInput className={inputClass} value={capital} onChange={setCapital} />
             </Field>
