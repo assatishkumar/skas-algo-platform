@@ -40,6 +40,27 @@ export interface BenchmarkPoint {
   value: number;
 }
 
+// Slim per-cycle row for the options compare view (aligned by entry month).
+export interface CompareCycle extends Omit<MarketContext, "exit_date"> {
+  entry_date: string;
+  exit_date: string | null;
+  expiry: string;
+  exit_reason: string;
+  holding_days: number;
+  premium_collected: number;
+  realized_pnl: number;
+  charges?: number;
+  net_pnl?: number;
+  n_legs: number;
+}
+
+export interface CompareOptions {
+  summary: OptionsReportData["summary"];
+  charges: ChargeBreakdown;
+  exit_reasons: Record<string, ExitReasonStat>;
+  cycles: CompareCycle[];
+}
+
 export interface CompareRun {
   run_id: number;
   name: string;
@@ -48,6 +69,15 @@ export interface CompareRun {
   capital: number | null;
   metrics: Metrics;
   growth: BenchmarkPoint[];
+  options?: CompareOptions;
+}
+
+export interface StrategyTemplate {
+  strategy_id: string;
+  run_id: number | null;
+  name: string | null;
+  capital: number;
+  params: Record<string, unknown>;
 }
 
 export interface Report {

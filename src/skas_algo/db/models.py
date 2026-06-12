@@ -200,6 +200,20 @@ class Override(Base, TimestampMixin):
     algo: Mapped[Algo] = relationship(back_populates="overrides")
 
 
+class StrategyTemplate(Base, TimestampMixin):
+    """Per-strategy default backtest params, captured from a chosen run ("use this run's
+    config as the starting point for new backtests"). One template per strategy_id;
+    params are COPIED so the template survives the source run's deletion."""
+
+    __tablename__ = "strategy_template"
+
+    strategy_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # source run (informational)
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)  # source run's name
+    capital: Mapped[float] = mapped_column(Float, default=0.0)
+    params: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class Alert(Base, TimestampMixin):
     __tablename__ = "alert"
 

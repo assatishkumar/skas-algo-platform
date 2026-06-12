@@ -1,10 +1,10 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import ReportView from "../components/ReportView";
 import { Card, ErrorBox, NumberInput } from "../components/ui";
-import type { BacktestRequest, OverrideInput } from "../types";
+import type { BacktestRequest, OverrideInput, StrategyTemplate } from "../types";
 
 // Fields a sweep can vary, with how each value maps into the request.
 // unit "pct" values are divided by 100 (like the form); "num" pass through.
@@ -142,17 +142,90 @@ export default function NewBacktestPage() {
     if (isCallRatio) setCapital(ratioSide === "batman" ? 200000 : 100000);
   }, [isCallRatio, ratioSide]);
 
-  // Reset the buy/sell/hedge offsets to sensible defaults for the chosen strike basis.
+  // Reset the buy/sell/hedge/tail offsets to sensible defaults for the chosen strike
+  // basis. Batman defaults to the half-size put-wing tail (the run-92 config — best
+  // risk-adjusted in the 2020-26 sweep); single-wing ratios default tail-off.
+  // A template apply sets strike_mode AND offsets together — this effect must not
+  // clobber those offsets on the re-render the mode change triggers.
+  const templateModeRef = useRef<string | null>(null);
   useEffect(() => {
+    if (templateModeRef.current !== null) {
+      const fromTemplate = templateModeRef.current === strikeMode;
+      templateModeRef.current = null;
+      if (fromTemplate) return; // keep the template's offsets
+    }
     const d =
-      strikeMode === "delta" ? [0.36, 0.25, 0.05]
-      : strikeMode === "sd" ? [0.35, 0.7, 1.85] // multiples of the 1σ expected move
-      : strikeMode === "points" ? [300, 600, 1600]
-      : [1.3, 2.6, 7.0]; // percent (% OTM)
+      strikeMode === "delta" ? [0.36, 0.25, 0.05, 0.03]
+      : strikeMode === "sd" ? [0.35, 0.7, 1.85, 2.4] // multiples of the 1σ expected move
+      : strikeMode === "points" ? [300, 600, 1600, 2100]
+      : [1.3, 2.6, 7.0, 8.75]; // percent (% OTM)
     setBuyOffset(d[0]);
     setSellOffset(d[1]);
     setHedgeOffset(d[2]);
-  }, [strikeMode]);
+    if (ratioSide === "batman") {
+      setTailOffset(d[3]);
+      setTailLots(0.5);
+      setTailSide("put");
+    } else {
+      setTailOffset(0);
+    }
+  }, [strikeMode, ratioSide]);
+
+  // ---- per-strategy template prefill ("set as template" on a run's detail page).
+  // Declared AFTER the default-resetting effects so, when the strategy changes, the
+  // template's values land last in the same commit and win.
+  const { data: templatesData } = useQuery({ queryKey: ["templates"], queryFn: api.templates });
+  const [appliedTemplate, setAppliedTemplate] = useState<StrategyTemplate | null>(null);
+  useEffect(() => {
+    const t = templatesData?.templates?.[strategyId];
+    if (!t) {
+      setAppliedTemplate(null);
+      return;
+    }
+    const p = t.params as Record<string, unknown>;
+    const num = (k: string, set: (v: number) => void, scale = 1) => {
+      if (typeof p[k] === "number") set((p[k] as number) * scale);
+    };
+    const str = (k: string, set: (v: string) => void) => {
+      if (typeof p[k] === "string") set(p[k] as string);
+    };
+    if (t.capital) setCapital(t.capital);
+    str("underlying", setUnderlying);
+    // ratio family (percent-of-capital params are stored as fractions)
+    if (typeof p.strike_mode === "string") templateModeRef.current = p.strike_mode;
+    str("strike_mode", setStrikeMode);
+    num("buy_offset", setBuyOffset);
+    num("sell_offset", setSellOffset);
+    num("hedge_offset", setHedgeOffset);
+    num("credit_debit_limit_pct", setCreditLimitPct, 100);
+    num("combined_credit_limit_pct", setCombinedCreditPct, 100);
+    num("min_credit_pct", setMinCreditPct, 100);
+    num("max_holding_days", setMaxHoldingDays);
+    num("min_vix", setMinVix);
+    num("tail_hedge_offset", setTailOffset);
+    num("tail_hedge_lots", setTailLots);
+    str("tail_hedge_side", setTailSide);
+    // short_premium / shared options
+    str("structure", setStructure);
+    num("dte_target", setDteTarget);
+    num("strike_step", setStrikeStep);
+    const ratio = ["call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly"].includes(strategyId);
+    num("lots", ratio ? setCrLots : setLots);
+    num("profit_target_pct", ratio ? setCrProfitPct : setProfitTargetPct, 100);
+    num("stop_loss_pct", ratio ? setCrStopPct : setStopLossPct, 100);
+    // equity strategies
+    num("capital_parts", setParts);
+    num("profit_target", setTarget, 100);
+    num("profit_target_1", setTarget1, 100);
+    num("profit_target_2", setTarget2, 100);
+    num("profit_target_3", setTarget3, 100);
+    num("max_lots", setMaxLots);
+    num("lookback", setLookback);
+    str("allocation_mode", setAllocationMode);
+    num("tax_rate", setTaxRate, 100);
+    num("withdrawal_rate", setWithdrawalRate, 100);
+    setAppliedTemplate(t);
+  }, [strategyId, templatesData]);
 
   // Available cached range for the selected instrument class / underlying — used to
   // default the date pickers so a backtest spans what's actually in the cache.
@@ -331,6 +404,17 @@ export default function NewBacktestPage() {
               <input className={inputClass} placeholder="what you're testing / why" value={notes} onChange={(e) => setNotes(e.target.value)} />
             </Field>
           </div>
+          {appliedTemplate && (
+            <div className="flex items-center gap-2 rounded-md bg-amber-950/40 border border-amber-900/50 px-3 py-2 text-xs text-amber-200">
+              <span>
+                ★ Params prefilled from this strategy's template:{" "}
+                <Link to={`/runs/${appliedTemplate.run_id}`} className="underline hover:text-amber-100">
+                  {appliedTemplate.name || `run #${appliedTemplate.run_id}`}
+                </Link>{" "}
+                — edit anything below, or manage the template from that run's page.
+              </span>
+            </div>
+          )}
           <div className="grid md:grid-cols-2 gap-4">
             <Field label="Strategy">
               <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>

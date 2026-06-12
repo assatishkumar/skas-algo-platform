@@ -139,6 +139,7 @@ def test_put_ratio_mirrors_below_spot():
 def test_batman_enters_both_wings():
     strat = BatmanRatioMonthlyStrategy(
         universe=["NIFTY"], initial_capital=200_000, max_holding_days=15, min_dte=18,
+        tail_hedge_offset=0,  # un-tailed wing mechanics (tail default covered separately)
     )
     result = _run(strat)
     txns = result.transactions
@@ -162,7 +163,7 @@ def test_batman_combined_credit_cap_reshifts_both_wings():
     # (half-cap per wing = ₹500 → 2 extra shifts each) so the sum fits.
     strat = BatmanRatioMonthlyStrategy(
         universe=["NIFTY"], initial_capital=200_000, max_holding_days=15, min_dte=18,
-        combined_credit_limit_pct=0.005,
+        combined_credit_limit_pct=0.005, tail_hedge_offset=0,
     )
     result = _run(strat)
     entries = [t for t in result.transactions if t["action"] in ("BUY", "SHORT")]
@@ -409,3 +410,19 @@ def test_tail_hedge_snaps_to_last_listed_strike():
     buys = [t for t in result.transactions if t["action"] == "BUY"]
     strikes = sorted(int(t["ticker"].split("|")[2]) for t in buys)
     assert strikes == [21300, 22600, 25950], strikes
+
+
+def test_batman_defaults_to_half_put_tail():
+    """Batman ships with the run-92 config: half-size put-wing tail at 2100 pts —
+    7 legs (CE 3 + PE 4), tail at spot−2100 with half the wing's units."""
+    strat = BatmanRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=200_000, max_holding_days=15, min_dte=18,
+        lots=2,  # 2 lots → half-tail = 1 whole lot
+    )
+    assert (strat.tail_hedge_offset, strat.tail_hedge_lots, strat.tail_hedge_side) == (2100.0, 0.5, "put")
+    result = _run(strat)
+    entries = [t for t in result.transactions if t["action"] in ("BUY", "SHORT")]
+    assert len(entries) == 7, [(t["action"], t["ticker"]) for t in entries]
+    tail = next(t for t in entries
+                if t["action"] == "BUY" and t["ticker"].split("|")[2] == "18900")
+    assert tail["ticker"].endswith("|PE") and tail["units"] == 50  # 1 lot vs wings' 2

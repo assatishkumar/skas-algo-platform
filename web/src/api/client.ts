@@ -22,6 +22,7 @@ import type {
   Report,
   RunSummary,
   StartLiveRequest,
+  StrategyTemplate,
   Trade,
   Universe,
   WatchRow,
@@ -55,6 +56,12 @@ export const api = {
     request(`/runs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   runsCompare: (ids: number[]) =>
     request<{ runs: CompareRun[] }>(`/runs/compare?ids=${ids.join(",")}`),
+  templates: () =>
+    request<{ templates: Record<string, StrategyTemplate> }>("/strategies/templates"),
+  setTemplate: (runId: number) =>
+    request<StrategyTemplate>(`/runs/${runId}/set-template`, { method: "POST" }),
+  clearTemplate: (strategyId: string) =>
+    request(`/strategies/${strategyId}/template`, { method: "DELETE" }),
   runArchive: (id: number) => request(`/runs/${id}/archive`, { method: "POST" }),
   runUnarchive: (id: number) => request(`/runs/${id}/unarchive`, { method: "POST" }),
   runDelete: (id: number) => request(`/runs/${id}`, { method: "DELETE" }),

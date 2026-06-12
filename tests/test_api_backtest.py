@@ -266,3 +266,31 @@ def test_backtest_unknown_strategy(api_client: TestClient):
     }
     resp = api_client.post("/api/v1/backtest", json=body)
     assert resp.status_code == 404
+
+
+def test_strategy_template_lifecycle(api_client: TestClient):
+    """Set a run as its strategy's template → it serves params for new backtests;
+    re-setting overwrites; clearing removes. Params are copied (survive run deletion)."""
+    body = {
+        "strategy_id": "sst_lifo", "symbols": ["RELIANCE"], "instrument_class": "STOCK",
+        "start_date": "2020-01-01", "end_date": "2020-04-30", "capital": 500000,
+        "params": {"profit_target": 0.1},
+    }
+    run_id = api_client.post("/api/v1/backtest", json=body).json()["run_id"]
+
+    resp = api_client.post(f"/api/v1/runs/{run_id}/set-template")
+    assert resp.status_code == 200
+    t = resp.json()
+    assert t["strategy_id"] == "sst_lifo" and t["run_id"] == run_id
+    assert t["capital"] == 500000 and t["params"]["profit_target"] == 0.1
+
+    templates = api_client.get("/api/v1/strategies/templates").json()["templates"]
+    assert templates["sst_lifo"]["run_id"] == run_id
+
+    # Template survives deleting the source run (params were copied).
+    api_client.delete(f"/api/v1/runs/{run_id}")
+    templates = api_client.get("/api/v1/strategies/templates").json()["templates"]
+    assert templates["sst_lifo"]["params"]["profit_target"] == 0.1
+
+    assert api_client.delete("/api/v1/strategies/sst_lifo/template").json()["cleared"] is True
+    assert api_client.get("/api/v1/strategies/templates").json()["templates"] == {}

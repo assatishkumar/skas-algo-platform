@@ -62,6 +62,7 @@ export default function RunDetailPage() {
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
+  const { data: templatesData } = useQuery({ queryKey: ["templates"], queryFn: api.templates });
 
   // Seed the edit fields once the run loads.
   useEffect(() => {
@@ -110,6 +111,16 @@ export default function RunDetailPage() {
     }
   }
 
+  async function makeTemplate() {
+    setBusy(true);
+    try {
+      await api.setTemplate(runId);
+      await queryClient.invalidateQueries({ queryKey: ["templates"] });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
@@ -120,6 +131,20 @@ export default function RunDetailPage() {
           {data.name || `Run #${runId}`} <span className="text-slate-500 text-sm">· {data.strategy_id}</span>
         </h1>
         <div className="ml-auto flex items-center gap-2 text-sm">
+          {templatesData?.templates?.[data.strategy_id]?.run_id === runId ? (
+            <span className="rounded-md bg-amber-950/60 text-amber-300 px-3 py-1.5" title="New backtests of this strategy prefill from this run">
+              ★ Strategy template
+            </span>
+          ) : (
+            <button
+              onClick={makeTemplate}
+              disabled={busy}
+              title="Use this run's params as the default for new backtests of this strategy"
+              className="rounded-md bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50"
+            >
+              ☆ Set as template
+            </button>
+          )}
           <button onClick={() => setEditing((v) => !v)} className="rounded-md bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
             {editing ? "Close" : "Edit name/notes"}
           </button>

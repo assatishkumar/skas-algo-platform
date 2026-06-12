@@ -423,13 +423,23 @@ class BatmanRatioMonthlyStrategy(CallRatioMonthlyStrategy):
     P&L. Profit zone is the whole band between the short strikes (theta from both
     sides); risk is a fast move in EITHER direction, capped beyond the hedges.
     Margin ≈ 2× a single ratio (~₹2L per lot-set) — size capital accordingly.
+
+    Batman defaults to a HALF-SIZE PUT-WING TAIL HEDGE (offset 2100 pts, 0.5× lots):
+    the 2020-26 sweep showed gap-crashes jump the EOD MTM stop (Apr-2025: −31k→−218k
+    overnight) and the far put's vega cut that worst loss to −124k while keeping ~86%
+    of the un-tailed P&L and the best risk-adjusted return. Set tail_hedge_offset=0
+    to reproduce the un-hedged variant.
     """
 
     strategy_id = "batman_ratio_monthly"
     entry_reason = "batman"
 
-    def __init__(self, *args, combined_credit_limit_pct: float = 0.02, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, *args, combined_credit_limit_pct: float = 0.02,
+                 tail_hedge_offset: float = 2100.0, tail_hedge_lots: float = 0.5,
+                 tail_hedge_side: str = "put", **kwargs):
+        super().__init__(*args, tail_hedge_offset=tail_hedge_offset,
+                         tail_hedge_lots=tail_hedge_lots, tail_hedge_side=tail_hedge_side,
+                         **kwargs)
         # Cap on the COMBINED (both wings) net credit, as a fraction of capital. The
         # per-wing cap (credit_debit_limit_pct, 1%) still applies, so the default 2%
         # changes nothing; a tighter combined cap re-shifts BOTH wings further OTM.

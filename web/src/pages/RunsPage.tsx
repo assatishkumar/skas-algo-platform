@@ -13,12 +13,14 @@ function RunTile({
   selectMode = false,
   selected = false,
   onSelect,
+  isTemplate = false,
 }: {
   run: RunSummary;
   onChanged: () => void;
   selectMode?: boolean;
   selected?: boolean;
   onSelect?: () => void;
+  isTemplate?: boolean;
 }) {
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
@@ -80,6 +82,11 @@ function RunTile({
           )}
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
             {run.archived && <StatusPill status="archived" />}
+            {isTemplate && (
+              <span className="text-amber-300" title="Strategy template — new backtests prefill from this run">
+                ★ template
+              </span>
+            )}
             <Badge>{run.strategy_id}</Badge>
             <Badge>{run.mode}</Badge>
             <span>#{run.run_id}</span>
@@ -206,6 +213,10 @@ export default function RunsPage() {
     queryKey: ["runs", tab],
     queryFn: () => api.runs(tab),
   });
+  const { data: templatesData } = useQuery({ queryKey: ["templates"], queryFn: api.templates });
+  const templateRunIds = new Set(
+    Object.values(templatesData?.templates ?? {}).map((t) => t.run_id),
+  );
 
   const onChanged = () => queryClient.invalidateQueries({ queryKey: ["runs"] });
 
@@ -247,6 +258,7 @@ export default function RunsPage() {
       selectMode={compareMode}
       selected={selected.includes(r.run_id)}
       onSelect={() => toggleSelect(r.run_id)}
+      isTemplate={templateRunIds.has(r.run_id)}
     />
   );
 

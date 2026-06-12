@@ -22,7 +22,7 @@ from skas_algo.api.models import (
 from skas_algo.data import universes
 from skas_algo.data.provider import get_available_symbols, get_price_loader
 from skas_algo.db.enums import TradingMode
-from skas_algo.db.models import Algo, AlgoRun
+from skas_algo.db.models import Algo, AlgoRun, StrategyTemplate
 from skas_algo.engine.market import PriceLoader
 from skas_algo.services.backtest import run_backtest
 from skas_algo.services.benchmark import BENCHMARK_INDICES, benchmark_series
@@ -157,17 +157,30 @@ def compare_runs(ids: str, db: Session = Depends(get_db)) -> dict:
             if base
             else []
         )
-        out.append(
-            {
-                "run_id": run.id,
-                "name": algo.name if algo else f"run {rid}",
-                "strategy_id": algo.strategy_id if algo else None,
-                "params": algo.params if algo else {},
-                "capital": algo.capital if algo else None,
-                "metrics": (run.metrics or {}).get("metrics", {}),
-                "growth": growth,
+        entry = {
+            "run_id": run.id,
+            "name": algo.name if algo else f"run {rid}",
+            "strategy_id": algo.strategy_id if algo else None,
+            "params": algo.params if algo else {},
+            "capital": algo.capital if algo else None,
+            "metrics": (run.metrics or {}).get("metrics", {}),
+            "growth": growth,
+        }
+        opt = (run.metrics or {}).get("options")
+        if opt:
+            # Slim per-cycle rows so options runs can be compared position-by-position
+            # (aligned by entry month in the UI) without shipping full legs_detail.
+            cycle_keys = ("entry_date", "exit_date", "expiry", "exit_reason", "holding_days",
+                          "premium_collected", "realized_pnl", "charges", "net_pnl",
+                          "underlying_entry", "underlying_exit", "vix_entry", "vix_exit")
+            entry["options"] = {
+                "summary": opt.get("summary", {}),
+                "charges": opt.get("charges", {}),
+                "exit_reasons": opt.get("exit_reasons", {}),
+                "cycles": [{k: c.get(k) for k in cycle_keys} | {"n_legs": len(c.get("legs", []))}
+                           for c in opt.get("cycles", [])],
             }
-        )
+        out.append(entry)
     return {"runs": out}
 
 
@@ -180,6 +193,44 @@ def update_run(run_id: int, body: DeploymentUpdate, db: Session = Depends(get_db
     if body.notes is not None:
         algo.notes = body.notes
     return {"run_id": run_id, "name": algo.name, "notes": algo.notes}
+
+
+def _template_out(t: StrategyTemplate) -> dict:
+    return {"strategy_id": t.strategy_id, "run_id": t.run_id, "name": t.name,
+            "capital": t.capital, "params": t.params}
+
+
+@router.get("/strategies/templates")
+def list_templates(db: Session = Depends(get_db)) -> dict:
+    """Per-strategy default-params templates, keyed by strategy_id."""
+    rows = db.execute(select(StrategyTemplate)).scalars().all()
+    return {"templates": {t.strategy_id: _template_out(t) for t in rows}}
+
+
+@router.post("/runs/{run_id}/set-template")
+def set_template(run_id: int, db: Session = Depends(get_db)) -> dict:
+    """Make this run's params the default template for its strategy (one per strategy).
+    Params are copied, so the template survives if the run is later deleted."""
+    run = _get_run(db, run_id)
+    algo = db.get(Algo, run.algo_id)
+    if algo is None:
+        raise HTTPException(status_code=404, detail="run's algo not found")
+    t = db.get(StrategyTemplate, algo.strategy_id) or StrategyTemplate(strategy_id=algo.strategy_id)
+    t.run_id = run.id
+    t.name = algo.name
+    t.capital = algo.capital
+    t.params = dict(algo.params or {})
+    db.merge(t)
+    db.flush()
+    return _template_out(t)
+
+
+@router.delete("/strategies/{strategy_id}/template")
+def clear_template(strategy_id: str, db: Session = Depends(get_db)) -> dict:
+    t = db.get(StrategyTemplate, strategy_id)
+    if t is not None:
+        db.delete(t)
+    return {"strategy_id": strategy_id, "cleared": t is not None}
 
 
 @router.post("/runs/{run_id}/archive")

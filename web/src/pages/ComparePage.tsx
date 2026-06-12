@@ -15,7 +15,7 @@ import { api } from "../api/client";
 import { Badge, Card, ErrorBox, Spinner } from "../components/ui";
 import { formatInr, pct } from "../lib/format";
 import { formatParamValue, orderedParamKeys, paramLabel } from "../lib/params";
-import type { CompareRun, Metrics } from "../types";
+import type { CompareCycle, CompareRun, Metrics } from "../types";
 
 // Distinct colors for up to 5 runs; benchmark is amber.
 const COLORS = ["#14b8a6", "#6366f1", "#ec4899", "#f59e0b", "#22c55e"];
@@ -52,6 +52,183 @@ function bestIndex(runs: CompareRun[], key: keyof Metrics, better: Better): numb
     }
   });
   return bi >= 0 ? bi : null;
+}
+
+const REASON_STYLE: Record<string, string> = {
+  target: "text-emerald-400",
+  stop: "text-rose-400",
+  time: "text-sky-400",
+  expiry: "text-amber-400",
+  manual: "text-slate-400",
+  mixed: "text-violet-400",
+};
+
+function pnlCls(v: number | null | undefined): string {
+  if (v == null) return "text-slate-600";
+  return v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-slate-400";
+}
+
+/** Options-strategy comparison: per-run lifecycle stats side by side. */
+function OptionsSummaryCompare({ runs }: { runs: CompareRun[] }) {
+  const exits = (o: NonNullable<CompareRun["options"]>) => {
+    const er = o.exit_reasons ?? {};
+    const n = (k: string) => er[k]?.count ?? 0;
+    return `${n("target")} / ${n("time")} / ${n("stop")}`;
+  };
+  const worst = (o: NonNullable<CompareRun["options"]>) =>
+    o.cycles.length ? Math.min(...o.cycles.map((c) => c.net_pnl ?? c.realized_pnl)) : 0;
+  const best = (o: NonNullable<CompareRun["options"]>) =>
+    o.cycles.length ? Math.max(...o.cycles.map((c) => c.net_pnl ?? c.realized_pnl)) : 0;
+  const rows: { label: string; fn: (o: NonNullable<CompareRun["options"]>) => number | string; fmt?: (v: number) => string; better?: Better }[] = [
+    { label: "Net P&L (after charges)", fn: (o) => o.summary.net_after_charges, fmt: formatInr, better: "max" },
+    { label: "F&O charges", fn: (o) => o.summary.total_charges, fmt: formatInr, better: "min" },
+    { label: "Premium collected (net)", fn: (o) => o.summary.total_premium_collected, fmt: formatInr },
+    { label: "Cycles entered", fn: (o) => o.summary.num_cycles },
+    { label: "Win rate (cycles)", fn: (o) => o.summary.win_rate_pct, fmt: (v) => pct(v), better: "max" },
+    { label: "Exits target / time / stop", fn: exits },
+    { label: "Avg holding (days)", fn: (o) => o.summary.avg_holding_days, fmt: (v) => v.toFixed(1) },
+    { label: "Best cycle (net)", fn: best, fmt: formatInr, better: "max" },
+    { label: "Worst cycle (net)", fn: worst, fmt: formatInr, better: "max" },
+    { label: "Max margin used", fn: (o) => o.summary.max_margin_used, fmt: formatInr, better: "min" },
+  ];
+  return (
+    <Card>
+      <div className="text-sm font-medium text-slate-300 mb-2">Options summary</div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm tabular-nums">
+          <thead className="text-slate-400 text-left">
+            <tr>
+              <th className="py-1 pr-4">Metric</th>
+              {runs.map((r, i) => (
+                <th key={r.run_id} className="py-1 pr-4 text-right" style={{ color: COLORS[i % COLORS.length] }}>
+                  {r.name}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const vals = runs.map((r) => (r.options ? row.fn(r.options) : null));
+              let bi: number | null = null;
+              if (row.better) {
+                let bv = row.better === "max" ? -Infinity : Infinity;
+                vals.forEach((v, i) => {
+                  if (typeof v !== "number") return;
+                  if ((row.better === "max" && v > bv) || (row.better === "min" && v < bv)) {
+                    bv = v;
+                    bi = i;
+                  }
+                });
+              }
+              return (
+                <tr key={row.label} className="border-t border-slate-800">
+                  <td className="py-1.5 pr-4 text-slate-400">{row.label}</td>
+                  {vals.map((v, i) => (
+                    <td key={runs[i].run_id} className={`py-1.5 pr-4 text-right ${i === bi ? "text-emerald-400 font-semibold" : ""}`}>
+                      {v == null ? "—" : typeof v === "number" ? (row.fmt ?? String)(v) : v}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+/** Month-by-month position comparison: cycles aligned by entry month across runs, so
+ * each run's entry (or skip), exit reason, and net P&L sit side by side. */
+function CycleCompare({ runs }: { runs: CompareRun[] }) {
+  const months = useMemo(() => {
+    const set = new Set<string>();
+    runs.forEach((r) => r.options?.cycles.forEach((c) => set.add(c.entry_date.slice(0, 7))));
+    return Array.from(set).sort();
+  }, [runs]);
+  const byMonth = useMemo(
+    () =>
+      runs.map((r) => {
+        const m = new Map<string, CompareCycle[]>();
+        r.options?.cycles.forEach((c) => {
+          const k = c.entry_date.slice(0, 7);
+          m.set(k, [...(m.get(k) ?? []), c]);
+        });
+        return m;
+      }),
+    [runs],
+  );
+  if (!months.length) return null;
+  return (
+    <Card>
+      <div className="text-sm font-medium text-slate-300 mb-1">
+        Positions month by month{" "}
+        <span className="text-slate-500 font-normal">(net P&L by ENTRY month · exit reason · — = month skipped)</span>
+      </div>
+      <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
+        <table className="w-full text-sm tabular-nums">
+          <thead className="text-slate-400 text-left sticky top-0 bg-slate-900">
+            <tr>
+              <th className="py-1 pr-4">Entry month</th>
+              {runs.map((r, i) => (
+                <th key={r.run_id} className="py-1 pr-4 text-right" style={{ color: COLORS[i % COLORS.length] }}>
+                  {r.name}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {months.map((m) => (
+              <tr key={m} className="border-t border-slate-800">
+                <td className="py-1 pr-4 text-slate-400 whitespace-nowrap">{m}</td>
+                {runs.map((r, i) => {
+                  const cycles = byMonth[i].get(m);
+                  if (!cycles?.length)
+                    return (
+                      <td key={r.run_id} className="py-1 pr-4 text-right text-slate-600">—</td>
+                    );
+                  return (
+                    <td key={r.run_id} className="py-1 pr-4 text-right whitespace-nowrap">
+                      {cycles.map((c, j) => {
+                        const net = c.net_pnl ?? c.realized_pnl;
+                        const spot =
+                          c.underlying_entry != null && c.underlying_exit != null
+                            ? ` · spot ${Math.round(c.underlying_entry)}→${Math.round(c.underlying_exit)}`
+                            : "";
+                        return (
+                          <span key={j} title={`${c.entry_date} → ${c.exit_date ?? "?"} (${c.holding_days}d)${spot}`}>
+                            {j > 0 && <span className="text-slate-600"> · </span>}
+                            <span className={pnlCls(net)}>{formatInr(net)}</span>{" "}
+                            <span className={`text-[10px] uppercase ${REASON_STYLE[c.exit_reason] ?? "text-slate-500"}`}>
+                              {c.exit_reason}
+                            </span>
+                          </span>
+                        );
+                      })}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+            <tr className="border-t-2 border-slate-700 font-medium">
+              <td className="py-1.5 pr-4 text-slate-300">Total (net)</td>
+              {runs.map((r) => {
+                const total = (r.options?.cycles ?? []).reduce(
+                  (s, c) => s + (c.net_pnl ?? c.realized_pnl),
+                  0,
+                );
+                return (
+                  <td key={r.run_id} className={`py-1.5 pr-4 text-right ${pnlCls(total)}`}>
+                    {formatInr(total)}
+                  </td>
+                );
+              })}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
 }
 
 function ParamCompare({ runs }: { runs: CompareRun[] }) {
@@ -226,6 +403,7 @@ export default function ComparePage() {
   if (isLoading) return <Spinner />;
   if (error) return <ErrorBox message={(error as Error).message} />;
   const runs = data?.runs ?? [];
+  const anyOptions = runs.some((r) => r.options);
 
   return (
     <div className="space-y-4">
@@ -235,6 +413,9 @@ export default function ComparePage() {
       </div>
 
       <GrowthChart runs={runs} />
+
+      {anyOptions && <OptionsSummaryCompare runs={runs} />}
+      {anyOptions && <CycleCompare runs={runs} />}
 
       <Card>
         <div className="text-sm font-medium text-slate-300 mb-2">Metrics</div>
