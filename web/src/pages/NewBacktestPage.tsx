@@ -148,7 +148,10 @@ export default function NewBacktestPage() {
   // A template apply sets strike_mode AND offsets together — this effect must not
   // clobber those offsets on the re-render the mode change triggers.
   const templateModeRef = useRef<string | null>(null);
+  const prevSideRef = useRef(ratioSide);
   useEffect(() => {
+    const sideChanged = prevSideRef.current !== ratioSide;
+    prevSideRef.current = ratioSide;
     if (templateModeRef.current !== null) {
       const fromTemplate = templateModeRef.current === strikeMode;
       templateModeRef.current = null;
@@ -163,9 +166,17 @@ export default function NewBacktestPage() {
     setSellOffset(d[1]);
     setHedgeOffset(d[2]);
     if (ratioSide === "batman") {
-      setTailOffset(d[3]);
-      setTailLots(0.5);
-      setTailSide("put");
+      if (sideChanged) {
+        // Newly selected Batman → arm the default tail (a template apply in the same
+        // commit overrides this, including back to off for pre-tail templates).
+        setTailOffset(d[3]);
+        setTailLots(0.5);
+        setTailSide("put");
+      } else {
+        // Strike-basis change: convert the tail offset to the new mode's units, but
+        // respect a deliberately disabled tail (e.g. a tail-off template).
+        setTailOffset((cur) => (cur > 0 ? d[3] : 0));
+      }
     } else {
       setTailOffset(0);
     }
@@ -183,11 +194,16 @@ export default function NewBacktestPage() {
       return;
     }
     const p = t.params as Record<string, unknown>;
-    const num = (k: string, set: (v: number) => void, scale = 1) => {
+    // ``absent`` makes the prefill FAITHFUL to the template run: a param the run
+    // didn't record (e.g. tail-hedge on a pre-tail-feature run) resets to the value
+    // that run actually traded with, instead of inheriting form leftovers/defaults.
+    const num = (k: string, set: (v: number) => void, scale = 1, absent?: number) => {
       if (typeof p[k] === "number") set((p[k] as number) * scale);
+      else if (absent !== undefined) set(absent);
     };
-    const str = (k: string, set: (v: string) => void) => {
+    const str = (k: string, set: (v: string) => void, absent?: string) => {
       if (typeof p[k] === "string") set(p[k] as string);
+      else if (absent !== undefined) set(absent);
     };
     if (t.capital) setCapital(t.capital);
     str("underlying", setUnderlying);
@@ -198,18 +214,19 @@ export default function NewBacktestPage() {
     num("sell_offset", setSellOffset);
     num("hedge_offset", setHedgeOffset);
     num("credit_debit_limit_pct", setCreditLimitPct, 100);
-    num("combined_credit_limit_pct", setCombinedCreditPct, 100);
-    num("min_credit_pct", setMinCreditPct, 100);
+    num("combined_credit_limit_pct", setCombinedCreditPct, 100, 2);
+    num("min_credit_pct", setMinCreditPct, 100, 0);
     num("max_holding_days", setMaxHoldingDays);
-    num("min_vix", setMinVix);
-    num("tail_hedge_offset", setTailOffset);
-    num("tail_hedge_lots", setTailLots);
-    str("tail_hedge_side", setTailSide);
-    // short_premium / shared options
+    num("min_vix", setMinVix, 1, 0);
+    num("tail_hedge_offset", setTailOffset, 1, 0); // absent = the run traded UN-tailed
+    num("tail_hedge_lots", setTailLots, 1, 1);
+    str("tail_hedge_side", setTailSide, "both");
+    const ratio = ["call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly"].includes(strategyId);
+    // short_premium / shared options (ratio templates carry an informational
+    // strike_step=50 that must NOT leak into short_premium's strangle step)
     str("structure", setStructure);
     num("dte_target", setDteTarget);
-    num("strike_step", setStrikeStep);
-    const ratio = ["call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly"].includes(strategyId);
+    if (!ratio) num("strike_step", setStrikeStep);
     num("lots", ratio ? setCrLots : setLots);
     num("profit_target_pct", ratio ? setCrProfitPct : setProfitTargetPct, 100);
     num("stop_loss_pct", ratio ? setCrStopPct : setStopLossPct, 100);
