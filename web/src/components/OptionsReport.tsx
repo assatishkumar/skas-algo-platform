@@ -16,6 +16,7 @@ import {
 } from "recharts";
 import { formatInr, pct } from "../lib/format";
 import type { OptionCycle, OptionPosition, OptionsReportData } from "../types";
+import PayoffChart from "./PayoffChart";
 import { Card, MetricCard } from "./ui";
 
 const REASON_COLOR: Record<string, string> = {
@@ -271,6 +272,14 @@ function CycleRow({ c }: { c: OptionCycle }) {
             </td>
           </tr>
         ))}
+      {open && (
+        <tr className="bg-slate-900/60">
+          <td />
+          <td colSpan={10} className="py-2 pr-4">
+            <PayoffChart cycle={c} />
+          </td>
+        </tr>
+      )}
     </>
   );
 }
@@ -311,7 +320,7 @@ function PositionsTable({ options }: { options: OptionsReportData }) {
     <Card>
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm font-medium text-slate-300">
-          Positions <span className="text-slate-500">({options.cycles.length} cycles · click a row for legs)</span>
+          Positions <span className="text-slate-500">({options.cycles.length} cycles · click a row for legs & payoff)</span>
         </div>
         <div className="flex gap-1">
           {reasons.map((r) => (
