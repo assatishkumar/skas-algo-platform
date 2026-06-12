@@ -12,7 +12,11 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from skas_algo.data.synthetic_options import build_synthetic_options_run, synthetic_chain_df
+from skas_algo.data.synthetic_options import (
+    GOLD_STRIKE_STEP,
+    build_synthetic_options_run,
+    synthetic_chain_df,
+)
 from skas_algo.engine.options.black_scholes import implied_vol
 from skas_algo.engine.runner import BacktestRunner
 from skas_algo.strategies.short_premium import ShortPremiumStrategy
@@ -50,7 +54,7 @@ class FakeGoldSD:
 def test_synthetic_chain_round_trips_iv():
     on, exp, spot, vol = date(2024, 1, 15), date(2024, 2, 5), 62000.0, 0.18
     df = synthetic_chain_df("GOLD", on, exp, spot, vol)
-    atm = round(spot / 100) * 100
+    atm = round(spot / GOLD_STRIKE_STEP) * GOLD_STRIKE_STEP
     ce = df[(df.option_type == "CE") & (df.strike_price == atm)].iloc[0]
     t = (exp - on).days / 365.0
     iv = implied_vol(float(ce.close), spot, atm, t, 0.065, "CE")
