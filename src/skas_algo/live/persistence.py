@@ -19,7 +19,7 @@ from skas_algo.db.enums import (
     PositionStatus,
     TradingMode,
 )
-from skas_algo.db.models import Algo, AlgoRun, Fill, Order, Position
+from skas_algo.db.models import Algo, AlgoRun, Fill, GreeksSnapshot, Order, Position
 
 
 def start_live_run(
@@ -112,6 +112,36 @@ def persist_state(session: Session, run_id: int, state: dict) -> None:
     run = session.get(AlgoRun, run_id)
     if run is not None:
         run.state = state
+
+
+def record_greeks(
+    session: Session, run_id: int, snapshot: dict, ts: datetime, spot: float | None = None
+) -> None:
+    """Append a sampled greeks point (net + per-leg) for an options deployment."""
+    legs = [
+        {
+            "symbol": p["symbol"],
+            "iv": p.get("iv"),
+            "delta": p.get("delta"),
+            "pos_delta": p.get("pos_delta"),
+            "units": p.get("units"),
+            "dir": p.get("direction"),
+        }
+        for p in snapshot.get("positions", [])
+        if p.get("iv") is not None
+    ]
+    pnl = sum(p.get("unrealized_pnl", 0.0) for p in snapshot.get("positions", []))
+    session.add(
+        GreeksSnapshot(
+            algo_run_id=run_id,
+            ts=ts,
+            spot=spot,
+            net_delta=snapshot.get("net_delta"),
+            net_iv=snapshot.get("net_iv"),
+            pnl=pnl,
+            legs=legs,
+        )
+    )
 
 
 def finalize_live_run(session: Session, run: AlgoRun, *, metrics: dict, trade_log: list) -> None:

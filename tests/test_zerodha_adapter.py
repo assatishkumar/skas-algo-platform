@@ -102,3 +102,39 @@ def test_get_quote_skips_unlisted_option():
     adapter = ZerodhaAdapter(CREDS, kite=_QuoteKite())
     out = adapter.get_quote(["NIFTY|2026-01-13|99000|CE"])  # strike not in the dump
     assert out == {}
+
+
+class _MarginKite(_QuoteKite):
+    """Adds basket_margins() so basket-margin building can be tested."""
+
+    def __init__(self):
+        super().__init__()
+        self.last_basket = None
+
+    def basket_order_margins(self, basket, consider_positions=True):
+        self.last_basket = basket
+        self.last_consider_positions = consider_positions
+        return {"initial": {"total": 200000.0}, "final": {"total": 132000.0}}
+
+
+def test_basket_margin_builds_basket_from_own_legs():
+    kite = _MarginKite()
+    adapter = ZerodhaAdapter(CREDS, kite=kite)
+    total = adapter.basket_margin([
+        {"symbol": "NIFTY|2026-01-13|25400|CE", "direction": -1, "units": 195},
+        {"symbol": "NIFTY|2026-01-13|25200|CE", "direction": 1, "units": 65},
+    ])
+    assert total == 132000.0  # the spread-benefit "final" net, not "initial"
+    assert kite.last_consider_positions is False  # basket-alone margin (Sensibull-style)
+    sell, buy = kite.last_basket
+    assert sell["transaction_type"] == "SELL" and sell["tradingsymbol"] == "NIFTY2611325400CE"
+    assert sell["quantity"] == 195 and sell["exchange"] == "NFO" and sell["product"] == "NRML"
+    assert buy["transaction_type"] == "BUY" and buy["tradingsymbol"] == "NIFTY2611325200CE"
+
+
+def test_basket_margin_none_when_nothing_maps():
+    adapter = ZerodhaAdapter(CREDS, kite=_MarginKite())
+    # Strike not in the NFO dump → no orders → None (caller falls back to the model).
+    assert adapter.basket_margin(
+        [{"symbol": "NIFTY|2026-01-13|99000|CE", "direction": -1, "units": 75}]
+    ) is None

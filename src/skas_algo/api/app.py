@@ -18,6 +18,15 @@ logger = logging.getLogger("skas_algo")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure the schema exists (idempotent — only creates missing tables, never alters
+    # existing data). Picks up new tables like greeks_snapshot on the next restart.
+    try:
+        import skas_algo.db.models  # noqa: F401 - register all ORM tables
+        from skas_algo.db.base import Base, get_engine
+
+        Base.metadata.create_all(get_engine())
+    except Exception:  # pragma: no cover - never block startup
+        logger.exception("schema create_all failed")
     # Rebuild any paper/live runs that were still running before a restart.
     try:
         from skas_algo.live.recovery import recover_running_sessions

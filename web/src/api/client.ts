@@ -12,7 +12,9 @@ import type {
   Deployment,
   DerivCoverage,
   FuturesSeries,
+  GreeksHistory,
   LiveControlsInput,
+  ManualOrderInput,
   OptionChain,
   OptionsExpiries,
   RefreshResult,
@@ -147,6 +149,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(ov),
     }),
+  liveFlatten: (id: number) =>
+    request<{ run_id: number; closed: number; snapshot: LiveRunSnapshot }>(
+      `/live/${id}/flatten`,
+      { method: "POST" },
+    ),
+  liveManualOrder: (id: number, body: ManualOrderInput) =>
+    request<{ run_id: number; executed: number; snapshot: LiveRunSnapshot }>(
+      `/live/${id}/manual-order`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  liveGreeksHistory: (id: number) => request<GreeksHistory>(`/live/${id}/greeks-history`),
   liveDeployments: (status?: string) =>
     request<Deployment[]>(`/live/deployments${status ? `?status=${status}` : ""}`),
   liveArchive: (id: number) => request(`/live/${id}/archive`, { method: "POST" }),

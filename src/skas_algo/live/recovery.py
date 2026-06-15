@@ -37,6 +37,7 @@ _NON_STRATEGY_KEYS = {
     "decision_time",
     "ignore_market_hours",
     "excluded_symbols",
+    "warm_from_date",  # one-time seed at start; recovery restores the saved book instead.
     # passed explicitly below; also backtest bookkeeping a forward-tested run carries.
     "universe",
     "initial_capital",

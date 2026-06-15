@@ -80,6 +80,7 @@ class CallRatioMonthlyStrategy:
         stop_check: str = "eod",         # how often to evaluate the stop loss
         time_check: str = "eod",         # how often to evaluate the time exit
         eod_time: str = "15:15",         # what "eod" means (at/after this IST time)
+        margin_per_lotset: float = 130_000.0,  # ~SPAN+exposure margin per ratio lot-set
         lot_overrides: dict | None = None,
         **_ignored,
     ):
@@ -113,6 +114,7 @@ class CallRatioMonthlyStrategy:
         self.stop_check = str(stop_check)
         self.time_check = str(time_check)
         self.eod_time = str(eod_time)
+        self.margin_per_lotset = float(margin_per_lotset)
         self.lot_overrides = lot_overrides
         # Per-exit last-evaluation timestamps (for interval cadences); transient.
         self._last_check: dict[str, "datetime"] = {}
@@ -496,10 +498,11 @@ class BatmanRatioMonthlyStrategy(CallRatioMonthlyStrategy):
 
     def __init__(self, *args, combined_credit_limit_pct: float = 0.02,
                  tail_hedge_offset: float = 2100.0, tail_hedge_lots: float = 0.5,
-                 tail_hedge_side: str = "put", **kwargs):
+                 tail_hedge_side: str = "put", margin_per_lotset: float = 200_000.0, **kwargs):
+        # Batman runs BOTH ratio wings → ~2× a single ratio's margin per lot-set.
         super().__init__(*args, tail_hedge_offset=tail_hedge_offset,
                          tail_hedge_lots=tail_hedge_lots, tail_hedge_side=tail_hedge_side,
-                         **kwargs)
+                         margin_per_lotset=margin_per_lotset, **kwargs)
         # Cap on the COMBINED (both wings) net credit, as a fraction of capital. The
         # per-wing cap (credit_debit_limit_pct, 1%) still applies, so the default 2%
         # changes nothing; a tighter combined cap re-shifts BOTH wings further OTM.

@@ -122,6 +122,78 @@ def test_live_strike_selection_uses_live_index_spot():
     assert shorts and shorts[0]["ticker"].split("|")[2] == "26400"  # 26000 + 400 OTM
 
 
+def test_live_snapshot_includes_greeks():
+    cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
+    sd = FakeLiveSD(cal)
+    sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
+    mv.set_index_spot("NIFTY", 25000.0)
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))
+    sess.update_quotes({leg["symbol"]: leg["entry"] for leg in strat.legs})
+    snap = sess.snapshot()
+    # Net greeks present, and every (priceable) leg carries an IV + delta.
+    assert snap["net_delta"] is not None and snap["net_iv"] is not None
+    assert all("iv" in p and "delta" in p and "pos_delta" in p for p in snap["positions"])
+
+
+def test_live_snapshot_includes_target_stop_and_realized():
+    cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
+    sd = FakeLiveSD(cal)
+    sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))  # enter
+    snap = sess.snapshot()
+    # HNI target/stop = ±1% of deployed margin (margin_per_lotset × lots = 132000 × 1).
+    assert snap["profit_target_amt"] == 1320.0
+    assert snap["stop_loss_amt"] == 1320.0
+    assert snap["realized_pnl"] == 0.0  # nothing booked yet
+
+
+def test_live_snapshot_includes_margin_and_net_credit():
+    cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
+    sd = FakeLiveSD(cal)
+    sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))  # enter the 1-3-2
+    snap = sess.snapshot()
+    assert snap["net_credit"] is not None             # net premium of the structure
+    assert snap["margin_used"] is not None and snap["margin_used"] > 0  # short legs need margin
+    assert snap["margin_source"] == "model"           # no live Zerodha session in this test
+
+
+def test_live_flatten_closes_all_legs():
+    cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
+    sd = FakeLiveSD(cal)
+    sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))  # enter the 1-3-2
+    assert strat.legs and sess.portfolio.lot_symbols()
+    sess.update_quotes({leg["symbol"]: leg["entry"] for leg in strat.legs})
+    events = sess.flatten(datetime(2026, 1, 5, 10, 0))
+    # short body buys-to-close (COVER), the two longs sell (SELL)
+    assert {e["action"] for e in events} <= {"COVER", "SELL"}
+    assert not sess.portfolio.lot_symbols()  # fully flat
+    assert not strat.legs                     # strategy adopted the flat book
+
+
+def test_live_manual_order_close_and_open_adopts_book():
+    cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
+    sd = FakeLiveSD(cal)
+    sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))
+    hedge = "NIFTY|2026-01-13|25600|CE"  # the long hedge leg (spot 25000 + 600)
+    assert hedge in {leg["symbol"] for leg in strat.legs}
+    sess.update_quotes({leg["symbol"]: leg["entry"] for leg in strat.legs})
+    # Close the hedge leg entirely AND open a new long PE leg on the same expiry.
+    events = sess.manual_order(
+        datetime(2026, 1, 5, 10, 0),
+        closes=[{"symbol": hedge}],
+        opens=[{"right": "PE", "strike": 24800, "lots": 1, "side": "buy"}],
+    )
+    assert events
+    book = set(sess.portfolio.lot_symbols())
+    assert hedge not in book                          # closed
+    assert "NIFTY|2026-01-13|24800|PE" in book        # opened (1 lot-set = 65 units)
+    # "Strategy adopts the book": its tracked legs now mirror exactly what's held.
+    assert {leg["symbol"] for leg in strat.legs} == book
+
+
 def test_live_expiry_settles_legs():
     cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
     sd = FakeLiveSD(cal)

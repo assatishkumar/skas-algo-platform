@@ -98,6 +98,9 @@ class LiveStartRequest(BaseModel):
     decision_time: str = "15:20"
     ignore_market_hours: bool = False
     auto: bool = False  # start the background refresh/decision loop
+    # Options PAPER only: seed from a past date — replay the strategy as a backtest from
+    # warm_from_date → today, then carry the resulting open book forward live.
+    warm_from_date: date | None = None
 
 
 class BrokerConnectRequest(BaseModel):
@@ -125,6 +128,32 @@ class LiveControlsInput(BaseModel):
     refresh_seconds: int | None = None
     excluded_symbols: list[str] | None = None  # replaces the no-new-entry blocklist
     lots: int | None = None  # options: lot-sets for the NEXT entry (doesn't resize open legs)
+
+
+class ManualLegClose(BaseModel):
+    """Close some/all lot-records of one held option leg (manual option intervention)."""
+
+    symbol: str
+    lots: int | None = None  # None = close every lot-record of this symbol
+
+
+class ManualLegOpen(BaseModel):
+    """Open a new option leg on a running deployment (uses the strategy's current expiry)."""
+
+    right: str  # "CE" | "PE"
+    strike: float
+    lots: int  # lot-sets (× the contract lot size)
+    side: str  # "buy" | "sell"
+
+
+class ManualOrderInput(BaseModel):
+    """Option-aware live intervention: close selected legs/lots and/or open new legs now.
+
+    Executes immediately at live prices; afterwards the strategy adopts the resulting book.
+    """
+
+    closes: list[ManualLegClose] = Field(default_factory=list)
+    opens: list[ManualLegOpen] = Field(default_factory=list)
 
 
 class RefreshCacheInput(BaseModel):

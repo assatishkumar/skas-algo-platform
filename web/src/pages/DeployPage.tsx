@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, brokers } from "../api/client";
 import { Card, ErrorBox, NumberInput } from "../components/ui";
+import { isOptionsStrategy } from "../lib/params";
 import type { ForwardTestPrefill, StartLiveRequest } from "../types";
 
 const inputClass =
@@ -55,11 +56,11 @@ export default function DeployPage() {
   const [stopCheck, setStopCheck] = useState(String(ps.stop_check ?? "eod"));
   const [timeCheck, setTimeCheck] = useState(String(ps.time_check ?? "eod"));
   const [eodTime, setEodTime] = useState(String(ps.eod_time ?? "15:15"));
+  // Options PAPER: optionally seed from a past date (replay as backtest → continue live).
+  const [warmFromDate, setWarmFromDate] = useState("");
 
   const isFifo = strategyId === "sst_fifo";
-  const OPTIONS_STRATEGIES = ["hni_weekly", "batman_ratio_monthly", "call_ratio_monthly",
-    "put_ratio_monthly", "short_premium"];
-  const isOptions = OPTIONS_STRATEGIES.includes(strategyId);
+  const isOptions = isOptionsStrategy(strategyId);
   const CADENCES = ["tick", "1min", "5min", "15min", "30min", "60min", "eod"];
   const sessioned = (accounts ?? []).filter((a) => a.has_session);
 
@@ -101,6 +102,7 @@ export default function DeployPage() {
       broker_account_id: quoteSource === "zerodha" ? accountId : null,
       ignore_market_hours: ignoreHours,
       auto,
+      ...(isOptions && warmFromDate ? { warm_from_date: warmFromDate } : {}),
     };
     try {
       await api.liveStart(body);
@@ -195,7 +197,24 @@ export default function DeployPage() {
                 <span className={lbl}>{strategyId === "hni_weekly" ? "Lot-sets (× 1-3-2)" : "Lots"}</span>
                 <NumberInput className={inputClass} value={optLots} onChange={setOptLots} />
               </label>
+              <label className="block">
+                <span className={lbl}>Seed from (optional)</span>
+                <input
+                  type="date"
+                  className={inputClass}
+                  value={warmFromDate}
+                  onChange={(e) => setWarmFromDate(e.target.value)}
+                />
+              </label>
             </div>
+            {warmFromDate && (
+              <div className="text-[11px] text-sky-300/90">
+                Replays the strategy as a backtest from {warmFromDate} → today, then carries the
+                resulting open position forward as the live (PAPER) book — so a month-before-expiry
+                strategy can be tested now instead of waiting for the next cycle. Needs the option
+                chain cached back to that date.
+              </div>
+            )}
             <div className="text-[11px] text-amber-300/90">
               Intraday exit cadence — how often each exit is evaluated. Profit can book intraday
               (e.g. every 15 min) while the stop holds to EOD. Intraday cadences need live Zerodha

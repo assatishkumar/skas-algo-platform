@@ -153,6 +153,48 @@ class ZerodhaAdapter:
         data = self._kite_client().ltp(list(key_of.values()))
         return {s: data[k]["last_price"] for s, k in key_of.items() if k in data}
 
+    def basket_margin(self, legs: list[dict]) -> float | None:
+        """Net margin (₹) Zerodha would block for a basket built from THESE legs.
+
+        Built from our own option legs (NOT ``kite.positions()`` — in PAPER mode the broker
+        holds no such positions). ``legs``: [{"symbol", "direction", "units"}]. Returns the
+        spread-benefit net total, or None if it can't be computed (no mapping / API error)."""
+        from skas_algo.engine.options.instrument import parse
+
+        kite = self._kite_client()
+        basket: list[dict] = []
+        for leg in legs:
+            inst = parse(leg["symbol"])
+            if inst is None:
+                continue
+            ts = self._option_tradingsymbol(inst)
+            qty = abs(int(leg.get("units", 0)))
+            if not ts or qty <= 0:
+                continue
+            basket.append({
+                "exchange": "NFO",
+                "tradingsymbol": ts,
+                "transaction_type": "SELL" if leg.get("direction", 1) < 0 else "BUY",
+                "variety": "regular",
+                "product": "NRML",
+                "order_type": "MARKET",
+                "quantity": qty,
+                "price": 0,
+                "trigger_price": 0,
+            })
+        if not basket:
+            return None
+        try:
+            # consider_positions=False → margin for THIS basket alone (with its own spread
+            # benefit), matching Sensibull's "Margin Needed" — not netted against the
+            # account's unrelated real positions.
+            result = kite.basket_order_margins(basket, consider_positions=False)
+        except Exception:  # pragma: no cover - network/API hiccup → caller falls back
+            return None
+        final = result.get("final", {}) if isinstance(result, dict) else {}
+        total = final.get("total")
+        return float(total) if total is not None else None
+
     def _option_tradingsymbol(self, inst) -> str | None:
         """Resolve an option instrument to its Kite NFO tradingsymbol via the instruments
         dump (cached for the session)."""

@@ -148,6 +148,19 @@ const PCT_KEYS = new Set([
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+/** Strategy ids that trade options (DERIV) — share one source of truth across the UI. */
+export const OPTIONS_STRATEGIES = [
+  "hni_weekly",
+  "batman_ratio_monthly",
+  "call_ratio_monthly",
+  "put_ratio_monthly",
+  "short_premium",
+];
+
+export function isOptionsStrategy(strategyId: string): boolean {
+  return OPTIONS_STRATEGIES.includes(strategyId);
+}
+
 export function paramLabel(key: string): string {
   return LABELS[key] ?? key;
 }

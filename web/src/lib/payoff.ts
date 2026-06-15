@@ -169,3 +169,120 @@ export function buildLivePayoff(
   }
   return { data, spot, expiryDate };
 }
+
+// ---- Sensibull-style position metrics --------------------------------------------
+export interface PositionMetrics {
+  maxProfit: number; // +Infinity if unbounded
+  maxLoss: number; // negative; -Infinity if unbounded
+  maxProfitUnlimited: boolean;
+  maxLossUnlimited: boolean;
+  breakevens: number[];
+  pop: number | null; // probability of profit, 0..1
+  currentPnl: number;
+  profitLeft: number; // maxProfit − currentPnl (Infinity if unbounded)
+  lossLeft: number; // currentPnl − maxLoss (Infinity if unbounded)
+  intrinsicValue: number; // net intrinsic of the position (signed)
+  timeValue: number; // net mark − intrinsic (signed)
+  rewardRisk: number | null; // maxProfit / |maxLoss| when both finite
+}
+
+/** Derive Max P/L, breakevens, POP, time/intrinsic value and reward:risk from the OPEN
+ *  legs' expiry payoff curve. "Unlimited" upside/downside comes from the net call slope
+ *  (puts are bounded at S=0). POP uses a risk-neutral lognormal at expiry with ``aggIv``. */
+export function computeMetrics(
+  legs: LiveLeg[], spot: number, expiryDate: string, today?: string, aggIv?: number | null,
+): PositionMetrics | null {
+  if (!legs.length || !spot) return null;
+  const asOf = today ?? new Date().toISOString().slice(0, 10);
+  const t = Math.max(daysBetween(asOf, expiryDate) / 365, 1 / 365);
+
+  const expiryPnl = (S: number) =>
+    legs.reduce((p, l) => p + l.direction * (intrinsic(l.right, S, l.strike) - l.entry) * l.units, 0);
+
+  // Unbounded tails: only net calls run away (puts are capped at S=0).
+  const ceNet = legs
+    .filter((l) => l.right === "CE")
+    .reduce((s, l) => s + l.direction * l.units, 0);
+  const maxProfitUnlimited = ceNet > 1e-9;
+  const maxLossUnlimited = ceNet < -1e-9;
+
+  // Dense grid over [0, spot·2.5] including every strike so kinks + the S=0 edge are hit.
+  const xs = new Set<number>([0, ...legs.map((l) => l.strike)]);
+  const hi = spot * 2.5;
+  const n = 500;
+  for (let i = 0; i <= n; i++) xs.add((hi * i) / n);
+  const grid = [...xs].filter((s) => s >= 0).sort((a, b) => a - b);
+
+  let gMax = -Infinity;
+  let gMin = Infinity;
+  const breakevens: number[] = [];
+  let prevS = grid[0];
+  let prevP = expiryPnl(prevS);
+  gMax = Math.max(gMax, prevP);
+  gMin = Math.min(gMin, prevP);
+  for (let i = 1; i < grid.length; i++) {
+    const s = grid[i];
+    const p = expiryPnl(s);
+    gMax = Math.max(gMax, p);
+    gMin = Math.min(gMin, p);
+    if ((prevP < 0 && p >= 0) || (prevP > 0 && p <= 0)) {
+      const be = prevP === p ? s : prevS + ((0 - prevP) * (s - prevS)) / (p - prevP);
+      if (!breakevens.some((b) => Math.abs(b - be) < spot * 0.0005)) breakevens.push(be);
+    }
+    prevS = s;
+    prevP = p;
+  }
+
+  const maxProfit = maxProfitUnlimited ? Infinity : gMax;
+  const maxLoss = maxLossUnlimited ? -Infinity : gMin;
+
+  // POP: risk-neutral lognormal mass over the profit segments between breakevens.
+  const sigma = aggIv && aggIv > 0
+    ? aggIv
+    : (() => {
+        const xv = legs
+          .map((l) => (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, t, RISK_FREE, l.right) : null))
+          .filter((v): v is number => v != null);
+        return xv.length ? xv.reduce((a, b) => a + b, 0) / xv.length : 0;
+      })();
+  let pop: number | null = null;
+  if (sigma > 0) {
+    const cdf = (K: number) =>
+      K <= 0 ? 0 : normCdf((Math.log(K / spot) - (RISK_FREE - 0.5 * sigma * sigma) * t) / (sigma * Math.sqrt(t)));
+    const bounds = [0, ...breakevens.slice().sort((a, b) => a - b), Infinity];
+    pop = 0;
+    for (let i = 0; i < bounds.length - 1; i++) {
+      const a = bounds[i];
+      const b = bounds[i + 1];
+      const mid = b === Infinity ? a * 1.5 + spot * 0.25 : (a + b) / 2;
+      if (expiryPnl(mid) > 0) pop += (b === Infinity ? 1 : cdf(b)) - cdf(a);
+    }
+    pop = Math.max(0, Math.min(1, pop));
+  }
+
+  const currentPnl = legs.reduce(
+    (p, l) => p + l.direction * ((l.ltp ?? l.entry) - l.entry) * l.units, 0,
+  );
+  const intrinsicValue = legs.reduce(
+    (p, l) => p + l.direction * intrinsic(l.right, spot, l.strike) * l.units, 0,
+  );
+  const netMark = legs.reduce((p, l) => p + l.direction * (l.ltp ?? l.entry) * l.units, 0);
+  const timeValue = netMark - intrinsicValue;
+  const rewardRisk =
+    maxProfitUnlimited || maxLossUnlimited || maxLoss >= 0 ? null : maxProfit / Math.abs(maxLoss);
+
+  return {
+    maxProfit,
+    maxLoss,
+    maxProfitUnlimited,
+    maxLossUnlimited,
+    breakevens: breakevens.sort((a, b) => a - b),
+    pop,
+    currentPnl,
+    profitLeft: maxProfitUnlimited ? Infinity : maxProfit - currentPnl,
+    lossLeft: maxLossUnlimited ? Infinity : currentPnl - maxLoss,
+    intrinsicValue,
+    timeValue,
+    rewardRisk,
+  };
+}

@@ -140,6 +140,27 @@ class Position(Base, TimestampMixin):
     algo: Mapped[Algo] = relationship(back_populates="positions")
 
 
+class GreeksSnapshot(Base):
+    """A sampled point of an options deployment's live greeks, for history + analytics.
+
+    Written ~once a minute by the live loop (not every tick) so a day of forward-testing
+    is a few hundred rows. Holds the aggregate (net delta / IV-weighted) plus a per-leg
+    JSON breakdown; greeks are derived from live Zerodha quotes (LTP + index spot + DTE)."""
+
+    __tablename__ = "greeks_snapshot"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    algo_run_id: Mapped[int] = mapped_column(ForeignKey("algo_run.id"), index=True)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    spot: Mapped[float | None] = mapped_column(Float, nullable=True)  # live underlying spot
+    net_delta: Mapped[float | None] = mapped_column(Float, nullable=True)  # Σ dir·δ·units
+    net_iv: Mapped[float | None] = mapped_column(Float, nullable=True)  # units-weighted IV
+    pnl: Mapped[float | None] = mapped_column(Float, nullable=True)  # net unrealized P&L (₹)
+    legs: Mapped[list] = mapped_column(JSON, default=list)  # [{symbol, iv, delta, pos_delta, ...}]
+
+
 class Order(Base, TimestampMixin):
     __tablename__ = "order"
 

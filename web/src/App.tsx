@@ -7,6 +7,7 @@ import LivePage from "./pages/LivePage";
 import NewBacktestPage from "./pages/NewBacktestPage";
 import RunDetailPage from "./pages/RunDetailPage";
 import RunsPage from "./pages/RunsPage";
+import StrategiesPage from "./pages/StrategiesPage";
 
 function NavItem({ to, label }: { to: string; label: string }) {
   return (
@@ -35,6 +36,7 @@ export default function App() {
           <NavItem to="/" label="Runs" />
           <NavItem to="/new" label="New backtest" />
           <NavItem to="/live" label="Live" />
+          <NavItem to="/strategies" label="Strategies" />
           <NavItem to="/data" label="Data" />
           <NavItem to="/brokers" label="Brokers" />
         </div>
@@ -45,6 +47,7 @@ export default function App() {
           <Route path="/new" element={<NewBacktestPage />} />
           <Route path="/live" element={<LivePage />} />
           <Route path="/live/new" element={<DeployPage />} />
+          <Route path="/strategies" element={<StrategiesPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
           <Route path="/compare" element={<ComparePage />} />

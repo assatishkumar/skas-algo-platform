@@ -130,6 +130,19 @@ class SliceExecutor:
             events.extend(self._execute(ts, action, lots_at_start))
         return self._charge(events)
 
+    def execute_actions(self, ts: date | datetime, actions: list) -> list[dict]:
+        """Execute pre-resolved actions directly (flatten / manual intervention).
+
+        Bypasses the strategy + override resolver — the caller builds the actions itself
+        (e.g. close these specific lots, open this leg) — but fills, portfolio bookkeeping
+        and F&O charges go through the exact same path as a normal slice.
+        """
+        lots_at_start = {s: len(self.portfolio.lots(s)) for s in self.portfolio.lot_symbols()}
+        events: list[dict] = []
+        for action in actions:
+            events.extend(self._execute(ts, action, lots_at_start))
+        return self._charge(events)
+
     # ------------------------------------------------------------ internals
     def _execute(self, ts, action, lots_at_start) -> list[dict]:
         if isinstance(action, CloseLot):

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import date, datetime, time
 
 from skas_algo.db.base import session_scope
 from skas_algo.db.models import AlgoRun
@@ -26,6 +26,7 @@ from skas_algo.strategies.registry import get_strategy
 from .persistence import (
     finalize_live_run,
     persist_state,
+    record_greeks,
     record_trades,
     start_live_run,
     sync_positions,
@@ -57,6 +58,8 @@ class LiveConfig:
     decision_time: str = "15:20"  # IST; daily decision fires at/after this
     ignore_market_hours: bool = False
     auto: bool = False  # whether the background refresh/decision loop runs
+    # Options PAPER only: replay from this past date as a backtest, then continue live.
+    warm_from_date: "date | None" = None
 
 
 def _serialize_event(ev: dict) -> dict:
@@ -125,6 +128,12 @@ class LiveRun:
         self.on_cache_fallback = False
         self.last_decision_day = None
         self.status = "running"
+        # Greeks history is sampled (~1/min), not every refresh tick → keep a day's
+        # forward-test to a few hundred rows.
+        self._last_greeks_at: datetime | None = None
+        # Real Zerodha basket margin, refreshed ~1/min (overrides the model estimate).
+        self._margin: float | None = None
+        self._last_margin_at: datetime | None = None
         # Let the options view fetch a freshly-selected contract's live price at fill time
         # (follows quote-source promotion since it reads self.quote_source each call).
         market = getattr(self.session, "market", None)
@@ -153,21 +162,65 @@ class LiveRun:
         if idx and idx in quotes and hasattr(self.session.market, "set_index_spot"):
             self.session.market.set_index_spot(self.config.underlying, quotes.pop(idx))
         self.session.update_quotes(quotes)
-        snap = self.session.snapshot()
+        self._maybe_refresh_margin()
+        snap = self.snapshot()
         with session_scope() as db:
             sync_positions(db, self.algo_id, snap)
+            self._maybe_record_greeks(db, snap)
         self.broadcaster.publish({"type": "snapshot", "run_id": self.run_id, **snap})
         self._persist_state()
         return snap
+
+    def _maybe_refresh_margin(self) -> None:
+        """Throttled (~1/min) real Zerodha basket margin, built from our own legs. Falls
+        back silently to the model estimate (in the session snapshot) when unavailable."""
+        if self.config.instrument_class.upper() != "DERIV" or self.config.quote_source != "zerodha":
+            return
+        symbols = self.session.portfolio.lot_symbols()
+        if not symbols:
+            self._margin = None
+            return
+        now = datetime.now(IST)
+        if self._last_margin_at and (now - self._last_margin_at).total_seconds() < 60:
+            return
+        self._last_margin_at = now
+        adapter = getattr(self.quote_source, "adapter", None)
+        if adapter is None or not hasattr(adapter, "basket_margin"):
+            return
+        legs = [
+            {
+                "symbol": s,
+                "direction": self.session.portfolio.lots(s)[0].direction,
+                "units": sum(lot.units for lot in self.session.portfolio.lots(s)),
+            }
+            for s in symbols
+        ]
+        try:
+            m = adapter.basket_margin(legs)
+        except Exception:  # pragma: no cover - never break the loop on a margin call
+            m = None
+        if m is not None:
+            self._margin = m
+
+    def _maybe_record_greeks(self, db, snap: dict) -> None:
+        """Sample the deployment's live greeks to history at most once a minute."""
+        if snap.get("net_delta") is None:
+            return  # equity run / no priceable option legs
+        now = datetime.now(IST)
+        if self._last_greeks_at and (now - self._last_greeks_at).total_seconds() < 60:
+            return
+        self._last_greeks_at = now
+        record_greeks(db, self.run_id, snap, now, spot=self._underlying_spot())
 
     def run_decision(self, ts: datetime | None = None) -> list[dict]:
         """Make today's entry/exit decision; persist trades + positions; broadcast."""
         ts = ts or datetime.now(IST)
         events = self.session.run_decision(ts)
+        snap = self.snapshot()  # wrapper: real margin override + greeks + target/stop, etc.
         with session_scope() as db:
             if events:
                 record_trades(db, self.algo_id, events)
-            sync_positions(db, self.algo_id, self.session.snapshot())
+            sync_positions(db, self.algo_id, snap)
         if events:
             self.broadcaster.publish(
                 {
@@ -176,11 +229,40 @@ class LiveRun:
                     "events": [_serialize_event(e) for e in events],
                 }
             )
-        self.broadcaster.publish(
-            {"type": "snapshot", "run_id": self.run_id, **self.session.snapshot()}
-        )
+        self.broadcaster.publish({"type": "snapshot", "run_id": self.run_id, **snap})
         self._persist_state()
         return events
+
+    def flatten(self) -> list[dict]:
+        """Exit-all: close every open leg now; persist trades + positions; broadcast."""
+        events = self.session.flatten(datetime.now(IST))
+        self._after_manual(events)
+        return events
+
+    def manual_order(self, *, closes=None, opens=None) -> list[dict]:
+        """Option-aware intervention: close selected legs/lots and/or open new legs now."""
+        events = self.session.manual_order(datetime.now(IST), closes=closes, opens=opens)
+        self._after_manual(events)
+        return events
+
+    def _after_manual(self, events: list[dict]) -> None:
+        """Persist + broadcast after a manual flatten/order (mirrors run_decision)."""
+        self._maybe_refresh_margin()
+        snap = self.snapshot()
+        with session_scope() as db:
+            if events:
+                record_trades(db, self.algo_id, events)
+            sync_positions(db, self.algo_id, snap)
+        if events:
+            self.broadcaster.publish(
+                {
+                    "type": "trades",
+                    "run_id": self.run_id,
+                    "events": [_serialize_event(e) for e in events],
+                }
+            )
+        self.broadcaster.publish({"type": "snapshot", "run_id": self.run_id, **snap})
+        self._persist_state()
 
     def end_day(self) -> None:
         self.session.end_day()
@@ -207,32 +289,35 @@ class LiveRun:
         self.broadcaster.publish({"type": "stopped", "run_id": self.run_id})
 
     def snapshot(self) -> dict:
-        return to_native(
-            {
-                "run_id": self.run_id,
-                "status": self.status,
-                "name": self.config.name,
-                "strategy_id": self.config.strategy_id,
-                "instrument_class": self.config.instrument_class,
-                "underlying": self.config.underlying,
-                "quote_source": self.config.quote_source,
-                "on_cache_fallback": self.on_cache_fallback,
-                "parts_total": self.config.params.get("capital_parts"),
-                # Options deployments expose lot-sets (editable live while flat); equity
-                # strategies have no `lots` attr → null → the UI hides the control.
-                "lots": getattr(getattr(self.session, "strategy", None), "lots", None),
-                # Live underlying spot (for the positions payoff diagram), if known.
-                "underlying_spot": self._underlying_spot(),
-                # Live controls + exclusion editing surface for the UI.
-                "auto": self.config.auto,
-                "ignore_market_hours": self.config.ignore_market_hours,
-                "refresh_seconds": self.config.refresh_seconds,
-                "decision_time": self.config.decision_time,
-                "universe": list(self.config.symbols),
-                "excluded_symbols": self.session.excluded_symbols,
-                **self.session.snapshot(),
-            }
-        )
+        snap = {
+            "run_id": self.run_id,
+            "status": self.status,
+            "name": self.config.name,
+            "strategy_id": self.config.strategy_id,
+            "instrument_class": self.config.instrument_class,
+            "underlying": self.config.underlying,
+            "quote_source": self.config.quote_source,
+            "on_cache_fallback": self.on_cache_fallback,
+            "parts_total": self.config.params.get("capital_parts"),
+            # Options deployments expose lot-sets (editable live while flat); equity
+            # strategies have no `lots` attr → null → the UI hides the control.
+            "lots": getattr(getattr(self.session, "strategy", None), "lots", None),
+            # Live underlying spot (for the positions payoff diagram), if known.
+            "underlying_spot": self._underlying_spot(),
+            # Live controls + exclusion editing surface for the UI.
+            "auto": self.config.auto,
+            "ignore_market_hours": self.config.ignore_market_hours,
+            "refresh_seconds": self.config.refresh_seconds,
+            "decision_time": self.config.decision_time,
+            "universe": list(self.config.symbols),
+            "excluded_symbols": self.session.excluded_symbols,
+            **self.session.snapshot(),
+        }
+        # Prefer the real Zerodha basket margin (throttled) over the model estimate.
+        if self._margin is not None:
+            snap["margin_used"] = self._margin
+            snap["margin_source"] = "zerodha"
+        return to_native(snap)
 
     def _underlying_spot(self):
         market = getattr(self.session, "market", None)
@@ -275,12 +360,46 @@ class LiveRunManager:
             universe=[underlying] if is_deriv else config.symbols,
             initial_capital=config.capital, **strategy_params,
         )
+
+        # Margin guard (options): capital must fund the position's margin for the chosen
+        # lot-sets, or the % profit/stop targets are nonsensical (and the broker would reject
+        # the order live). Raise with a suggested capital — the route returns it as a 422.
+        if is_deriv:
+            mpl = getattr(strategy, "margin_per_lotset", None)
+            lots = int(getattr(strategy, "lots", 1) or 1)
+            if mpl:
+                required = mpl * lots
+                if config.capital < required:
+                    import math
+
+                    suggested = int(math.ceil(required / 50_000.0) * 50_000)
+                    raise ValueError(
+                        f"Capital ₹{config.capital:,.0f} is below the ~₹{required:,.0f} margin "
+                        f"needed for {lots} lot-set(s) of {config.strategy_id}. "
+                        f"Deploy with at least ₹{suggested:,.0f}, or reduce the lot-sets."
+                    )
+
         session = _build_session(config, strategy, loader, is_deriv, underlying)
+
+        # Backtest-then-forward seed (options PAPER): replay from a past date and carry the
+        # resulting open book + strategy state forward as the live starting position. The
+        # replay's trades/equity curve are carried too, so a seeded run that already booked
+        # (and is now flat) still shows its realized P&L + trade log, not an empty deployment.
+        if config.warm_from_date and is_deriv:
+            from skas_algo.live.seed import seed_state_from_backtest
+
+            seeded = seed_state_from_backtest(config, loader, end_date=date.today())
+            session.load_state(seeded["state"])
+            session.transactions = list(seeded.get("transactions", []))
+            session.history = list(seeded.get("history", []))
 
         params_snapshot = {
             "symbols": config.symbols,
             "instrument_class": config.instrument_class,
             "underlying": underlying if is_deriv else None,
+            "warm_from_date": (
+                config.warm_from_date.isoformat() if config.warm_from_date else None
+            ),
             "lookback": config.lookback,
             "tax_rate": config.tax_rate,
             "withdrawal_rate": config.withdrawal_rate,

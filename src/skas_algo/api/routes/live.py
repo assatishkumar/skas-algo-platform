@@ -16,6 +16,7 @@ from skas_algo.api.models import (
     DeploymentUpdate,
     LiveControlsInput,
     LiveStartRequest,
+    ManualOrderInput,
     OverrideInput,
     QuoteSourceInput,
     iso_utc,
@@ -23,7 +24,7 @@ from skas_algo.api.models import (
 from skas_algo.data import universes
 from skas_algo.data.provider import get_available_symbols, get_price_loader
 from skas_algo.db.enums import TradingMode
-from skas_algo.db.models import Algo, AlgoRun, BrokerAccount
+from skas_algo.db.models import Algo, AlgoRun, BrokerAccount, GreeksSnapshot
 from skas_algo.engine.market import PriceLoader
 from skas_algo.engine.overrides import OverrideRule
 from skas_algo.live.manager import LiveConfig, manager
@@ -99,10 +100,13 @@ async def start_live(
             decision_time=req.decision_time,
             ignore_market_hours=req.ignore_market_hours,
             auto=req.auto,
+            warm_from_date=req.warm_from_date if is_deriv else None,
         )
         live = manager.start(config, loader, quote_source)
     except KeyError as exc:  # unknown strategy
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:  # bad warm_from_date / missing option-chain data to seed
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if req.auto:
         manager.start_loop(live.run_id)
     return live.snapshot()
@@ -149,6 +153,8 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             "mode": run.mode.value,
             "status": st,
             "quote_source": (run.params_snapshot or {}).get("quote_source", "cache"),
+            "instrument_class": (run.params_snapshot or {}).get("instrument_class"),
+            "underlying": (run.params_snapshot or {}).get("underlying"),
             "started_at": iso_utc(run.started_at),
             "stopped_at": iso_utc(run.stopped_at),
         }
@@ -164,6 +170,11 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
                 "open_lots": snap.get("open_lots", 0),
                 "parts_total": snap.get("parts_total"),
                 "unrealized_pnl": upnl,
+                # Options tiles surface margin + net credit/debit instead of equity value.
+                "margin_used": snap.get("margin_used"),
+                "margin_source": snap.get("margin_source"),
+                "net_credit": snap.get("net_credit"),
+                "net_delta": snap.get("net_delta"),
             }
         else:
             m = (run.metrics or {}).get("metrics", {})
@@ -268,6 +279,59 @@ async def set_controls(run_id: int, body: LiveControlsInput) -> dict:
         lots=body.lots,
     )
     return live.snapshot()
+
+
+@router.get("/{run_id}/greeks-history")
+async def greeks_history(run_id: int, limit: int = 1000, db: Session = Depends(get_db)) -> dict:
+    """Sampled greeks time-series for an options deployment (net delta + IV + per-leg)."""
+    rows = (
+        db.execute(
+            select(GreeksSnapshot)
+            .where(GreeksSnapshot.algo_run_id == run_id)
+            .order_by(GreeksSnapshot.ts.desc())
+            .limit(max(1, min(limit, 5000)))
+        )
+        .scalars()
+        .all()
+    )
+    points = [
+        {
+            "ts": iso_utc(r.ts),
+            "spot": r.spot,
+            "net_delta": r.net_delta,
+            "net_iv": r.net_iv,
+            "pnl": r.pnl,
+            "legs": r.legs,
+        }
+        for r in reversed(rows)  # oldest → newest for charting
+    ]
+    return {"run_id": run_id, "points": points}
+
+
+@router.post("/{run_id}/flatten")
+async def flatten(run_id: int) -> dict:
+    """Exit-all: close every open position now, at live prices. The strategy adopts the
+    now-flat book (it won't try to manage legs that no longer exist)."""
+    live = _get(run_id)
+    events = live.flatten()
+    return {"run_id": run_id, "closed": len(events), "snapshot": live.snapshot()}
+
+
+@router.post("/{run_id}/manual-order")
+async def manual_order(run_id: int, body: ManualOrderInput) -> dict:
+    """Option-aware live intervention: close selected legs/lots and/or open new legs now.
+
+    Executes immediately at live prices; afterwards the strategy adopts the resulting book.
+    """
+    live = _get(run_id)
+    try:
+        events = live.manual_order(
+            closes=[c.model_dump() for c in body.closes],
+            opens=[o.model_dump() for o in body.opens],
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"run_id": run_id, "executed": len(events), "snapshot": live.snapshot()}
 
 
 @router.post("/{run_id}/overrides")

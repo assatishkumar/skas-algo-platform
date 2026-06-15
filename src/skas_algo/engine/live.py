@@ -20,7 +20,18 @@ from skas_algo.brokers.sim_broker import PaperBroker
 from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.execution import SliceExecutor
 from skas_algo.engine.live_market import LiveMarketView
-from skas_algo.engine.overrides import OverrideResolver, OverrideRule
+from skas_algo.engine.options import black_scholes as bs
+from skas_algo.engine.options.instrument import make as make_option
+from skas_algo.engine.options.instrument import parse as parse_option
+from skas_algo.engine.overrides import (
+    BuyLot,
+    CloseLot,
+    ClosePosition,
+    CloseShort,
+    OpenShort,
+    OverrideResolver,
+    OverrideRule,
+)
 from skas_algo.engine.portfolio import Portfolio
 from skas_algo.engine.sim_fill import FillModel
 from skas_algo.engine.stops import StopBook
@@ -103,6 +114,128 @@ class LiveSession:
     def set_excluded(self, symbols: list[str]) -> None:
         """Replace the no-new-entry blocklist (open positions keep being managed)."""
         self.resolver.excluded = {s.strip().upper() for s in symbols if s.strip()}
+
+    # ----------------------------------------------- manual intervention
+    def flatten(self, ts: date | datetime, *, tag: str = "MANUAL", reason: str = "manual") -> list[dict]:
+        """Close every open position now (exit-all). Short legs buy-to-close, long legs
+        sell. Afterwards the strategy adopts the now-flat book (so it won't try to manage
+        legs that no longer exist)."""
+        actions: list = []
+        for symbol in list(self.portfolio.lot_symbols()):
+            lots = self.portfolio.lots(symbol)
+            if not lots:
+                continue
+            if all(lot.direction == -1 for lot in lots):
+                actions.extend(CloseShort(symbol, lot.id, tag=tag, reason=reason) for lot in lots)
+            else:
+                actions.append(ClosePosition(symbol, tag=tag, reason=reason))
+        events = self.executor.execute_actions(ts, actions)
+        self.transactions.extend(events)
+        self.sync_strategy_book(ts)
+        self._record_history(ts)
+        return events
+
+    def manual_order(self, ts: date | datetime, *, closes=None, opens=None,
+                     tag: str = "MANUAL") -> list[dict]:
+        """Close selected legs/lots and/or open new legs immediately, at live prices.
+
+        ``closes``: [{"symbol", "lots"?}] — close ``lots`` lot-records (None = all).
+        ``opens``:  [{"right", "strike", "lots", "side"}] — new legs on the strategy's
+        current expiry. Afterwards the strategy adopts the resulting book.
+        """
+        actions: list = []
+        for c in closes or []:
+            symbol = c["symbol"]
+            held = self.portfolio.lots(symbol)
+            if not held:
+                continue
+            n = c.get("lots")
+            chosen = held if n is None else held[: max(0, int(n))]
+            for lot in chosen:
+                if lot.direction == -1:
+                    actions.append(CloseShort(symbol, lot.id, tag=tag, reason="manual"))
+                else:
+                    actions.append(CloseLot(symbol, lot.id, lot.units, tag=tag))
+        for o in opens or []:
+            symbol, units = self._build_manual_leg(o)
+            side = str(o.get("side", "")).lower()
+            if side in ("sell", "short"):
+                actions.append(OpenShort(symbol, units, int(o.get("multiplier", 1))))
+            elif side in ("buy", "long"):
+                actions.append(BuyLot(symbol, units, tag=tag))
+            else:
+                raise ValueError(f"manual open side must be buy/sell, got {o.get('side')!r}")
+        if not actions:
+            raise ValueError("no manual actions to apply")
+        events = self.executor.execute_actions(ts, actions)
+        self.transactions.extend(events)
+        self.sync_strategy_book(ts)
+        self._record_history(ts)
+        return events
+
+    def _build_manual_leg(self, o: dict) -> tuple[str, int]:
+        """Resolve a manual-open spec to an (option_symbol, units) pair."""
+        strat = self.strategy
+        underlying = getattr(strat, "underlying", None)
+        if underlying is None:
+            raise ValueError("manual legs require an options strategy")
+        expiry = getattr(strat, "entry_expiry", None) or self._default_expiry()
+        if expiry is None:
+            raise ValueError("could not resolve an expiry for the manual leg")
+        lots = int(o["lots"])
+        if lots <= 0:
+            raise ValueError("manual open lots must be > 0")
+        inst = make_option(
+            underlying, expiry, float(o["strike"]), str(o["right"]).upper(),
+            lot_overrides=getattr(strat, "lot_overrides", None),
+        )
+        return inst.symbol, lots * inst.lot_size
+
+    def _default_expiry(self):
+        """Fallback expiry for a manual leg when the strategy is flat — reuse the
+        strategy's own expiry selection against the live chain."""
+        chain = getattr(self.market, "chain", None)
+        today = getattr(self.market, "current_date", None)
+        select = getattr(self.strategy, "_select_expiry", None)
+        if chain is not None and today is not None and select is not None:
+            try:
+                return select(chain, today)
+            except Exception:  # pragma: no cover - thin/odd chain → caller raises
+                return None
+        return None
+
+    def sync_strategy_book(self, ts: date | datetime) -> None:
+        """Rebuild an options strategy's tracked legs from the live book, so after a manual
+        change it keeps managing exactly what's held ("strategy adopts the book"). No-op for
+        strategies that don't track ``legs`` (e.g. equity SST)."""
+        strat = self.strategy
+        if not hasattr(strat, "legs"):
+            return
+        legs: list[dict] = []
+        for symbol in self.portfolio.lot_symbols():
+            lots = self.portfolio.lots(symbol)
+            if not lots:
+                continue
+            units = sum(lot.units for lot in lots)
+            cost = sum(lot.units * lot.price for lot in lots)
+            legs.append({
+                "symbol": symbol,
+                "dir": lots[0].direction,  # all lots of a symbol share direction
+                "units": units,
+                "entry": cost / units if units else 0.0,
+            })
+        strat.legs = legs
+        if not legs:
+            if hasattr(strat, "_flat"):
+                strat._flat()  # clears entry_expiry/date so a flat book reads as flat
+            return
+        # Keep entry bookkeeping coherent so _manage()/_time_exit() still work.
+        if getattr(strat, "entry_expiry", None) is None:
+            inst = parse_option(legs[0]["symbol"])
+            if inst is not None:
+                strat.entry_expiry = inst.expiry
+        if getattr(strat, "entry_date", None) is None:
+            strat.entry_date = ts.date() if isinstance(ts, datetime) else ts
 
     def run_decision(self, ts: date | datetime) -> list[dict]:
         """One decision cycle: cursor, expiry settlement, month flush, stops, strategy."""
@@ -193,8 +326,15 @@ class LiveSession:
                     "unrealized_pnl": direction * (value - cost),
                 }
             )
+        net_delta, net_iv = self._enrich_greeks(positions)
         holdings = self.portfolio.holdings_value(closes)
         symbols_held = self.portfolio.lot_symbols()
+        # Net premium collected at entry (+credit for shorts, −debit for longs).
+        net_credit = sum(-p["direction"] * p["avg_price"] * p["units"] for p in positions)
+        # Realized (booked) P&L across all trades so far — includes anything a backtest
+        # seed already booked during the replay (so a seeded-then-flat run isn't blank).
+        realized_pnl = sum((t.get("profit") or 0.0) for t in self.transactions)
+        target_amt, stop_amt = self._exit_amounts()
         return {
             "cash": self.portfolio.cash,
             "holdings_value": holdings,
@@ -204,7 +344,87 @@ class LiveSession:
             "open_lots": sum(len(self.portfolio.lots(s)) for s in symbols_held),
             "realized_taxes": self.portfolio.total_taxes,
             "positions": positions,
+            # Options greeks (derived from live LTP + index spot + DTE); None for equity.
+            "net_delta": net_delta,
+            "net_iv": net_iv,
+            # Margin estimate from the built-in SPAN+exposure model (live runs override
+            # this with the real Zerodha basket margin when a session is active).
+            "margin_used": self._model_margin(),
+            "margin_source": "model" if self.margin_model is not None else None,
+            "net_credit": net_credit if positions else None,
+            "realized_pnl": realized_pnl,
+            # Rupee profit-target / stop-loss the strategy will act on (so the live UI can
+            # show "Target +₹X / Stop −₹Y"). None for strategies without %-based exits.
+            "profit_target_amt": target_amt,
+            "stop_loss_amt": stop_amt,
         }
+
+    def _exit_amounts(self) -> tuple[float | None, float | None]:
+        strat = self.strategy
+        pt = getattr(strat, "profit_target_pct", None)
+        sl = getattr(strat, "stop_loss_pct", None)
+        if pt is None and sl is None:
+            return None, None
+        base_fn = getattr(strat, "_risk_base", None)
+        try:
+            base = base_fn() if base_fn else getattr(strat, "initial_capital", None)
+        except Exception:  # pragma: no cover
+            base = getattr(strat, "initial_capital", None)
+        if not base:
+            return None, None
+        return (pt * base if pt is not None else None), (sl * base if sl is not None else None)
+
+    def _model_margin(self) -> float | None:
+        if self.margin_model is None:
+            return None
+        on_date = getattr(self.market, "current_date", None) or date.today()
+        try:
+            return self.margin_model.margin_used(self.portfolio, on_date)
+        except Exception:  # pragma: no cover - spot provider gap → no estimate
+            return None
+
+    def _enrich_greeks(self, positions: list[dict]) -> tuple[float | None, float | None]:
+        """Attach per-leg IV/delta to option positions and return (net_delta, net_iv).
+
+        Greeks are backed out of the live mark (LTP) using the live index spot and the
+        contract's days-to-expiry — the same Black-Scholes inversion Sensibull uses (Kite
+        exposes no greeks field). No-op for equity runs (no index spot) → returns (None,None).
+        """
+        market = self.market
+        if not hasattr(market, "index_spot"):
+            return None, None  # equity run
+        underlying = getattr(self.strategy, "underlying", None)
+        spot = market.index_spot(underlying) if underlying else None
+        if spot is None:
+            return None, None
+        r = float(getattr(self.strategy, "r", 0.065))
+        today = getattr(market, "current_date", None) or date.today()
+        net_delta = 0.0
+        iv_num = iv_den = 0.0
+        have = False
+        for p in positions:
+            inst = parse_option(p["symbol"])
+            ltp = p.get("ltp")
+            if inst is None or ltp is None or ltp <= 0:
+                continue
+            t = max((inst.expiry - today).days, 0) / 365.0
+            if t <= 0:
+                continue
+            iv = bs.implied_vol(ltp, spot, inst.strike, t, r, inst.right)
+            if iv is None:
+                continue
+            d = bs.delta(spot, inst.strike, t, r, iv, inst.right)
+            pos_delta = p["direction"] * d * p["units"]
+            p["iv"] = iv
+            p["delta"] = d
+            p["pos_delta"] = pos_delta
+            net_delta += pos_delta
+            iv_num += iv * p["units"]
+            iv_den += p["units"]
+            have = True
+        if not have:
+            return None, None
+        return net_delta, (iv_num / iv_den if iv_den else None)
 
     def watchlist(self) -> list[dict]:
         """Per-symbol decision context: price, 20-day levels, tracking, holding, status.

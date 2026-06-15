@@ -307,6 +307,23 @@ export interface OverrideInput {
   rule: Record<string, unknown>;
 }
 
+export interface ManualLegClose {
+  symbol: string;
+  lots?: number | null; // null = close every lot-record of this symbol
+}
+
+export interface ManualLegOpen {
+  right: string; // "CE" | "PE"
+  strike: number;
+  lots: number; // lot-sets (× contract lot size)
+  side: string; // "buy" | "sell"
+}
+
+export interface ManualOrderInput {
+  closes: ManualLegClose[];
+  opens: ManualLegOpen[];
+}
+
 export interface LivePosition {
   symbol: string;
   units: number;
@@ -315,6 +332,24 @@ export interface LivePosition {
   avg_price: number;
   ltp: number | null;
   unrealized_pnl: number;
+  // Live greeks (options only; derived from live LTP + index spot + DTE).
+  iv?: number | null; // implied vol (decimal, e.g. 0.14)
+  delta?: number | null; // per-contract delta (signed by right)
+  pos_delta?: number | null; // position delta = direction · delta · units
+}
+
+export interface GreeksHistoryPoint {
+  ts: string;
+  spot: number | null;
+  net_delta: number | null;
+  net_iv: number | null;
+  pnl: number | null; // net unrealized P&L (₹) at this sample
+  legs: { symbol: string; iv: number | null; delta: number | null; pos_delta: number | null }[];
+}
+
+export interface GreeksHistory {
+  run_id: number;
+  points: GreeksHistoryPoint[];
 }
 
 export interface LiveRunSnapshot {
@@ -337,6 +372,14 @@ export interface LiveRunSnapshot {
   on_cache_fallback?: boolean;
   realized_taxes: number;
   positions: LivePosition[];
+  net_delta?: number | null; // options: Σ position delta (None for equity)
+  net_iv?: number | null; // options: units-weighted IV (decimal)
+  margin_used?: number | null; // options: real Zerodha basket margin or model estimate
+  margin_source?: string | null; // "zerodha" | "model"
+  net_credit?: number | null; // options: net premium (+credit / −debit)
+  realized_pnl?: number | null; // booked P&L so far (incl. a backtest seed's trades)
+  profit_target_amt?: number | null; // ₹ profit target the strategy will act on
+  stop_loss_amt?: number | null; // ₹ stop-loss the strategy will act on
   // live controls + exclusion editing
   auto: boolean;
   ignore_market_hours: boolean;
@@ -371,6 +414,7 @@ export interface StartLiveRequest {
   broker_account_id?: number | null;
   ignore_market_hours: boolean;
   auto: boolean;
+  warm_from_date?: string; // options PAPER: seed from this past date (ISO)
 }
 
 export interface BrokerAccount {
@@ -418,6 +462,11 @@ export interface DeploymentMetrics {
   unrealized_pnl?: number;
   total_return_pct?: number | null;
   total_trades?: number;
+  // Options tiles: margin utilised + net credit/debit instead of equity value.
+  margin_used?: number | null;
+  margin_source?: string | null;
+  net_credit?: number | null;
+  net_delta?: number | null;
 }
 
 export interface Deployment {
@@ -429,6 +478,8 @@ export interface Deployment {
   mode: string;
   status: "active" | "stopped" | "archived";
   quote_source: string;
+  instrument_class?: string | null; // "DERIV" for options, "STOCK"/null for equity
+  underlying?: string | null; // e.g. NIFTY (options only)
   started_at: string | null;
   stopped_at: string | null;
   metrics: DeploymentMetrics;

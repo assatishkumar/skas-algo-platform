@@ -3,8 +3,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
 import { Badge, Card, StatusPill, timeAgo } from "../components/ui";
+import GreeksPanel from "../components/GreeksPanel";
 import LivePayoffChart from "../components/LivePayoffChart";
+import OptionMetricsPanel from "../components/OptionMetricsPanel";
 import { formatInr } from "../lib/format";
+import { isOptionsStrategy } from "../lib/params";
 import type {
   Deployment,
   LiveRunSnapshot,
@@ -184,6 +187,102 @@ function OverridePanel({ runId, onDone }: { runId: number; onDone: () => void })
       <button onClick={apply} className="rounded bg-slate-700 hover:bg-slate-600 px-3 py-1 text-xs">
         Apply to run
       </button>
+    </div>
+  );
+}
+
+/** Option-aware intervention: close selected legs/lots and/or open a new leg now.
+ *  Replaces the equity book/trail override for options — those rules don't fit a
+ *  multi-leg book. After it applies, the strategy adopts whatever book is left. */
+function OptionIntervenePanel({ run, onDone }: { run: LiveRunSnapshot; onDone: () => void }) {
+  const positions = run.positions ?? [];
+  const [closeLots, setCloseLots] = useState<Record<string, number>>({});
+  const [right, setRight] = useState("CE");
+  const [strike, setStrike] = useState("");
+  const [lots, setLots] = useState("1");
+  const [side, setSide] = useState("sell");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function apply() {
+    const closes = positions
+      .filter((p) => (closeLots[p.symbol] ?? 0) > 0)
+      .map((p) => ({ symbol: p.symbol, lots: closeLots[p.symbol] }));
+    const opens = strike.trim()
+      ? [{ right, strike: Number(strike), lots: Math.max(1, Number(lots) || 1), side }]
+      : [];
+    if (!closes.length && !opens.length) {
+      setErr("Pick legs to close or a new leg to open.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.liveManualOrder(run.run_id, { closes, opens });
+      onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/40 p-3 text-sm">
+      <div className="text-xs text-amber-400/90 mb-2">
+        ⚠ Manual changes alter the position's risk (e.g. break a net-zero ratio). The strategy
+        then manages whatever book is left.
+      </div>
+      {positions.length > 0 && (
+        <div className="mb-3">
+          <div className="text-xs text-slate-400 mb-1">Close legs / lots</div>
+          <div className="space-y-1">
+            {positions.map((p) => (
+              <div key={p.symbol} className="flex items-center gap-2 text-xs">
+                <span className="font-mono">{p.symbol}</span>
+                <span className="text-slate-500">
+                  ({p.lots} lot{p.lots > 1 ? "s" : ""}, {p.direction === -1 ? "short" : "long"})
+                </span>
+                <span className="ml-auto text-slate-400">close</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={p.lots}
+                  value={closeLots[p.symbol] ?? 0}
+                  onChange={(e) =>
+                    setCloseLots({
+                      ...closeLots,
+                      [p.symbol]: Math.max(0, Math.min(p.lots, Number(e.target.value) || 0)),
+                    })
+                  }
+                  className="w-14 rounded bg-slate-800 border border-slate-700 px-2 py-1"
+                />
+                <span className="text-slate-500">lots</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="text-xs text-slate-400 w-full">Open a new leg (strategy's current expiry)</div>
+        <select value={side} onChange={(e) => setSide(e.target.value)} className="rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm">
+          <option value="sell">Sell</option>
+          <option value="buy">Buy</option>
+        </select>
+        <select value={right} onChange={(e) => setRight(e.target.value)} className="rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm">
+          <option value="CE">CE</option>
+          <option value="PE">PE</option>
+        </select>
+        <input type="number" placeholder="strike" value={strike} onChange={(e) => setStrike(e.target.value)} className="w-24 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" />
+        <input type="number" min={1} placeholder="lots" value={lots} onChange={(e) => setLots(e.target.value)} className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" />
+        <span className="text-xs text-slate-500">lot-sets</span>
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        <button onClick={apply} disabled={busy} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs font-medium disabled:opacity-50">
+          {busy ? "Applying…" : "Apply"}
+        </button>
+        {err && <span className="text-xs text-rose-400">{err}</span>}
+      </div>
     </div>
   );
 }
@@ -414,25 +513,30 @@ function RunCard({
   const upnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
   return (
     <div className="mt-3 border-t border-slate-800 pt-3">
-      {/* Quick summary: deployed capital, parts, positions, unrealized P&L */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-        <div className="rounded-md bg-slate-800/40 px-3 py-2">
-          <div className="text-slate-400 text-xs">Deployed</div>
-          {formatInr(run.invested ?? 0)}
+      {/* Options: Sensibull-style position metrics (max P/L, breakevens, POP, margin, …).
+          Equity: deployed capital / parts / positions / unrealized P&L. */}
+      {isOptions ? (
+        <OptionMetricsPanel run={run} />
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+          <div className="rounded-md bg-slate-800/40 px-3 py-2">
+            <div className="text-slate-400 text-xs">Deployed</div>
+            {formatInr(run.invested ?? 0)}
+          </div>
+          <div className="rounded-md bg-slate-800/40 px-3 py-2">
+            <div className="text-slate-400 text-xs">Parts deployed</div>
+            {run.open_lots ?? 0}{run.parts_total ? ` / ${run.parts_total}` : ""}
+          </div>
+          <div className="rounded-md bg-slate-800/40 px-3 py-2">
+            <div className="text-slate-400 text-xs">Positions held</div>
+            {run.open_positions ?? 0}
+          </div>
+          <div className="rounded-md bg-slate-800/40 px-3 py-2">
+            <div className="text-slate-400 text-xs">Unrealized P&amp;L</div>
+            <span className={upnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{formatInr(upnl)}</span>
+          </div>
         </div>
-        <div className="rounded-md bg-slate-800/40 px-3 py-2">
-          <div className="text-slate-400 text-xs">Parts deployed</div>
-          {run.open_lots ?? 0}{run.parts_total ? ` / ${run.parts_total}` : ""}
-        </div>
-        <div className="rounded-md bg-slate-800/40 px-3 py-2">
-          <div className="text-slate-400 text-xs">Positions held</div>
-          {run.open_positions ?? 0}
-        </div>
-        <div className="rounded-md bg-slate-800/40 px-3 py-2">
-          <div className="text-slate-400 text-xs">Unrealized P&amp;L</div>
-          <span className={upnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{formatInr(upnl)}</span>
-        </div>
-      </div>
+      )}
 
       {run.positions?.length ? (
         <div className="overflow-x-auto mt-3">
@@ -443,6 +547,8 @@ function RunCard({
                 <th className="py-1 pr-4 text-right">Units</th>
                 <th className="py-1 pr-4 text-right">Avg</th>
                 <th className="py-1 pr-4 text-right">LTP</th>
+                {isOptions && <th className="py-1 pr-4 text-right">Δ</th>}
+                {isOptions && <th className="py-1 pr-4 text-right">IV</th>}
                 <th className="py-1 pr-4 text-right">Unrealized</th>
               </tr>
             </thead>
@@ -453,6 +559,16 @@ function RunCard({
                   <td className="py-1 pr-4 text-right">{p.units}</td>
                   <td className="py-1 pr-4 text-right">{formatInr(p.avg_price, 2)}</td>
                   <td className="py-1 pr-4 text-right">{p.ltp != null ? formatInr(p.ltp, 2) : "—"}</td>
+                  {isOptions && (
+                    <td className="py-1 pr-4 text-right tabular-nums text-slate-300">
+                      {p.pos_delta != null ? p.pos_delta.toFixed(1) : "—"}
+                    </td>
+                  )}
+                  {isOptions && (
+                    <td className="py-1 pr-4 text-right tabular-nums text-slate-300">
+                      {p.iv != null ? `${(p.iv * 100).toFixed(1)}%` : "—"}
+                    </td>
+                  )}
                   <td className={`py-1 pr-4 text-right ${p.unrealized_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                     {formatInr(p.unrealized_pnl)}
                   </td>
@@ -466,7 +582,10 @@ function RunCard({
       )}
 
       {isOptions && run.positions?.length ? (
-        <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
+        <>
+          <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
+          <GreeksPanel run={run} />
+        </>
       ) : null}
 
       {!stopped && (
@@ -483,6 +602,17 @@ function RunCard({
               {showControls ? "Hide controls" : "Controls"}
             </button>
             <button onClick={() => setShowOverride((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Intervene…</button>
+            {isOptions && run.positions?.length ? (
+              <button
+                onClick={() => {
+                  if (confirm("Exit ALL open legs now at live prices?"))
+                    act(() => api.liveFlatten(run.run_id));
+                }}
+                className="rounded bg-rose-900 hover:bg-rose-800 px-3 py-1.5 text-xs"
+              >
+                Exit all
+              </button>
+            ) : null}
             {run.on_cache_fallback && (
               <button
                 onClick={() => act(() => api.liveReconnectQuotes(run.run_id))}
@@ -495,7 +625,18 @@ function RunCard({
             <QuoteSwitch run={run} onChanged={onChanged} />
           </div>
           {showControls && <ControlsPanel run={run} onChanged={onChanged} />}
-          {showOverride && <OverridePanel runId={run.run_id} onDone={() => setShowOverride(false)} />}
+          {showOverride &&
+            (isOptions ? (
+              <OptionIntervenePanel
+                run={run}
+                onDone={() => {
+                  setShowOverride(false);
+                  onChanged();
+                }}
+              />
+            ) : (
+              <OverridePanel runId={run.run_id} onDone={() => setShowOverride(false)} />
+            ))}
           {showSignals && !isOptions && <SignalsPanel runId={run.run_id} version={version} />}
         </>
       )}
@@ -533,6 +674,28 @@ function DeploymentTile({
       : m.unrealized_pnl;
   const positions = snapshot?.open_positions ?? m.open_positions ?? 0;
 
+  // Options vs equity (drives badge + which controls make sense). Persisted in the tile,
+  // so it resolves even for stopped/archived deployments without a live snapshot.
+  const isOptions =
+    dep.instrument_class === "DERIV" ||
+    isOptionsStrategy(dep.strategy_id) ||
+    snapshot?.lots != null;
+  const underlying = snapshot?.underlying ?? dep.underlying ?? null;
+  // "Pause" = the auto-loop toggle: decisions freeze, marking/P&L keep updating.
+  const auto = snapshot?.auto ?? true;
+  const paused = dep.status === "active" && snapshot != null && !auto;
+  // Options tiles surface margin + net credit/debit instead of equity value.
+  const marginUsed = snapshot?.margin_used ?? m.margin_used ?? null;
+  const netCredit = snapshot?.net_credit ?? m.net_credit ?? null;
+
+  // When a deployment is opened, pull a fresh snapshot so the positions panel populates
+  // immediately instead of waiting for the next WebSocket tick.
+  useEffect(() => {
+    if (expanded && dep.status === "active") {
+      api.liveRefresh(dep.run_id).catch(() => {});
+    }
+  }, [expanded, dep.status, dep.run_id]);
+
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -563,14 +726,51 @@ function DeploymentTile({
           )}
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
             <StatusPill status={dep.status} />
+            {paused && (
+              <span className="rounded-full bg-amber-900/40 border border-amber-700/50 text-amber-300 px-2 py-0.5 text-[11px] font-medium">
+                Paused
+              </span>
+            )}
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                isOptions
+                  ? "bg-indigo-900/40 border border-indigo-600/50 text-indigo-300"
+                  : "bg-slate-800 border border-slate-700 text-slate-300"
+              }`}
+              title={isOptions ? "Options (DERIV) strategy" : "Equity (STOCK) strategy"}
+            >
+              {isOptions ? `OPT${underlying ? ` · ${underlying}` : ""}` : "EQ"}
+            </span>
             <Badge>{dep.strategy_id}</Badge>
             <Badge>{dep.quote_source === "zerodha" ? "live quotes" : "cache quotes"}</Badge>
             <span>#{dep.run_id}</span>
           </div>
         </div>
-        <div className="text-right text-sm shrink-0">
-          <div className="text-slate-400 text-xs">Equity</div>
-          <div>{equity != null ? formatInr(equity) : "—"}</div>
+        <div className="flex items-start gap-2 shrink-0">
+          <div className="text-right text-sm">
+            <div className="text-slate-400 text-xs">{isOptions ? "Margin" : "Equity"}</div>
+            <div>
+              {isOptions
+                ? marginUsed != null
+                  ? formatInr(marginUsed)
+                  : "—"
+                : equity != null
+                  ? formatInr(equity)
+                  : "—"}
+            </div>
+          </div>
+          {expanded && dep.status === "active" && (
+            <button
+              onClick={onToggle}
+              title="Minimize"
+              aria-label="Minimize"
+              className="rounded p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="18 15 12 9 6 15" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 
@@ -590,8 +790,22 @@ function DeploymentTile({
       {/* Key metrics */}
       <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
         <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          <div className="text-slate-400 text-[11px] mb-0.5">Positions</div>
-          <div className="font-medium tabular-nums">{positions}</div>
+          <div className="text-slate-400 text-[11px] mb-0.5">
+            {isOptions ? (netCredit != null && netCredit < 0 ? "Net debit" : "Net credit") : "Positions"}
+          </div>
+          <div className="font-medium tabular-nums">
+            {isOptions ? (
+              netCredit != null ? (
+                <span className={netCredit >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                  {formatInr(Math.abs(netCredit))}
+                </span>
+              ) : (
+                "—"
+              )
+            ) : (
+              positions
+            )}
+          </div>
         </div>
         <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
           <div className="text-slate-400 text-[11px] mb-0.5">Unrealized</div>
@@ -619,8 +833,18 @@ function DeploymentTile({
       <div className="mt-auto pt-3 flex flex-wrap items-center gap-2 text-xs">
         {dep.status === "active" ? (
           <>
-            <button onClick={onToggle} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
-              {expanded ? "Minimize ▲" : "Open"}
+            {!expanded && (
+              <button onClick={onToggle} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
+                Open
+              </button>
+            )}
+            <button
+              onClick={() => act(() => api.liveSetControls(dep.run_id, { auto: !auto }))}
+              disabled={busy}
+              title={auto ? "Pause decisions (keeps marking live P&L)" : "Resume the decision loop"}
+              className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50"
+            >
+              {auto ? "⏸ Pause" : "▶ Resume"}
             </button>
             <button
               onClick={() => act(() => api.liveStop(dep.run_id))}
@@ -680,19 +904,10 @@ function DeploymentTile({
         )}
       </div>
 
-      {/* Inline live detail for an expanded active deployment */}
+      {/* Inline live detail for an expanded active deployment.
+          Minimize is the chevron icon at the card's top-right. */}
       {expanded && dep.status === "active" && snapshot && (
-        <>
-          <RunCard run={snapshot} version={version} onChanged={onChanged} />
-          <div className="mt-3 flex justify-center border-t border-slate-800 pt-3">
-            <button
-              onClick={onToggle}
-              className="rounded bg-slate-800 hover:bg-slate-700 px-4 py-1.5 text-xs"
-            >
-              Minimize ▲
-            </button>
-          </div>
-        </>
+        <RunCard run={snapshot} version={version} onChanged={onChanged} />
       )}
     </Card>
   );
