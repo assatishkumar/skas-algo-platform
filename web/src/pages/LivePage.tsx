@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
 import { Badge, Card, StatusPill, timeAgo } from "../components/ui";
+import LivePayoffChart from "../components/LivePayoffChart";
 import { formatInr } from "../lib/format";
 import type {
   Deployment,
@@ -249,9 +250,11 @@ function ControlsPanel({ run, onChanged }: { run: LiveRunSnapshot; onChanged: ()
   const [refresh, setRefresh] = useState(String(run.refresh_seconds));
   const [excluded, setExcluded] = useState<string[]>(run.excluded_symbols ?? []);
   const [add, setAdd] = useState("");
+  const [lots, setLots] = useState(run.lots != null ? String(run.lots) : "");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  const isOptions = run.lots != null; // options strategies expose lot-sets
   const universe = run.universe ?? [];
   const available = universe.filter((s) => !excluded.includes(s));
 
@@ -259,6 +262,7 @@ function ControlsPanel({ run, onChanged }: { run: LiveRunSnapshot; onChanged: ()
     auto !== run.auto ||
     ignore !== run.ignore_market_hours ||
     Number(refresh) !== run.refresh_seconds ||
+    (isOptions && Number(lots) !== run.lots) ||
     excluded.slice().sort().join(",") !== (run.excluded_symbols ?? []).slice().sort().join(",");
 
   function addExcluded() {
@@ -283,6 +287,7 @@ function ControlsPanel({ run, onChanged }: { run: LiveRunSnapshot; onChanged: ()
         ignore_market_hours: ignore,
         refresh_seconds: Math.max(5, Number(refresh) || run.refresh_seconds),
         excluded_symbols: excluded,
+        ...(isOptions ? { lots: Math.max(1, Number(lots) || (run.lots ?? 1)) } : {}),
       });
       onChanged();
       setMsg("Saved.");
@@ -315,7 +320,22 @@ function ControlsPanel({ run, onChanged }: { run: LiveRunSnapshot; onChanged: ()
           />
           s
         </label>
-        <span className="text-xs text-slate-500">daily decision at {run.decision_time} IST</span>
+        {isOptions && (
+          <label className="flex items-center gap-2">
+            lot-sets
+            <input
+              type="number"
+              min={1}
+              value={lots}
+              onChange={(e) => setLots(e.target.value)}
+              className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1"
+            />
+            <span className="text-xs text-slate-500">(next entry)</span>
+          </label>
+        )}
+        <span className="text-xs text-slate-500">
+          {isOptions ? "decides each refresh · entry/exit cadence per strategy" : `daily decision at ${run.decision_time} IST`}
+        </span>
       </div>
 
       <div className="mt-3">
@@ -377,6 +397,9 @@ function RunCard({
   const [showOverride, setShowOverride] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
   const [showControls, setShowControls] = useState(false);
+  // SST "Signals" is the equity Donchian watchlist (20d high/low breakout) — meaningless
+  // for an options strategy, which decides on its own entry/exit schedule.
+  const isOptions = run.lots != null;
   const act = async (fn: () => Promise<unknown>) => {
     await fn();
     onChanged();
@@ -442,14 +465,20 @@ function RunCard({
         <div className="text-slate-500 text-sm mt-3">No open positions.</div>
       )}
 
+      {isOptions && run.positions?.length ? (
+        <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
+      ) : null}
+
       {!stopped && (
         <>
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={refresh} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Refresh</button>
             <button onClick={() => act(() => api.liveRunDecision(run.run_id))} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs">Run decision</button>
-            <button onClick={() => setShowSignals((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
-              {showSignals ? "Hide signals" : "Signals"}
-            </button>
+            {!isOptions && (
+              <button onClick={() => setShowSignals((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
+                {showSignals ? "Hide signals" : "Signals"}
+              </button>
+            )}
             <button onClick={() => setShowControls((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
               {showControls ? "Hide controls" : "Controls"}
             </button>
@@ -467,7 +496,7 @@ function RunCard({
           </div>
           {showControls && <ControlsPanel run={run} onChanged={onChanged} />}
           {showOverride && <OverridePanel runId={run.run_id} onDone={() => setShowOverride(false)} />}
-          {showSignals && <SignalsPanel runId={run.run_id} version={version} />}
+          {showSignals && !isOptions && <SignalsPanel runId={run.run_id} version={version} />}
         </>
       )}
     </div>

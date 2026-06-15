@@ -43,6 +43,32 @@ const LABELS: Record<string, string> = {
   risk_free_rate: "Risk-free rate",
   structure: "Structure",
   dte_target: "DTE target",
+  // live intraday exit cadence
+  entry_time: "Entry time (IST)",
+  profit_check: "Profit check",
+  stop_check: "Stop check",
+  time_check: "Time-exit check",
+  eod_time: "EOD time (IST)",
+  // hni_weekly
+  buy_lots: "Buy ratio ×",
+  sell_lots: "Sell ratio ×",
+  hedge_lots: "Hedge ratio ×",
+  exit_weekday: "Exit weekday",
+  dte_tolerance: "DTE tolerance (±days)",
+  margin_per_lotset: "Margin / lot-set",
+  // staggered_covered_call
+  etf_symbol: "ETF symbol",
+  ce_otm_pct: "CE OTM %",
+  tranches: "Tranches",
+  rolldown_trigger_pct: "Roll-down trigger",
+  rolldown_min_dte: "Roll-down min DTE",
+  min_premium_pct: "Min premium % (of spot)",
+  min_ce_otm_pct: "Min CE OTM % floor",
+  keep_strike_above_cost: "Strike ≥ ETF cost",
+  min_return_pct: "Min return % on assignment",
+  covered_call_delta: "Covered-call Δ (fully covered)",
+  sell_puts: "Wheel (sell puts)",
+  put_otm_pct: "Put OTM %",
   strangle_delta: "Strangle delta",
   vol_premium: "Implied/realized vol ×",
   vol_window: "Realized-vol window (days)",
@@ -57,6 +83,20 @@ const ORDER = [
   "end_date",
   "capital",
   "lots",
+  "buy_lots",
+  "sell_lots",
+  "hedge_lots",
+  "etf_symbol",
+  "ce_otm_pct",
+  "tranches",
+  "rolldown_trigger_pct",
+  "rolldown_min_dte",
+  "min_premium_pct",
+  "min_ce_otm_pct",
+  "min_return_pct",
+  "covered_call_delta",
+  "sell_puts",
+  "put_otm_pct",
   "strike_mode",
   "buy_offset",
   "sell_offset",
@@ -69,6 +109,11 @@ const ORDER = [
   "tail_hedge_side",
   "profit_target_pct",
   "stop_loss_pct",
+  "margin_per_lotset",
+  "dte_target",
+  "dte_tolerance",
+  "entry_weekday",
+  "exit_weekday",
   "max_holding_days",
   "min_vix",
   "min_dte",
@@ -97,6 +142,8 @@ const PCT_KEYS = new Set([
   "profit_target_pct",
   "stop_loss_pct",
   "risk_free_rate",
+  "rolldown_trigger_pct",
+  "min_premium_pct",
 ]);
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -109,14 +156,16 @@ export function paramLabel(key: string): string {
 export function formatParamValue(key: string, value: unknown): string {
   if (value == null || value === "") return "—";
   if (Array.isArray(value)) return `${value.length} symbol${value.length === 1 ? "" : "s"}`;
-  if (key === "capital" && typeof value === "number") return formatInr(value);
+  if ((key === "capital" || key === "margin_per_lotset") && typeof value === "number")
+    return formatInr(value);
   if (PCT_KEYS.has(key) && typeof value === "number") {
     const p = value * 100;
     return `${Number.isInteger(p) ? p : p.toFixed(1)}%`;
   }
   if (key === "max_lots" && value === 0) return "∞ (unlimited)";
   if (key === "allocation_mode") return value === "equity_scaled" ? "Equity-scaled" : "Fixed";
-  if (key === "entry_weekday" && typeof value === "number") return WEEKDAYS[value] ?? String(value);
+  if ((key === "entry_weekday" || key === "exit_weekday") && typeof value === "number")
+    return WEEKDAYS[value] ?? String(value);
   if (key === "min_vix" && value === 0) return "off";
   if (key === "tail_hedge_offset" && value === 0) return "off";
   return String(value);

@@ -61,12 +61,50 @@ def build_options_report(
             side, entry = queue.popleft()
             positions.append(_round_trip(inst, entry, t, side))
 
+    # --- open option legs still live at the run end (expiry beyond end_date): marked to
+    #     the last close so a combined strategy net reconciles with the equity curve.
+    final_marks = getattr(result, "final_marks", {}) or {}
+    option_open_pnl = 0.0
+    for sym, queue in open_legs.items():
+        inst = parse(sym)
+        mark = final_marks.get(sym)
+        if inst is None or mark is None:
+            continue
+        for side, entry in queue:
+            units, mult = entry["units"], inst.multiplier
+            option_open_pnl += ((entry["price"] - mark) if side == "short"
+                                else (mark - entry["price"])) * units * mult
+
     # --- cycles: group the CE+PE legs entered together (a straddle/strangle) -----
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for p in positions:
         groups[(p["underlying"], p["entry_date"], p["expiry"])].append(p)
     cycles: list[dict] = [_cycle(key, legs) for key, legs in groups.items()]
     cycles.sort(key=lambda c: (c["entry_date"], c["expiry"]))
+
+    # --- equity (covered-leg) round trips: a strategy may BUY an underlying inside an
+    #     options run (the staggered covered call accumulates an ETF against the sold
+    #     call). Those legs are where the bulk of the P&L books, but they're not options
+    #     — pair BUY/AVG_BUY → SELL per non-option symbol so the report shows them. Empty
+    #     for pure-options runs, so nothing changes there.
+    equity_open: dict[str, list] = defaultdict(list)
+    equity_legs: list[dict] = []
+    for t in txns:
+        if parse(t["ticker"]) is not None:
+            continue  # options handled above
+        act = t["action"]
+        if act in ("BUY", "AVG_BUY"):
+            equity_open[t["ticker"]].append(t)
+        elif act == "SELL":
+            buys = equity_open.get(t["ticker"])
+            if buys:
+                equity_legs.append(_equity_round_trip(t["ticker"], list(buys), t))
+                buys.clear()
+    equity_held: list[dict] = [
+        _equity_held(sym, list(buys), final_marks.get(sym))
+        for sym, buys in equity_open.items() if buys
+    ]
+    equity_legs.sort(key=lambda l: l["entry_date"])
 
     # --- F&O transaction charges across all option legs (same schedule the engine
     #     deducted from cash at execution, so the totals reconcile with the equity curve).
@@ -92,8 +130,11 @@ def build_options_report(
         if "open_premium" in r
     ]
 
-    return {
-        "summary": _summary(positions, cycles, metrics, margin_series, charges["total"]),
+    summary = _summary(positions, cycles, metrics, margin_series, charges["total"])
+    _add_equity_summary(summary, equity_legs, equity_held, option_open_pnl)
+
+    out = {
+        "summary": summary,
         "charges": charges,
         "exit_reasons": _exit_reasons(positions),
         "per_expiry_cycle": _per_expiry(positions),
@@ -102,6 +143,126 @@ def build_options_report(
         "margin_series": margin_series,
         "premium_curve": premium_curve,
     }
+    if equity_legs or equity_held:
+        out["equity_legs"] = equity_legs
+        out["equity_held"] = equity_held
+        out["campaigns"] = _build_campaigns(equity_legs, equity_held, positions)
+    return out
+
+
+def _build_campaigns(equity_legs: list[dict], equity_held: list[dict],
+                     positions: list[dict]) -> list[dict]:
+    """Group a covered-call run into CAMPAIGNS: one per accumulation→called-away round
+    trip (plus the still-open holding). Each campaign carries its tranche buys and the
+    calls sold/rolled while it was live, with a combined net (equity + option). A call is
+    assigned to the latest campaign whose start is on/before the call's entry date."""
+    import bisect
+
+    camps: list[dict] = []
+    for l in equity_legs:
+        camps.append({
+            "start": l["entry_date"], "end": l["exit_date"], "status": "called_away",
+            "units": l["units"], "avg_cost": l["entry_price"], "exit_price": l["exit_price"],
+            "exit_reason": l["exit_reason"], "holding_days": l["holding_days"],
+            "equity_realized": l["realized_pnl"], "equity_open": 0.0,
+            "tranches": l["tranches"], "calls": [],
+        })
+    for h in equity_held:
+        camps.append({
+            "start": h["entry_date"], "end": None, "status": "open",
+            "units": h["units"], "avg_cost": h["entry_price"], "exit_price": None,
+            "mark": h.get("mark"), "exit_reason": "open", "holding_days": None,
+            "equity_realized": 0.0, "equity_open": h.get("unrealized_pnl") or 0.0,
+            "tranches": h["tranches"], "calls": [],
+        })
+    if not camps:
+        return []
+    camps.sort(key=lambda c: c["start"])
+    starts = [c["start"] for c in camps]
+    for p in positions:
+        if p.get("right") != "CE":
+            continue
+        i = max(0, bisect.bisect_right(starts, p["entry_date"]) - 1)
+        camps[i]["calls"].append({
+            "entry_date": p["entry_date"], "strike": p["strike"],
+            "entry_premium": p["entry_premium"], "exit_date": p["exit_date"],
+            "exit_price": p["exit_price"], "exit_reason": p["exit_reason"],
+            "premium_collected": p["premium_collected"], "realized_pnl": p["realized_pnl"],
+            "net_pnl": p.get("net_pnl", p["realized_pnl"]),
+        })
+    for c in camps:
+        c["calls"].sort(key=lambda x: x["entry_date"])
+        c["n_calls"] = len(c["calls"])
+        c["option_net"] = sum(x["net_pnl"] for x in c["calls"])
+        c["premium_collected"] = sum(x["premium_collected"] for x in c["calls"])
+        c["combined_net"] = c["equity_realized"] + c["equity_open"] + c["option_net"]
+    return camps
+
+
+def _equity_round_trip(symbol: str, buys: list[dict], sell: dict) -> dict:
+    """One closed equity round-trip: a run of accumulating BUY/AVG_BUY legs realized by
+    a single SELL (the covered call's tranches → called-away liquidation). Realized P&L
+    is the SELL event's own pooled profit; entry is the size-weighted average cost."""
+    from skas_algo.engine.execution import _as_date
+
+    bought_units = sum(b["units"] for b in buys) or 1
+    avg_cost = sum(b["units"] * b["price"] for b in buys) / bought_units
+    return {
+        "symbol": symbol,
+        "side": "equity",
+        "entry_date": _iso(buys[0]["date"]),
+        "entry_price": avg_cost,
+        "exit_date": _iso(sell["date"]),
+        "exit_price": sell["price"],
+        "exit_reason": sell.get("exit_reason") or "sold",
+        "units": sell["units"],
+        "realized_pnl": sell["profit"],
+        "holding_days": (_as_date(sell["date"]) - _as_date(buys[0]["date"])).days,
+        "tranches": [
+            {"date": _iso(b["date"]), "units": b["units"], "price": b["price"],
+             "tag": b.get("tag", "")} for b in buys
+        ],
+    }
+
+
+def _equity_held(symbol: str, buys: list[dict], mark: float | None) -> dict:
+    """Still-open equity at the end of the run: held tranche units marked to the last
+    known close (``mark``), with unrealized P&L vs the average cost."""
+    units = sum(b["units"] for b in buys) or 1
+    avg_cost = sum(b["units"] * b["price"] for b in buys) / units
+    unreal = ((mark - avg_cost) * units) if mark is not None else None
+    return {
+        "symbol": symbol,
+        "side": "equity_open",
+        "entry_date": _iso(buys[0]["date"]),
+        "entry_price": avg_cost,
+        "units": units,
+        "mark": mark,
+        "unrealized_pnl": unreal,
+        "tranches": [
+            {"date": _iso(b["date"]), "units": b["units"], "price": b["price"],
+             "tag": b.get("tag", "")} for b in buys
+        ],
+    }
+
+
+def _add_equity_summary(summary: dict, equity_legs: list[dict], equity_held: list[dict],
+                        option_open_pnl: float = 0.0) -> None:
+    """Fold the covered leg into the summary: realized + open equity P&L and a combined
+    strategy net (option net-after-charges + open option MTM + equity). Added only when
+    equity legs exist so pure-options summaries are unchanged. The combined net then
+    reconciles to the run's Final Equity − capital regardless of the end-of-run state."""
+    if not (equity_legs or equity_held):
+        return
+    realized = sum(l["realized_pnl"] for l in equity_legs)
+    open_pnl = sum(l["unrealized_pnl"] for l in equity_held
+                   if l.get("unrealized_pnl") is not None)
+    summary["equity_realized_pnl"] = realized
+    summary["equity_open_pnl"] = open_pnl
+    summary["equity_units_held"] = sum(l["units"] for l in equity_held)
+    summary["option_open_pnl"] = option_open_pnl
+    summary["strategy_net_pnl"] = (summary["net_after_charges"] + option_open_pnl
+                                   + realized + open_pnl)
 
 
 def _round_trip(inst, entry: dict, exit_ev: dict, side: str = "short") -> dict:

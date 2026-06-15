@@ -174,3 +174,34 @@ def test_nifty_expiry_weekday_history():
     # Last Thursday of June 2024 vs last Tuesday of October 2025.
     assert expected_monthly_expiry("NIFTY", 2024, 6) == date(2024, 6, 27)
     assert expected_monthly_expiry("NIFTY", 2025, 10) == date(2025, 10, 28)
+
+
+# ------------------------------------------------------------------ equity fallback
+def test_market_view_equity_loader_fallback():
+    """A plain (non-option) symbol inside an options run is priced via the optional
+    equity_loader; without it the lazy view has no series and close() raises."""
+    import pandas as pd
+
+    from skas_algo.engine.options.market import OptionMarketView
+
+    cal = [date(2024, 1, 22), date(2024, 1, 23)]
+    etf = pd.DataFrame({"date": cal, "close": [60.0, 61.0]})
+
+    def opt_loader(symbol, start, end):
+        return None  # options loader can't decode a plain symbol
+
+    def equity_loader(symbol, start, end):
+        return etf if symbol == "GOLDBEES" else None
+
+    mv = OptionMarketView(opt_loader, chain=None, calendar=cal, equity_loader=equity_loader)
+    mv.set_date(pd.Timestamp(cal[1]))
+    assert mv.close("GOLDBEES") == 61.0
+    assert mv.has_print("GOLDBEES") is True
+
+    bare = OptionMarketView(opt_loader, chain=None, calendar=cal)  # no fallback
+    bare.set_date(pd.Timestamp(cal[1]))
+    try:
+        bare.close("GOLDBEES")
+        raise AssertionError("expected KeyError without equity_loader")
+    except KeyError:
+        pass

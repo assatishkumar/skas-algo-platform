@@ -153,7 +153,7 @@ class SliceExecutor:
             self.stops.attach(action.stop)
             return []
         if isinstance(action, BuyLot):
-            ev = self._buy(ts, action.symbol, action.units)
+            ev = self._buy(ts, action.symbol, action.units, action.tag)
             return [ev] if ev else []
         if isinstance(action, OpenShort):
             ev = self._sell_to_open(ts, action.symbol, action.units, action.multiplier)
@@ -195,7 +195,7 @@ class SliceExecutor:
             exit_reason=(reason or None),
         )
 
-    def _buy(self, ts, symbol, units) -> dict | None:
+    def _buy(self, ts, symbol, units, tag: str = "STRATEGY") -> dict | None:
         if units <= 0:
             return None
         label = "BUY" if not self.portfolio.lots(symbol) else "AVG_BUY"
@@ -210,7 +210,7 @@ class SliceExecutor:
             0.0,
             0.0,
             len(self.portfolio.lots(symbol)),
-            "STRATEGY",
+            tag,
         )
 
     def _sell_to_open(self, ts, symbol, units, multiplier) -> dict | None:

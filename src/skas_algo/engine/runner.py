@@ -32,6 +32,9 @@ class RunResult:
     transactions: list[dict] = field(default_factory=list)
     monthly_flush_log: dict = field(default_factory=dict)
     portfolio: Portfolio | None = None
+    # Last-known close per symbol at the end of the run (used to mark still-open legs,
+    # e.g. the covered call's held ETF). Empty for runs that close everything.
+    final_marks: dict = field(default_factory=dict)
 
 
 class BacktestRunner:
@@ -107,6 +110,7 @@ class BacktestRunner:
         if current_month is not None and view.unified_dates:
             self._flush(portfolio, result, current_month, view.unified_dates[-1])
 
+        result.final_marks = dict(view.mark_prices())
         return result
 
     # ----------------------------------------------------------- bookkeeping

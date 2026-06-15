@@ -45,7 +45,22 @@ export default function DeployPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Options (DERIV) deployment: underlying + lot-sets + per-exit check cadence. When
+  // forward-testing a backtest, prefill from its recorded params (still editable).
+  const ps = pfStrategyParams as Record<string, unknown>;
+  const [underlying, setUnderlying] = useState(String(ps.underlying ?? "NIFTY"));
+  const [optLots, setOptLots] = useState(Number(ps.lots) || 1);
+  const [entryTime, setEntryTime] = useState(String(ps.entry_time ?? "09:45"));
+  const [profitCheck, setProfitCheck] = useState(String(ps.profit_check ?? "15min"));
+  const [stopCheck, setStopCheck] = useState(String(ps.stop_check ?? "eod"));
+  const [timeCheck, setTimeCheck] = useState(String(ps.time_check ?? "eod"));
+  const [eodTime, setEodTime] = useState(String(ps.eod_time ?? "15:15"));
+
   const isFifo = strategyId === "sst_fifo";
+  const OPTIONS_STRATEGIES = ["hni_weekly", "batman_ratio_monthly", "call_ratio_monthly",
+    "put_ratio_monthly", "short_premium"];
+  const isOptions = OPTIONS_STRATEGIES.includes(strategyId);
+  const CADENCES = ["tick", "1min", "5min", "15min", "30min", "60min", "eod"];
   const sessioned = (accounts ?? []).filter((a) => a.has_session);
 
   async function deploy() {
@@ -60,15 +75,26 @@ export default function DeployPage() {
         ? { profit_target_1: target1 / 100, profit_target_2: target2 / 100, profit_target_3: target3 / 100 }
         : { profit_target: target / 100 }),
     };
+    const optionsParams = {
+      underlying,
+      lots: optLots,
+      entry_time: entryTime,
+      profit_check: profitCheck,
+      stop_check: stopCheck,
+      time_check: timeCheck,
+      eod_time: eodTime,
+    };
     const body: StartLiveRequest = {
       strategy_id: strategyId,
       name: name.trim() || undefined,
       notes: notes.trim() || undefined,
-      universe: isCustom ? null : universe,
-      symbols: isCustom ? symbols.split(",").map((s) => s.trim()).filter(Boolean) : [],
+      instrument_class: isOptions ? "DERIV" : "STOCK",
+      underlying: isOptions ? underlying : undefined,
+      universe: isOptions || isCustom ? null : universe,
+      symbols: isOptions ? [] : isCustom ? symbols.split(",").map((s) => s.trim()).filter(Boolean) : [],
       capital,
-      params: pf ? pfStrategyParams : manualParams,
-      tax_rate: pf ? (pfTax ?? 0.2) : taxRate / 100,
+      params: isOptions ? { ...pfStrategyParams, ...optionsParams } : pf ? pfStrategyParams : manualParams,
+      tax_rate: pf ? (pfTax ?? 0.2) : isOptions ? 0 : taxRate / 100,
       withdrawal_rate: pf ? (pfWd ?? 0) : withdrawalRate / 100,
       lookback: pf ? (pfLookback ?? 20) : lookback,
       quote_source: quoteSource,
@@ -105,67 +131,134 @@ export default function DeployPage() {
           </label>
         </div>
 
-        {pf ? (
+        {pf && (
           <div className="text-sm text-slate-400 mb-3">
-            {pf.strategy_id} · {(pfSymbols ?? []).length} symbols · params from backtest (capital editable below)
-          </div>
-        ) : (
-          <div className="space-y-3 mb-3">
-            <div className="grid md:grid-cols-3 gap-3">
-              <label className="block">
-                <span className={lbl}>Strategy</span>
-                <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>
-                  {(strategyData?.strategies ?? ["sst_lifo"]).map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
-                <span className={lbl}>Universe</span>
-                <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
-                  {(universeData ?? []).map((u) => (
-                    <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
-                  ))}
-                  <option value="">Custom</option>
-                </select>
-              </label>
-              <label className="block">
-                <span className={lbl}>Symbols</span>
-                {universe === "" ? (
-                  <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
-                ) : (
-                  <input className={`${inputClass} text-slate-500`} disabled value="(from universe)" />
-                )}
-              </label>
-            </div>
-            <div className="grid md:grid-cols-3 lg:grid-cols-6 gap-3">
-              <label className="block">
-                <span className={lbl}>Capital parts</span>
-                <NumberInput className={inputClass} value={parts} onChange={setParts} />
-              </label>
-              {isFifo ? (
-                <>
-                  <label className="block"><span className={lbl}>Target % (1 lot)</span><NumberInput step="0.1" className={inputClass} value={target1} onChange={setTarget1} /></label>
-                  <label className="block"><span className={lbl}>Target % (2)</span><NumberInput step="0.1" className={inputClass} value={target2} onChange={setTarget2} /></label>
-                  <label className="block"><span className={lbl}>Target % (3+)</span><NumberInput step="0.1" className={inputClass} value={target3} onChange={setTarget3} /></label>
-                </>
-              ) : (
-                <label className="block"><span className={lbl}>Profit target %</span><NumberInput step="0.1" className={inputClass} value={target} onChange={setTarget} /></label>
-              )}
-              <label className="block"><span className={lbl}>Max lots (0=∞)</span><NumberInput className={inputClass} value={maxLots} onChange={setMaxLots} /></label>
-              <label className="block"><span className={lbl}>Lookback</span><NumberInput className={inputClass} value={lookback} onChange={setLookback} /></label>
-              <label className="block"><span className={lbl}>Tax rate %</span><NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} /></label>
-              <label className="block"><span className={lbl}>Withdrawal %</span><NumberInput className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} /></label>
-              <label className="block">
-                <span className={lbl}>Position sizing</span>
-                <select className={inputClass} value={allocationMode} onChange={(e) => setAllocationMode(e.target.value)}>
-                  <option value="fixed">Fixed</option>
-                  <option value="equity_scaled">Equity-scaled</option>
-                </select>
-              </label>
-            </div>
+            {pf.strategy_id}
+            {(pfSymbols ?? []).length ? ` · ${(pfSymbols ?? []).length} symbols` : ""} · params from
+            backtest{isOptions ? " — underlying / lot-sets / cadence editable below" : " (capital editable below)"}
           </div>
         )}
+
+        {/* Strategy + (equity) universe — only when deploying manually (pf locks the strategy). */}
+        {!pf && (
+          <div className="grid md:grid-cols-3 gap-3 mb-3">
+            <label className="block">
+              <span className={lbl}>Strategy</span>
+              <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>
+                {(strategyData?.strategies ?? ["sst_lifo"]).map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </label>
+            {!isOptions && (
+              <>
+                <label className="block">
+                  <span className={lbl}>Universe</span>
+                  <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
+                    {(universeData ?? []).map((u) => (
+                      <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
+                    ))}
+                    <option value="">Custom</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className={lbl}>Symbols</span>
+                  {universe === "" ? (
+                    <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
+                  ) : (
+                    <input className={`${inputClass} text-slate-500`} disabled value="(from universe)" />
+                  )}
+                </label>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Options deployment: underlying + lot-sets + per-exit cadence (manual OR forward-test). */}
+        {isOptions ? (
+          <div className="space-y-3 mb-3">
+            <div className="grid md:grid-cols-3 lg:grid-cols-5 gap-3">
+              <label className="block">
+                <span className={lbl}>Underlying</span>
+                <select className={inputClass} value={underlying} onChange={(e) => setUnderlying(e.target.value)}>
+                  {strategyId === "hni_weekly" ? (
+                    <option value="NIFTY">NIFTY (weeklies)</option>
+                  ) : (
+                    <>
+                      <option value="NIFTY">NIFTY</option>
+                      <option value="BANKNIFTY">BANKNIFTY</option>
+                    </>
+                  )}
+                </select>
+              </label>
+              <label className="block">
+                <span className={lbl}>{strategyId === "hni_weekly" ? "Lot-sets (× 1-3-2)" : "Lots"}</span>
+                <NumberInput className={inputClass} value={optLots} onChange={setOptLots} />
+              </label>
+            </div>
+            <div className="text-[11px] text-amber-300/90">
+              Intraday exit cadence — how often each exit is evaluated. Profit can book intraday
+              (e.g. every 15 min) while the stop holds to EOD. Intraday cadences need live Zerodha
+              quotes during market hours; on cache they collapse to one EOD check. PAPER
+              (simulated fills) — no real orders.
+            </div>
+            <div className="grid md:grid-cols-3 lg:grid-cols-5 gap-3">
+              <label className="block">
+                <span className={lbl}>Entry time (IST)</span>
+                <input className={inputClass} value={entryTime} onChange={(e) => setEntryTime(e.target.value)} placeholder="09:45" />
+              </label>
+              <label className="block">
+                <span className={lbl}>Profit check</span>
+                <select className={inputClass} value={profitCheck} onChange={(e) => setProfitCheck(e.target.value)}>
+                  {CADENCES.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className={lbl}>Stop check</span>
+                <select className={inputClass} value={stopCheck} onChange={(e) => setStopCheck(e.target.value)}>
+                  {CADENCES.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className={lbl}>Time-exit check</span>
+                <select className={inputClass} value={timeCheck} onChange={(e) => setTimeCheck(e.target.value)}>
+                  {CADENCES.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className={lbl}>EOD time (IST)</span>
+                <input className={inputClass} value={eodTime} onChange={(e) => setEodTime(e.target.value)} placeholder="15:15" />
+              </label>
+            </div>
+          </div>
+        ) : (!pf && (
+          <div className="grid md:grid-cols-3 lg:grid-cols-6 gap-3 mb-3">
+            <label className="block">
+              <span className={lbl}>Capital parts</span>
+              <NumberInput className={inputClass} value={parts} onChange={setParts} />
+            </label>
+            {isFifo ? (
+              <>
+                <label className="block"><span className={lbl}>Target % (1 lot)</span><NumberInput step="0.1" className={inputClass} value={target1} onChange={setTarget1} /></label>
+                <label className="block"><span className={lbl}>Target % (2)</span><NumberInput step="0.1" className={inputClass} value={target2} onChange={setTarget2} /></label>
+                <label className="block"><span className={lbl}>Target % (3+)</span><NumberInput step="0.1" className={inputClass} value={target3} onChange={setTarget3} /></label>
+              </>
+            ) : (
+              <label className="block"><span className={lbl}>Profit target %</span><NumberInput step="0.1" className={inputClass} value={target} onChange={setTarget} /></label>
+            )}
+            <label className="block"><span className={lbl}>Max lots (0=∞)</span><NumberInput className={inputClass} value={maxLots} onChange={setMaxLots} /></label>
+            <label className="block"><span className={lbl}>Lookback</span><NumberInput className={inputClass} value={lookback} onChange={setLookback} /></label>
+            <label className="block"><span className={lbl}>Tax rate %</span><NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} /></label>
+            <label className="block"><span className={lbl}>Withdrawal %</span><NumberInput className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} /></label>
+            <label className="block">
+              <span className={lbl}>Position sizing</span>
+              <select className={inputClass} value={allocationMode} onChange={(e) => setAllocationMode(e.target.value)}>
+                <option value="fixed">Fixed</option>
+                <option value="equity_scaled">Equity-scaled</option>
+              </select>
+            </label>
+          </div>
+        ))}
 
         <div className="grid md:grid-cols-4 gap-3 items-end">
           <label className="block">

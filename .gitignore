@@ -30,8 +30,10 @@ secrets/
 *.duckdb
 *.sqlite
 *.sqlite3
-data/
-exports/
+# Root-anchored so these only ignore the local cache/output dirs at the repo root —
+# NOT the src/skas_algo/data Python package (which must be tracked).
+/data/
+/exports/
 
 # Node / frontend
 node_modules/

@@ -320,6 +320,26 @@ def test_credit_cap_never_exceeded():
         assert 0 <= net <= 1000, f"credit {net} exceeds 1% cap"
 
 
+def test_generalized_132_ratio_units_and_net():
+    # buy_lots/sell_lots/hedge_lots generalize the leg ratio: 1:3:2 at 200/400/600
+    # must emit 50/150/100 units (Feb-2024 lot 50) with the body short.
+    prem = {21200.0: 90.0, 21400.0: 70.0, 21600.0: 55.0}
+    chain = _StubChain(SPOT, EXPIRY, prem)
+    s = CallRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=100_000,
+        buy_lots=1, sell_lots=3, hedge_lots=2,
+        buy_offset=200, sell_offset=400, hedge_offset=600, credit_debit_limit_pct=99,
+    )
+    out = s.on_slice(_StubCtx(chain, date(2024, 1, 30)))
+    assert len(out) == 3
+    q = {int(sig.symbol.split("|")[2]): sig.quantity for sig in out}
+    assert q == {21200: 50, 21400: 150, 21600: 100}
+    body = next(sig for sig in out if sig.symbol.split("|")[2] == "21400")
+    assert body.action.value == "ENTER_SHORT"
+    # Generalized net: (3·70 − 1·90 − 2·55)·50 = ₹500 credit, recorded in the legs.
+    assert {leg["units"] for leg in s.legs} == {50, 150, 100}
+
+
 class _StubChain:
     def __init__(self, spot, expiry, prem):
         self._spot, self._expiry, self._prem = spot, expiry, prem

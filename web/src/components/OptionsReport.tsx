@@ -16,6 +16,7 @@ import {
 } from "recharts";
 import { formatInr, pct } from "../lib/format";
 import type { OptionCycle, OptionPosition, OptionsReportData } from "../types";
+import CoveredCallReport from "./CoveredCallReport";
 import PayoffChart from "./PayoffChart";
 import { Card, MetricCard } from "./ui";
 
@@ -44,6 +45,7 @@ function pnlClass(v: number): string {
 }
 
 function SummaryTiles({ s }: { s: OptionsReportData["summary"] }) {
+  const hasEquity = s.strategy_net_pnl != null;
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
       <MetricCard label="Premium Collected" value={formatInr(s.total_premium_collected)} />
@@ -54,10 +56,29 @@ function SummaryTiles({ s }: { s: OptionsReportData["summary"] }) {
       />
       <MetricCard label="F&O Charges" value={formatInr(s.total_charges)} tone="bad" />
       <MetricCard
-        label="Net P&L (after charges)"
+        label={hasEquity ? "Option Net (after charges)" : "Net P&L (after charges)"}
         value={formatInr(s.net_after_charges)}
         tone={s.net_after_charges >= 0 ? "good" : "bad"}
       />
+      {hasEquity && (
+        <>
+          <MetricCard
+            label="Equity P&L (realized)"
+            value={formatInr(s.equity_realized_pnl ?? 0)}
+            tone={(s.equity_realized_pnl ?? 0) >= 0 ? "good" : "bad"}
+          />
+          <MetricCard
+            label="Equity P&L (open)"
+            value={formatInr(s.equity_open_pnl ?? 0)}
+            tone={(s.equity_open_pnl ?? 0) >= 0 ? "good" : "bad"}
+          />
+          <MetricCard
+            label="Strategy Net (option + equity)"
+            value={formatInr(s.strategy_net_pnl ?? 0)}
+            tone={(s.strategy_net_pnl ?? 0) >= 0 ? "good" : "bad"}
+          />
+        </>
+      )}
       <MetricCard label="Capture %" value={pct(s.premium_capture_pct)} />
       <MetricCard
         label="Win Rate (cycles)"
@@ -363,17 +384,28 @@ function PositionsTable({ options }: { options: OptionsReportData }) {
 }
 
 export default function OptionsReport({ options }: { options: OptionsReportData }) {
+  const isCoveredCall = (options.campaigns?.length ?? 0) > 0;
   return (
     <div className="space-y-4">
-      <div className="text-sm font-semibold text-slate-200">Options analytics</div>
+      <div className="text-sm font-semibold text-slate-200">
+        {isCoveredCall ? "Covered-call analytics" : "Options analytics"}
+      </div>
       <SummaryTiles s={options.summary} />
       <ChargesLine c={options.charges} />
-      <PositionsTable options={options} />
-      <PremiumDecayChart options={options} />
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <ExitReasonDonut options={options} />
-        <PerExpiryBars options={options} />
-      </div>
+      {isCoveredCall ? (
+        // Covered call: campaign cards (accumulation → calls → called away) + timelines,
+        // in place of the straddle/ratio-oriented positions table & premium-decay charts.
+        <CoveredCallReport options={options} />
+      ) : (
+        <>
+          <PositionsTable options={options} />
+          <PremiumDecayChart options={options} />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <ExitReasonDonut options={options} />
+            <PerExpiryBars options={options} />
+          </div>
+        </>
+      )}
       <div className="text-[11px] text-slate-500">
         * Capital efficiency = premium collected ÷ peak margin used. Margin is a flat SPAN+exposure
         approximation — treat it as indicative.

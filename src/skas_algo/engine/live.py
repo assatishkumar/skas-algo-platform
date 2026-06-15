@@ -40,6 +40,10 @@ class LiveSession:
         fill_model: FillModel | None = None,
         broker=None,
         algo_id: int | None = None,
+        market_view=None,
+        settler=None,
+        charge_model=None,
+        margin_model=None,
     ):
         self.strategy = strategy
         self.lookback = lookback
@@ -48,7 +52,11 @@ class LiveSession:
 
         self.portfolio = Portfolio(cash=initial_capital)
         self.stops = StopBook()
-        self.market = LiveMarketView(lookback)
+        # Options runs pass a prebuilt LiveOptionsMarketView (+ settler/charge/margin);
+        # equity runs default to the Donchian LiveMarketView → byte-identical path.
+        self.market = market_view or LiveMarketView(lookback)
+        self.settler = settler
+        self.margin_model = margin_model
         # PAPER: simulated fills on live prices. LIVE (later): a ZerodhaAdapter passed in.
         self.broker = broker or PaperBroker(
             price_fn=self.market.close, fill_model=fill_model or FillModel()
@@ -61,7 +69,9 @@ class LiveSession:
             market=self.market,
             stops=self.stops,
         )
-        self.executor = SliceExecutor(self.portfolio, self.stops, self.resolver, self.broker)
+        self.executor = SliceExecutor(
+            self.portfolio, self.stops, self.resolver, self.broker, charge_model=charge_model
+        )
 
         self.transactions: list[dict] = []
         self.history: list[dict] = []
@@ -73,8 +83,11 @@ class LiveSession:
         """Seed historical closes (chronological, up to yesterday) per symbol.
 
         Pass the universe in order; symbols with no history yet get an empty list so
-        the view's symbol order is established for deterministic iteration.
+        the view's symbol order is established for deterministic iteration. Options runs
+        (no Donchian seed) skip this — the chain view supplies everything.
         """
+        if not hasattr(self.market, "seed"):
+            return
         for symbol, closes in history_by_symbol.items():
             self.market.seed(symbol, closes)
 
@@ -92,13 +105,21 @@ class LiveSession:
         self.resolver.excluded = {s.strip().upper() for s in symbols if s.strip()}
 
     def run_decision(self, ts: date | datetime) -> list[dict]:
-        """One decision cycle: month flush, managed stops, strategy + overrides."""
+        """One decision cycle: cursor, expiry settlement, month flush, stops, strategy."""
+        # Advance the options cursor so ctx.now()/today() (and the exit cadences) see ``ts``.
+        if hasattr(self.market, "set_now") and isinstance(ts, datetime):
+            self.market.set_now(ts)
+
         this_month = (ts.year, ts.month)
         if self._current_month is not None and this_month != self._current_month:
             self._flush(self._current_month, ts)
         self._current_month = this_month
 
         events: list[dict] = []
+        # Settle expired option contracts first so the strategy sees a flat book and can
+        # re-enter (mirrors the backtest runner). No-op (settler=None) for equity runs.
+        if self.settler is not None:
+            events.extend(self.executor.settle_expiries(ts, self.settler))
         events.extend(self.executor.check_stops(ts, self.market.closes_today()))
         events.extend(self.executor.decide_and_execute(ts, self.strategy, self.ctx))
         self.transactions.extend(events)
@@ -158,15 +179,18 @@ class LiveSession:
             units = sum(lot.units for lot in lots)
             cost = sum(lot.units * lot.price for lot in lots)
             ltp = closes.get(symbol)
+            direction = lots[0].direction if lots else 1  # all lots of a symbol share it
             value = units * ltp if ltp is not None else cost
             positions.append(
                 {
                     "symbol": symbol,
                     "units": units,
                     "lots": len(lots),
+                    "direction": direction,  # +1 long / −1 short — for the payoff diagram
                     "avg_price": cost / units if units else 0.0,
                     "ltp": ltp,
-                    "unrealized_pnl": value - cost,
+                    # Short legs profit when the mark falls: sign the unrealized P&L.
+                    "unrealized_pnl": direction * (value - cost),
                 }
             )
         holdings = self.portfolio.holdings_value(closes)
@@ -188,6 +212,8 @@ class LiveSession:
         Lets you see what the algo is 'thinking' for every name in the universe —
         which it's tracking (waiting for a breakout), holding, or just watching.
         """
+        if not hasattr(self.market, "universe"):
+            return []  # options runs have no fixed Donchian universe to introspect
         tracking = getattr(self.strategy, "tracking", {})
         excluded = self.resolver.excluded
         rows: list[dict] = []

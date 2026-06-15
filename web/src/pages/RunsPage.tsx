@@ -195,6 +195,8 @@ const STRATEGY_LABELS: Record<string, string> = {
   call_ratio_monthly: "Call Ratio Monthly (options)",
   put_ratio_monthly: "Put Ratio Monthly (options)",
   batman_ratio_monthly: "Batman Ratio Monthly (options)",
+  hni_weekly: "HNI Weekly (options)",
+  staggered_covered_call: "Staggered Covered Call (options)",
 };
 const strategyLabel = (id: string) => STRATEGY_LABELS[id] ?? id;
 

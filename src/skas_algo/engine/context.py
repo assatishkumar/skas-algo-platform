@@ -77,6 +77,16 @@ class AlgoContext:
         from datetime import date as _date
         return _date.today()
 
+    def now(self):
+        """Current timestamp (a ``datetime.datetime``). Live: the market view's real-time
+        cursor; backtest: the bar date at end-of-session (15:30 IST) so intraday exit
+        cadences collapse to one evaluation per daily bar."""
+        from datetime import datetime as _dt, time as _time
+        cur = getattr(self.market, "current_datetime", None)
+        if cur is not None:
+            return cur
+        return _dt.combine(self.today(), _time(15, 30))
+
     def option_chain(self):
         """The OptionChainView for this run, or None for equity runs."""
         return getattr(self.market, "chain", None)

@@ -65,9 +65,16 @@ async def start_live(
     loader: PriceLoader = Depends(get_price_loader),
     avail: set[str] = Depends(get_available_symbols),
 ) -> dict:
-    symbols = universes.resolve(req.universe, avail) if req.universe else list(req.symbols)
-    if not symbols:
-        raise HTTPException(status_code=422, detail="symbols or a valid universe required")
+    is_deriv = req.instrument_class.upper() == "DERIV"
+    underlying = (req.underlying or (req.symbols[0] if req.symbols else None))
+    if is_deriv:
+        if not underlying:
+            raise HTTPException(status_code=422, detail="underlying required for a DERIV deployment")
+        symbols = [underlying.upper()]
+    else:
+        symbols = universes.resolve(req.universe, avail) if req.universe else list(req.symbols)
+        if not symbols:
+            raise HTTPException(status_code=422, detail="symbols or a valid universe required")
     try:
         quote_source = _quote_source(req, loader, db)
         config = LiveConfig(
@@ -75,6 +82,8 @@ async def start_live(
             strategy_id=req.strategy_id,
             notes=req.notes,
             symbols=symbols,
+            instrument_class=req.instrument_class,
+            underlying=underlying.upper() if is_deriv else None,
             capital=req.capital,
             params=req.params,
             tax_rate=req.tax_rate,
@@ -256,6 +265,7 @@ async def set_controls(run_id: int, body: LiveControlsInput) -> dict:
         ignore_market_hours=body.ignore_market_hours,
         refresh_seconds=body.refresh_seconds,
         excluded_symbols=body.excluded_symbols,
+        lots=body.lots,
     )
     return live.snapshot()
 

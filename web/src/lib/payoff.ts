@@ -23,7 +23,7 @@ function normCdf(x: number): number {
   return 0.5 * (1 + erf(x / Math.SQRT2));
 }
 
-function intrinsic(right: string, spot: number, strike: number): number {
+export function intrinsic(right: string, spot: number, strike: number): number {
   return right === "CE" ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0);
 }
 
@@ -124,4 +124,48 @@ export function buildPayoff(cycle: OptionCycle): PayoffData | null {
     });
 
   return { data, entrySpot, exitSpot, realized: cycle.realized_pnl };
+}
+
+// ---- live positions payoff (Sensibull-style) -----------------------------------
+export interface LiveLeg {
+  strike: number;
+  right: string;
+  direction: number; // +1 long / −1 short
+  units: number;
+  entry: number; // avg fill premium
+  ltp: number | null;
+}
+
+export interface LivePayoffData {
+  data: { spot: number; expiry: number; now: number }[];
+  spot: number;
+  expiryDate: string;
+}
+
+/** Expiry payoff tent + a current-value (T+0) curve for the OPEN option legs, across a
+ *  ±10% underlying range. IV per leg is backed out of its live LTP (fallback 15%). */
+export function buildLivePayoff(
+  legs: LiveLeg[], spot: number, expiryDate: string, today?: string,
+): LivePayoffData | null {
+  if (!legs.length || !spot) return null;
+  const asOf = today ?? new Date().toISOString().slice(0, 10);
+  const t = Math.max(daysBetween(asOf, expiryDate) / 365, 1 / 365); // ≥ ~1 day keeps BS sane
+  const ivs = legs.map(
+    (l) => (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, t, RISK_FREE, l.right) : null) ?? 0.15,
+  );
+  const lo = spot * 0.9;
+  const hi = spot * 1.1;
+  const n = 81;
+  const data = [];
+  for (let i = 0; i < n; i++) {
+    const S = lo + ((hi - lo) * i) / (n - 1);
+    let expiry = 0;
+    let now = 0;
+    legs.forEach((l, j) => {
+      expiry += l.direction * (intrinsic(l.right, S, l.strike) - l.entry) * l.units;
+      now += l.direction * (bsPrice(S, l.strike, t, RISK_FREE, ivs[j], l.right) - l.entry) * l.units;
+    });
+    data.push({ spot: S, expiry, now });
+  }
+  return { data, spot, expiryDate };
 }

@@ -42,6 +42,8 @@ class LiveConfig:
     symbols: list[str]
     notes: str | None = None
     capital: float = 2_500_000
+    instrument_class: str = "STOCK"   # "STOCK" | "DERIV" (options)
+    underlying: str | None = None     # DERIV: NIFTY/BANKNIFTY (option underlying)
     params: dict = field(default_factory=dict)
     tax_rate: float = 0.20
     withdrawal_rate: float = 0.0
@@ -62,6 +64,30 @@ def _serialize_event(ev: dict) -> dict:
     dt = ev["date"]
     out["date"] = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)
     return out
+
+
+def _build_session(config: "LiveConfig", strategy, loader, is_deriv: bool, underlying: str) -> LiveSession:
+    """A LiveSession wired for the deployment's instrument class. DERIV builds the live
+    options stack (chain/lazy-marks/settler/charges/margin); STOCK is the Donchian view."""
+    common = dict(
+        initial_capital=config.capital, lookback=config.lookback, tax_rate=config.tax_rate,
+        withdrawal_rate=config.withdrawal_rate, overrides=config.overrides,
+        excluded_symbols=config.excluded_symbols,
+    )
+    if is_deriv:
+        from skas_algo.data.options_provider import build_live_options_run
+        from skas_algo.data.provider import get_data_cache
+        from skas_algo.engine.options.charges import ChargeModel
+
+        mv, _chain, settler, margin = build_live_options_run(
+            get_data_cache(), underlying,
+            lot_overrides=config.params.get("contract_specs"), now=datetime.now(IST),
+        )
+        return LiveSession(strategy, market_view=mv, settler=settler,
+                           charge_model=ChargeModel(), margin_model=margin, **common)
+    session = LiveSession(strategy, **common)
+    session.warmup(warmup_history(loader, config.symbols, config.lookback))
+    return session
 
 
 class Broadcaster:
@@ -99,11 +125,33 @@ class LiveRun:
         self.on_cache_fallback = False
         self.last_decision_day = None
         self.status = "running"
+        # Let the options view fetch a freshly-selected contract's live price at fill time
+        # (follows quote-source promotion since it reads self.quote_source each call).
+        market = getattr(self.session, "market", None)
+        if market is not None and hasattr(market, "set_quote_fn"):
+            market.set_quote_fn(lambda syms: self.quote_source.get_quotes(syms))
 
     # ----------------------------------------------------------- actions
+    def _quote_symbols(self) -> list[str]:
+        """Symbols to pull live quotes for. Equity: the fixed universe. Options: the open
+        contract legs (dynamic) — there's no fixed option universe, and pre-entry strike
+        selection reads the cache chain, not live quotes."""
+        if self.config.instrument_class.upper() == "DERIV":
+            return self.session.portfolio.lot_symbols()
+        return self.config.symbols
+
     def refresh(self) -> dict:
         """Pull quotes, mark-to-market, persist positions, broadcast snapshot."""
-        quotes = self.quote_source.get_quotes(self.config.symbols)
+        symbols = self._quote_symbols()
+        idx = None
+        if self.config.instrument_class.upper() == "DERIV" and self.config.underlying:
+            from skas_algo.data.options_provider import INDEX_SYMBOL
+            idx = INDEX_SYMBOL.get(self.config.underlying.upper())
+            if idx:
+                symbols = symbols + [idx]  # also quote the index → live spot for strikes
+        quotes = self.quote_source.get_quotes(symbols) if symbols else {}
+        if idx and idx in quotes and hasattr(self.session.market, "set_index_spot"):
+            self.session.market.set_index_spot(self.config.underlying, quotes.pop(idx))
         self.session.update_quotes(quotes)
         snap = self.session.snapshot()
         with session_scope() as db:
@@ -165,9 +213,16 @@ class LiveRun:
                 "status": self.status,
                 "name": self.config.name,
                 "strategy_id": self.config.strategy_id,
+                "instrument_class": self.config.instrument_class,
+                "underlying": self.config.underlying,
                 "quote_source": self.config.quote_source,
                 "on_cache_fallback": self.on_cache_fallback,
                 "parts_total": self.config.params.get("capital_parts"),
+                # Options deployments expose lot-sets (editable live while flat); equity
+                # strategies have no `lots` attr → null → the UI hides the control.
+                "lots": getattr(getattr(self.session, "strategy", None), "lots", None),
+                # Live underlying spot (for the positions payoff diagram), if known.
+                "underlying_spot": self._underlying_spot(),
                 # Live controls + exclusion editing surface for the UI.
                 "auto": self.config.auto,
                 "ignore_market_hours": self.config.ignore_market_hours,
@@ -178,6 +233,12 @@ class LiveRun:
                 **self.session.snapshot(),
             }
         )
+
+    def _underlying_spot(self):
+        market = getattr(self.session, "market", None)
+        if self.config.underlying and market is not None and hasattr(market, "index_spot"):
+            return market.index_spot(self.config.underlying)
+        return None
 
     def export_state(self) -> dict:
         return {
@@ -208,22 +269,18 @@ class LiveRunManager:
         # collide with the constructor args or get rejected as unknown kwargs.
         reserved = {"universe", "initial_capital", "start_date", "end_date"}
         strategy_params = {k: v for k, v in config.params.items() if k not in reserved}
+        is_deriv = config.instrument_class.upper() == "DERIV"
+        underlying = (config.underlying or (config.symbols[0] if config.symbols else "NIFTY")).upper()
         strategy = factory(
-            universe=config.symbols, initial_capital=config.capital, **strategy_params
+            universe=[underlying] if is_deriv else config.symbols,
+            initial_capital=config.capital, **strategy_params,
         )
-        session = LiveSession(
-            strategy,
-            initial_capital=config.capital,
-            lookback=config.lookback,
-            tax_rate=config.tax_rate,
-            withdrawal_rate=config.withdrawal_rate,
-            overrides=config.overrides,
-            excluded_symbols=config.excluded_symbols,
-        )
-        session.warmup(warmup_history(loader, config.symbols, config.lookback))
+        session = _build_session(config, strategy, loader, is_deriv, underlying)
 
         params_snapshot = {
             "symbols": config.symbols,
+            "instrument_class": config.instrument_class,
+            "underlying": underlying if is_deriv else None,
             "lookback": config.lookback,
             "tax_rate": config.tax_rate,
             "withdrawal_rate": config.withdrawal_rate,
@@ -280,12 +337,14 @@ class LiveRunManager:
         ignore_market_hours: bool | None = None,
         refresh_seconds: int | None = None,
         excluded_symbols: list[str] | None = None,
+        lots: int | None = None,
     ) -> LiveRun:
-        """Mutate a running deployment's loop controls / exclusion list, in place.
+        """Mutate a running deployment's loop controls / exclusion list / lot-sets, in place.
 
         Applies to the in-memory run immediately (the loop reads config each tick),
         toggles the background loop on/off to match ``auto``, and persists the new
-        values into the run's params_snapshot so a restart recovers them.
+        values into the run's params_snapshot so a restart recovers them. A ``lots`` change
+        takes effect on the strategy's NEXT entry (it doesn't resize open legs).
         """
         live = self.runs[run_id]
         cfg = live.config
@@ -296,6 +355,9 @@ class LiveRunManager:
         if excluded_symbols is not None:
             live.session.set_excluded(excluded_symbols)
             cfg.excluded_symbols = live.session.excluded_symbols
+        if lots is not None and hasattr(live.session.strategy, "lots"):
+            live.session.strategy.lots = max(1, int(lots))
+            cfg.params = {**cfg.params, "lots": live.session.strategy.lots}
         if auto is not None:
             cfg.auto = auto
             running = run_id in self._tasks and not self._tasks[run_id].done()
@@ -314,6 +376,8 @@ class LiveRunManager:
                     refresh_seconds=cfg.refresh_seconds,
                     excluded_symbols=cfg.excluded_symbols,
                 )
+                if lots is not None and hasattr(live.session.strategy, "lots"):
+                    snap["lots"] = live.session.strategy.lots
                 run.params_snapshot = snap
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
         return live
@@ -353,13 +417,22 @@ class LiveRunManager:
 
     async def _loop(self, live: LiveRun) -> None:
         try:
+            is_deriv = live.config.instrument_class.upper() == "DERIV"
             decide_at = time.fromisoformat(live.config.decision_time)
             while True:
                 if live.config.ignore_market_hours or is_market_open():
                     try:
                         live.refresh()
                         now = datetime.now(IST)
-                        if now.time() >= decide_at and live.last_decision_day != now.date():
+                        if is_deriv:
+                            # Options: decide EVERY tick — the strategy's entry-time +
+                            # per-exit cadence gate what actually fires (e.g. profit every
+                            # 15 min, stop at 15:15). Roll the day once after the close.
+                            live.run_decision(now)
+                            if now.time() >= time(15, 30) and live.last_decision_day != now.date():
+                                live.end_day()
+                                live.last_decision_day = now.date()
+                        elif now.time() >= decide_at and live.last_decision_day != now.date():
                             live.run_decision(now)
                             live.end_day()
                             live.last_decision_day = now.date()

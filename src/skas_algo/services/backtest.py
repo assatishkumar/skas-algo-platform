@@ -80,7 +80,7 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
             market_view, _chain, settler, margin_model = build_synthetic_options_run(
                 sd, underlying.upper(), req.start_date, req.end_date,
                 lot_overrides=req.params.get("contract_specs"),
-                margin_params=req.params.get("margin"), **opt_kwargs,
+                margin_params=req.params.get("margin"), equity_loader=loader, **opt_kwargs,
             )
         else:
             from skas_algo.data.options_provider import build_options_run
@@ -88,7 +88,7 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
             market_view, _chain, settler, margin_model = build_options_run(
                 sd, underlying.upper(), req.start_date, req.end_date,
                 lot_overrides=req.params.get("contract_specs"),
-                margin_params=req.params.get("margin"),
+                margin_params=req.params.get("margin"), equity_loader=loader,
             )
         # Options are business income (slab) → no per-trade tax modelled; instead F&O
         # transaction charges (brokerage + STT + exchange + GST + SEBI + stamp) are
@@ -116,10 +116,16 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
     result = runner.run(req.start_date, req.end_date)
     report = build_report(result, req.capital)
     if is_deriv and report.get("options"):
-        # Tag each position/cycle with underlying (NIFTY/GOLD) + India VIX at entry/exit.
-        from skas_algo.data.options_provider import enrich_with_market
+        # Tag each position/cycle with underlying (NIFTY/GOLD) + India VIX at entry/exit,
+        # and attach the underlying price series for the covered-call timeline charts.
+        from skas_algo.data.options_provider import (
+            attach_underlying_timeline,
+            enrich_with_market,
+        )
 
         enrich_with_market(get_data_cache(), report["options"], underlying.upper())
+        attach_underlying_timeline(get_data_cache(), report["options"], underlying.upper(),
+                                   req.start_date, req.end_date)
     trades = _serialize_trades(result.transactions)
 
     # Persist as an Algo + AlgoRun (BACKTEST mode).

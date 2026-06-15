@@ -24,15 +24,14 @@ from __future__ import annotations
 
 import calendar
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.types import Signal, SignalAction
 
-
-def _bad(x) -> bool:
-    return x is None or x != x or x <= 0  # None / NaN / non-positive premium
+from ._options_common import bad_close as _bad
+from ._options_common import next_monthly_expiry
 
 
 def _last_weekday_of_month(d: date, weekday: int) -> date:
@@ -56,6 +55,9 @@ class CallRatioMonthlyStrategy:
         sell_offset: float = 600,
         hedge_offset: float = 1600,
         lots: int = 1,
+        buy_lots: int = 1,    # leg ratio multiples (×lots): 1:2:1 = the classic ratio;
+        sell_lots: int = 2,   # HNI weekly uses 1:3:2 — net contracts must stay balanced
+        hedge_lots: int = 1,  # (buy+hedge ≥ sell) or the wing carries a naked tail
         credit_debit_limit_pct: float = 0.01,   # max net CREDIT = this × capital (credit required)
         shift_step: float = 100,                 # strike-adjust step (searched ± both directions)
         max_shifts: int = 10,                    # search up to ±max_shifts × shift_step
@@ -71,6 +73,13 @@ class CallRatioMonthlyStrategy:
         tail_hedge_lots: float = 1.0,    # tail size as a fraction of ``lots`` (whole-lot rounded)
         tail_hedge_side: str = "both",   # "both" | "call" | "put" — which wings carry the tail
         min_credit_pct: float = 0.0,     # credit floor ×capital (negative = allow a small debit)
+        # --- live intraday exit cadence (backtest is EOD → every cadence collapses to the
+        #     daily bar, so these change nothing in backtest). Each ∈ tick/1/5/15/30/60min/eod.
+        entry_time: str | None = None,   # only enter at/after this IST time (None = any time)
+        profit_check: str = "eod",       # how often to evaluate the profit target
+        stop_check: str = "eod",         # how often to evaluate the stop loss
+        time_check: str = "eod",         # how often to evaluate the time exit
+        eod_time: str = "15:15",         # what "eod" means (at/after this IST time)
         lot_overrides: dict | None = None,
         **_ignored,
     ):
@@ -81,6 +90,9 @@ class CallRatioMonthlyStrategy:
         self.sell_offset = float(sell_offset)
         self.hedge_offset = float(hedge_offset)
         self.lots = int(lots)
+        self.buy_lots = int(buy_lots)
+        self.sell_lots = int(sell_lots)
+        self.hedge_lots = int(hedge_lots)
         self.credit_debit_limit_pct = float(credit_debit_limit_pct)
         self.shift_step = float(shift_step)
         self.max_shifts = int(max_shifts)
@@ -96,7 +108,14 @@ class CallRatioMonthlyStrategy:
         self.tail_hedge_lots = float(tail_hedge_lots)
         self.tail_hedge_side = str(tail_hedge_side).lower()
         self.min_credit_pct = float(min_credit_pct)
+        self.entry_time = entry_time
+        self.profit_check = str(profit_check)
+        self.stop_check = str(stop_check)
+        self.time_check = str(time_check)
+        self.eod_time = str(eod_time)
         self.lot_overrides = lot_overrides
+        # Per-exit last-evaluation timestamps (for interval cadences); transient.
+        self._last_check: dict[str, "datetime"] = {}
         # +1 for calls (OTM = above spot), −1 for puts (OTM = below spot).
         self._sign = 1 if self.right == "CE" else -1
 
@@ -115,32 +134,70 @@ class CallRatioMonthlyStrategy:
             return self._manage(ctx)
         return self._maybe_enter(ctx, chain, ctx.today())
 
+    # ------------------------------------------------- subclass seams (timing/risk)
+    # The weekly variants (HNI) override these four; the monthly base behaviour is
+    # unchanged: month-locked entry from the last entry_weekday, monthly expiry,
+    # capital-based target/stop, max-holding-days time exit.
+    def _entry_allowed(self, today: date) -> bool:
+        if self.last_entry_month == (today.year, today.month):
+            return False  # already traded this month (one entry / month, zero adjustments)
+        return today >= _last_weekday_of_month(today, self.entry_weekday)
+
+    def _mark_entered(self, today: date) -> None:
+        self.last_entry_month = (today.year, today.month)
+
+    def _select_expiry(self, chain, today: date) -> date | None:
+        return self._next_monthly_expiry(chain, today)
+
+    def _risk_base(self) -> float:
+        """Rupee base the profit-target/stop percentages apply to."""
+        return self.initial_capital
+
+    def _time_exit(self, today: date) -> bool:
+        return bool(self.entry_date) and (today - self.entry_date).days >= self.max_holding_days
+
+    # ------------------------------------------------- intraday exit cadence
+    # In backtest there's one slice/day at the EOD bar, so every cadence is "due" once a
+    # day → behaviour is unchanged. In live (intraday ticks) these gate how often each
+    # exit type is actually evaluated (e.g. profit every 15 min, stop only at 15:15).
+    _INTERVAL_MIN = {"tick": 0, "1min": 1, "5min": 5, "15min": 15, "30min": 30, "60min": 60}
+
+    def _now(self, ctx) -> datetime:
+        fn = getattr(ctx, "now", None)
+        if fn is not None:
+            return fn()
+        return datetime.combine(ctx.today(), time(15, 30))  # stub ctx → treat as EOD
+
+    def _eod_reached(self, now: datetime) -> bool:
+        try:
+            return now.time() >= time.fromisoformat(self.eod_time)
+        except (ValueError, TypeError):
+            return True
+
+    def _due(self, kind: str, now: datetime) -> bool:
+        """Is the ``kind`` exit ("profit"/"stop"/"time") due to be evaluated at ``now``?"""
+        cadence = getattr(self, f"{kind}_check", "eod")
+        if cadence == "eod":
+            return self._eod_reached(now)
+        mins = self._INTERVAL_MIN.get(cadence, 0)
+        last = self._last_check.get(kind)
+        if last is None or (now - last).total_seconds() >= mins * 60:
+            self._last_check[kind] = now
+            return True
+        return False
+
+    def _entry_time_ok(self, now: datetime) -> bool:
+        if not self.entry_time:
+            return True
+        try:
+            return now.time() >= time.fromisoformat(self.entry_time)
+        except (ValueError, TypeError):
+            return True
+
     # ------------------------------------------------------------------ helpers
     def _next_monthly_expiry(self, chain, today: date) -> date | None:
-        """The nearest monthly expiry at least ``min_dte`` out.
-
-        "Monthly" = the most LIQUID expiry of its calendar month (highest total open
-        interest on today's chain), not simply the latest date — exchanges sometimes list
-        odd late-month expiries whose contracts never trade but still carry frozen
-        bhavcopy closes (e.g. NIFTY 2025-04-30 vs the real 2025-04-24 monthly); picking
-        by date would enter phantom, un-executable positions.
-        """
-        exps = chain.expiries(self.underlying, today)
-        if not exps:
-            return None
-        by_month: dict[tuple[int, int], list[date]] = {}
-        for e in exps:
-            if (e - today).days >= self.min_dte:
-                by_month.setdefault((e.year, e.month), []).append(e)
-        if not by_month:
-            return None
-        month = min(by_month)  # nearest qualifying month
-        cands = by_month[month]
-        if len(cands) == 1:
-            return cands[0]
-        def total_oi(exp: date) -> int:
-            return sum(r.oi for r in chain.chain(self.underlying, today, exp) if r.right == self.right)
-        return max(cands, key=total_oi)
+        """Nearest max-OI monthly ≥ min_dte out (shared helper; see _options_common)."""
+        return next_monthly_expiry(chain, self.underlying, today, self.min_dte, self.right)
 
     @staticmethod
     def _snap(strikes: list[float], target: float) -> float | None:
@@ -218,12 +275,11 @@ class CallRatioMonthlyStrategy:
         return [spot + sg * o for o in offs]  # points (default)
 
     def _maybe_enter(self, ctx, chain, today: date) -> list[Signal]:
-        ym = (today.year, today.month)
-        if self.last_entry_month == ym:
-            return []  # already traded this month (one entry / month, zero adjustments)
-        if today < _last_weekday_of_month(today, self.entry_weekday):
-            return []  # entry window (last Tuesday → on/after) not reached
-        expiry = self._next_monthly_expiry(chain, today)
+        if not self._entry_allowed(today):
+            return []
+        if not self._entry_time_ok(self._now(ctx)):
+            return []  # entry window not yet reached today (live intraday; EOD-safe)
+        expiry = self._select_expiry(chain, today)
         spot = chain.spot(self.underlying, today)
         if expiry is None or spot is None:
             return []
@@ -238,16 +294,18 @@ class CallRatioMonthlyStrategy:
         signals: list[Signal] = []
         t_units = self._tail_units(units)
         for buy, sell, hedge, tail in sides:
+            b_units, s_units, h_units = (self.buy_lots * units, self.sell_lots * units,
+                                         self.hedge_lots * units)
             side_legs = [
-                {"symbol": buy.symbol, "dir": 1, "units": units, "entry": buy.close},
-                {"symbol": sell.symbol, "dir": -1, "units": 2 * units, "entry": sell.close},
-                {"symbol": hedge.symbol, "dir": 1, "units": units, "entry": hedge.close},
+                {"symbol": buy.symbol, "dir": 1, "units": b_units, "entry": buy.close},
+                {"symbol": sell.symbol, "dir": -1, "units": s_units, "entry": sell.close},
+                {"symbol": hedge.symbol, "dir": 1, "units": h_units, "entry": hedge.close},
             ]
             side_sigs = [
-                Signal(buy.symbol, SignalAction.ENTER_LONG, quantity=units, reason=self.entry_reason),
-                Signal(sell.symbol, SignalAction.ENTER_SHORT, quantity=2 * units,
+                Signal(buy.symbol, SignalAction.ENTER_LONG, quantity=b_units, reason=self.entry_reason),
+                Signal(sell.symbol, SignalAction.ENTER_SHORT, quantity=s_units,
                        reason=self.entry_reason, meta={"multiplier": 1}),
-                Signal(hedge.symbol, SignalAction.ENTER_LONG, quantity=units, reason=self.entry_reason),
+                Signal(hedge.symbol, SignalAction.ENTER_LONG, quantity=h_units, reason=self.entry_reason),
             ]
             if tail is not None and t_units:
                 if tail.symbol == hedge.symbol:
@@ -255,7 +313,7 @@ class CallRatioMonthlyStrategy:
                     # legs on the same symbol would double-fire EXIT_ALL).
                     side_legs[2]["units"] += t_units
                     side_sigs[2] = Signal(hedge.symbol, SignalAction.ENTER_LONG,
-                                          quantity=units + t_units, reason=self.entry_reason)
+                                          quantity=h_units + t_units, reason=self.entry_reason)
                 else:
                     side_legs.append(
                         {"symbol": tail.symbol, "dir": 1, "units": t_units, "entry": tail.close})
@@ -265,7 +323,7 @@ class CallRatioMonthlyStrategy:
             signals += side_sigs
         self.entry_expiry = expiry
         self.entry_date = today
-        self.last_entry_month = ym
+        self._mark_entered(today)
         return signals
 
     def _entry_sides(self, chain, today, expiry, spot, units, limit) -> list | None:
@@ -331,7 +389,8 @@ class CallRatioMonthlyStrategy:
                 tail = rows.get(tk)
                 if tail is None or _bad(tail.close):
                     tail = hedge  # same-strike merge: hedge is simply doubled up
-            net = (2 * sell.close - buy.close - hedge.close) * units  # +ve = credit received
+            net = (self.sell_lots * sell.close - self.buy_lots * buy.close
+                   - self.hedge_lots * hedge.close) * units  # +ve = credit received
             if tail is not None:
                 net -= tail.close * t_units
             if floor_amt <= net <= limit:
@@ -358,14 +417,15 @@ class CallRatioMonthlyStrategy:
                       for leg in self.legs)
         except KeyError:
             return []  # a leg didn't print today; manage next slice
-        cap = self.initial_capital
+        base = self._risk_base()
         today = ctx.today()
+        now = self._now(ctx)
         reason = None
-        if pnl >= self.profit_target_pct * cap:
+        if self._due("profit", now) and pnl >= self.profit_target_pct * base:
             reason = "target"
-        elif pnl <= -self.stop_loss_pct * cap:
+        elif self._due("stop", now) and pnl <= -self.stop_loss_pct * base:
             reason = "stop"
-        elif self.entry_date and (today - self.entry_date).days >= self.max_holding_days:
+        elif self._due("time", now) and self._time_exit(today):
             reason = "time"
         if reason is None:
             return []
@@ -447,7 +507,8 @@ class BatmanRatioMonthlyStrategy(CallRatioMonthlyStrategy):
 
     def _wing_credit(self, side: tuple, units: int) -> float:
         buy, sell, hedge, tail = side
-        net = (2 * sell.close - buy.close - hedge.close) * units
+        net = (self.sell_lots * sell.close - self.buy_lots * buy.close
+               - self.hedge_lots * hedge.close) * units
         if tail is not None:
             net -= tail.close * self._tail_units(units)
         return net

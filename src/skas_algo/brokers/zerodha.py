@@ -52,6 +52,7 @@ class ZerodhaAdapter:
         self.live_enabled = live_enabled
         self._kite = kite  # injectable KiteConnect (lazily built if None)
         self.access_token: str | None = None
+        self._nfo_lut: dict | None = None  # (name, expiry, strike, CE/PE) -> tradingsymbol
 
     # ------------------------------------------------------------------ kite
     def _kite_client(self):
@@ -133,6 +134,37 @@ class ZerodhaAdapter:
         return Funds(available=available, used=used)
 
     def get_quote(self, symbols: list[str]) -> dict[str, float]:
-        keys = [f"NSE:{s}" for s in symbols]
-        data = self._kite_client().ltp(keys)
-        return {s: data[f"NSE:{s}"]["last_price"] for s in symbols if f"NSE:{s}" in data}
+        """LTP per symbol. Equities map to ``NSE:<symbol>``; option contracts
+        (``UNDERLYING|EXPIRY|STRIKE|RIGHT``) map to ``NFO:<tradingsymbol>`` via the Kite
+        NFO instruments dump (so we don't hand-encode weekly/monthly tradingsymbols)."""
+        from skas_algo.engine.options.instrument import parse
+
+        key_of: dict[str, str] = {}  # my_symbol -> kite ltp key
+        for s in symbols:
+            inst = parse(s)
+            if inst is None:
+                key_of[s] = f"NSE:{s}"
+            else:
+                ts = self._option_tradingsymbol(inst)
+                if ts:
+                    key_of[s] = f"NFO:{ts}"
+        if not key_of:
+            return {}
+        data = self._kite_client().ltp(list(key_of.values()))
+        return {s: data[k]["last_price"] for s, k in key_of.items() if k in data}
+
+    def _option_tradingsymbol(self, inst) -> str | None:
+        """Resolve an option instrument to its Kite NFO tradingsymbol via the instruments
+        dump (cached for the session)."""
+        if self._nfo_lut is None:
+            self._nfo_lut = {}
+            for r in self._kite_client().instruments("NFO"):
+                if r.get("instrument_type") not in ("CE", "PE"):
+                    continue
+                exp = r.get("expiry")
+                exp_iso = exp.isoformat() if hasattr(exp, "isoformat") else str(exp)[:10]
+                self._nfo_lut[(r["name"], exp_iso, float(r["strike"]), r["instrument_type"])] = \
+                    r["tradingsymbol"]
+        return self._nfo_lut.get(
+            (inst.underlying, inst.expiry.isoformat(), float(inst.strike), inst.right)
+        )

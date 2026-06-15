@@ -25,6 +25,8 @@ logger = logging.getLogger("skas_algo.live")
 
 _NON_STRATEGY_KEYS = {
     "symbols",
+    "instrument_class",
+    "underlying",
     "lookback",
     "tax_rate",
     "withdrawal_rate",
@@ -74,32 +76,29 @@ def recover_running_sessions() -> int:
 
 
 def _rebuild(db, run: AlgoRun, loader) -> None:
+    from skas_algo.live.manager import _build_session
+
     algo = db.get(Algo, run.algo_id)
     params = dict(run.params_snapshot or {})
     symbols = params.get("symbols", [])
     lookback = params.get("lookback", 20)
     strategy_params = {k: v for k, v in params.items() if k not in _NON_STRATEGY_KEYS}
+    instrument_class = params.get("instrument_class", "STOCK")
+    is_deriv = str(instrument_class).upper() == "DERIV"
+    underlying = (params.get("underlying") or (symbols[0] if symbols else "NIFTY")).upper()
 
     strategy = get_strategy(algo.strategy_id)(
-        universe=symbols, initial_capital=algo.capital, **strategy_params
+        universe=[underlying] if is_deriv else symbols,
+        initial_capital=algo.capital, **strategy_params,
     )
-    session = LiveSession(
-        strategy,
-        initial_capital=algo.capital,
-        lookback=lookback,
-        tax_rate=params.get("tax_rate", 0.20),
-        withdrawal_rate=params.get("withdrawal_rate", 0.0),
-        excluded_symbols=params.get("excluded_symbols", []),
-    )
-    session.warmup(warmup_history(loader, symbols, lookback))
-    if run.state:
-        session.load_state(run.state)
 
     config = LiveConfig(
         name=algo.name,
         strategy_id=algo.strategy_id,
         symbols=symbols,
         capital=algo.capital,
+        instrument_class=instrument_class,
+        underlying=underlying if is_deriv else None,
         params=strategy_params,
         tax_rate=params.get("tax_rate", 0.20),
         withdrawal_rate=params.get("withdrawal_rate", 0.0),
@@ -113,6 +112,9 @@ def _rebuild(db, run: AlgoRun, loader) -> None:
         auto=params.get("auto", False),
         excluded_symbols=params.get("excluded_symbols", []),
     )
+    session = _build_session(config, strategy, loader, is_deriv, underlying)
+    if run.state:
+        session.load_state(run.state)
 
     quote_source, on_cache_fallback = _quote_source(db, config, loader)
     live = LiveRun(run.id, run.algo_id, config, session, quote_source, manager.broadcaster)

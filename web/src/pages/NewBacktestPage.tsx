@@ -107,6 +107,34 @@ export default function NewBacktestPage() {
   const [tailSide, setTailSide] = useState("both"); // both | put | call (batman wings)
   const [minCreditPct, setMinCreditPct] = useState(0); // credit floor; negative allows a small debit
 
+  // HNI Weekly params (1-3-2 net-zero weekly tent)
+  const [hniLots, setHniLots] = useState(1);
+  const [hniBuyLots, setHniBuyLots] = useState(1);
+  const [hniSellLots, setHniSellLots] = useState(3);
+  const [hniHedgeLots, setHniHedgeLots] = useState(2);
+  const [hniBuyOffset, setHniBuyOffset] = useState(200);
+  const [hniSellOffset, setHniSellOffset] = useState(400);
+  const [hniHedgeOffset, setHniHedgeOffset] = useState(600);
+  const [hniDteTarget, setHniDteTarget] = useState(8);
+  const [hniTargetPct, setHniTargetPct] = useState(1); // % of deployed margin
+  const [hniStopPct, setHniStopPct] = useState(1);
+  const [hniMargin, setHniMargin] = useState(132000); // ₹ per 1-3-2 lot-set
+
+  // Staggered Covered Call params
+  const [ccEtfSymbol, setCcEtfSymbol] = useState("GOLDBEES");
+  const [ccLots, setCcLots] = useState(1);
+  const [ccOtmPct, setCcOtmPct] = useState(6);
+  const [ccRolldownPct, setCcRolldownPct] = useState(80);
+  const [ccRolldownMinDte, setCcRolldownMinDte] = useState(5);
+  const [ccMinDte, setCcMinDte] = useState(18);
+  const [ccMinPremiumPct, setCcMinPremiumPct] = useState(0.1); // % of spot; walk strike nearer below it
+  const [ccMinOtmPct, setCcMinOtmPct] = useState(2); // never sell a call nearer than this
+  const [ccKeepAboveCost, setCcKeepAboveCost] = useState(true); // never roll a CE below the ETF cost
+  const [ccMinReturnPct, setCcMinReturnPct] = useState(2); // call strike ≥ cost ×(1+this%)
+  const [ccDelta, setCcDelta] = useState(0.3); // when fully covered, target this |Δ| (0=off)
+  const [ccSellPuts, setCcSellPuts] = useState(false); // wheel: accumulate via short puts
+  const [ccPutOtmPct, setCcPutOtmPct] = useState(5); // put strike ≈ spot ×(1−this%)
+
   // Override builder
   const [ovEnabled, setOvEnabled] = useState(false);
   const [ovScope, setOvScope] = useState("ALGO");
@@ -129,7 +157,9 @@ export default function NewBacktestPage() {
     strategyId === "put_ratio_monthly" ? "put"
     : strategyId === "batman_ratio_monthly" ? "batman"
     : "call";
-  const isOptions = strategyId === "short_premium" || isCallRatio;
+  const isHni = strategyId === "hni_weekly";
+  const isCoveredCall = strategyId === "staggered_covered_call";
+  const isOptions = strategyId === "short_premium" || isCallRatio || isHni || isCoveredCall;
   const strikeUnit =
     strikeMode === "delta" ? "Δ"
     : strikeMode === "sd" ? "× exp.move (σ)"
@@ -140,7 +170,22 @@ export default function NewBacktestPage() {
   // %-of-capital targets are meaningful (Batman = both wings ≈ 2×). User can still edit.
   useEffect(() => {
     if (isCallRatio) setCapital(ratioSide === "batman" ? 200000 : 100000);
-  }, [isCallRatio, ratioSide]);
+    if (isHni) {
+      setCapital(200000); // ≥ the ₹1.32L margin per lot-set
+      setUnderlying("NIFTY"); // weeklies are cached for NIFTY only
+    }
+    if (isCoveredCall) {
+      setCapital(2000000); // ETF notional ≈ ₹15L + the short CE's margin
+      setUnderlying("GOLD");
+    }
+  }, [isCallRatio, ratioSide, isHni, isCoveredCall]);
+
+  // Covered call: keep the ETF proxy in sync with the underlying (still editable).
+  useEffect(() => {
+    if (!isCoveredCall) return;
+    const map: Record<string, string> = { GOLD: "GOLDBEES", NIFTY: "NIFTYBEES", BANKNIFTY: "BANKBEES" };
+    setCcEtfSymbol(map[underlying] ?? `${underlying}BEES`);
+  }, [isCoveredCall, underlying]);
 
   // Reset the buy/sell/hedge/tail offsets to sensible defaults for the chosen strike
   // basis. Batman defaults to the half-size put-wing tail (the run-92 config — best
@@ -221,6 +266,34 @@ export default function NewBacktestPage() {
     num("tail_hedge_offset", setTailOffset, 1, 0); // absent = the run traded UN-tailed
     num("tail_hedge_lots", setTailLots, 1, 1);
     str("tail_hedge_side", setTailSide, "both");
+    if (strategyId === "hni_weekly") {
+      num("lots", setHniLots);
+      num("buy_lots", setHniBuyLots);
+      num("sell_lots", setHniSellLots);
+      num("hedge_lots", setHniHedgeLots);
+      num("buy_offset", setHniBuyOffset);
+      num("sell_offset", setHniSellOffset);
+      num("hedge_offset", setHniHedgeOffset);
+      num("dte_target", setHniDteTarget);
+      num("profit_target_pct", setHniTargetPct, 100);
+      num("stop_loss_pct", setHniStopPct, 100);
+      num("margin_per_lotset", setHniMargin);
+    }
+    if (strategyId === "staggered_covered_call") {
+      str("etf_symbol", setCcEtfSymbol);
+      num("lots", setCcLots);
+      num("ce_otm_pct", setCcOtmPct);
+      num("rolldown_trigger_pct", setCcRolldownPct, 100);
+      num("rolldown_min_dte", setCcRolldownMinDte);
+      num("min_dte", setCcMinDte);
+      num("min_premium_pct", setCcMinPremiumPct, 100);
+      num("min_ce_otm_pct", setCcMinOtmPct);
+      if (typeof p.keep_strike_above_cost === "boolean") setCcKeepAboveCost(p.keep_strike_above_cost);
+      num("min_return_pct", setCcMinReturnPct);
+      num("covered_call_delta", setCcDelta);
+      if (typeof p.sell_puts === "boolean") setCcSellPuts(p.sell_puts);
+      num("put_otm_pct", setCcPutOtmPct);
+    }
     const ratio = ["call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly"].includes(strategyId);
     // short_premium / shared options (ratio templates carry an informational
     // strike_step=50 that must NOT leak into short_premium's strangle step)
@@ -276,7 +349,39 @@ export default function NewBacktestPage() {
       });
     }
     if (isOptions) {
-      const params: Record<string, unknown> = isCallRatio
+      const params: Record<string, unknown> = isHni
+        ? {
+            underlying,
+            lots: hniLots,
+            buy_lots: hniBuyLots,
+            sell_lots: hniSellLots,
+            hedge_lots: hniHedgeLots,
+            buy_offset: hniBuyOffset,
+            sell_offset: hniSellOffset,
+            hedge_offset: hniHedgeOffset,
+            dte_target: hniDteTarget,
+            profit_target_pct: hniTargetPct / 100,
+            stop_loss_pct: hniStopPct / 100,
+            margin_per_lotset: hniMargin,
+          }
+        : isCoveredCall
+        ? {
+            underlying,
+            etf_symbol: ccEtfSymbol.trim().toUpperCase(),
+            lots: ccLots,
+            ce_otm_pct: ccOtmPct,
+            rolldown_trigger_pct: ccRolldownPct / 100,
+            rolldown_min_dte: ccRolldownMinDte,
+            min_dte: ccMinDte,
+            min_premium_pct: ccMinPremiumPct / 100,
+            min_ce_otm_pct: ccMinOtmPct,
+            keep_strike_above_cost: ccKeepAboveCost,
+            min_return_pct: ccMinReturnPct,
+            covered_call_delta: ccDelta,
+            sell_puts: ccSellPuts,
+            ...(ccSellPuts ? { put_otm_pct: ccPutOtmPct } : {}),
+          }
+        : isCallRatio
         ? {
             underlying,
             strike_mode: strikeMode,
@@ -443,9 +548,15 @@ export default function NewBacktestPage() {
             {isOptions ? (
               <Field label="Underlying">
                 <select className={inputClass} value={underlying} onChange={(e) => setUnderlying(e.target.value)}>
-                  <option value="NIFTY">NIFTY</option>
-                  <option value="BANKNIFTY">BANKNIFTY</option>
-                  <option value="GOLD">GOLD (synthetic)</option>
+                  {isHni ? (
+                    <option value="NIFTY">NIFTY (weeklies cached)</option>
+                  ) : (
+                    <>
+                      <option value="NIFTY">NIFTY</option>
+                      <option value="BANKNIFTY">BANKNIFTY</option>
+                      <option value="GOLD">GOLD (synthetic)</option>
+                    </>
+                  )}
                 </select>
               </Field>
             ) : (
@@ -482,7 +593,128 @@ export default function NewBacktestPage() {
             </Field>
           </div>
 
-          {isCallRatio ? (
+          {isHni ? (
+            <div key="hni-params" className="grid md:grid-cols-3 gap-4">
+              <div className="md:col-span-3 text-[11px] text-amber-300/90">
+                HNI Weekly: net-zero 1-3-2 call ratio "tent" — BUY 1× ~200 OTM, SELL 3× ~400 OTM,
+                BUY 2× ~600 OTM on the ~8-DTE weekly (enter Monday, force-exit Friday; no weekend
+                carry). Target/stop are % of DEPLOYED MARGIN (≈ ₹1.32L per lot-set), not capital.
+                Max profit ≈ max loss (R:R ~1:1) by construction; entry is not gated on the
+                credit/debit sign. EOD engine: the 9:45 AM entry and intraday ±1% exits fill at
+                daily closes. Weekly Tuesday expiries are cached from Sep 2025.
+              </div>
+              <Field label="Capital (₹)">
+                <NumberInput className={inputClass} value={capital} onChange={setCapital} />
+              </Field>
+              <Field label="Lot-sets (× 1-3-2)">
+                <NumberInput className={inputClass} value={hniLots} onChange={setHniLots} />
+              </Field>
+              <Field label="Margin per lot-set (₹)">
+                <NumberInput className={inputClass} value={hniMargin} onChange={setHniMargin} />
+              </Field>
+              <Field label="Buy ratio × (near long)">
+                <NumberInput className={inputClass} value={hniBuyLots} onChange={setHniBuyLots} />
+              </Field>
+              <Field label="Sell ratio × (short body)">
+                <NumberInput className={inputClass} value={hniSellLots} onChange={setHniSellLots} />
+              </Field>
+              <Field label="Hedge ratio × (far long)">
+                <NumberInput className={inputClass} value={hniHedgeLots} onChange={setHniHedgeLots} />
+              </Field>
+              <Field label="Buy offset (pts OTM)">
+                <NumberInput className={inputClass} value={hniBuyOffset} onChange={setHniBuyOffset} />
+              </Field>
+              <Field label="Sell offset (pts OTM)">
+                <NumberInput className={inputClass} value={hniSellOffset} onChange={setHniSellOffset} />
+              </Field>
+              <Field label="Hedge offset (pts OTM)">
+                <NumberInput className={inputClass} value={hniHedgeOffset} onChange={setHniHedgeOffset} />
+              </Field>
+              <Field label="DTE target (8 = next Tuesday)">
+                <NumberInput className={inputClass} value={hniDteTarget} onChange={setHniDteTarget} />
+              </Field>
+              <Field label="Target % (of deployed margin)">
+                <NumberInput step="0.1" className={inputClass} value={hniTargetPct} onChange={setHniTargetPct} />
+              </Field>
+              <Field label="Stop % (of deployed margin)">
+                <NumberInput step="0.1" className={inputClass} value={hniStopPct} onChange={setHniStopPct} />
+              </Field>
+              <Field label="Tax rate %">
+                <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />
+              </Field>
+              <Field label="Withdrawal rate %">
+                <NumberInput step="1" className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} />
+              </Field>
+            </div>
+          ) : isCoveredCall ? (
+            <div key="cc-params" className="grid md:grid-cols-3 gap-4">
+              <div className="md:col-span-3 text-[11px] text-amber-300/90">
+                Staggered covered call: SELL 1 monthly CE ~OTM% against the INTENDED full ETF
+                position, but buy the ETF in 3 tranches — T1 at entry (~33% covered / 67% naked),
+                T2/T3 fire GTT-style as spot closes over S + ⅓/⅔ of the gap to the strike. When
+                ~80% of the premium is captured, the CE is rolled DOWN to a fresh OTM strike
+                (same expiry). ITM expiry = called away (ETF liquidated, fresh cycle); OTM expiry
+                keeps the tranches. EOD engine: GTT buys fill at the CLOSE of the crossing day.
+                GOLD options are synthetic (Black-76, no smile); margin reporting is
+                coverage-unaware (overstates the short CE).
+              </div>
+              <Field label="Capital (₹) — covers the full ETF notional">
+                <NumberInput className={inputClass} value={capital} onChange={setCapital} />
+              </Field>
+              <Field label="ETF symbol (auto from underlying)">
+                <input className={inputClass} value={ccEtfSymbol} onChange={(e) => setCcEtfSymbol(e.target.value)} />
+              </Field>
+              <Field label="CE lots">
+                <NumberInput className={inputClass} value={ccLots} onChange={setCcLots} />
+              </Field>
+              <Field label="CE OTM % (3–12)">
+                <NumberInput step="0.5" className={inputClass} value={ccOtmPct} onChange={setCcOtmPct} />
+              </Field>
+              <Field label="Roll-down trigger % (50–95)">
+                <NumberInput step="1" className={inputClass} value={ccRolldownPct} onChange={setCcRolldownPct} />
+              </Field>
+              <Field label="Roll-down min DTE">
+                <NumberInput className={inputClass} value={ccRolldownMinDte} onChange={setCcRolldownMinDte} />
+              </Field>
+              <Field label="Min DTE (monthly expiry pick)">
+                <NumberInput className={inputClass} value={ccMinDte} onChange={setCcMinDte} />
+              </Field>
+              <Field label="Min premium % of spot (else roll nearer)">
+                <NumberInput step="0.05" className={inputClass} value={ccMinPremiumPct} onChange={setCcMinPremiumPct} />
+              </Field>
+              <Field label="Min CE OTM % floor (never nearer)">
+                <NumberInput step="0.5" className={inputClass} value={ccMinOtmPct} onChange={setCcMinOtmPct} />
+              </Field>
+              <label className="flex items-center gap-2 text-sm md:col-span-3">
+                <input type="checkbox" checked={ccKeepAboveCost} onChange={(e) => setCcKeepAboveCost(e.target.checked)} />
+                <span>Never sell/roll the call below the ETF's average cost</span>
+                <span className="text-slate-500">— so a called-away always books a profit (don't roll into a loss)</span>
+              </label>
+              <Field label="Min return % on assignment (0 = breakeven)">
+                <NumberInput step="0.5" className={inputClass} value={ccMinReturnPct} onChange={setCcMinReturnPct} />
+              </Field>
+              <Field label="Covered-call delta when fully covered (0 = off)">
+                <NumberInput step="0.05" className={inputClass} value={ccDelta} onChange={setCcDelta} />
+              </Field>
+              <div />
+              <label className="flex items-center gap-2 text-sm md:col-span-3">
+                <input type="checkbox" checked={ccSellPuts} onChange={(e) => setCcSellPuts(e.target.checked)} />
+                <span>Wheel: accumulate by selling cash-secured puts</span>
+                <span className="text-slate-500">— premium income on the way down; assigned on dips (replaces GTT up-buys)</span>
+              </label>
+              {ccSellPuts && (
+                <Field label="Put OTM % (strike below spot)">
+                  <NumberInput step="0.5" className={inputClass} value={ccPutOtmPct} onChange={setCcPutOtmPct} />
+                </Field>
+              )}
+              <Field label="Tax rate %">
+                <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />
+              </Field>
+              <Field label="Withdrawal rate %">
+                <NumberInput step="1" className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} />
+              </Field>
+            </div>
+          ) : isCallRatio ? (
             <div key="ratio-params" className="grid md:grid-cols-3 gap-4">
               <div className="md:col-span-3 text-[11px] text-amber-300/90">
                 {ratioSide === "batman"

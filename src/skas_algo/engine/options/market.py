@@ -19,9 +19,14 @@ from .instrument import is_option_symbol
 
 
 class OptionMarketView:
-    def __init__(self, loader, chain: OptionChainView, calendar: list, lot_overrides: dict | None = None):
-        # loader(symbol, start, end) -> DataFrame with 'date' + 'close' for one contract
+    def __init__(self, loader, chain: OptionChainView, calendar: list, lot_overrides: dict | None = None,
+                 equity_loader=None):
+        # loader(symbol, start, end) -> DataFrame with 'date' + 'close' for one contract.
+        # equity_loader (optional, same shape): fallback for PLAIN symbols (e.g. an ETF
+        # held inside a covered-call options run) — the options loader returns None for
+        # anything that isn't a contract symbol. None → behaviour unchanged.
         self._loader = loader
+        self._equity_loader = equity_loader
         self.chain = chain
         self.lot_overrides = lot_overrides
         self.unified_dates: list[pd.Timestamp] = [pd.Timestamp(d) for d in calendar]
@@ -49,6 +54,9 @@ class OptionMarketView:
         if symbol in self._series:
             return
         df = self._loader(symbol, self._start, self._end)
+        if ((df is None or df.empty) and self._equity_loader is not None
+                and not is_option_symbol(symbol)):
+            df = self._equity_loader(symbol, self._start, self._end)
         series: dict[pd.Timestamp, float] = {}
         if df is not None and not df.empty:
             df = df.copy()

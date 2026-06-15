@@ -50,6 +50,10 @@ class AttachStop:
 class BuyLot:
     symbol: str
     units: int
+    # Trade-log tag for the BUY event. Strategies may stage it via Signal.meta["tag"]
+    # (e.g. the covered call's cc_t1/cc_t2/cc_t3 tranches); default keeps every
+    # existing BUY event byte-identical.
+    tag: str = "STRATEGY"
 
 
 @dataclass
@@ -123,7 +127,8 @@ class OverrideResolver:
             if sig.action is SignalAction.ENTER_LONG:
                 if sig.symbol in self.excluded:
                     continue  # excluded: no new entries (existing lots still managed)
-                actions.append(BuyLot(sig.symbol, sig.quantity or 0))
+                actions.append(BuyLot(sig.symbol, sig.quantity or 0,
+                                      tag=sig.meta.get("tag", "STRATEGY")))
             elif sig.action is SignalAction.ENTER_SHORT:
                 if sig.symbol in self.excluded:
                     continue

@@ -83,6 +83,8 @@ class LiveStartRequest(BaseModel):
     notes: str | None = None
     symbols: list[str] = Field(default_factory=list)
     universe: str | None = None
+    instrument_class: str = "STOCK"   # "STOCK" | "DERIV" (options)
+    underlying: str | None = None     # DERIV: NIFTY/BANKNIFTY
     capital: float = 2_500_000
     params: dict = Field(default_factory=dict)
     tax_rate: float = 0.20
@@ -122,6 +124,7 @@ class LiveControlsInput(BaseModel):
     ignore_market_hours: bool | None = None
     refresh_seconds: int | None = None
     excluded_symbols: list[str] | None = None  # replaces the no-new-entry blocklist
+    lots: int | None = None  # options: lot-sets for the NEXT entry (doesn't resize open legs)
 
 
 class RefreshCacheInput(BaseModel):

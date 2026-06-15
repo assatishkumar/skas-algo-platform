@@ -159,6 +159,69 @@ export interface OptionCycle extends MarketContext {
   pe: OptionPosition | null;
 }
 
+// Covered-leg (equity) tranche buy + round-trip — the ETF bought against a sold call.
+export interface EquityTranche {
+  date: string;
+  units: number;
+  price: number;
+  tag: string;
+}
+
+export interface EquityLeg {
+  symbol: string;
+  side: "equity" | "equity_open";
+  entry_date: string;
+  entry_price: number;
+  exit_date?: string;
+  exit_price?: number;
+  exit_reason?: string;
+  units: number;
+  realized_pnl?: number;
+  holding_days?: number;
+  mark?: number | null;
+  unrealized_pnl?: number | null;
+  tranches: EquityTranche[];
+}
+
+// A call sold (or rolled) during a covered-call campaign.
+export interface CampaignCall {
+  entry_date: string;
+  strike: number;
+  entry_premium: number;
+  exit_date: string;
+  exit_price: number;
+  exit_reason: string;
+  premium_collected: number;
+  realized_pnl: number;
+  net_pnl: number;
+}
+
+// One accumulation→called-away campaign (or the still-open holding).
+export interface Campaign {
+  start: string;
+  end: string | null;
+  status: "called_away" | "open";
+  units: number;
+  avg_cost: number;
+  exit_price: number | null;
+  mark?: number | null;
+  exit_reason: string;
+  holding_days: number | null;
+  equity_realized: number;
+  equity_open: number;
+  option_net: number;
+  premium_collected: number;
+  combined_net: number;
+  n_calls: number;
+  tranches: EquityTranche[];
+  calls: CampaignCall[];
+}
+
+export interface ReportTimeline {
+  underlying: string;
+  prices: { date: string; close: number }[];
+}
+
 export interface ChargeBreakdown {
   brokerage: number;
   stt: number;
@@ -192,8 +255,18 @@ export interface OptionsReportData {
     avg_premium_per_cycle: number;
     total_charges: number;
     net_after_charges: number;
+    // covered-call only: the equity (ETF) leg folded in
+    equity_realized_pnl?: number;
+    equity_open_pnl?: number;
+    equity_units_held?: number;
+    option_open_pnl?: number; // MTM of any option leg still open at the run end
+    strategy_net_pnl?: number;
   };
   charges?: ChargeBreakdown;
+  equity_legs?: EquityLeg[]; // closed ETF round-trips (covered call)
+  equity_held?: EquityLeg[]; // still-held ETF, marked to last close
+  campaigns?: Campaign[]; // covered-call accumulation→called-away campaigns
+  timeline?: ReportTimeline; // underlying daily price series for campaign charts
   exit_reasons: Record<string, ExitReasonStat>;
   per_expiry_cycle: {
     expiry: string;
@@ -238,6 +311,7 @@ export interface LivePosition {
   symbol: string;
   units: number;
   lots: number;
+  direction?: number; // +1 long / −1 short (for the payoff diagram)
   avg_price: number;
   ltp: number | null;
   unrealized_pnl: number;
@@ -255,6 +329,10 @@ export interface LiveRunSnapshot {
   open_positions: number;
   open_lots: number;
   parts_total: number | null;
+  lots?: number | null; // options: lot-sets (null for equity strategies)
+  instrument_class?: string | null;
+  underlying?: string | null;
+  underlying_spot?: number | null; // live index spot (payoff marker)
   quote_source: string;
   on_cache_fallback?: boolean;
   realized_taxes: number;
@@ -273,6 +351,7 @@ export interface LiveControlsInput {
   ignore_market_hours?: boolean;
   refresh_seconds?: number;
   excluded_symbols?: string[];
+  lots?: number;
 }
 
 export interface StartLiveRequest {
@@ -281,6 +360,8 @@ export interface StartLiveRequest {
   notes?: string;
   symbols?: string[];
   universe?: string | null;
+  instrument_class?: string; // "STOCK" | "DERIV"
+  underlying?: string;
   capital: number;
   params: Record<string, unknown>;
   tax_rate: number;
