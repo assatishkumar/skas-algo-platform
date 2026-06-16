@@ -68,6 +68,10 @@ class AlgoContext:
     def rolling_low(self, symbol: str) -> float:
         return self.market.rolling_low(symbol)
 
+    def rolling_mean(self, symbol: str) -> float:
+        """The N-day moving average (DMA) for the symbol (trailing window, excludes today)."""
+        return self.market.rolling_mean(symbol)
+
     # ----- options (no-ops / None for non-options runs) -----
     def today(self):
         """Current trading date (a ``datetime.date``). Used by options strategies."""

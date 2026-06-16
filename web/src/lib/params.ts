@@ -72,6 +72,13 @@ const LABELS: Record<string, string> = {
   strangle_delta: "Strangle delta",
   vol_premium: "Implied/realized vol ×",
   vol_window: "Realized-vol window (days)",
+  // sst_weekly
+  donchian_weeks: "Donchian (weeks)",
+  // nifty_shop
+  allocation_pct: "Allocation % / trade",
+  num_candidates: "Candidates (below DMA)",
+  new_buys_per_day: "New buys / day",
+  avg_down_pct: "Average-down trigger",
 };
 
 const ORDER = [
@@ -117,8 +124,13 @@ const ORDER = [
   "max_holding_days",
   "min_vix",
   "min_dte",
+  "allocation_pct",
+  "num_candidates",
+  "new_buys_per_day",
+  "avg_down_pct",
   "capital_parts",
   "allocation_mode",
+  "donchian_weeks",
   "profit_target",
   "profit_target_1",
   "profit_target_2",
@@ -144,6 +156,8 @@ const PCT_KEYS = new Set([
   "risk_free_rate",
   "rolldown_trigger_pct",
   "min_premium_pct",
+  "allocation_pct",
+  "avg_down_pct",
 ]);
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];

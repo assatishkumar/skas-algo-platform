@@ -31,6 +31,7 @@ class MarketLike(Protocol):
     def close(self, symbol: str) -> float: ...
     def rolling_high(self, symbol: str) -> float: ...
     def rolling_low(self, symbol: str) -> float: ...
+    def rolling_mean(self, symbol: str) -> float: ...
     def closes_today(self) -> dict[str, float]: ...
     def mark_prices(self) -> dict[str, float]: ...
 
@@ -42,8 +43,8 @@ class MarketView:
         self.lookback = lookback
         self.unified_dates: list[pd.Timestamp] = []
         self._current: pd.Timestamp | None = None
-        # symbol -> {date: (close, high_Nd, low_Nd)}  (levels may be NaN early)
-        self._series: dict[str, dict[pd.Timestamp, tuple[float, float, float]]] = {}
+        # symbol -> {date: (close, high_Nd, low_Nd, mean_Nd)}  (levels may be NaN early)
+        self._series: dict[str, dict[pd.Timestamp, tuple[float, float, float, float]]] = {}
         self._universe_order: list[str] = []
         # Most recent close seen per symbol, forward-filled as the cursor advances.
         self._last_close: dict[str, float] = {}
@@ -56,8 +57,9 @@ class MarketView:
         close = df["close"]
         high = close.rolling(self.lookback).max().shift(1)
         low = close.rolling(self.lookback).min().shift(1)
+        mean = close.rolling(self.lookback).mean().shift(1)  # the N-day moving average (DMA)
         self._series[symbol] = {
-            ts: (close.loc[ts], high.loc[ts], low.loc[ts]) for ts in close.index
+            ts: (close.loc[ts], high.loc[ts], low.loc[ts], mean.loc[ts]) for ts in close.index
         }
         self._universe_order.append(symbol)
 
@@ -82,11 +84,11 @@ class MarketView:
         return self._current
 
     # --------------------------------------------------------------- query
-    def _row(self, symbol: str) -> tuple[float, float, float] | None:
+    def _row(self, symbol: str) -> tuple[float, float, float, float] | None:
         row = self._series.get(symbol, {}).get(self._current)
         if row is None:
             return None
-        _close, high, low = row
+        _close, high, low, _mean = row
         if pd.isna(high) or pd.isna(low):
             return None  # insufficient history (loc < lookback)
         return row
@@ -106,6 +108,10 @@ class MarketView:
 
     def rolling_low(self, symbol: str) -> float:
         return self._row(symbol)[2]  # type: ignore[index]
+
+    def rolling_mean(self, symbol: str) -> float:
+        """The prior-N moving average (DMA), excluding today — same window as the levels."""
+        return self._row(symbol)[3]  # type: ignore[index]
 
     def closes_today(self) -> dict[str, float]:
         """Prices actually printed today (for stop evaluation / fills)."""

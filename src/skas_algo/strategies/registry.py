@@ -14,15 +14,20 @@ from .call_ratio_monthly import (
     PutRatioMonthlyStrategy,
 )
 from .hni_weekly import HniWeeklyStrategy
+from .nifty_shop import NiftyShopStrategy
 from .short_premium import ShortPremiumStrategy
 from .sst_fifo import SSTFifoStrategy
 from .sst_lifo import SSTLifoStrategy
+from .sst_weekly import SSTWeeklyFifoStrategy, SSTWeeklyStrategy
 from .staggered_covered_call import StaggeredCoveredCallStrategy
 
 # strategy_id -> factory(universe, **params) -> strategy instance
 _REGISTRY: dict[str, Callable[..., Any]] = {
     SSTLifoStrategy.strategy_id: SSTLifoStrategy,
     SSTFifoStrategy.strategy_id: SSTFifoStrategy,
+    SSTWeeklyStrategy.strategy_id: SSTWeeklyStrategy,
+    SSTWeeklyFifoStrategy.strategy_id: SSTWeeklyFifoStrategy,
+    NiftyShopStrategy.strategy_id: NiftyShopStrategy,
     ShortPremiumStrategy.strategy_id: ShortPremiumStrategy,
     CallRatioMonthlyStrategy.strategy_id: CallRatioMonthlyStrategy,
     PutRatioMonthlyStrategy.strategy_id: PutRatioMonthlyStrategy,

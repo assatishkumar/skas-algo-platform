@@ -128,6 +128,25 @@ const STRATEGIES: Rule[] = [
     risk: "Capped upside (the short call) in exchange for premium; downside is the ETF itself, cushioned by collected premium.",
   },
   {
+    id: "nifty_shop",
+    name: "Nifty_Shop",
+    kind: "Equity",
+    bias: "Mean-reversion · dip accumulator",
+    summary:
+      "\"Shops\" the most beaten-down names below their 20-DMA and averages the dips, with compounding %-of-equity sizing.",
+    structure: [
+      "Universe (e.g. NIFTY 50) ranked by how far the close sits below its 20-DMA.",
+      "Take the 5 most-below names as the day's candidates.",
+    ],
+    entry: [
+      "Case 1 — if any of the 5 is NOT held: buy up to 2 of the not-held names (1 if only 1 available).",
+      "Case 2 — if all 5 are held: average into the worst performer that has dropped >3% from its last entry (one averaging trade/day).",
+      "Each buy invests the same rupee amount = 4% (configurable) of current equity → built-in compounding. Skipped if cash is insufficient (you wait).",
+    ],
+    exit: ["Sell a name (whole position) at +5% (configurable) over its average buy price."],
+    risk: "Long-only; concentrated in beaten-down names. Averaging down deepens exposure to a falling name until it recovers to target.",
+  },
+  {
     id: "sst_lifo",
     name: "SST LIFO",
     kind: "Equity",
@@ -137,6 +156,35 @@ const STRATEGIES: Rule[] = [
     entry: ["A stock makes a 20-day low (starts tracking), then buys on the 20-day-high breakout."],
     exit: ["Each lot exits at its own profit target (last-in booked first)."],
     risk: "Equity long-only; managed by per-lot targets and any configured stops.",
+  },
+  {
+    id: "sst_weekly",
+    name: "SST Weekly",
+    kind: "Equity",
+    bias: "Trend-following · weekly",
+    summary: "The SST Donchian breakout system on a weekly timeframe — same logic as SST-LIFO, but levels and decisions are weekly instead of daily.",
+    structure: ["Per-lot positions; pyramids into strength. Decisions only at each week's open."],
+    entry: [
+      "Tracks a symbol when its weekly close prints a 20-week (configurable) low.",
+      "Buys when the weekly close breaks above the 20-week high (Donchian breakout).",
+    ],
+    exit: ["Each lot exits independently once it's up the profit target (default 15%) from its own entry."],
+    risk: "Equity long-only; weekly bars hold trends longer (fewer, larger trades). ~20-week warmup from the start date.",
+  },
+  {
+    id: "sst_weekly_fifo",
+    name: "SST Weekly (FIFO)",
+    kind: "Equity",
+    bias: "Trend-following · weekly",
+    summary: "SST Weekly with the pooled exit: the whole position exits at once on a tiered average-cost target that tightens as lots accumulate.",
+    structure: ["Pooled (averaged) position per symbol; same weekly Donchian entry + pyramiding as SST Weekly."],
+    entry: [
+      "Tracks a weekly 20-week low, buys the weekly 20-week-high breakout (weekly cadence).",
+    ],
+    exit: [
+      "Whole position exits when the average-cost gain hits the tier: 1 lot 20% / 2 lots 15% / 3+ lots 12% (configurable).",
+    ],
+    risk: "Equity long-only; weekly trend-following. ~20-week warmup from the start date.",
   },
   {
     id: "sst_fifo",

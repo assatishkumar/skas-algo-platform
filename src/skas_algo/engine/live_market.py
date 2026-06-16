@@ -39,12 +39,12 @@ class LiveMarketView:
         self._quotes = {}
 
     # ------------------------------------------------------------- query
-    def _rolling(self, symbol: str) -> tuple[float, float] | None:
+    def _rolling(self, symbol: str) -> tuple[float, float, float] | None:
         hist = self._hist.get(symbol, [])
         if len(hist) < self.lookback:
             return None
         window = hist[-self.lookback :]
-        return max(window), min(window)
+        return max(window), min(window), sum(window) / len(window)
 
     def present_symbols(self) -> list[str]:
         return [s for s in self._order if s in self._quotes and self._rolling(s) is not None]
@@ -57,6 +57,10 @@ class LiveMarketView:
 
     def rolling_low(self, symbol: str) -> float:
         return self._rolling(symbol)[1]  # type: ignore[index]
+
+    def rolling_mean(self, symbol: str) -> float:
+        """The trailing N-close moving average (DMA), excluding today."""
+        return self._rolling(symbol)[2]  # type: ignore[index]
 
     def closes_today(self) -> dict[str, float]:
         return dict(self._quotes)

@@ -81,6 +81,16 @@ export default function NewBacktestPage() {
   const [lookback, setLookback] = useState(20);
   const [allocationMode, setAllocationMode] = useState("fixed");
 
+  // SST Weekly param (weekly Donchian window)
+  const [donchianWeeks, setDonchianWeeks] = useState(20);
+
+  // Nifty_Shop params (DMA-dip accumulator; the Lookback field is the DMA window)
+  const [nsAllocPct, setNsAllocPct] = useState(4); // % of equity per trade (compounds)
+  const [nsTarget, setNsTarget] = useState(5); // exit a name at +this% over avg cost
+  const [nsCandidates, setNsCandidates] = useState(5); // rank the N most-below-DMA
+  const [nsNewBuys, setNsNewBuys] = useState(2); // Case 1: open up to this many new/day
+  const [nsAvgDown, setNsAvgDown] = useState(3); // Case 2: average a name down >this%
+
   // Options (short_premium) params
   const [underlying, setUnderlying] = useState("NIFTY");
   const [structure, setStructure] = useState("straddle");
@@ -152,6 +162,11 @@ export default function NewBacktestPage() {
 
   const navigate = useNavigate();
   const isFifo = strategyId === "sst_fifo";
+  const isNiftyShop = strategyId === "nifty_shop";
+  const isSstWeekly = strategyId === "sst_weekly";
+  const isSstWeeklyFifo = strategyId === "sst_weekly_fifo";
+  const isWeeklyDonchian = isSstWeekly || isSstWeeklyFifo; // both expose donchian_weeks
+  const isTiered = isFifo || isSstWeeklyFifo; // FIFO-style tiered profit targets
   const isCallRatio = ["call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly"].includes(strategyId);
   const ratioSide =
     strategyId === "put_ratio_monthly" ? "put"
@@ -437,18 +452,27 @@ export default function NewBacktestPage() {
       start_date: startDate,
       end_date: endDate,
       capital,
-      params: {
-        capital_parts: parts,
-        max_lots: maxLots,
-        allocation_mode: allocationMode,
-        ...(isFifo
-          ? {
-              profit_target_1: target1 / 100,
-              profit_target_2: target2 / 100,
-              profit_target_3: target3 / 100,
-            }
-          : { profit_target: target / 100 }),
-      },
+      params: isNiftyShop
+        ? {
+            allocation_pct: nsAllocPct / 100,
+            profit_target: nsTarget / 100,
+            num_candidates: nsCandidates,
+            new_buys_per_day: nsNewBuys,
+            avg_down_pct: nsAvgDown / 100,
+          }
+        : {
+            capital_parts: parts,
+            max_lots: maxLots,
+            allocation_mode: allocationMode,
+            ...(isWeeklyDonchian ? { donchian_weeks: donchianWeeks } : {}),
+            ...(isTiered
+              ? {
+                  profit_target_1: target1 / 100,
+                  profit_target_2: target2 / 100,
+                  profit_target_3: target3 / 100,
+                }
+              : { profit_target: target / 100 }),
+          },
       tax_rate: taxRate / 100,
       withdrawal_rate: withdrawalRate / 100,
       lookback,
@@ -851,29 +875,56 @@ export default function NewBacktestPage() {
             <Field label="Capital (₹)">
               <NumberInput className={inputClass} value={capital} onChange={setCapital} />
             </Field>
-            <Field label="Capital parts">
-              <NumberInput className={inputClass} value={parts} onChange={setParts} />
-            </Field>
-            {isFifo ? (
+            {isNiftyShop ? (
               <>
-                <Field label="Target % (1 lot)">
-                  <NumberInput step="0.1" className={inputClass} value={target1} onChange={setTarget1} />
+                <Field label="Allocation % per trade (of equity)">
+                  <NumberInput step="0.1" className={inputClass} value={nsAllocPct} onChange={setNsAllocPct} />
                 </Field>
-                <Field label="Target % (2 lots)">
-                  <NumberInput step="0.1" className={inputClass} value={target2} onChange={setTarget2} />
+                <Field label="Exit target %">
+                  <NumberInput step="0.1" className={inputClass} value={nsTarget} onChange={setNsTarget} />
                 </Field>
-                <Field label="Target % (3+ lots)">
-                  <NumberInput step="0.1" className={inputClass} value={target3} onChange={setTarget3} />
+                <Field label="Candidates (most below DMA)">
+                  <NumberInput className={inputClass} value={nsCandidates} onChange={setNsCandidates} />
+                </Field>
+                <Field label="New buys / day">
+                  <NumberInput className={inputClass} value={nsNewBuys} onChange={setNsNewBuys} />
+                </Field>
+                <Field label="Average-down trigger %">
+                  <NumberInput step="0.1" className={inputClass} value={nsAvgDown} onChange={setNsAvgDown} />
                 </Field>
               </>
             ) : (
-              <Field label="Profit target %">
-                <NumberInput step="0.1" className={inputClass} value={target} onChange={setTarget} />
-              </Field>
+              <>
+                <Field label="Capital parts">
+                  <NumberInput className={inputClass} value={parts} onChange={setParts} />
+                </Field>
+                {isTiered ? (
+                  <>
+                    <Field label="Target % (1 lot)">
+                      <NumberInput step="0.1" className={inputClass} value={target1} onChange={setTarget1} />
+                    </Field>
+                    <Field label="Target % (2 lots)">
+                      <NumberInput step="0.1" className={inputClass} value={target2} onChange={setTarget2} />
+                    </Field>
+                    <Field label="Target % (3+ lots)">
+                      <NumberInput step="0.1" className={inputClass} value={target3} onChange={setTarget3} />
+                    </Field>
+                  </>
+                ) : (
+                  <Field label="Profit target %">
+                    <NumberInput step="0.1" className={inputClass} value={target} onChange={setTarget} />
+                  </Field>
+                )}
+                <Field label="Max lots (0 = unlimited)">
+                  <NumberInput className={inputClass} value={maxLots} onChange={setMaxLots} />
+                </Field>
+                {isWeeklyDonchian && (
+                  <Field label="Donchian (weeks)">
+                    <NumberInput className={inputClass} value={donchianWeeks} onChange={setDonchianWeeks} />
+                  </Field>
+                )}
+              </>
             )}
-            <Field label="Max lots (0 = unlimited)">
-              <NumberInput className={inputClass} value={maxLots} onChange={setMaxLots} />
-            </Field>
             <Field label="Tax rate %">
               <NumberInput className={inputClass} value={taxRate} onChange={setTaxRate} />
             </Field>
@@ -883,12 +934,14 @@ export default function NewBacktestPage() {
             <Field label="Lookback (days)">
               <NumberInput className={inputClass} value={lookback} onChange={setLookback} />
             </Field>
-            <Field label="Position sizing">
-              <select className={inputClass} value={allocationMode} onChange={(e) => setAllocationMode(e.target.value)}>
-                <option value="fixed">Fixed (capital / parts)</option>
-                <option value="equity_scaled">Equity-scaled (compounds)</option>
-              </select>
-            </Field>
+            {!isNiftyShop && (
+              <Field label="Position sizing">
+                <select className={inputClass} value={allocationMode} onChange={(e) => setAllocationMode(e.target.value)}>
+                  <option value="fixed">Fixed (capital / parts)</option>
+                  <option value="equity_scaled">Equity-scaled (compounds)</option>
+                </select>
+              </Field>
+            )}
           </div>
           )}
 
