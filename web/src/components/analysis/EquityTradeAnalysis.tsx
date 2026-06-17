@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   CartesianGrid,
   ComposedChart,
+  Customized,
   Line,
   ResponsiveContainer,
   Scatter,
@@ -31,6 +32,72 @@ const RANGES: { key: string; label: string; years: number }[] = [
   { key: "1y", label: "1Y", years: 1 },
   { key: "6m", label: "6M", years: 0.5 },
 ];
+
+// Trade markers: bigger arrows with a white outline so they read on candles.
+// Entry = green ▲ from below (tip up at the fill price); exit = red ▼ from above; book = amber ◆.
+function EntryArrow({ cx, cy }: any) {
+  if (cx == null || cy == null) return null;
+  const w = 8;
+  const tip = cy + 5; // tip points up to the price; body sits just below
+  return <path d={`M ${cx} ${tip} L ${cx - w} ${tip + 14} L ${cx + w} ${tip + 14} Z`} fill="#059669" stroke="#fff" strokeWidth={1.5} />;
+}
+function ExitArrow({ cx, cy }: any) {
+  if (cx == null || cy == null) return null;
+  const w = 8;
+  const tip = cy - 5; // tip points down to the price; body sits just above
+  return <path d={`M ${cx} ${tip} L ${cx - w} ${tip - 14} L ${cx + w} ${tip - 14} Z`} fill="#e11d48" stroke="#fff" strokeWidth={1.5} />;
+}
+function BookMarker({ cx, cy }: any) {
+  if (cx == null || cy == null) return null;
+  const s = 6;
+  return <path d={`M ${cx} ${cy - s} L ${cx + s} ${cy} L ${cx} ${cy + s} L ${cx - s} ${cy} Z`} fill="#d97706" stroke="#fff" strokeWidth={1.25} />;
+}
+
+type CandleRow = { t: number; open: number | null; high: number | null; low: number | null; close: number | null };
+
+/** OHLC candlesticks drawn with the chart's own x/y scales (so they respect the time axis,
+ *  the focus zoom, and log mode). Rendered inside the ComposedChart via <Customized>. */
+function makeCandles(rows: CandleRow[]) {
+  return function Candles(props: any) {
+    const { xAxisMap, yAxisMap } = props;
+    if (!xAxisMap || !yAxisMap) return null;
+    const xa: any = xAxisMap[Object.keys(xAxisMap)[0]];
+    const ya: any = yAxisMap[Object.keys(yAxisMap)[0]];
+    const xScale = xa?.scale;
+    const yScale = ya?.scale;
+    if (!xScale || !yScale) return null;
+    // Candle width ≈ 60% of the median pixel gap between bars (clamped 1..14px).
+    const px = rows.map((r) => xScale(r.t));
+    let gap = 8;
+    if (px.length > 1) {
+      const diffs: number[] = [];
+      for (let i = 1; i < px.length; i++) diffs.push(Math.abs(px[i] - px[i - 1]));
+      diffs.sort((a, b) => a - b);
+      gap = diffs[Math.floor(diffs.length / 2)] || 8;
+    }
+    const w = Math.max(1, Math.min(gap * 0.6, 14));
+    return (
+      <g>
+        {rows.map((r, i) => {
+          if (r.open == null || r.close == null || r.high == null || r.low == null) return null;
+          const cx = xScale(r.t);
+          const up = r.close >= r.open;
+          const color = up ? "#10b981" : "#f43f5e";
+          const yO = yScale(r.open);
+          const yC = yScale(r.close);
+          const top = Math.min(yO, yC);
+          const h = Math.max(1, Math.abs(yC - yO));
+          return (
+            <g key={i} stroke={color} fill={color}>
+              <line x1={cx} x2={cx} y1={yScale(r.high)} y2={yScale(r.low)} strokeWidth={1} />
+              <rect x={cx - w / 2} width={w} y={top} height={h} />
+            </g>
+          );
+        })}
+      </g>
+    );
+  };
+}
 
 function Metric({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
   return (
@@ -95,6 +162,7 @@ function ChartTooltip({ active, payload, label }: any) {
 function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[]; stParams: Record<string, unknown> }) {
   const [range, setRange] = useState("all");
   const [logScale, setLogScale] = useState(true);
+  const [chartType, setChartType] = useState<"line" | "candle">("line");
   // A clicked trade focuses the chart on just that round-trip's window; index into sortedRts.
   const [focusIdx, setFocusIdx] = useState<number | null>(null);
   const hasST = Object.keys(stParams).length > 0;
@@ -117,6 +185,9 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
 
   const allRows = (data?.points ?? []).map((p) => ({
     t: Date.parse(p.date),
+    open: p.open,
+    high: p.high,
+    low: p.low,
     close: p.close,
     stUp: p.direction != null && p.direction > 0 ? p.supertrend ?? null : null,
     stDown: p.direction != null && p.direction < 0 ? p.supertrend ?? null : null,
@@ -190,6 +261,11 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
               </button>
             ))}
           </div>
+          <button onClick={() => setChartType((t) => (t === "candle" ? "line" : "candle"))}
+            title="Toggle line / candlestick"
+            className={`px-2 py-0.5 rounded ${chartType === "candle" ? "bg-brand text-white" : "bg-slate-800/60 text-slate-400"}`}>
+            candles
+          </button>
           <button onClick={() => setLogScale((v) => !v)}
             className={`px-2 py-0.5 rounded ${logScale ? "bg-brand text-white" : "bg-slate-800/60 text-slate-400"}`}>
             log
@@ -213,19 +289,21 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
               tick={{ fontSize: 11, fill: "#94a3b8" }} width={60}
               tickFormatter={(v) => Math.round(v).toString()} />
             <Tooltip content={<ChartTooltip />} />
-            <Line type="monotone" dataKey="close" stroke="#38bdf8" strokeWidth={1.5} dot={false} name="Price" isAnimationActive={false} />
+            {chartType === "candle" && <Customized component={makeCandles(rows)} />}
+            {/* Keep the close line in candle mode but transparent — it still feeds the tooltip. */}
+            <Line type="monotone" dataKey="close" stroke={chartType === "candle" ? "transparent" : "#38bdf8"} strokeWidth={1.5} dot={false} name="Price" isAnimationActive={false} />
             <Line type="monotone" dataKey="stUp" stroke="#10b981" strokeWidth={1.5} dot={false} connectNulls={false} name="ST↑" isAnimationActive={false} />
             <Line type="monotone" dataKey="stDown" stroke="#f43f5e" strokeWidth={1.5} dot={false} connectNulls={false} name="ST↓" isAnimationActive={false} />
-            <Scatter data={entries} dataKey="y" fill="#10b981" isAnimationActive={false} />
-            <Scatter data={books} dataKey="y" fill="#f59e0b" isAnimationActive={false} />
-            <Scatter data={exits} dataKey="y" fill="#f43f5e" isAnimationActive={false} />
+            <Scatter data={books} dataKey="y" shape={<BookMarker />} isAnimationActive={false} />
+            <Scatter data={entries} dataKey="y" shape={<EntryArrow />} isAnimationActive={false} />
+            <Scatter data={exits} dataKey="y" shape={<ExitArrow />} isAnimationActive={false} />
           </ComposedChart>
         </ResponsiveContainer>
       )}
       </div>
       <div className="text-xs text-slate-500 mt-1">
-        <span className="text-emerald-600 dark:text-emerald-400">● entry</span> · <span className="text-amber-600 dark:text-amber-400">● 50% book</span> ·{" "}
-        <span className="text-rose-600 dark:text-rose-400">● exit</span>
+        <span className="text-emerald-600 dark:text-emerald-400">▲ entry</span> · <span className="text-amber-600 dark:text-amber-400">◆ 50% book</span> ·{" "}
+        <span className="text-rose-600 dark:text-rose-400">▼ exit</span>
         {hasST && <> · <span className="text-emerald-600 dark:text-emerald-400">— ST↑</span> / <span className="text-rose-600 dark:text-rose-400">ST↓</span></>}
         {" "}· hover a dot for details · click a trade below to zoom
       </div>
