@@ -41,7 +41,7 @@ function ReasonChip({ reason }: { reason: string }) {
 }
 
 function pnlClass(v: number): string {
-  return v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-slate-400";
+  return v > 0 ? "text-emerald-600 dark:text-emerald-400" : v < 0 ? "text-rose-600 dark:text-rose-400" : "text-slate-400";
 }
 
 function SummaryTiles({ s }: { s: OptionsReportData["summary"] }) {
@@ -142,7 +142,7 @@ function PremiumDecayChart({ options }: { options: OptionsReportData }) {
             tickFormatter={(v) => `${(v / 1e5).toFixed(1)}L`}
           />
           <Tooltip
-            contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
+            contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }}
             formatter={(v: number) => formatInr(v)}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -206,7 +206,7 @@ function ExitReasonDonut({ options }: { options: OptionsReportData }) {
             ))}
           </Pie>
           <Tooltip
-            contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
+            contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }}
             formatter={(v: number, _n, p) => [`${v} legs · ${formatInr(p.payload.pnl)}`, p.payload.reason]}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -232,7 +232,7 @@ function PerExpiryBars({ options }: { options: OptionsReportData }) {
             tickFormatter={(v) => `${(v / 1e3).toFixed(0)}k`}
           />
           <Tooltip
-            contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
+            contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }}
             formatter={(v: number) => formatInr(v)}
           />
           <Bar dataKey="realized_pnl" name="Realized P&L">
@@ -312,7 +312,7 @@ function SpotCell({ c }: { c: OptionCycle }) {
   return (
     <span className="whitespace-nowrap">
       {Math.round(c.underlying_entry)}→{Math.round(c.underlying_exit)}{" "}
-      <span className={p >= 0 ? "text-emerald-400" : "text-rose-400"}>({pct(p, 1)})</span>
+      <span className={p >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>({pct(p, 1)})</span>
     </span>
   );
 }

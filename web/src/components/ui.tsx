@@ -71,7 +71,7 @@ export function MetricCard({
   tone?: "default" | "good" | "bad";
 }) {
   const color =
-    tone === "good" ? "text-emerald-400" : tone === "bad" ? "text-rose-400" : "text-slate-100";
+    tone === "good" ? "text-emerald-600 dark:text-emerald-400" : tone === "bad" ? "text-rose-600 dark:text-rose-400" : "text-slate-100";
   return (
     <Card>
       <div className="text-xs uppercase tracking-wide text-slate-400">{label}</div>
@@ -86,7 +86,7 @@ export function Spinner({ label = "Loading…" }: { label?: string }) {
 
 export function ErrorBox({ message }: { message: string }) {
   return (
-    <div className="rounded-lg border border-rose-800 bg-rose-950/40 text-rose-300 p-3 text-sm">
+    <div className="rounded-lg border border-rose-300 bg-rose-100 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300 p-3 text-sm">
       {message}
     </div>
   );
@@ -101,9 +101,11 @@ export function Badge({ children }: { children: ReactNode }) {
 }
 
 const STATUS_STYLE: Record<string, string> = {
-  active: "bg-emerald-900/40 text-emerald-300 border border-emerald-700/50",
-  stopped: "bg-slate-700/50 text-slate-300 border border-slate-600/50",
-  archived: "bg-amber-900/30 text-amber-300 border border-amber-700/40",
+  active:
+    "bg-emerald-100 text-emerald-700 border border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700/50",
+  stopped: "bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-700/50 dark:text-slate-300 dark:border-slate-600/50",
+  archived:
+    "bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700/40",
 };
 
 /** Small colored status chip shared by the Live and Runs dashboards. */

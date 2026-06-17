@@ -158,6 +158,26 @@ const STRATEGIES: Rule[] = [
     risk: "Equity long-only; managed by per-lot targets and any configured stops.",
   },
   {
+    id: "supertrend_momentum",
+    name: "SuperTrend Momentum",
+    kind: "Equity",
+    bias: "Trend-following · D/W/M",
+    summary: "Rides the SuperTrend on a chosen timeframe (Daily/Weekly/Monthly): buy when it flips green, exit on a % target and/or when it flips red.",
+    structure: [
+      "Per-symbol long; one lot per green flip. SuperTrend ATR period + multiplier configurable (default 10 / 3).",
+      "Timeframe ∈ Daily / Weekly / Monthly — the flip happens on that bar's close.",
+    ],
+    entry: [
+      "Buy one lot when SuperTrend flips GREEN (−1 → +1) on the chosen timeframe.",
+      "Optional 'pullback' entry: after the green flip, wait for a dip and enter only when price breaks back above the post-flip high.",
+    ],
+    exit: [
+      "A SuperTrend RED flip exits whatever remains.",
+      "At the % profit target, book a configurable share (default 50%) and let the remainder ride to the red flip (set Book % = 100 for a full exit at the target).",
+    ],
+    risk: "Equity long-only trend-rider. Higher timeframes hold longer (fewer trades, deeper pullbacks). Live SuperTrend is computed from cached OHLC.",
+  },
+  {
     id: "sst_weekly",
     name: "SST Weekly",
     kind: "Equity",
@@ -232,8 +252,8 @@ export default function StrategiesPage() {
                 <span
                   className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                     s.kind === "Options"
-                      ? "bg-indigo-900/40 border border-indigo-600/50 text-indigo-300"
-                      : "bg-slate-800 border border-slate-700 text-slate-300"
+                      ? "bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-900/40 dark:border-indigo-600/50 dark:text-indigo-300"
+                      : "bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300"
                   }`}
                 >
                   {s.kind}

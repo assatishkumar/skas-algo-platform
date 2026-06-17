@@ -74,6 +74,14 @@ const LABELS: Record<string, string> = {
   vol_window: "Realized-vol window (days)",
   // sst_weekly
   donchian_weeks: "Donchian (weeks)",
+  // supertrend_momentum
+  timeframe: "Timeframe",
+  supertrend_period: "SuperTrend ATR period",
+  supertrend_multiplier: "SuperTrend multiplier",
+  partial_book_pct: "Book % at target",
+  entry_mode: "Entry",
+  pullback_pct: "Min pullback %",
+  idle_return: "Idle cash return %/yr",
   // nifty_shop
   allocation_pct: "Allocation % / trade",
   num_candidates: "Candidates (below DMA)",
@@ -131,6 +139,13 @@ const ORDER = [
   "capital_parts",
   "allocation_mode",
   "donchian_weeks",
+  "timeframe",
+  "supertrend_period",
+  "supertrend_multiplier",
+  "partial_book_pct",
+  "entry_mode",
+  "pullback_pct",
+  "idle_return",
   "profit_target",
   "profit_target_1",
   "profit_target_2",
@@ -158,6 +173,9 @@ const PCT_KEYS = new Set([
   "min_premium_pct",
   "allocation_pct",
   "avg_down_pct",
+  "partial_book_pct",
+  "pullback_pct",
+  "idle_return",
 ]);
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -191,6 +209,7 @@ export function formatParamValue(key: string, value: unknown): string {
   }
   if (key === "max_lots" && value === 0) return "∞ (unlimited)";
   if (key === "allocation_mode") return value === "equity_scaled" ? "Equity-scaled" : "Fixed";
+  if (key === "entry_mode") return value === "pullback" ? "Pullback breakout" : "On green flip";
   if ((key === "entry_weekday" || key === "exit_weekday") && typeof value === "number")
     return WEEKDAYS[value] ?? String(value);
   if (key === "min_vix" && value === 0) return "off";

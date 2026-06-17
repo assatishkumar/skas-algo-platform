@@ -22,9 +22,9 @@ function downsample<T>(arr: T[], maxPoints = 400): T[] {
   return arr.filter((_, i) => i % step === 0 || i === arr.length - 1);
 }
 
-function EquityChart({ report, runId }: { report: Report; runId?: number }) {
-  // Default the benchmark to NIFTY 50; "none" hides it.
-  const [index, setIndex] = useState("NIFTY 50");
+function EquityChart({ report, runId, defaultBenchmark }: { report: Report; runId?: number; defaultBenchmark?: string }) {
+  // Default the benchmark to NIFTY 50 (or the run's own index, e.g. NIFTY 500); "none" hides it.
+  const [index, setIndex] = useState(defaultBenchmark ?? "NIFTY 50");
   const hasGross = (report.equity_curve ?? []).some((p) => p.gross_equity != null);
 
   const { data: benchNames } = useQuery({ queryKey: ["benchmarks"], queryFn: api.benchmarks });
@@ -72,7 +72,7 @@ function EquityChart({ report, runId }: { report: Report; runId?: number }) {
             tickFormatter={(v) => `${(v / 1e5).toFixed(1)}L`}
           />
           <Tooltip
-            contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
+            contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }}
             formatter={(v: number) => formatInr(v)}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -142,7 +142,7 @@ function YearlyTable({ report }: { report: Report }) {
               return (
                 <tr key={y} className="border-t border-slate-800">
                   <td className="py-1 pr-4">{y}</td>
-                  <td className={`py-1 pr-4 text-right ${r["Return (Abs)"] >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                  <td className={`py-1 pr-4 text-right ${r["Return (Abs)"] >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
                     {formatInr(r["Return (Abs)"])}
                   </td>
                   <td className="py-1 pr-4 text-right">{pct(r["Return (%)"])}</td>
@@ -211,7 +211,7 @@ function TradesTable({ trades }: { trades: Trade[] }) {
                 <td className="py-1 pr-4">{t.action}</td>
                 <td className="py-1 pr-4 text-right">{t.units}</td>
                 <td className="py-1 pr-4 text-right">{formatInr(t.price, 2)}</td>
-                <td className={`py-1 pr-4 text-right ${t.profit > 0 ? "text-emerald-400" : t.profit < 0 ? "text-rose-400" : "text-slate-400"}`}>
+                <td className={`py-1 pr-4 text-right ${t.profit > 0 ? "text-emerald-600 dark:text-emerald-400" : t.profit < 0 ? "text-rose-600 dark:text-rose-400" : "text-slate-400"}`}>
                   {["SELL", "COVER", "SETTLE"].includes(t.action) ? formatInr(t.profit) : "—"}
                 </td>
                 <td className="py-1 pr-4">
@@ -302,14 +302,20 @@ export default function ReportView({
   trades,
   csvUrl,
   runId,
+  defaultBenchmark,
 }: {
   report: Report;
   trades: Trade[];
   csvUrl?: string;
   runId?: number;
+  defaultBenchmark?: string;
 }) {
   const m = report.metrics;
   const netMonthly = m["Avg Monthly Net P&L (Post-Tax)"] ?? 0;
+  // Deployed-capital + idle-cash overlay (present only for opt-in strategies). The idle-CAGR
+  // key carries the configured rate (e.g. "CAGR (idle @ 6%) %"), so find it dynamically.
+  const idleKey = Object.keys(m).find((k) => k.startsWith("CAGR (idle @"));
+  const idleCagr = idleKey ? (m as unknown as Record<string, number>)[idleKey] : undefined;
   return (
     <div className="space-y-4">
       {report.options ? (
@@ -339,10 +345,22 @@ export default function ReportView({
           <MetricCard label="Avg Monthly Net P&L" value={formatInr(netMonthly)} tone={netMonthly >= 0 ? "good" : "bad"} />
           <MetricCard label="Avg Winners' Profit (Pre-Tax)" value={formatInr(m["Avg Monthly Profit (Pre-Tax)"])} />
           <MetricCard label="Avg Winners' Profit (Post-Tax)" value={formatInr(m["Avg Monthly Profit (Post-Tax)"])} />
+          {m["Deployed CAGR %"] != null && (
+            <MetricCard label="Deployed CAGR" value={pct(m["Deployed CAGR %"])} tone="good" />
+          )}
+          {m["Return on Deployed Capital %"] != null && (
+            <MetricCard label="Return on Deployed Capital" value={pct(m["Return on Deployed Capital %"])} />
+          )}
+          {m["Avg Deployed Capital"] != null && (
+            <MetricCard label="Avg Deployed Capital" value={formatInr(m["Avg Deployed Capital"])} />
+          )}
+          {idleCagr != null && idleKey && (
+            <MetricCard label={idleKey.replace(/ %$/, "")} value={pct(idleCagr)} />
+          )}
         </div>
       )}
       {report.options && <OptionsReport options={report.options} />}
-      <EquityChart report={report} runId={runId} />
+      <EquityChart report={report} runId={runId} defaultBenchmark={defaultBenchmark} />
       <YearlyTable report={report} />
       <MonthlyGrid
         title={report.options ? "Monthly profit (booked on exit date)" : "Monthly profit (booked)"}

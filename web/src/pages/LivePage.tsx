@@ -1,10 +1,11 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
 import { Badge, Card, StatusPill, timeAgo } from "../components/ui";
 import GreeksPanel from "../components/GreeksPanel";
 import LivePayoffChart from "../components/LivePayoffChart";
+import LiveTradesPanel from "../components/LiveTradesPanel";
 import OptionMetricsPanel from "../components/OptionMetricsPanel";
 import { formatInr } from "../lib/format";
 import { isOptionsStrategy } from "../lib/params";
@@ -50,7 +51,7 @@ function SignalsPanel({ runId, version }: { runId: number; version: number }) {
     <div className="mt-3 border-t border-slate-800 pt-3">
       <div className="flex items-center justify-between mb-2">
         <div className="text-xs text-slate-400">
-          {wouldAct > 0 && <span className="text-amber-400 font-semibold">⚡ would act: {wouldAct}  ·  </span>}
+          {wouldAct > 0 && <span className="text-amber-600 dark:text-amber-400 font-semibold">⚡ would act: {wouldAct}  ·  </span>}
           {Object.entries(counts).map(([s, n]) => `${s}: ${n}`).join("  ·  ") || "no symbols"}
           <span className="text-slate-600">  —  buy needs a 20-day low (👁) then a breakout; → breakout is % to the 20d high</span>
         </div>
@@ -95,12 +96,12 @@ function SignalsPanel({ runId, version }: { runId: number; version: number }) {
                     ? "—"
                     : `${r.to_breakout_pct >= 0 ? "+" : ""}${r.to_breakout_pct.toFixed(1)}%`}
                 </td>
-                <td className={`py-1 pr-3 text-right ${(r.pnl_pct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                <td className={`py-1 pr-3 text-right ${(r.pnl_pct ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
                   {r.pnl_pct == null ? "—" : `${r.pnl_pct >= 0 ? "+" : ""}${r.pnl_pct.toFixed(1)}%`}
                 </td>
                 <td className="py-1 pr-3">
                   {r.signal && (
-                    <span className={`mr-1 font-semibold ${r.signal === "BUY" ? "text-emerald-400" : "text-amber-400"}`}>
+                    <span className={`mr-1 font-semibold ${r.signal === "BUY" ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
                       ⚡{r.signal}
                     </span>
                   )}
@@ -229,7 +230,7 @@ function OptionIntervenePanel({ run, onDone }: { run: LiveRunSnapshot; onDone: (
 
   return (
     <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/40 p-3 text-sm">
-      <div className="text-xs text-amber-400/90 mb-2">
+      <div className="text-xs text-amber-600 dark:text-amber-400/90 mb-2">
         ⚠ Manual changes alter the position's risk (e.g. break a net-zero ratio). The strategy
         then manages whatever book is left.
       </div>
@@ -281,7 +282,7 @@ function OptionIntervenePanel({ run, onDone }: { run: LiveRunSnapshot; onDone: (
         <button onClick={apply} disabled={busy} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs font-medium disabled:opacity-50">
           {busy ? "Applying…" : "Apply"}
         </button>
-        {err && <span className="text-xs text-rose-400">{err}</span>}
+        {err && <span className="text-xs text-rose-600 dark:text-rose-400">{err}</span>}
       </div>
     </div>
   );
@@ -319,7 +320,7 @@ function QuoteSwitch({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () =
   return (
     <span className="inline-flex items-center gap-1">
       {!open ? (
-        <button onClick={() => setOpen(true)} className="rounded bg-emerald-900 hover:bg-emerald-800 px-3 py-1.5 text-xs">
+        <button onClick={() => setOpen(true)} className="rounded bg-emerald-900 hover:bg-emerald-800 text-white px-3 py-1.5 text-xs">
           Go live ⚡
         </button>
       ) : (
@@ -330,13 +331,13 @@ function QuoteSwitch({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () =
               <option key={a.id} value={a.id}>{a.label}</option>
             ))}
           </select>
-          <button onClick={() => go("zerodha", acct)} disabled={!acct || busy} className="rounded bg-emerald-900 hover:bg-emerald-800 px-2 py-1 text-xs disabled:opacity-50">
+          <button onClick={() => go("zerodha", acct)} disabled={!acct || busy} className="rounded bg-emerald-900 hover:bg-emerald-800 text-white px-2 py-1 text-xs disabled:opacity-50">
             {busy ? "…" : "Use live"}
           </button>
           <button onClick={() => setOpen(false)} className="text-slate-500 px-1">×</button>
         </>
       )}
-      {err && <span className="text-rose-400 text-xs">{err}</span>}
+      {err && <span className="text-rose-600 dark:text-rose-400 text-xs">{err}</span>}
     </span>
   );
 }
@@ -444,7 +445,7 @@ function ControlsPanel({ run, onChanged }: { run: LiveRunSnapshot; onChanged: ()
         <div className="flex flex-wrap items-center gap-1.5">
           {excluded.length === 0 && <span className="text-xs text-slate-500">None excluded.</span>}
           {excluded.map((s) => (
-            <span key={s} className="inline-flex items-center gap-1 rounded-full bg-amber-900/30 border border-amber-700/40 text-amber-300 px-2 py-0.5 text-xs">
+            <span key={s} className="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-900/30 dark:border-amber-700/40 dark:text-amber-300 px-2 py-0.5 text-xs">
               {s}
               <button onClick={() => setExcluded(excluded.filter((x) => x !== s))} className="hover:text-amber-100">×</button>
             </span>
@@ -533,7 +534,7 @@ function RunCard({
           </div>
           <div className="rounded-md bg-slate-800/40 px-3 py-2">
             <div className="text-slate-400 text-xs">Unrealized P&amp;L</div>
-            <span className={upnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{formatInr(upnl)}</span>
+            <span className={upnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>{formatInr(upnl)}</span>
           </div>
         </div>
       )}
@@ -569,7 +570,7 @@ function RunCard({
                       {p.iv != null ? `${(p.iv * 100).toFixed(1)}%` : "—"}
                     </td>
                   )}
-                  <td className={`py-1 pr-4 text-right ${p.unrealized_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                  <td className={`py-1 pr-4 text-right ${p.unrealized_pnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
                     {formatInr(p.unrealized_pnl)}
                   </td>
                 </tr>
@@ -582,11 +583,12 @@ function RunCard({
       )}
 
       {isOptions && run.positions?.length ? (
-        <>
-          <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
-          <GreeksPanel run={run} />
-        </>
+        <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
       ) : null}
+      {/* Greeks/P&L history + the trade log stay visible after a cycle closes, so a booked
+          position still shows how it evolved, when it exited and the realized P&L. */}
+      {isOptions ? <GreeksPanel run={run} /> : null}
+      {isOptions ? <LiveTradesPanel runId={run.run_id} version={version} /> : null}
 
       {!stopped && (
         <>
@@ -608,7 +610,7 @@ function RunCard({
                   if (confirm("Exit ALL open legs now at live prices?"))
                     act(() => api.liveFlatten(run.run_id));
                 }}
-                className="rounded bg-rose-900 hover:bg-rose-800 px-3 py-1.5 text-xs"
+                className="rounded bg-rose-900 hover:bg-rose-800 text-white px-3 py-1.5 text-xs"
               >
                 Exit all
               </button>
@@ -644,6 +646,74 @@ function RunCard({
   );
 }
 
+/** Circular-arrows refresh icon; spins while a manual refresh is in flight. */
+function RefreshIcon({ spinning }: { spinning?: boolean }) {
+  return (
+    <svg
+      className={spinning ? "animate-spin" : ""}
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polyline points="23 4 23 10 17 10" />
+      <polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    </svg>
+  );
+}
+
+/** A small green dot that "pings" once whenever `flash` flips true (a fresh tick arrived). */
+function LivePulse({ flash, label }: { flash: boolean; label: string }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400"
+      title="Receiving live updates"
+    >
+      <span className="relative flex h-2 w-2">
+        {flash && (
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+        )}
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+      </span>
+      {label}
+    </span>
+  );
+}
+
+/** Quote-source / broker-connection chip: green when live & connected, rose when the
+ *  zerodha session is down (or it has fallen back to cache), plain badge for cache runs. */
+function BrokerChip({ dep }: { dep: Deployment }) {
+  if (dep.quote_source !== "zerodha") return <Badge>cache quotes</Badge>;
+  const label = dep.broker_label || "Zerodha";
+  const fallback = dep.on_cache_fallback === true;
+  const ok = dep.broker_connected === true && !fallback;
+  const suffix = ok ? "live" : fallback ? "cache" : "offline";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+        ok
+          ? "bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700/50"
+          : "bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-900/40 dark:text-rose-300 dark:border-rose-700/50"
+      }`}
+      title={
+        ok
+          ? `Connected to ${label} — live Zerodha quotes`
+          : fallback
+            ? `${label}: session lost, using cache quotes. Log in again, then Reconnect.`
+            : `${label}: not connected. Log in (paste request token) to resume live quotes.`
+      }
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${ok ? "bg-emerald-500" : "bg-rose-500"}`} />
+      {label} · {suffix}
+    </span>
+  );
+}
+
 /** A deployment tile: name, status, key metrics, notes, and per-status actions. */
 function DeploymentTile({
   dep,
@@ -664,6 +734,31 @@ function DeploymentTile({
   const [name, setName] = useState(dep.name);
   const [notes, setNotes] = useState(dep.notes ?? "");
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Pulse a "live" dot each time a fresh WS snapshot bumps the version for this run.
+  const [flash, setFlash] = useState(false);
+  const lastVersion = useRef(version);
+  useEffect(() => {
+    if (version !== lastVersion.current) {
+      lastVersion.current = version;
+      setFlash(true);
+      const t = setTimeout(() => setFlash(false), 900);
+      return () => clearTimeout(t);
+    }
+  }, [version]);
+
+  // Manual refresh: re-poll quotes + mark-to-market now (the backend broadcasts the
+  // resulting snapshot, so this also pulses the live dot and updates an expanded panel).
+  async function refreshNow() {
+    setRefreshing(true);
+    try {
+      await api.liveRefresh(dep.run_id);
+      onChanged();
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const m = dep.metrics ?? {};
   // Prefer the live snapshot for active tiles (WS-fresh), fall back to tile metrics.
@@ -726,23 +821,24 @@ function DeploymentTile({
           )}
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
             <StatusPill status={dep.status} />
+            {dep.status === "active" && <LivePulse flash={flash} label="live" />}
             {paused && (
-              <span className="rounded-full bg-amber-900/40 border border-amber-700/50 text-amber-300 px-2 py-0.5 text-[11px] font-medium">
+              <span className="rounded-full bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-900/40 dark:border-amber-700/50 dark:text-amber-300 px-2 py-0.5 text-[11px] font-medium">
                 Paused
               </span>
             )}
             <span
               className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                 isOptions
-                  ? "bg-indigo-900/40 border border-indigo-600/50 text-indigo-300"
-                  : "bg-slate-800 border border-slate-700 text-slate-300"
+                  ? "bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-900/40 dark:border-indigo-600/50 dark:text-indigo-300"
+                  : "bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300"
               }`}
               title={isOptions ? "Options (DERIV) strategy" : "Equity (STOCK) strategy"}
             >
               {isOptions ? `OPT${underlying ? ` · ${underlying}` : ""}` : "EQ"}
             </span>
             <Badge>{dep.strategy_id}</Badge>
-            <Badge>{dep.quote_source === "zerodha" ? "live quotes" : "cache quotes"}</Badge>
+            <BrokerChip dep={dep} />
             <span>#{dep.run_id}</span>
           </div>
         </div>
@@ -796,7 +892,7 @@ function DeploymentTile({
           <div className="font-medium tabular-nums">
             {isOptions ? (
               netCredit != null ? (
-                <span className={netCredit >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                <span className={netCredit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
                   {formatInr(Math.abs(netCredit))}
                 </span>
               ) : (
@@ -811,7 +907,7 @@ function DeploymentTile({
           <div className="text-slate-400 text-[11px] mb-0.5">Unrealized</div>
           <div className="font-medium tabular-nums">
             {upnl != null ? (
-              <span className={upnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{formatInr(upnl)}</span>
+              <span className={upnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>{formatInr(upnl)}</span>
             ) : (
               "—"
             )}
@@ -847,9 +943,18 @@ function DeploymentTile({
               {auto ? "⏸ Pause" : "▶ Resume"}
             </button>
             <button
+              onClick={refreshNow}
+              disabled={refreshing}
+              title="Refresh now — re-poll quotes and mark-to-market"
+              className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+            >
+              <RefreshIcon spinning={refreshing} />
+              Refresh
+            </button>
+            <button
               onClick={() => act(() => api.liveStop(dep.run_id))}
               disabled={busy}
-              className="rounded bg-rose-900 hover:bg-rose-800 px-3 py-1.5 disabled:opacity-50"
+              className="rounded bg-rose-900 hover:bg-rose-800 text-white px-3 py-1.5 disabled:opacity-50"
             >
               Stop
             </button>
@@ -941,7 +1046,7 @@ function PortfolioBar({ deployments }: { deployments: Deployment[] }) {
         </div>
         <div>
           <div className="text-slate-400 text-xs">Unrealized P&amp;L</div>
-          <div className={`text-lg font-semibold ${totals.upnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+          <div className={`text-lg font-semibold ${totals.upnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
             {formatInr(totals.upnl)}
           </div>
         </div>
@@ -995,7 +1100,7 @@ export default function LivePage() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-lg font-semibold">Live (paper)</h1>
         <div className="flex items-center gap-3 text-xs">
-          <span className={connected ? "text-emerald-400" : "text-slate-500"}>
+          <span className={connected ? "text-emerald-600 dark:text-emerald-400" : "text-slate-500"}>
             {connected ? "● live" : "○ disconnected"}
           </span>
           <Link
@@ -1015,7 +1120,7 @@ export default function LivePage() {
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`rounded-md px-3 py-1 ${tab === t.key ? "bg-slate-700 text-white" : "text-slate-400 hover:text-slate-200"}`}
+              className={`rounded-md px-3 py-1 ${tab === t.key ? "bg-brand text-white" : "text-slate-400 hover:text-slate-200"}`}
             >
               {t.label}
             </button>

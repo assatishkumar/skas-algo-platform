@@ -22,7 +22,7 @@ from skas_algo.api.models import (
 from skas_algo.data import universes
 from skas_algo.data.provider import get_available_symbols, get_price_loader
 from skas_algo.db.enums import TradingMode
-from skas_algo.db.models import Algo, AlgoRun, StrategyTemplate
+from skas_algo.db.models import Algo, AlgoRun, Order, StrategyTemplate
 from skas_algo.engine.market import PriceLoader
 from skas_algo.services.backtest import run_backtest
 from skas_algo.services.benchmark import BENCHMARK_INDICES, benchmark_series
@@ -272,6 +272,74 @@ def get_run(run_id: int, db: Session = Depends(get_db)) -> dict:
         "mode": run.mode.value,
         "report": run.metrics,
         "trades": run.trade_log or [],
+    }
+
+
+@router.get("/analysis/runs")
+def analysis_runs(db: Session = Depends(get_db)) -> list[dict]:
+    """All runs selectable in the Trade Analysis page (backtests + paper/live deployments)."""
+    rows = db.execute(
+        select(AlgoRun, Algo).join(Algo, AlgoRun.algo_id == Algo.id).order_by(AlgoRun.id.desc())
+    ).all()
+    out: list[dict] = []
+    for run, algo in rows:
+        mode = run.mode.value
+        if mode == TradingMode.BACKTEST.value:
+            status = "backtest"
+        elif run.archived:
+            status = "archived"
+        elif run.stopped_at:
+            status = "stopped"
+        else:
+            status = "active"
+        out.append({
+            "run_id": run.id,
+            "name": algo.name if algo else None,
+            "strategy_id": algo.strategy_id if algo else None,
+            "instrument_class": algo.instrument_class.value if algo else "STOCK",
+            "mode": mode,
+            "status": status,
+        })
+    return out
+
+
+@router.get("/runs/{run_id}/analysis")
+def run_analysis(run_id: int, db: Session = Depends(get_db)) -> dict:
+    """Unified trade feed for the analysis page — works for any run. Uses the finalized
+    ``trade_log`` (backtests + stopped deployments); falls back to filled orders for a
+    still-running live deployment (per-trade ``profit`` is then derived client-side from prices)."""
+    run = db.get(AlgoRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    algo = db.get(Algo, run.algo_id)
+    trades = run.trade_log or []
+    if not trades and run.mode != TradingMode.BACKTEST:
+        orders = db.execute(
+            select(Order).where(Order.algo_id == run.algo_id).order_by(Order.id)
+        ).scalars().all()
+        trades = [
+            {
+                "date": (o.created_at.date().isoformat() if o.created_at else None),
+                "ticker": o.symbol,
+                "action": o.side.value if hasattr(o.side, "value") else str(o.side),
+                "units": o.quantity,
+                "price": o.price or 0.0,
+                "amount": (o.price or 0.0) * o.quantity,
+                "profit": 0.0,
+                "pnl_pct": 0.0,
+                "lots": 1,
+                "tag": o.tag or "",
+            }
+            for o in orders
+        ]
+    return {
+        "run_id": run.id,
+        "name": algo.name if algo else None,
+        "strategy_id": algo.strategy_id if algo else None,
+        "instrument_class": algo.instrument_class.value if algo else "STOCK",
+        "params": algo.params if algo else {},
+        "capital": algo.capital if algo else None,
+        "trades": trades,
     }
 
 

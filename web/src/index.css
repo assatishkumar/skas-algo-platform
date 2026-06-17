@@ -2,7 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
+/* The `slate` Tailwind ramp is driven by these CSS variables (space-separated RGB). LIGHT is the
+   default: the ramp is INVERTED (slate-950 → near-white page bg, slate-100 → near-black text), so
+   every existing bg-slate-900 / text-slate-300 / border-slate-800 themes automatically. The .dark
+   class restores the normal (dark-first) ramp. */
 :root {
+  --slate-50: 2 6 23;
+  --slate-100: 15 23 42;
+  --slate-200: 30 41 59;
+  --slate-300: 51 65 85;
+  --slate-400: 71 85 105;
+  --slate-500: 100 116 139;
+  --slate-600: 148 163 184;
+  --slate-700: 203 213 225;
+  --slate-800: 226 232 240;
+  --slate-900: 241 245 249;
+  --slate-950: 248 250 252;
+  color-scheme: light;
+}
+
+.dark {
+  --slate-50: 248 250 252;
+  --slate-100: 241 245 249;
+  --slate-200: 226 232 240;
+  --slate-300: 203 213 225;
+  --slate-400: 148 163 184;
+  --slate-500: 100 116 139;
+  --slate-600: 71 85 105;
+  --slate-700: 51 65 85;
+  --slate-800: 30 41 59;
+  --slate-900: 15 23 42;
+  --slate-950: 2 6 23;
   color-scheme: dark;
 }
 
@@ -20,4 +50,17 @@ input[type="number"]::-webkit-inner-spin-button {
 input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;
+}
+
+/* Recharts gridlines are drawn with a hardcoded dark stroke (a presentation attribute).
+   A CSS rule outranks presentation attributes, so routing the stroke through the slate var
+   makes every chart's gridlines adapt to light/dark automatically — subtle on both. */
+.recharts-cartesian-grid line {
+  stroke: rgb(var(--slate-800));
+}
+
+/* Axis tick labels are drawn with a hardcoded mid-grey fill (also a presentation attribute),
+   so route them through the slate var too — dark-grey on light, light-grey on dark. */
+.recharts-cartesian-axis-tick-value {
+  fill: rgb(var(--slate-400));
 }

@@ -13,7 +13,7 @@ import pandas as pd
 from skas_algo.engine.market import PriceLoader
 
 # Index symbols that exist in the skas-data cache (load exactly like stocks).
-BENCHMARK_INDICES: list[str] = ["NIFTY 50", "NIFTY 100", "NIFTY 200"]
+BENCHMARK_INDICES: list[str] = ["NIFTY 50", "NIFTY 100", "NIFTY 200", "NIFTY 500"]
 
 
 def benchmark_series(

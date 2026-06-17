@@ -14,7 +14,7 @@ import { formatInr } from "../lib/format";
 import type { Campaign, CampaignCall, EquityTranche, OptionsReportData } from "../types";
 
 function pnlClass(v: number): string {
-  return v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-slate-400";
+  return v > 0 ? "text-emerald-600 dark:text-emerald-400" : v < 0 ? "text-rose-600 dark:text-rose-400" : "text-slate-400";
 }
 
 const kFmt = (v: number) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${v}`);
@@ -86,7 +86,7 @@ function TimelineChart({
           tickFormatter={kFmt}
         />
         <Tooltip
-          contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
+          contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }}
           formatter={(v: number, name: string) => [Math.round(v), name]}
         />
         <Legend wrapperStyle={{ fontSize: 11 }} />

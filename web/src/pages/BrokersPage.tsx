@@ -123,7 +123,7 @@ function RefreshData({ id }: { id: number }) {
         >
           {busy ? "Refreshing…" : "Refresh data"}
         </button>
-        {summary && <span className="text-xs text-emerald-400">{summary}</span>}
+        {summary && <span className="text-xs text-emerald-600 dark:text-emerald-400">{summary}</span>}
       </div>
       {err && <ErrorBox message={err} />}
     </div>
@@ -196,7 +196,7 @@ export default function BrokersPage() {
                 <span className="font-medium">{a.label}</span>{" "}
                 <span className="text-xs text-slate-400">{a.broker} · {a.user_id}</span>{" "}
                 {a.has_session ? <Badge>session ✓</Badge> : <Badge>no session</Badge>}{" "}
-                {a.armed ? <span className="text-amber-400 text-xs font-semibold">ARMED</span> : <Badge>disarmed</Badge>}
+                {a.armed ? <span className="text-amber-600 dark:text-amber-400 text-xs font-semibold">ARMED</span> : <Badge>disarmed</Badge>}
               </div>
               <div className="flex gap-2">
                 <button onClick={() => setLoginFor((v) => (v === a.id ? null : a.id))} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
@@ -205,9 +205,9 @@ export default function BrokersPage() {
                 {a.armed ? (
                   <button onClick={() => run(() => brokers.disarm(a.id), "Disarmed.")} disabled={busy} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Disarm</button>
                 ) : (
-                  <button onClick={() => run(() => brokers.arm(a.id), "Armed.")} disabled={busy} className="rounded bg-amber-900 hover:bg-amber-800 px-3 py-1.5 text-xs">Arm</button>
+                  <button onClick={() => run(() => brokers.arm(a.id), "Armed.")} disabled={busy} className="rounded bg-amber-900 hover:bg-amber-800 text-white px-3 py-1.5 text-xs">Arm</button>
                 )}
-                <button onClick={() => run(() => brokers.remove(a.id), "Deleted.")} disabled={busy} className="rounded bg-rose-900 hover:bg-rose-800 px-3 py-1.5 text-xs">Delete</button>
+                <button onClick={() => run(() => brokers.remove(a.id), "Deleted.")} disabled={busy} className="rounded bg-rose-900 hover:bg-rose-800 text-white px-3 py-1.5 text-xs">Delete</button>
               </div>
             </div>
             {loginFor === a.id && (

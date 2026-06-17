@@ -83,7 +83,7 @@ function RunTile({
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
             {run.archived && <StatusPill status="archived" />}
             {isTemplate && (
-              <span className="text-amber-300" title="Strategy template — new backtests prefill from this run">
+              <span className="text-amber-700 dark:text-amber-300" title="Strategy template — new backtests prefill from this run">
                 ★ template
               </span>
             )}
@@ -96,7 +96,7 @@ function RunTile({
         </div>
         <div className="text-right text-sm shrink-0">
           <div className="text-slate-400 text-xs">Return</div>
-          <div className={ret >= 0 ? "text-emerald-400" : "text-rose-400"}>{pct(ret)}</div>
+          <div className={ret >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>{pct(ret)}</div>
         </div>
       </div>
 
@@ -121,7 +121,7 @@ function RunTile({
         </div>
         <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
           <div className="text-slate-400 text-[11px]">Max DD</div>
-          <span className="text-rose-400">{pct(run.metrics["Max Drawdown %"])}</span>
+          <span className="text-rose-600 dark:text-rose-400">{pct(run.metrics["Max Drawdown %"])}</span>
         </div>
         <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
           <div className="text-slate-400 text-[11px]">Trades</div>
@@ -134,7 +134,7 @@ function RunTile({
         <Link to={`/runs/${run.run_id}`} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
           Open
         </Link>
-        <button onClick={forwardTest} className="rounded bg-emerald-900 hover:bg-emerald-800 px-3 py-1.5">
+        <button onClick={forwardTest} className="rounded bg-emerald-900 hover:bg-emerald-800 text-white px-3 py-1.5">
           Forward-test →
         </button>
         {run.archived ? (
@@ -303,7 +303,7 @@ export default function RunsPage() {
               setCompareMode((v) => !v);
               setSelected([]);
             }}
-            className={`rounded-md px-3 py-2 text-sm font-medium ${compareMode ? "bg-slate-700 text-white" : "bg-slate-800 hover:bg-slate-700 text-slate-300"}`}
+            className={`rounded-md px-3 py-2 text-sm font-medium ${compareMode ? "bg-brand text-white" : "bg-slate-800 hover:bg-slate-700 text-slate-300"}`}
           >
             {compareMode ? "Cancel compare" : "Compare"}
           </button>
@@ -319,7 +319,7 @@ export default function RunsPage() {
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`rounded-md px-3 py-1 ${tab === t.key ? "bg-slate-700 text-white" : "text-slate-400 hover:text-slate-200"}`}
+              className={`rounded-md px-3 py-1 ${tab === t.key ? "bg-brand text-white" : "text-slate-400 hover:text-slate-200"}`}
             >
               {t.label}
             </button>
@@ -374,7 +374,7 @@ export default function RunsPage() {
                     <Badge>{rs.length} run{rs.length === 1 ? "" : "s"}</Badge>
                   </div>
                   <div className="text-xs text-slate-400 shrink-0">
-                    best <span className={best >= 0 ? "text-emerald-400" : "text-rose-400"}>{pct(best)}</span>
+                    best <span className={best >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>{pct(best)}</span>
                   </div>
                 </button>
                 {open && <div className="px-3 pb-3">{renderGroupedRuns(rs)}</div>}

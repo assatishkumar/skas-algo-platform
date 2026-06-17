@@ -22,7 +22,9 @@ function FreshnessPill({ stale, staleDays }: { stale: boolean; staleDays: number
   return (
     <span
       className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-        stale ? "bg-amber-900/30 text-amber-300 border border-amber-700/40" : "bg-emerald-900/40 text-emerald-300 border border-emerald-700/50"
+        stale
+          ? "bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700/40"
+          : "bg-emerald-100 text-emerald-700 border border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700/50"
       }`}
     >
       {label}
@@ -88,7 +90,7 @@ function SymbolDetail({ symbol, onRefreshed }: { symbol: string; onRefreshed: ()
           <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
           <XAxis dataKey="year" tick={{ fontSize: 10, fill: "#94a3b8" }} />
           <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} width={36} />
-          <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155" }} />
+          <Tooltip contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }} />
           <Bar dataKey="count" fill="#14b8a6" />
         </BarChart>
       </ResponsiveContainer>
@@ -100,7 +102,7 @@ function SymbolDetail({ symbol, onRefreshed }: { symbol: string; onRefreshed: ()
             <LineChart data={data.recent} margin={{ top: 5, right: 5, bottom: 0, left: 0 }}>
               <XAxis dataKey="date" hide />
               <YAxis domain={["auto", "auto"]} hide />
-              <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155" }} />
+              <Tooltip contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }} />
               <Line type="monotone" dataKey="close" stroke="#6366f1" dot={false} strokeWidth={1.5} />
             </LineChart>
           </ResponsiveContainer>
@@ -293,7 +295,7 @@ function StocksDataSection() {
           </div>
           <div>
             <div className="text-slate-400 text-xs">Stale (&gt;5d)</div>
-            <div className={`text-lg font-semibold ${staleCount ? "text-amber-400" : "text-emerald-400"}`}>
+            <div className={`text-lg font-semibold ${staleCount ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>
               {staleCount}
             </div>
           </div>
@@ -375,7 +377,7 @@ export default function DataPage() {
             onClick={() => setParams(t.key === "stocks" ? {} : { tab: t.key })}
             className={`px-4 py-2 text-sm font-medium -mb-px border-b-2 ${
               tab === t.key
-                ? "border-brand text-white"
+                ? "border-brand text-slate-100"
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >

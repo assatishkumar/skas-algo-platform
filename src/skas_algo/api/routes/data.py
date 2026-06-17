@@ -164,6 +164,65 @@ def symbol_detail(symbol: str, cache=Depends(get_data_cache)) -> dict:
     }
 
 
+@router.get("/stocks/{symbol}/series")
+def stock_series(
+    symbol: str,
+    start: date | None = None,
+    end: date | None = None,
+    st_period: int | None = None,
+    st_multiplier: float | None = None,
+    st_timeframe: str = "daily",
+    cache=Depends(get_data_cache),
+) -> dict:
+    """Daily OHLC for an equity symbol, optionally with a SuperTrend line + direction overlaid
+    (when ``st_period`` & ``st_multiplier`` are given). Powers the trade-analysis charts."""
+    end = end or datetime.now(UTC).date()
+    start = start or (end - timedelta(days=400))
+    try:
+        df = cache.get_prices(symbol, start_date=start, end_date=end)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"no cached data for {symbol!r}: {exc}") from exc
+    if df is None or len(df) == 0:
+        raise HTTPException(status_code=404, detail=f"no cached data for {symbol!r}")
+    df = df.copy()
+
+    st_by_date: dict[str, tuple] = {}
+    if st_period and st_multiplier:
+        from skas_algo.engine.indicators.supertrend import supertrend_bands
+
+        try:
+            st = supertrend_bands(df, period=int(st_period), multiplier=float(st_multiplier),
+                                  timeframe=st_timeframe)
+            for ts, row in st.iterrows():
+                key = ts.date().isoformat() if hasattr(ts, "date") else str(ts)[:10]
+                st_by_date[key] = (row["supertrend"], row["direction"])
+        except Exception:  # overlay is best-effort; price still renders
+            st_by_date = {}
+
+    def _num(v):
+        return None if v is None or (isinstance(v, float) and math.isnan(v)) else float(v)
+
+    points: list[dict] = []
+    for _, row in df.iterrows():
+        d = row["date"]
+        ds = d.date().isoformat() if hasattr(d, "date") else str(d)[:10]
+        pt = {
+            "date": ds,
+            "open": _num(row.get("open", row["close"])),
+            "high": _num(row["high"]),
+            "low": _num(row["low"]),
+            "close": _num(row["close"]),
+        }
+        if ds in st_by_date:
+            line, dirn = st_by_date[ds]
+            if _num(line) is not None:
+                pt["supertrend"] = _num(line)
+            if _num(dirn) is not None:
+                pt["direction"] = _num(dirn)
+        points.append(pt)
+    return {"symbol": symbol, "points": points}
+
+
 # ====================================================================== options
 # These read the NSE options DuckDB (no Kite session). Refresh downloads the public
 # F&O bhavcopy, so it also works without a broker login — unlike equity refresh which

@@ -72,6 +72,12 @@ class AlgoContext:
         """The N-day moving average (DMA) for the symbol (trailing window, excludes today)."""
         return self.market.rolling_mean(symbol)
 
+    def supertrend_dir(self, symbol: str) -> float | None:
+        """SuperTrend direction (+1 green / −1 red), or None when the view has no SuperTrend
+        (e.g. a strategy/run that didn't request it). Strategies treat None as 'no signal'."""
+        fn = getattr(self.market, "supertrend_dir", None)
+        return fn(symbol) if fn is not None else None
+
     # ----- options (no-ops / None for non-options runs) -----
     def today(self):
         """Current trading date (a ``datetime.date``). Used by options strategies."""

@@ -15,8 +15,13 @@ from .metrics import compute_metrics
 from .runner import RunResult
 
 
-def build_report(result: RunResult, initial_capital: float) -> dict[str, Any]:
-    metrics = compute_metrics(result, initial_capital)
+def build_report(
+    result: RunResult, initial_capital: float, *,
+    deployed_metrics: bool = False, idle_return: float = 0.0,
+) -> dict[str, Any]:
+    metrics = compute_metrics(
+        result, initial_capital, deployed=deployed_metrics, idle_return=idle_return
+    )
     if not result.history:
         return {"metrics": metrics}
 

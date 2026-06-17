@@ -24,7 +24,7 @@ from skas_algo.api.models import (
 from skas_algo.data import universes
 from skas_algo.data.provider import get_available_symbols, get_price_loader
 from skas_algo.db.enums import TradingMode
-from skas_algo.db.models import Algo, AlgoRun, BrokerAccount, GreeksSnapshot
+from skas_algo.db.models import Algo, AlgoRun, BrokerAccount, GreeksSnapshot, Order
 from skas_algo.engine.market import PriceLoader
 from skas_algo.engine.overrides import OverrideRule
 from skas_algo.live.manager import LiveConfig, manager
@@ -158,9 +158,22 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             "started_at": iso_utc(run.started_at),
             "stopped_at": iso_utc(run.stopped_at),
         }
+        # Broker connection: which account routes quotes/orders and whether its session
+        # is currently valid. Lets the tile show a connected/disconnected indicator.
+        account_id = (run.params_snapshot or {}).get("broker_account_id")
+        tile["broker_account_id"] = account_id
+        tile["broker_label"] = None
+        tile["broker_connected"] = None
+        if account_id is not None:
+            account = db.get(BrokerAccount, account_id)
+            if account is not None:
+                tile["broker_label"] = account.label
+                tile["broker_connected"] = broker_svc.has_valid_session(account)
+        tile["on_cache_fallback"] = False
         live = manager.get(run.id)
         if live is not None and st == "active":
             snap = live.snapshot()
+            tile["on_cache_fallback"] = snap.get("on_cache_fallback", False)
             upnl = sum(p["unrealized_pnl"] for p in snap.get("positions", []))
             tile["metrics"] = {
                 "equity": snap.get("equity"),
@@ -306,6 +319,65 @@ async def greeks_history(run_id: int, limit: int = 1000, db: Session = Depends(g
         for r in reversed(rows)  # oldest → newest for charting
     ]
     return {"run_id": run_id, "points": points}
+
+
+def _orders_to_trades(orders: list[Order]) -> list[dict]:
+    """Reconstruct trades (entry legs + exits with per-leg P&L) from the persisted Order rows —
+    the durable audit trail — so a closed cycle survives restarts even before it's finalized.
+    FIFO match per symbol; profit is directional (short entry SELL → cover BUY)."""
+    from collections import defaultdict, deque
+
+    open_lots: dict[str, deque] = defaultdict(deque)  # symbol -> [units, price, side]
+    out: list[dict] = []
+    for o in orders:
+        side = o.side.value if hasattr(o.side, "value") else str(o.side)
+        sym, units, px = o.symbol, int(o.quantity), float(o.price or 0.0)
+        d = o.created_at.date().isoformat() if o.created_at else None
+        q = open_lots[sym]
+        closing = q and q[0][2] != side  # opposite side of the open position → an exit
+        if closing:
+            rem, profit = units, 0.0
+            while rem > 0 and q:
+                lot = q[0]
+                take = min(rem, lot[0])
+                profit += (lot[1] - px) * take if lot[2] == "SELL" else (px - lot[1]) * take
+                lot[0] -= take
+                rem -= take
+                if lot[0] == 0:
+                    q.popleft()
+            out.append({"date": d, "ticker": sym, "action": "COVER" if side == "BUY" else "SELL",
+                        "units": units, "price": px, "profit": profit, "pnl_pct": 0.0,
+                        "lots": 1, "tag": o.tag or ""})
+            if rem > 0:
+                q.append([rem, px, side])
+        else:
+            q.append([units, px, side])
+            out.append({"date": d, "ticker": sym, "action": "SHORT" if side == "SELL" else "BUY",
+                        "units": units, "price": px, "profit": 0.0, "pnl_pct": 0.0,
+                        "lots": 1, "tag": o.tag or ""})
+    return out
+
+
+@router.get("/{run_id}/trades")
+async def live_trades(run_id: int, db: Session = Depends(get_db)) -> dict:
+    """Executed trades for a deployment — entry legs + exits with per-leg P&L, holding days and
+    exit reason — so a CLOSED cycle still shows what was traded, when it exited, and the booked
+    P&L. Prefers the running session's in-memory transactions (richest: exit_reason/holding_days),
+    then the persisted trade log, then a reconstruction from the durable Order rows."""
+    from skas_algo.live.manager import _serialize_event
+
+    live = manager.get(run_id)
+    if live is not None and live.session.transactions:
+        trades = [_serialize_event(t) for t in live.session.transactions]
+    else:
+        run = db.get(AlgoRun, run_id)
+        trades = (run.trade_log if run is not None else None) or []
+        if not trades and run is not None:
+            orders = db.execute(
+                select(Order).where(Order.algo_id == run.algo_id).order_by(Order.id)
+            ).scalars().all()
+            trades = _orders_to_trades(orders)
+    return {"run_id": run_id, "trades": trades}
 
 
 @router.post("/{run_id}/flatten")

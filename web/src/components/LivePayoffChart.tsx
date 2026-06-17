@@ -76,7 +76,7 @@ export default function LivePayoffChart({
             tickFormatter={(v) => `${(v / 1e3).toFixed(0)}k`}
           />
           <Tooltip
-            contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
+            contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }}
             formatter={(v: number, n: string) => [formatInr(v), n === "expiry" ? "At expiry" : "Current"]}
             labelFormatter={(v: number) => `Spot ${Math.round(v)}`}
           />

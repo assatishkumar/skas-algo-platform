@@ -46,7 +46,7 @@ export default function PayoffChart({ cycle }: { cycle: OptionCycle }) {
         {entrySpot != null && <LegendDot color="#f59e0b" label="entry spot" />}
         {exitSpot != null && <LegendDot color="#38bdf8" label="exit spot" />}
         <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block w-2 h-2 rounded-full bg-white" /> actual exit P&L
+          <span className="inline-block w-2 h-2 rounded-full bg-white border border-slate-900" /> actual exit P&L
         </span>
       </div>
       <ResponsiveContainer width="100%" height={240}>
@@ -71,7 +71,7 @@ export default function PayoffChart({ cycle }: { cycle: OptionCycle }) {
             width={78}
           />
           <Tooltip
-            contentStyle={{ background: "#0f172a", border: "1px solid #334155", fontSize: 12 }}
+            contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))", fontSize: 12 }}
             labelFormatter={(v) => `Spot ${Math.round(Number(v)).toLocaleString("en-IN")}`}
             formatter={(v: number, name: string) => [
               formatInr(v),

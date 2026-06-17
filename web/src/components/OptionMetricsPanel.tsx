@@ -18,7 +18,7 @@ function Metric({
   sub?: string;
   tone?: "pos" | "neg";
 }) {
-  const color = tone === "pos" ? "text-emerald-400" : tone === "neg" ? "text-rose-400" : "";
+  const color = tone === "pos" ? "text-emerald-600 dark:text-emerald-400" : tone === "neg" ? "text-rose-600 dark:text-rose-400" : "";
   return (
     <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
       <div className="text-slate-400 text-[11px] mb-0.5">{label}</div>

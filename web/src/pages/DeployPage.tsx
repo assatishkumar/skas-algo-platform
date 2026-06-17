@@ -208,14 +208,14 @@ export default function DeployPage() {
               </label>
             </div>
             {warmFromDate && (
-              <div className="text-[11px] text-sky-300/90">
+              <div className="text-[11px] text-sky-700 dark:text-sky-300/90">
                 Replays the strategy as a backtest from {warmFromDate} → today, then carries the
                 resulting open position forward as the live (PAPER) book — so a month-before-expiry
                 strategy can be tested now instead of waiting for the next cycle. Needs the option
                 chain cached back to that date.
               </div>
             )}
-            <div className="text-[11px] text-amber-300/90">
+            <div className="text-[11px] text-amber-700 dark:text-amber-300/90">
               Intraday exit cadence — how often each exit is evaluated. Profit can book intraday
               (e.g. every 15 min) while the stop holds to EOD. Intraday cadences need live Zerodha
               quotes during market hours; on cache they collapse to one EOD check. PAPER

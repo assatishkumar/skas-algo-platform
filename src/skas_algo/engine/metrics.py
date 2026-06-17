@@ -9,7 +9,9 @@ from __future__ import annotations
 from .runner import RunResult
 
 
-def compute_metrics(result: RunResult, initial_capital: float) -> dict:
+def compute_metrics(
+    result: RunResult, initial_capital: float, *, deployed: bool = False, idle_return: float = 0.0
+) -> dict:
     history = result.history
     if not history:
         return {}
@@ -67,7 +69,7 @@ def compute_metrics(result: RunResult, initial_capital: float) -> dict:
     profitable = sum(1 for t in sells if t["profit"] > 0)
     net_profit = sum(t["profit"] for t in sells)  # winners + losers = honest figure
 
-    return {
+    out = {
         "Total Return %": total_return,
         "CAGR %": cagr * 100,
         "Final Equity": final_equity,
@@ -87,3 +89,37 @@ def compute_metrics(result: RunResult, initial_capital: float) -> dict:
         "Avg Monthly Net P&L (Pre-Tax)": net_profit / months,
         "Avg Monthly Net P&L (Post-Tax)": (net_profit - total_taxes) / months,
     }
+    if deployed:
+        out.update(_deployed_idle_metrics(history, years, total_value, initial_capital, idle_return))
+    return out
+
+
+def _deployed_idle_metrics(history, years, total_value, initial_capital, idle_return) -> dict:
+    """Return-on-deployed-capital + idle-cash overlay (reporting only; the equity curve and the
+    standard CAGR are untouched). Deployed base = AVERAGE daily long cost basis; idle cash (the
+    daily cash balance) is assumed to compound at ``idle_return``/yr."""
+    profit = total_value - initial_capital
+    deployed_daily = [d.get("invested_capital", 0.0) for d in history]
+    avg_deployed = sum(deployed_daily) / len(deployed_daily) if deployed_daily else 0.0
+
+    out: dict = {"Avg Deployed Capital": avg_deployed}
+    if avg_deployed > 0:
+        out["Return on Deployed Capital %"] = profit / avg_deployed * 100
+        ratio = 1 + profit / avg_deployed
+        if years > 0 and ratio > 0:
+            out["Deployed CAGR %"] = (ratio ** (1 / years) - 1) * 100
+
+    # Idle cash compounding at idle_return/yr over each inter-day interval.
+    idle_interest = 0.0
+    if idle_return > 0:
+        daily_rate = (1 + idle_return) ** (1 / 365.25) - 1
+        for i in range(1, len(history)):
+            gap = (history[i]["date"] - history[i - 1]["date"]).days or 1
+            growth = (1 + daily_rate) ** gap
+            idle_interest = idle_interest * growth + history[i - 1].get("cash", 0.0) * (growth - 1)
+        out["Idle Interest (assumed)"] = idle_interest
+        idle_total = total_value + idle_interest
+        if years > 0 and idle_total > 0:
+            label = f"CAGR (idle @ {round(idle_return * 100)}%) %"
+            out[label] = ((idle_total / initial_capital) ** (1 / years) - 1) * 100
+    return out

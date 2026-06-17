@@ -103,6 +103,12 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
             charge_model=ChargeModel(),
         )
     else:
+        # SuperTrend strategies precompute their direction from OHLC in the market view.
+        supertrend = (
+            strategy.supertrend_config()
+            if getattr(strategy, "needs_supertrend", False) and hasattr(strategy, "supertrend_config")
+            else None
+        )
         runner = BacktestRunner(
             strategy=strategy,
             universe=list(req.symbols),
@@ -112,9 +118,17 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
             tax_rate=req.tax_rate,
             withdrawal_rate=req.withdrawal_rate,
             overrides=overrides,
+            supertrend=supertrend,
         )
     result = runner.run(req.start_date, req.end_date)
-    report = build_report(result, req.capital)
+    # Strategies that opt in (e.g. SuperTrend Momentum) get the deployed-capital + idle-cash
+    # CAGR overlay; idle rate is configurable (default 6%). Other strategies are unchanged.
+    want_deployed = getattr(strategy, "report_deployed_metrics", False)
+    report = build_report(
+        result, req.capital,
+        deployed_metrics=want_deployed,
+        idle_return=float(req.params.get("idle_return", 0.06)) if want_deployed else 0.0,
+    )
     if is_deriv and report.get("options"):
         # Tag each position/cycle with underlying (NIFTY/GOLD) + India VIX at entry/exit,
         # and attach the underlying price series for the covered-call timeline charts.

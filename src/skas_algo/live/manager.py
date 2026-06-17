@@ -90,7 +90,38 @@ def _build_session(config: "LiveConfig", strategy, loader, is_deriv: bool, under
                            charge_model=ChargeModel(), margin_model=margin, **common)
     session = LiveSession(strategy, **common)
     session.warmup(warmup_history(loader, config.symbols, config.lookback))
+    _seed_supertrend(session, strategy, loader, config.symbols)
     return session
+
+
+def _seed_supertrend(session, strategy, loader, symbols) -> None:
+    """For a SuperTrend strategy, compute each symbol's latest completed-bar direction from the
+    cached OHLC and set it on the live view (live quotes carry no high/low, so ATR comes from the
+    cache). Refreshed daily by the run loop. No-op for other strategies."""
+    if not getattr(strategy, "needs_supertrend", False) or not hasattr(strategy, "supertrend_config"):
+        return
+    market = getattr(session, "market", None)
+    if market is None or not hasattr(market, "set_supertrend_dir"):
+        return
+    from datetime import timedelta
+
+    from skas_algo.engine.indicators.supertrend import supertrend_direction
+
+    cfg = strategy.supertrend_config()
+    today = datetime.now(IST).date()
+    start = today - timedelta(days=1500)  # ~4y → enough for a monthly ATR window
+    for sym in symbols:
+        try:
+            df = loader(sym, start, today)
+        except Exception:  # pragma: no cover - missing cache → no signal
+            df = None
+        if df is None or getattr(df, "empty", True):
+            market.set_supertrend_dir(sym, None)
+            continue
+        sd = supertrend_direction(
+            df, period=cfg["period"], multiplier=cfg["multiplier"], timeframe=cfg["timeframe"]
+        ).dropna()
+        market.set_supertrend_dir(sym, float(sd.iloc[-1]) if len(sd) else None)
 
 
 class Broadcaster:
@@ -212,9 +243,23 @@ class LiveRun:
         self._last_greeks_at = now
         record_greeks(db, self.run_id, snap, now, spot=self._underlying_spot())
 
+    def _refresh_supertrend(self) -> None:
+        """Recompute SuperTrend from the cached OHLC before a decision (the latest completed
+        bar). Cheap and once-per-decision; no-op for non-SuperTrend strategies."""
+        strategy = getattr(self.session, "strategy", None)
+        if not getattr(strategy, "needs_supertrend", False):
+            return
+        try:
+            from skas_algo.data.provider import get_price_loader
+
+            _seed_supertrend(self.session, strategy, get_price_loader(), self.config.symbols)
+        except Exception:  # pragma: no cover - never break the decision loop on a cache hiccup
+            logger.exception("supertrend refresh failed for run %s", self.run_id)
+
     def run_decision(self, ts: datetime | None = None) -> list[dict]:
         """Make today's entry/exit decision; persist trades + positions; broadcast."""
         ts = ts or datetime.now(IST)
+        self._refresh_supertrend()
         events = self.session.run_decision(ts)
         snap = self.snapshot()  # wrapper: real margin override + greeks + target/stop, etc.
         with session_scope() as db:
@@ -276,7 +321,13 @@ class LiveRun:
             monthly_flush_log=self.session.monthly_flush_log,
             portfolio=self.session.portfolio,
         )
-        report = build_report(rr, self.config.capital)
+        strategy = getattr(self.session, "strategy", None)
+        want_deployed = getattr(strategy, "report_deployed_metrics", False)
+        report = build_report(
+            rr, self.config.capital,
+            deployed_metrics=want_deployed,
+            idle_return=getattr(strategy, "idle_return", 0.06) if want_deployed else 0.0,
+        )
         with session_scope() as db:
             run = db.get(AlgoRun, self.run_id)
             if run is not None:
@@ -539,7 +590,15 @@ class LiveRunManager:
             is_deriv = live.config.instrument_class.upper() == "DERIV"
             decide_at = time.fromisoformat(live.config.decision_time)
             while True:
-                if live.config.ignore_market_hours or is_market_open():
+                # Auto-refresh only during market hours (Mon–Fri 09:15–15:30 IST). A
+                # live (Zerodha) deployment NEVER polls outside hours — pointless and it
+                # hammers the broker with a stale token. ignore_market_hours still allows
+                # off-hours ticks for CACHE (offline) testing only. Manual refresh/decision
+                # via the REST endpoints is always available.
+                market_ok = is_market_open() or (
+                    live.config.ignore_market_hours and live.config.quote_source != "zerodha"
+                )
+                if market_ok:
                     try:
                         live.refresh()
                         now = datetime.now(IST)

@@ -17,6 +17,12 @@ export interface Metrics {
   "Net Realized P&L"?: number;
   "Avg Monthly Net P&L (Pre-Tax)"?: number;
   "Avg Monthly Net P&L (Post-Tax)"?: number;
+  // Deployed-capital + idle-cash overlay (present only for opt-in strategies, e.g. SuperTrend).
+  "Avg Deployed Capital"?: number;
+  "Return on Deployed Capital %"?: number;
+  "Deployed CAGR %"?: number;
+  "Idle Interest (assumed)"?: number;
+  "CAGR (idle @ 6%) %"?: number;
 }
 
 export interface YearlyRow {
@@ -106,6 +112,61 @@ export interface Trade {
   exit_reason?: string;
   entry_premium?: number;
   holding_days?: number;
+}
+
+// ---- Trade analysis ----
+export interface AnalysisRunItem {
+  run_id: number;
+  name: string | null;
+  strategy_id: string | null;
+  instrument_class: string; // "STOCK" | "DERIV"
+  mode: string;
+  status: string; // "backtest" | "active" | "stopped" | "archived"
+}
+
+export interface RunAnalysis {
+  run_id: number;
+  name: string | null;
+  strategy_id: string | null;
+  instrument_class: string;
+  params: Record<string, unknown>;
+  capital: number | null;
+  trades: Trade[];
+}
+
+export interface StockSeriesPoint {
+  date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  supertrend?: number; // SuperTrend line (when overlay requested)
+  direction?: number; // +1 green / −1 red
+}
+
+export interface StockSeries {
+  symbol: string;
+  points: StockSeriesPoint[];
+}
+
+export interface RoundTripExit {
+  date: string;
+  price: number;
+  units: number;
+  tag: string;
+}
+
+export interface RoundTrip {
+  symbol: string;
+  entryDate: string;
+  entryPrice: number;
+  qty: number;
+  exits: RoundTripExit[];
+  exitDate: string;
+  pnl: number;
+  pnlPct: number;
+  holdingDays: number;
+  won: boolean;
 }
 
 // ---- Options report (additive; only populated for DERIV runs) ----
@@ -483,6 +544,11 @@ export interface Deployment {
   started_at: string | null;
   stopped_at: string | null;
   metrics: DeploymentMetrics;
+  // Broker connection (zerodha quotes only; null for cache deployments)
+  broker_account_id?: number | null;
+  broker_label?: string | null;
+  broker_connected?: boolean | null; // session valid right now
+  on_cache_fallback?: boolean; // zerodha run currently falling back to cache quotes
 }
 
 export interface DataSummary {

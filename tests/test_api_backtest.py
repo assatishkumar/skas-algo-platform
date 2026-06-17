@@ -46,7 +46,7 @@ def test_universes_listed_with_counts(api_client: TestClient):
     resp = api_client.get("/api/v1/universes")
     assert resp.status_code == 200
     by_name = {u["name"]: u for u in resp.json()}
-    assert set(by_name) == {"nifty50", "nifty100", "nifty200"}
+    assert set(by_name) == {"nifty50", "nifty100", "nifty200", "nifty500"}
     # Only RELIANCE/TCS/INFY are "available", so counts reflect the intersection.
     assert by_name["nifty50"]["count"] == 3
     assert by_name["nifty50"]["label"] == "Nifty 50"
@@ -66,6 +66,25 @@ def test_backtest_by_universe(api_client: TestClient):
     assert resp.status_code == 200, resp.text
     # Ran against the 3 resolved symbols; at least one trade given the ramp.
     assert resp.json()["report"]["metrics"]["Total Trades"] >= 1
+
+
+def test_run_analysis_and_listing(api_client: TestClient):
+    body = {
+        "strategy_id": "sst_lifo", "universe": "nifty50",
+        "start_date": "2020-01-01", "end_date": "2021-12-31", "capital": 100000,
+        "params": {"capital_parts": 10, "profit_target": 0.06}, "tax_rate": 0.0,
+    }
+    rid = api_client.post("/api/v1/backtest", json=body).json()["run_id"]
+
+    a = api_client.get(f"/api/v1/runs/{rid}/analysis")
+    assert a.status_code == 200, a.text
+    j = a.json()
+    assert j["strategy_id"] == "sst_lifo" and j["instrument_class"] == "STOCK"
+    assert isinstance(j["trades"], list) and j["params"]
+
+    runs = api_client.get("/api/v1/analysis/runs").json()
+    mine = next(r for r in runs if r["run_id"] == rid)
+    assert mine["status"] == "backtest" and mine["instrument_class"] == "STOCK"
 
 
 def test_backtest_requires_symbols_or_universe(api_client: TestClient):

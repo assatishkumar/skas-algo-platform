@@ -9,10 +9,13 @@ import type {
   DataSummary,
   DataSymbol,
   DataSymbolDetail,
+  AnalysisRunItem,
   Deployment,
   DerivCoverage,
   FuturesSeries,
   GreeksHistory,
+  RunAnalysis,
+  StockSeries,
   LiveControlsInput,
   ManualOrderInput,
   OptionChain,
@@ -98,6 +101,18 @@ export const api = {
     request<{ index: string; points: BenchmarkPoint[] }>(
       `/runs/${id}/benchmark?index=${encodeURIComponent(index)}`,
     ),
+  // --- trade analysis ---
+  analysisRuns: () => request<AnalysisRunItem[]>("/analysis/runs"),
+  runAnalysis: (id: number) => request<RunAnalysis>(`/runs/${id}/analysis`),
+  stockSeries: (
+    symbol: string,
+    opts: { start?: string; end?: string; st_period?: number; st_multiplier?: number; st_timeframe?: string } = {},
+  ) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(opts)) if (v != null && v !== "") q.set(k, String(v));
+    const qs = q.toString();
+    return request<StockSeries>(`/data/stocks/${encodeURIComponent(symbol)}/series${qs ? `?${qs}` : ""}`);
+  },
 
   // --- options & futures data (no broker session needed) ---
   optionsUnderlyings: () => request<UnderlyingList>("/data/options/underlyings"),
@@ -160,6 +175,7 @@ export const api = {
       { method: "POST", body: JSON.stringify(body) },
     ),
   liveGreeksHistory: (id: number) => request<GreeksHistory>(`/live/${id}/greeks-history`),
+  liveTrades: (id: number) => request<{ run_id: number; trades: Trade[] }>(`/live/${id}/trades`),
   liveDeployments: (status?: string) =>
     request<Deployment[]>(`/live/deployments${status ? `?status=${status}` : ""}`),
   liveArchive: (id: number) => request(`/live/${id}/archive`, { method: "POST" }),

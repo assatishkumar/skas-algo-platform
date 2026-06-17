@@ -55,17 +55,17 @@ function bestIndex(runs: CompareRun[], key: keyof Metrics, better: Better): numb
 }
 
 const REASON_STYLE: Record<string, string> = {
-  target: "text-emerald-400",
-  stop: "text-rose-400",
-  time: "text-sky-400",
-  expiry: "text-amber-400",
+  target: "text-emerald-600 dark:text-emerald-400",
+  stop: "text-rose-600 dark:text-rose-400",
+  time: "text-sky-600 dark:text-sky-400",
+  expiry: "text-amber-600 dark:text-amber-400",
   manual: "text-slate-400",
   mixed: "text-violet-400",
 };
 
 function pnlCls(v: number | null | undefined): string {
   if (v == null) return "text-slate-600";
-  return v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-slate-400";
+  return v > 0 ? "text-emerald-600 dark:text-emerald-400" : v < 0 ? "text-rose-600 dark:text-rose-400" : "text-slate-400";
 }
 
 /** Options-strategy comparison: per-run lifecycle stats side by side. */
@@ -124,7 +124,7 @@ function OptionsSummaryCompare({ runs }: { runs: CompareRun[] }) {
                 <tr key={row.label} className="border-t border-slate-800">
                   <td className="py-1.5 pr-4 text-slate-400">{row.label}</td>
                   {vals.map((v, i) => (
-                    <td key={runs[i].run_id} className={`py-1.5 pr-4 text-right ${i === bi ? "text-emerald-400 font-semibold" : ""}`}>
+                    <td key={runs[i].run_id} className={`py-1.5 pr-4 text-right ${i === bi ? "text-emerald-600 dark:text-emerald-400 font-semibold" : ""}`}>
                       {v == null ? "—" : typeof v === "number" ? (row.fmt ?? String)(v) : v}
                     </td>
                   ))}
@@ -266,7 +266,7 @@ function ParamCompare({ runs }: { runs: CompareRun[] }) {
               const diff = differs(k);
               return (
                 <tr key={k} className={`border-t border-slate-800 ${diff ? "bg-amber-900/10" : ""}`}>
-                  <td className={`py-1.5 pr-4 ${diff ? "text-amber-300" : "text-slate-400"}`}>
+                  <td className={`py-1.5 pr-4 ${diff ? "text-amber-700 dark:text-amber-300" : "text-slate-400"}`}>
                     {paramLabel(k)}
                   </td>
                   {merged.map((p, i) => (
@@ -345,7 +345,7 @@ function GrowthChart({ runs }: { runs: CompareRun[] }) {
           <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#94a3b8" }} minTickGap={40} />
           <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} width={50} tickFormatter={(v) => `${v.toFixed(0)}`} />
           <Tooltip
-            contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
+            contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }}
             formatter={(v: number) => v?.toFixed(1)}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -443,7 +443,7 @@ export default function ComparePage() {
                     {runs.map((r, i) => (
                       <td
                         key={r.run_id}
-                        className={`py-1.5 pr-4 text-right ${i === bi ? "text-emerald-400 font-semibold" : ""}`}
+                        className={`py-1.5 pr-4 text-right ${i === bi ? "text-emerald-600 dark:text-emerald-400 font-semibold" : ""}`}
                       >
                         {row.fmt(r.metrics[row.key] ?? 0)}
                       </td>

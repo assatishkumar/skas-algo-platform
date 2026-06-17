@@ -192,9 +192,9 @@ function OptionChainTable({ rows, atm, greeks }: { rows: OptionChainRow[]; atm: 
             <th className="py-1 px-2 text-right">CE Δ-OI</th>
             {greeks && <th className="py-1 px-2 text-right">CE IV</th>}
             {greeks && <th className="py-1 px-2 text-right">CE δ</th>}
-            <th className="py-1 px-2 text-right text-emerald-300">CE LTP</th>
+            <th className="py-1 px-2 text-right text-emerald-700 dark:text-emerald-300">CE LTP</th>
             <th className="py-1 px-2 text-center font-semibold">STRIKE</th>
-            <th className="py-1 px-2 text-left text-rose-300">PE LTP</th>
+            <th className="py-1 px-2 text-left text-rose-700 dark:text-rose-300">PE LTP</th>
             {greeks && <th className="py-1 px-2 text-left">PE δ</th>}
             {greeks && <th className="py-1 px-2 text-left">PE IV</th>}
             <th className="py-1 px-2 text-left">PE Δ-OI</th>
@@ -204,8 +204,8 @@ function OptionChainTable({ rows, atm, greeks }: { rows: OptionChainRow[]; atm: 
         <tbody>
           {rows.map((r) => {
             const isAtm = atm != null && r.strike === atm;
-            const ceLtp = `py-1 px-2 text-right text-emerald-300 ${isAtm ? "bg-emerald-500/20 font-bold ring-1 ring-inset ring-emerald-500/40" : ""}`;
-            const peLtp = `py-1 px-2 text-left text-rose-300 ${isAtm ? "bg-rose-500/20 font-bold ring-1 ring-inset ring-rose-500/40" : ""}`;
+            const ceLtp = `py-1 px-2 text-right text-emerald-700 dark:text-emerald-300 ${isAtm ? "bg-emerald-500/20 font-bold ring-1 ring-inset ring-emerald-500/40" : ""}`;
+            const peLtp = `py-1 px-2 text-left text-rose-700 dark:text-rose-300 ${isAtm ? "bg-rose-500/20 font-bold ring-1 ring-inset ring-rose-500/40" : ""}`;
             return (
               <tr
                 key={r.strike}
@@ -217,7 +217,7 @@ function OptionChainTable({ rows, atm, greeks }: { rows: OptionChainRow[]; atm: 
                 {greeks && <td className="py-1 px-2 text-right text-slate-400">{r.ce?.iv != null ? pct(r.ce.iv * 100, 1) : "—"}</td>}
                 {greeks && <td className="py-1 px-2 text-right text-slate-400">{fmtNum(r.ce?.delta)}</td>}
                 <td className={ceLtp}>{fmtNum(r.ce?.ltp ?? r.ce?.close)}</td>
-                <td className={`py-1 px-2 text-center font-semibold ${isAtm ? "text-amber-300" : "text-slate-200"}`}>{r.strike}</td>
+                <td className={`py-1 px-2 text-center font-semibold ${isAtm ? "text-amber-700 dark:text-amber-300" : "text-slate-200"}`}>{r.strike}</td>
                 <td className={peLtp}>{fmtNum(r.pe?.ltp ?? r.pe?.close)}</td>
                 {greeks && <td className="py-1 px-2 text-left text-slate-400">{fmtNum(r.pe?.delta)}</td>}
                 {greeks && <td className="py-1 px-2 text-left text-slate-400">{r.pe?.iv != null ? pct(r.pe.iv * 100, 1) : "—"}</td>}
@@ -287,7 +287,7 @@ function OptionChainViewer({ underlying, coverageEnd }: { underlying: string; co
           </span>
         )}
         {chain?.synthetic && (
-          <span className="text-[11px] text-amber-300 pb-1.5">⚠ synthetic — model prices (BS), not traded premiums</span>
+          <span className="text-[11px] text-amber-700 dark:text-amber-300 pb-1.5">⚠ synthetic — model prices (BS), not traded premiums</span>
         )}
       </div>
       {isLoading ? (
@@ -365,7 +365,7 @@ export function OptionsDataSection() {
     <div className="space-y-4">
       <UnderlyingSelector value={underlying} onChange={setUnderlying} items={OPT_UNDERLYINGS} />
       {isGold && (
-        <div className="text-[11px] text-amber-300/90">
+        <div className="text-[11px] text-amber-700 dark:text-amber-300/90">
           GOLD is on MCX (no NSE bhavcopy) — its chain is <b>synthetic</b>: Black-76 (options on futures)
           priced from the realized volatility of the cached GOLD futures series × an implied-vol premium,
           on GOLDM specs (100 g lot, ₹500 strikes, expiry ~26th). Useful for mechanics, not market premiums.
@@ -409,7 +409,7 @@ function FuturesChart({ underlying, refreshKey }: { underlying: string; refreshK
               tickFormatter={(v) => `${(v / 1e3).toFixed(1)}k`}
             />
             <Tooltip
-              contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
+              contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }}
               formatter={(v: number) => formatInr(v)}
               labelFormatter={(d, payload) => {
                 const exp = payload?.[0]?.payload?.expiry;

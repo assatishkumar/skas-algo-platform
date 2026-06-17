@@ -132,7 +132,7 @@ export default function RunDetailPage() {
         </h1>
         <div className="ml-auto flex items-center gap-2 text-sm">
           {templatesData?.templates?.[data.strategy_id]?.run_id === runId ? (
-            <span className="rounded-md bg-amber-950/60 text-amber-300 px-3 py-1.5" title="New backtests of this strategy prefill from this run">
+            <span className="rounded-md bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 px-3 py-1.5" title="New backtests of this strategy prefill from this run">
               ★ Strategy template
             </span>
           ) : (
@@ -189,7 +189,15 @@ export default function RunDetailPage() {
         }}
       />
 
-      <ReportView report={data.report} trades={data.trades} csvUrl={api.tradesCsvUrl(runId)} runId={runId} />
+      <ReportView
+        report={data.report}
+        trades={data.trades}
+        csvUrl={api.tradesCsvUrl(runId)}
+        runId={runId}
+        defaultBenchmark={
+          (data.params as Record<string, unknown>)?.universe === "nifty500" ? "NIFTY 500" : undefined
+        }
+      />
     </div>
   );
 }

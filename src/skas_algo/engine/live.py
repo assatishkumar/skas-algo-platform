@@ -271,7 +271,9 @@ class LiveSession:
     def export_state(self) -> dict:
         """Full session state so a running run can be rebuilt after a restart.
 
-        Market history is NOT persisted — it's re-warmed from the cache on recovery.
+        Market history is NOT persisted — it's re-warmed from the cache on recovery. Executed
+        trades ARE persisted (capped) so a CLOSED cycle keeps its realized P&L + trade log across
+        restarts (otherwise the live card goes blank after the position exits).
         """
         return {
             "portfolio": self.portfolio.export_state(),
@@ -284,7 +286,16 @@ class LiveSession:
                 for o in self.resolver.overrides
             ],
             "current_month": list(self._current_month) if self._current_month else None,
+            "transactions": [self._ser_txn(t) for t in self.transactions[-5000:]],
         }
+
+    @staticmethod
+    def _ser_txn(t: dict) -> dict:
+        out = dict(t)
+        d = out.get("date")
+        if hasattr(d, "isoformat"):
+            out["date"] = d.isoformat()
+        return out
 
     def load_state(self, state: dict) -> None:
         from skas_algo.engine.overrides import OverrideRule
@@ -301,6 +312,20 @@ class LiveSession:
         ]
         cm = state.get("current_month")
         self._current_month = tuple(cm) if cm else None
+        # Restore executed trades, reviving the date back to a date object (downstream
+        # serialization/report code calls .strftime on it).
+        self.transactions = [self._rev_txn(t) for t in state.get("transactions", [])]
+
+    @staticmethod
+    def _rev_txn(t: dict) -> dict:
+        out = dict(t)
+        d = out.get("date")
+        if isinstance(d, str):
+            try:
+                out["date"] = date.fromisoformat(d[:10])
+            except ValueError:
+                pass
+        return out
 
     # ----------------------------------------------------------- views
     def snapshot(self) -> dict:

@@ -56,6 +56,7 @@ class BacktestRunner:
         settler=None,
         margin_model=None,
         charge_model=None,
+        supertrend=None,
     ):
         self.strategy = strategy
         self.universe = universe
@@ -73,11 +74,14 @@ class BacktestRunner:
         self.settler = settler
         self.margin_model = margin_model
         self.charge_model = charge_model
+        # Optional SuperTrend precompute config ({"period","multiplier","timeframe"}); the
+        # feed builds the equity view with SuperTrend when set.
+        self.supertrend = supertrend
 
     def run(self, start_date: date, end_date: date) -> RunResult:
-        view = self.market_view or HistoricalReplayFeed(self.loader, self.lookback).build(
-            self.universe, start_date, end_date, verbose=self.verbose
-        )
+        view = self.market_view or HistoricalReplayFeed(
+            self.loader, self.lookback, supertrend=self.supertrend
+        ).build(self.universe, start_date, end_date, verbose=self.verbose)
         portfolio = Portfolio(cash=self.initial_capital)
         stops = StopBook()
         broker = BacktestBroker(price_fn=view.close, fill_model=self.fill_model)

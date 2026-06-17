@@ -160,7 +160,13 @@ class OverrideResolver:
         rule = self._match(sig.symbol, lot.id)
         exit_rules = (rule or {}).get("exit") if rule else None
         if not exit_rules:
-            return [CloseLot(sig.symbol, lot.id, lot.units, tag="STRATEGY")]
+            # Honour a strategy-set partial quantity (e.g. book 50% now, ride the rest);
+            # quantity=None → full close, so existing EXIT signals are unchanged.
+            units = lot.units
+            if sig.quantity is not None and sig.quantity > 0:
+                units = min(int(sig.quantity), lot.units)
+            tag = sig.meta.get("tag", "STRATEGY") if sig.meta else "STRATEGY"
+            return [CloseLot(sig.symbol, lot.id, units, tag=tag)]
 
         book = next((r for r in exit_rules if r.get("action") == "book"), None)
         trail = next((r for r in exit_rules if r.get("action") == "trail_sl"), None)

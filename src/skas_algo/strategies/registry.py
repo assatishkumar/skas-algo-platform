@@ -19,6 +19,7 @@ from .short_premium import ShortPremiumStrategy
 from .sst_fifo import SSTFifoStrategy
 from .sst_lifo import SSTLifoStrategy
 from .sst_weekly import SSTWeeklyFifoStrategy, SSTWeeklyStrategy
+from .supertrend_momentum import SuperTrendMomentumStrategy
 from .staggered_covered_call import StaggeredCoveredCallStrategy
 
 # strategy_id -> factory(universe, **params) -> strategy instance
@@ -27,6 +28,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     SSTFifoStrategy.strategy_id: SSTFifoStrategy,
     SSTWeeklyStrategy.strategy_id: SSTWeeklyStrategy,
     SSTWeeklyFifoStrategy.strategy_id: SSTWeeklyFifoStrategy,
+    SuperTrendMomentumStrategy.strategy_id: SuperTrendMomentumStrategy,
     NiftyShopStrategy.strategy_id: NiftyShopStrategy,
     ShortPremiumStrategy.strategy_id: ShortPremiumStrategy,
     CallRatioMonthlyStrategy.strategy_id: CallRatioMonthlyStrategy,

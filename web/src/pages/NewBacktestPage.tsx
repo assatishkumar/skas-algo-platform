@@ -84,6 +84,15 @@ export default function NewBacktestPage() {
   // SST Weekly param (weekly Donchian window)
   const [donchianWeeks, setDonchianWeeks] = useState(20);
 
+  // SuperTrend Momentum params
+  const [stTimeframe, setStTimeframe] = useState("daily");
+  const [stPeriod, setStPeriod] = useState(10);
+  const [stMult, setStMult] = useState(3);
+  const [stBookPct, setStBookPct] = useState(50); // % booked at the profit target (100 = full)
+  const [stEntryMode, setStEntryMode] = useState("flip"); // "flip" | "pullback"
+  const [stPullbackPct, setStPullbackPct] = useState(0); // min dip below the post-flip peak
+  const [stIdleReturn, setStIdleReturn] = useState(6); // assumed idle-cash yield %/yr (reporting)
+
   // Nifty_Shop params (DMA-dip accumulator; the Lookback field is the DMA window)
   const [nsAllocPct, setNsAllocPct] = useState(4); // % of equity per trade (compounds)
   const [nsTarget, setNsTarget] = useState(5); // exit a name at +this% over avg cost
@@ -165,6 +174,7 @@ export default function NewBacktestPage() {
   const isNiftyShop = strategyId === "nifty_shop";
   const isSstWeekly = strategyId === "sst_weekly";
   const isSstWeeklyFifo = strategyId === "sst_weekly_fifo";
+  const isSupertrend = strategyId === "supertrend_momentum";
   const isWeeklyDonchian = isSstWeekly || isSstWeeklyFifo; // both expose donchian_weeks
   const isTiered = isFifo || isSstWeeklyFifo; // FIFO-style tiered profit targets
   const isCallRatio = ["call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly"].includes(strategyId);
@@ -462,9 +472,20 @@ export default function NewBacktestPage() {
           }
         : {
             capital_parts: parts,
-            max_lots: maxLots,
+            ...(isSupertrend ? {} : { max_lots: maxLots }),
             allocation_mode: allocationMode,
             ...(isWeeklyDonchian ? { donchian_weeks: donchianWeeks } : {}),
+            ...(isSupertrend
+              ? {
+                  timeframe: stTimeframe,
+                  supertrend_period: stPeriod,
+                  supertrend_multiplier: stMult,
+                  partial_book_pct: stBookPct / 100,
+                  entry_mode: stEntryMode,
+                  pullback_pct: stPullbackPct / 100,
+                  idle_return: stIdleReturn / 100,
+                }
+              : {}),
             ...(isTiered
               ? {
                   profit_target_1: target1 / 100,
@@ -551,7 +572,7 @@ export default function NewBacktestPage() {
             </Field>
           </div>
           {appliedTemplate && (
-            <div className="flex items-center gap-2 rounded-md bg-amber-950/40 border border-amber-900/50 px-3 py-2 text-xs text-amber-200">
+            <div className="flex items-center gap-2 rounded-md bg-amber-100 text-amber-800 border border-amber-300 dark:bg-amber-950/40 dark:border-amber-900/50 dark:text-amber-200 px-3 py-2 text-xs">
               <span>
                 ★ Params prefilled from this strategy's template:{" "}
                 <Link to={`/runs/${appliedTemplate.run_id}`} className="underline hover:text-amber-100">
@@ -619,7 +640,7 @@ export default function NewBacktestPage() {
 
           {isHni ? (
             <div key="hni-params" className="grid md:grid-cols-3 gap-4">
-              <div className="md:col-span-3 text-[11px] text-amber-300/90">
+              <div className="md:col-span-3 text-[11px] text-amber-700 dark:text-amber-300/90">
                 HNI Weekly: net-zero 1-3-2 call ratio "tent" — BUY 1× ~200 OTM, SELL 3× ~400 OTM,
                 BUY 2× ~600 OTM on the ~8-DTE weekly (enter Monday, force-exit Friday; no weekend
                 carry). Target/stop are % of DEPLOYED MARGIN (≈ ₹1.32L per lot-set), not capital.
@@ -672,7 +693,7 @@ export default function NewBacktestPage() {
             </div>
           ) : isCoveredCall ? (
             <div key="cc-params" className="grid md:grid-cols-3 gap-4">
-              <div className="md:col-span-3 text-[11px] text-amber-300/90">
+              <div className="md:col-span-3 text-[11px] text-amber-700 dark:text-amber-300/90">
                 Staggered covered call: SELL 1 monthly CE ~OTM% against the INTENDED full ETF
                 position, but buy the ETF in 3 tranches — T1 at entry (~33% covered / 67% naked),
                 T2/T3 fire GTT-style as spot closes over S + ⅓/⅔ of the gap to the strike. When
@@ -740,7 +761,7 @@ export default function NewBacktestPage() {
             </div>
           ) : isCallRatio ? (
             <div key="ratio-params" className="grid md:grid-cols-3 gap-4">
-              <div className="md:col-span-3 text-[11px] text-amber-300/90">
+              <div className="md:col-span-3 text-[11px] text-amber-700 dark:text-amber-300/90">
                 {ratioSide === "batman"
                   ? "Batman: BOTH 1:2 ratio wings (call above + put below spot, each hedged; 6 legs). Both wings must qualify for credit or the month is skipped; one combined target/stop/time exit. Risk = a fast move EITHER way; margin ≈ ₹2L per lot."
                   : ratioSide === "put"
@@ -915,13 +936,49 @@ export default function NewBacktestPage() {
                     <NumberInput step="0.1" className={inputClass} value={target} onChange={setTarget} />
                   </Field>
                 )}
-                <Field label="Max lots (0 = unlimited)">
-                  <NumberInput className={inputClass} value={maxLots} onChange={setMaxLots} />
-                </Field>
+                {!isSupertrend && (
+                  <Field label="Max lots (0 = unlimited)">
+                    <NumberInput className={inputClass} value={maxLots} onChange={setMaxLots} />
+                  </Field>
+                )}
                 {isWeeklyDonchian && (
                   <Field label="Donchian (weeks)">
                     <NumberInput className={inputClass} value={donchianWeeks} onChange={setDonchianWeeks} />
                   </Field>
+                )}
+                {isSupertrend && (
+                  <>
+                    <Field label="Timeframe">
+                      <select className={inputClass} value={stTimeframe} onChange={(e) => setStTimeframe(e.target.value)}>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                      </select>
+                    </Field>
+                    <Field label="SuperTrend ATR period">
+                      <NumberInput className={inputClass} value={stPeriod} onChange={setStPeriod} />
+                    </Field>
+                    <Field label="SuperTrend multiplier">
+                      <NumberInput step="0.1" className={inputClass} value={stMult} onChange={setStMult} />
+                    </Field>
+                    <Field label="Book % at target (100 = full)">
+                      <NumberInput step="1" className={inputClass} value={stBookPct} onChange={setStBookPct} />
+                    </Field>
+                    <Field label="Entry">
+                      <select className={inputClass} value={stEntryMode} onChange={(e) => setStEntryMode(e.target.value)}>
+                        <option value="flip">On green flip</option>
+                        <option value="pullback">Pullback breakout</option>
+                      </select>
+                    </Field>
+                    {stEntryMode === "pullback" && (
+                      <Field label="Min pullback %">
+                        <NumberInput step="0.1" className={inputClass} value={stPullbackPct} onChange={setStPullbackPct} />
+                      </Field>
+                    )}
+                    <Field label="Idle cash return %/yr">
+                      <NumberInput step="0.5" className={inputClass} value={stIdleReturn} onChange={setStIdleReturn} />
+                    </Field>
+                  </>
                 )}
               </>
             )}
@@ -931,7 +988,7 @@ export default function NewBacktestPage() {
             <Field label="Withdrawal rate %">
               <NumberInput step="1" className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} />
             </Field>
-            <Field label="Lookback (days)">
+            <Field label={isSupertrend ? "Entry delay (bars)" : "Lookback (days)"}>
               <NumberInput className={inputClass} value={lookback} onChange={setLookback} />
             </Field>
             {!isNiftyShop && (

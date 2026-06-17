@@ -39,7 +39,7 @@ class MarketLike(Protocol):
 class MarketView:
     """Per-symbol price series with a movable 'current date' cursor."""
 
-    def __init__(self, lookback: int):
+    def __init__(self, lookback: int, supertrend: dict | None = None):
         self.lookback = lookback
         self.unified_dates: list[pd.Timestamp] = []
         self._current: pd.Timestamp | None = None
@@ -48,6 +48,10 @@ class MarketView:
         self._universe_order: list[str] = []
         # Most recent close seen per symbol, forward-filled as the cursor advances.
         self._last_close: dict[str, float] = {}
+        # Optional SuperTrend precompute: {"period","multiplier","timeframe"} → per-symbol
+        # daily-mapped direction (+1/−1). Only computed when requested (equity supertrend).
+        self._st_cfg = supertrend
+        self._supertrend: dict[str, dict[pd.Timestamp, float]] = {}
 
     # ------------------------------------------------------------- building
     def add_symbol(self, symbol: str, df: pd.DataFrame) -> None:
@@ -61,6 +65,16 @@ class MarketView:
         self._series[symbol] = {
             ts: (close.loc[ts], high.loc[ts], low.loc[ts], mean.loc[ts]) for ts in close.index
         }
+        if self._st_cfg is not None:
+            from skas_algo.engine.indicators.supertrend import supertrend_direction
+
+            sd = supertrend_direction(
+                df.reset_index(),  # supertrend_direction reads OHLC (has high/low here)
+                period=int(self._st_cfg.get("period", 10)),
+                multiplier=float(self._st_cfg.get("multiplier", 3.0)),
+                timeframe=str(self._st_cfg.get("timeframe", "daily")),
+            )
+            self._supertrend[symbol] = {ts: float(v) for ts, v in sd.items() if pd.notna(v)}
         self._universe_order.append(symbol)
 
     def finalize(self) -> None:
@@ -113,6 +127,11 @@ class MarketView:
         """The prior-N moving average (DMA), excluding today — same window as the levels."""
         return self._row(symbol)[3]  # type: ignore[index]
 
+    def supertrend_dir(self, symbol: str) -> float | None:
+        """SuperTrend direction (+1 green / −1 red) at the cursor date, or None if not computed
+        / not yet warmed up. Present only when the view was built with supertrend params."""
+        return self._supertrend.get(symbol, {}).get(self._current)
+
     def closes_today(self) -> dict[str, float]:
         """Prices actually printed today (for stop evaluation / fills)."""
         out: dict[str, float] = {}
@@ -134,14 +153,15 @@ class MarketView:
 class HistoricalReplayFeed:
     """Loads history for a universe and replays the unified calendar (BACKTEST)."""
 
-    def __init__(self, loader: PriceLoader, lookback: int):
+    def __init__(self, loader: PriceLoader, lookback: int, supertrend: dict | None = None):
         self.loader = loader
         self.lookback = lookback
+        self.supertrend = supertrend
 
     def build(
         self, universe: list[str], start_date: date, end_date: date, verbose: bool = False
     ) -> MarketView:
-        view = MarketView(self.lookback)
+        view = MarketView(self.lookback, supertrend=self.supertrend)
         for symbol in universe:
             df = self.loader(symbol, start_date, end_date)
             if df is not None and not df.empty:
