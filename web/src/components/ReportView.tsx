@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { formatInr, pct } from "../lib/format";
 import type { Report, Trade } from "../types";
@@ -82,8 +83,8 @@ function EquityChart({ report, runId, defaultBenchmark }: { report: Report; runI
               type="monotone"
               dataKey="gross_equity"
               name="Strategy (gross)"
-              stroke="#14b8a6"
-              strokeDasharray="4 3"
+              stroke="#8b5cf6"
+              strokeDasharray="5 3"
               dot={false}
               strokeWidth={1.5}
             />
@@ -133,7 +134,9 @@ function YearlyTable({ report }: { report: Report }) {
               <th className="py-1 pr-4 text-right">Return %</th>
               <th className="py-1 pr-4 text-right">Portfolio</th>
               <th className="py-1 pr-4 text-right">Taxes</th>
-              <th className="py-1 pr-4 text-right">Max DD %</th>
+              <th className="py-1 pr-4 text-right" title="Largest peak-to-trough drop WITHIN this calendar year (the high-water mark resets each year).">
+                Max DD %
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -155,11 +158,15 @@ function YearlyTable({ report }: { report: Report }) {
           </tbody>
         </table>
       </div>
+      <div className="text-xs text-slate-500 mt-2">
+        Per-year Max DD resets at each year start, so it can be smaller than the headline Max
+        Drawdown above — a single drawdown that spans a year-end is measured in full only there.
+      </div>
     </Card>
   );
 }
 
-function TradesTable({ trades }: { trades: Trade[] }) {
+function TradesTable({ trades, runId }: { trades: Trade[]; runId?: number }) {
   const [tag, setTag] = useState<string>("ALL");
   const tags = useMemo(
     () => ["ALL", ...Array.from(new Set(trades.map((t) => t.tag)))],
@@ -173,8 +180,19 @@ function TradesTable({ trades }: { trades: Trade[] }) {
   return (
     <Card>
       <div className="flex items-center justify-between mb-3">
-        <div className="text-sm font-medium text-slate-300">
-          Trades <span className="text-slate-500">({trades.length})</span>
+        <div className="flex items-center gap-3">
+          <div className="text-sm font-medium text-slate-300">
+            Trades <span className="text-slate-500">({trades.length})</span>
+          </div>
+          {runId != null && (
+            <Link
+              to={`/analyze?run=${runId}`}
+              className="rounded-md bg-brand hover:bg-brand-light text-white px-2.5 py-1 text-xs font-medium"
+              title="Open this run in the Analyze view (per-stock round-trips + charts)"
+            >
+              Analyze →
+            </Link>
+          )}
         </div>
         <div className="flex gap-1">
           {tags.map((t) => (
@@ -316,6 +334,14 @@ export default function ReportView({
   // key carries the configured rate (e.g. "CAGR (idle @ 6%) %"), so find it dynamically.
   const idleKey = Object.keys(m).find((k) => k.startsWith("CAGR (idle @"));
   const idleCagr = idleKey ? (m as unknown as Record<string, number>)[idleKey] : undefined;
+  // Deployed return per year (simple). Back-fill for runs scored before this metric existed:
+  // lifetime "Return on Deployed Capital %" / years (years from the equity-curve span).
+  const ec = report.equity_curve ?? [];
+  const spanYears =
+    ec.length > 1 ? (Date.parse(ec[ec.length - 1].date) - Date.parse(ec[0].date)) / (365.25 * 86_400_000) : 0;
+  const rodLifetime = m["Return on Deployed Capital %"];
+  const deployedPerYr =
+    m["Deployed Return %/yr"] ?? (rodLifetime != null && spanYears > 0 ? rodLifetime / spanYears : undefined);
   return (
     <div className="space-y-4">
       {report.options ? (
@@ -345,11 +371,11 @@ export default function ReportView({
           <MetricCard label="Avg Monthly Net P&L" value={formatInr(netMonthly)} tone={netMonthly >= 0 ? "good" : "bad"} />
           <MetricCard label="Avg Winners' Profit (Pre-Tax)" value={formatInr(m["Avg Monthly Profit (Pre-Tax)"])} />
           <MetricCard label="Avg Winners' Profit (Post-Tax)" value={formatInr(m["Avg Monthly Profit (Post-Tax)"])} />
-          {m["Deployed CAGR %"] != null && (
-            <MetricCard label="Deployed CAGR" value={pct(m["Deployed CAGR %"])} tone="good" />
+          {deployedPerYr != null && (
+            <MetricCard label="Deployed Return / yr" value={pct(deployedPerYr)} tone="good" />
           )}
           {m["Return on Deployed Capital %"] != null && (
-            <MetricCard label="Return on Deployed Capital" value={pct(m["Return on Deployed Capital %"])} />
+            <MetricCard label="Return on Deployed (lifetime)" value={pct(m["Return on Deployed Capital %"])} />
           )}
           {m["Avg Deployed Capital"] != null && (
             <MetricCard label="Avg Deployed Capital" value={formatInr(m["Avg Deployed Capital"])} />
@@ -391,7 +417,7 @@ export default function ReportView({
         total="eoy"
         totalLabel="EoY"
       />
-      <TradesTable trades={trades} />
+      <TradesTable trades={trades} runId={runId} />
       {csvUrl && (
         <a
           href={csvUrl}

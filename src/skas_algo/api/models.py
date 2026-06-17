@@ -49,11 +49,22 @@ class BacktestRequest(BaseModel):
     notes: str | None = None
     batch_id: str | None = None  # set by a sweep to group its variant runs
     overrides: list[OverrideInput] = Field(default_factory=list)
+    # False → compute + return the report/trades WITHOUT persisting an Algo/AlgoRun (preview).
+    # The client then calls /backtest/save to persist the already-computed result.
+    persist: bool = True
 
 
 class BacktestResponse(BaseModel):
-    run_id: int
+    run_id: int | None = None  # None for a non-persisted preview
     strategy_id: str
+    report: dict
+    trades: list[dict]
+
+
+class SaveBacktestRequest(BaseModel):
+    """Persist a previously-previewed backtest WITHOUT recomputing it."""
+
+    request: BacktestRequest
     report: dict
     trades: list[dict]
 

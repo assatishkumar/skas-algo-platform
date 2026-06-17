@@ -39,11 +39,16 @@ export default function GreeksPanel({ run }: { run: LiveRunSnapshot }) {
     queryFn: () => api.liveGreeksHistory(run.run_id),
     refetchInterval: 30000,
   });
-  // Market-hours samples only; re-indexed so consecutive sessions are contiguous (no overnight gap).
-  const rows = (data?.points ?? [])
+  // Prefer market-hours samples (re-indexed so consecutive sessions are contiguous — overnight
+  // gaps collapse). But fall back to ALL samples when none land in market hours, so a run that was
+  // sampled off-hours (paper tests / backdated seed runs / evening sessions) still shows its history
+  // instead of a perpetual "Collecting…".
+  const allPts = (data?.points ?? [])
     .map((p) => ({ t: p.ts ? new Date(p.ts).getTime() : 0, delta: p.net_delta, iv: p.net_iv != null ? p.net_iv * 100 : null, pnl: p.pnl }))
-    .filter((r) => r.t && marketHourIST(r.t))
-    .map((r, i) => ({ ...r, i }));
+    .filter((r) => r.t);
+  const marketPts = allPts.filter((r) => marketHourIST(r.t));
+  const mhOnly = marketPts.length > 1;
+  const rows = (mhOnly ? marketPts : allPts).map((r, i) => ({ ...r, i }));
 
   const netDelta = run.net_delta;
   const netIv = run.net_iv;
@@ -114,7 +119,7 @@ export default function GreeksPanel({ run }: { run: LiveRunSnapshot }) {
           </ResponsiveContainer>
           <div className="text-xs text-slate-500 mt-1">
             <span className="text-emerald-600 dark:text-emerald-400">▮ P&L</span> · <span className="text-sky-600 dark:text-sky-400">— Net Δ</span> ·{" "}
-            <span className="text-amber-600 dark:text-amber-400">— IV %</span> over time (market hours only)
+            <span className="text-amber-600 dark:text-amber-400">— IV %</span> over time {mhOnly ? "(market hours only)" : "(all samples)"}
           </div>
         </div>
       ) : (

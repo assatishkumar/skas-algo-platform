@@ -16,6 +16,7 @@ from skas_algo.api.models import (
     BacktestResponse,
     DeploymentUpdate,
     RunSummary,
+    SaveBacktestRequest,
     UniverseOut,
     iso_utc,
 )
@@ -24,7 +25,7 @@ from skas_algo.data.provider import get_available_symbols, get_price_loader
 from skas_algo.db.enums import TradingMode
 from skas_algo.db.models import Algo, AlgoRun, Order, StrategyTemplate
 from skas_algo.engine.market import PriceLoader
-from skas_algo.services.backtest import run_backtest
+from skas_algo.services.backtest import persist_backtest, run_backtest
 from skas_algo.services.benchmark import BENCHMARK_INDICES, benchmark_series
 from skas_algo.services.runs import delete_algo_cascade
 from skas_algo.strategies.registry import available
@@ -68,6 +69,23 @@ def list_universes(
     ]
 
 
+def _resolve_universe(req: BacktestRequest, avail: set[str]) -> None:
+    """Expand a named equity universe to its cached symbols, validating the request in place."""
+    # Options (DERIV) runs trade a dynamic option chain for an underlying, so they
+    # need neither explicit symbols nor a named equity universe.
+    if req.instrument_class.upper() == "DERIV":
+        if not (req.underlying or req.params.get("underlying")):
+            raise HTTPException(status_code=422, detail="underlying required for a DERIV backtest")
+        return
+    if req.universe:
+        try:
+            req.symbols = universes.resolve(req.universe, avail)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not req.symbols:
+        raise HTTPException(status_code=422, detail="symbols or a valid universe required")
+
+
 @router.post("/backtest", response_model=BacktestResponse)
 def post_backtest(
     req: BacktestRequest,
@@ -75,22 +93,24 @@ def post_backtest(
     loader: PriceLoader = Depends(get_price_loader),
     avail: set[str] = Depends(get_available_symbols),
 ) -> BacktestResponse:
-    # Options (DERIV) runs trade a dynamic option chain for an underlying, so they
-    # need neither explicit symbols nor a named equity universe.
-    is_deriv = req.instrument_class.upper() == "DERIV"
-    if not is_deriv:
-        # A named universe expands to its cached symbols; otherwise use explicit symbols.
-        if req.universe:
-            try:
-                req.symbols = universes.resolve(req.universe, avail)
-            except KeyError as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
-        if not req.symbols:
-            raise HTTPException(status_code=422, detail="symbols or a valid universe required")
-    elif not (req.underlying or req.params.get("underlying")):
-        raise HTTPException(status_code=422, detail="underlying required for a DERIV backtest")
+    _resolve_universe(req, avail)
     try:
         result = run_backtest(db, loader, req)
+    except KeyError as exc:  # unknown strategy_id
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return BacktestResponse(**result)
+
+
+@router.post("/backtest/save", response_model=BacktestResponse)
+def save_backtest(
+    body: SaveBacktestRequest,
+    db: Session = Depends(get_db),
+    avail: set[str] = Depends(get_available_symbols),
+) -> BacktestResponse:
+    """Persist a previously-previewed backtest (its report + trades) without recomputing."""
+    _resolve_universe(body.request, avail)
+    try:
+        result = persist_backtest(db, body.request, body.report, body.trades)
     except KeyError as exc:  # unknown strategy_id
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return BacktestResponse(**result)

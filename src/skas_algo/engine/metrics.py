@@ -104,10 +104,15 @@ def _deployed_idle_metrics(history, years, total_value, initial_capital, idle_re
 
     out: dict = {"Avg Deployed Capital": avg_deployed}
     if avg_deployed > 0:
+        # Lifetime (cumulative) return measured against the average rupees actually at work.
         out["Return on Deployed Capital %"] = profit / avg_deployed * 100
-        ratio = 1 + profit / avg_deployed
-        if years > 0 and ratio > 0:
-            out["Deployed CAGR %"] = (ratio ** (1 / years) - 1) * 100
+        if years > 0:
+            # Per-year return on deployed capital, SIMPLE (arithmetic) annualization.
+            # A geometric CAGR — (1 + profit/avg_deployed)^(1/years) − 1 — is invalid here:
+            # `profit` is cumulative against the INITIAL capital while `avg_deployed` is a time
+            # average that grows with equity-scaled sizing, so over many years the geometric root
+            # crushes the figure below the true CAGR. The simple per-rupee-year yield is coherent.
+            out["Deployed Return %/yr"] = profit / avg_deployed / years * 100
 
     # Idle cash compounding at idle_return/yr over each inter-day interval.
     idle_interest = 0.0

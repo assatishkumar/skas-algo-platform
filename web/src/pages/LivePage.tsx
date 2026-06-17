@@ -782,6 +782,10 @@ function DeploymentTile({
   // Options tiles surface margin + net credit/debit instead of equity value.
   const marginUsed = snapshot?.margin_used ?? m.margin_used ?? null;
   const netCredit = snapshot?.net_credit ?? m.net_credit ?? null;
+  const realized = snapshot?.realized_pnl ?? m.realized_pnl ?? null;
+  // An options run that has flattened (no open legs) → show its booked Realized P&L in place of
+  // the now-meaningless live net credit.
+  const optFlat = isOptions && positions === 0;
 
   // When a deployment is opened, pull a fresh snapshot so the positions panel populates
   // immediately instead of waiting for the next WebSocket tick.
@@ -887,19 +891,25 @@ function DeploymentTile({
       <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
         <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
           <div className="text-slate-400 text-[11px] mb-0.5">
-            {isOptions ? (netCredit != null && netCredit < 0 ? "Net debit" : "Net credit") : "Positions"}
+            {!isOptions ? "Positions" : optFlat ? "Realized P&L" : netCredit != null && netCredit < 0 ? "Net debit" : "Net credit"}
           </div>
           <div className="font-medium tabular-nums">
-            {isOptions ? (
-              netCredit != null ? (
-                <span className={netCredit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
-                  {formatInr(Math.abs(netCredit))}
+            {!isOptions ? (
+              positions
+            ) : optFlat ? (
+              realized != null ? (
+                <span className={realized >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
+                  {formatInr(realized)}
                 </span>
               ) : (
                 "—"
               )
+            ) : netCredit != null ? (
+              <span className={netCredit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
+                {formatInr(Math.abs(netCredit))}
+              </span>
             ) : (
-              positions
+              "—"
             )}
           </div>
         </div>
@@ -914,13 +924,18 @@ function DeploymentTile({
           </div>
         </div>
         <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          <div className="text-slate-400 text-[11px] mb-0.5">{dep.status === "active" ? "Started" : "Return"}</div>
+          <div className="text-slate-400 text-[11px] mb-0.5">{dep.status === "active" ? "Open positions" : "Return"}</div>
           <div className="font-medium tabular-nums">
-            {dep.status === "active"
-              ? timeAgo(dep.started_at)
-              : m.total_return_pct != null
-                ? `${m.total_return_pct >= 0 ? "+" : ""}${m.total_return_pct.toFixed(1)}%`
-                : "—"}
+            {dep.status === "active" ? (
+              <>
+                {positions}
+                <span className="text-slate-500 text-[11px] font-normal"> · {timeAgo(dep.started_at)}</span>
+              </>
+            ) : m.total_return_pct != null ? (
+              `${m.total_return_pct >= 0 ? "+" : ""}${m.total_return_pct.toFixed(1)}%`
+            ) : (
+              "—"
+            )}
           </div>
         </div>
       </div>

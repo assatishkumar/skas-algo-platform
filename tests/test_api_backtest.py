@@ -68,6 +68,41 @@ def test_backtest_by_universe(api_client: TestClient):
     assert resp.json()["report"]["metrics"]["Total Trades"] >= 1
 
 
+def test_backtest_preview_then_save(api_client: TestClient):
+    """persist=False previews without writing; /backtest/save persists the same result (no recompute)."""
+    body = {
+        "strategy_id": "sst_lifo",
+        "universe": "nifty50",
+        "start_date": "2020-01-01",
+        "end_date": "2021-12-31",
+        "capital": 100000,
+        "params": {"capital_parts": 10, "profit_target": 0.06},
+        "tax_rate": 0.0,
+        "persist": False,
+    }
+    before = len(api_client.get("/api/v1/runs").json())
+
+    preview = api_client.post("/api/v1/backtest", json=body)
+    assert preview.status_code == 200, preview.text
+    pj = preview.json()
+    assert pj["run_id"] is None  # a preview is NOT persisted
+    trades_count = pj["report"]["metrics"]["Total Trades"]
+    assert trades_count >= 1
+    assert len(api_client.get("/api/v1/runs").json()) == before  # nothing written yet
+
+    save = api_client.post(
+        "/api/v1/backtest/save",
+        json={"request": body, "report": pj["report"], "trades": pj["trades"]},
+    )
+    assert save.status_code == 200, save.text
+    rid = save.json()["run_id"]
+    assert rid is not None
+    # Saved run is retrievable and identical to the preview (saved, not recomputed).
+    got = api_client.get(f"/api/v1/runs/{rid}").json()
+    assert got["report"]["metrics"]["Total Trades"] == trades_count
+    assert len(api_client.get("/api/v1/runs").json()) == before + 1
+
+
 def test_run_analysis_and_listing(api_client: TestClient):
     body = {
         "strategy_id": "sst_lifo", "universe": "nifty50",

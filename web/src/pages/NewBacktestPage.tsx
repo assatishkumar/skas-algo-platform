@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import ReportView from "../components/ReportView";
 import { Card, ErrorBox, NumberInput } from "../components/ui";
@@ -51,6 +51,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const inputClass =
   "w-full rounded-md bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:border-brand";
+
+// Carried via router state from a run's "Clone" button into the prefilled backtest form.
+type ClonePrefill = {
+  strategy_id: string;
+  name: string | null;
+  capital: number | null;
+  params: Record<string, unknown>;
+};
 
 export default function NewBacktestPage() {
   const { data: strategyData } = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
@@ -170,6 +178,14 @@ export default function NewBacktestPage() {
   const [sweepError, setSweepError] = useState<string | null>(null);
 
   const navigate = useNavigate();
+  // "Clone" from a run lands here with its config in router state. We set strategy/symbols/dates
+  // in a one-shot mount effect, then let the (clone-aware) template effect apply its params LAST
+  // — same "lands after the strategy-default resets" trick the template prefill already relies on.
+  const location = useLocation();
+  const clonePrefill = (location.state as { clonePrefill?: ClonePrefill } | null)?.clonePrefill;
+  const cloneInitRef = useRef(false);
+  const cloneParamsRef = useRef(false);
+
   const isFifo = strategyId === "sst_fifo";
   const isNiftyShop = strategyId === "nifty_shop";
   const isSstWeekly = strategyId === "sst_weekly";
@@ -253,16 +269,41 @@ export default function NewBacktestPage() {
   }, [strikeMode, ratioSide]);
 
   // ---- per-strategy template prefill ("set as template" on a run's detail page).
+  // Clone (one-shot): adopt the cloned run's strategy / universe / dates / name. Its PARAMS land
+  // via the template effect below, so they survive the per-strategy default reset.
+  useEffect(() => {
+    if (!clonePrefill || cloneInitRef.current) return;
+    cloneInitRef.current = true;
+    setStrategyId(clonePrefill.strategy_id);
+    const p = clonePrefill.params;
+    if (typeof p.universe === "string" && p.universe) {
+      setUniverse(p.universe);
+    } else if (Array.isArray(p.symbols)) {
+      setUniverse("");
+      setSymbols((p.symbols as string[]).join(", "));
+    }
+    if (typeof p.start_date === "string") setStartDate(p.start_date);
+    if (typeof p.end_date === "string") setEndDate(p.end_date);
+    setDatesTouched(true);
+    if (clonePrefill.name) setName(`${clonePrefill.name} (copy)`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clonePrefill]);
+
   // Declared AFTER the default-resetting effects so, when the strategy changes, the
-  // template's values land last in the same commit and win.
+  // template's (or a clone's) values land last in the same commit and win.
   const { data: templatesData } = useQuery({ queryKey: ["templates"], queryFn: api.templates });
   const [appliedTemplate, setAppliedTemplate] = useState<StrategyTemplate | null>(null);
   useEffect(() => {
-    const t = templatesData?.templates?.[strategyId];
+    // A clone prefills from its own params (one-shot); otherwise use the strategy's template.
+    const useClone = !!clonePrefill && !cloneParamsRef.current && clonePrefill.strategy_id === strategyId;
+    const t = useClone
+      ? ({ run_id: 0, name: clonePrefill!.name ?? "", capital: clonePrefill!.capital ?? undefined, params: clonePrefill!.params } as StrategyTemplate)
+      : templatesData?.templates?.[strategyId];
     if (!t) {
       setAppliedTemplate(null);
       return;
     }
+    if (useClone) cloneParamsRef.current = true;
     const p = t.params as Record<string, unknown>;
     // ``absent`` makes the prefill FAITHFUL to the template run: a param the run
     // didn't record (e.g. tail-hedge on a pre-tail-feature run) resets to the value
@@ -339,8 +380,9 @@ export default function NewBacktestPage() {
     str("allocation_mode", setAllocationMode);
     num("tax_rate", setTaxRate, 100);
     num("withdrawal_rate", setWithdrawalRate, 100);
-    setAppliedTemplate(t);
-  }, [strategyId, templatesData]);
+    setAppliedTemplate(useClone ? null : t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategyId, templatesData, clonePrefill]);
 
   // Available cached range for the selected instrument class / underlying — used to
   // default the date pickers so a backtest spans what's actually in the cache.
@@ -357,6 +399,13 @@ export default function NewBacktestPage() {
 
   const mutation = useMutation({
     mutationFn: (body: BacktestRequest) => api.backtest(body),
+  });
+  // Persist a previewed result (no recompute); jump to the saved run on success.
+  const saveMutation = useMutation({
+    mutationFn: (b: Parameters<typeof api.backtestSave>[0]) => api.backtestSave(b),
+    onSuccess: (data) => {
+      if (data.run_id != null) navigate(`/runs/${data.run_id}`);
+    },
   });
 
   function buildBody(): BacktestRequest {
@@ -507,7 +556,8 @@ export default function NewBacktestPage() {
       runSweep();
       return;
     }
-    mutation.mutate(buildBody());
+    // Single run is a PREVIEW — computed but not persisted until the user clicks "Save backtest".
+    mutation.mutate({ ...buildBody(), persist: false });
   }
 
   async function runSweep() {
@@ -532,8 +582,9 @@ export default function NewBacktestPage() {
         const variant = applySweep(base, field, values[i]);
         variant.name = `${baseName} (${field.label} ${values[i]})`;
         variant.batch_id = batchId;
+        variant.persist = true; // a sweep persists its variants (they feed the compare view)
         const res = await api.backtest(variant);
-        runIds.push(res.run_id);
+        if (res.run_id != null) runIds.push(res.run_id);
       }
       navigate(`/compare?ids=${runIds.join(",")}`);
     } catch (e) {
@@ -1088,17 +1139,34 @@ export default function NewBacktestPage() {
 
       {result && (
         <div className="space-y-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <h2 className="font-semibold">Result</h2>
-            <Link to={`/runs/${result.run_id}`} className="text-brand-light text-sm underline">
-              open run #{result.run_id}
-            </Link>
+            {result.run_id != null ? (
+              <Link to={`/runs/${result.run_id}`} className="text-brand-light text-sm underline">
+                open run #{result.run_id}
+              </Link>
+            ) : (
+              <>
+                <span className="text-slate-500 text-sm">preview · not saved</span>
+                <button
+                  onClick={() =>
+                    mutation.variables &&
+                    saveMutation.mutate({ request: mutation.variables, report: result.report, trades: result.trades })
+                  }
+                  disabled={saveMutation.isPending}
+                  className="rounded-md bg-brand hover:bg-brand-light text-white px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+                >
+                  {saveMutation.isPending ? "Saving…" : "Save backtest"}
+                </button>
+              </>
+            )}
           </div>
+          {saveMutation.error && <ErrorBox message={(saveMutation.error as Error).message} />}
           <ReportView
             report={result.report}
             trades={result.trades}
-            csvUrl={api.tradesCsvUrl(result.run_id)}
-            runId={result.run_id}
+            csvUrl={result.run_id != null ? api.tradesCsvUrl(result.run_id) : undefined}
+            runId={result.run_id ?? undefined}
           />
         </div>
       )}

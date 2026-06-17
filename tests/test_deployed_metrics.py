@@ -39,10 +39,11 @@ def test_deployed_and_idle_metrics_present_and_sane():
     # +100k profit on ~1,000,000 → 10% total return; deployed base is the 200k cost basis.
     assert round(m["Total Return %"]) == 10
     assert round(m["Avg Deployed Capital"]) == 200_000
-    # Return on deployed = 100k / 200k = 50%.
+    # Return on deployed = 100k / 200k = 50% (lifetime, cumulative).
     assert round(m["Return on Deployed Capital %"]) == 50
-    # Deployed CAGR > whole-capital CAGR (smaller base).
-    assert m["Deployed CAGR %"] > m["CAGR %"]
+    # Simple per-year return on deployed = 50% / 1yr = 50%, above the 10% whole-capital CAGR.
+    assert round(m["Deployed Return %/yr"]) == 50
+    assert m["Deployed Return %/yr"] > m["CAGR %"]
     # Idle 6% on ~800k for a year ≈ ₹48k of extra interest, lifting the idle-adjusted CAGR.
     assert 40_000 < m["Idle Interest (assumed)"] < 56_000
     assert m["CAGR (idle @ 6%) %"] > m["CAGR %"]
@@ -51,4 +52,4 @@ def test_deployed_and_idle_metrics_present_and_sane():
 def test_deployed_metrics_absent_by_default():
     rr = RunResult(history=_history(), transactions=[], portfolio=_Pf())
     m = compute_metrics(rr, initial_capital=1_000_000.0)  # deployed=False
-    assert "Deployed CAGR %" not in m and "Idle Interest (assumed)" not in m
+    assert "Deployed Return %/yr" not in m and "Idle Interest (assumed)" not in m

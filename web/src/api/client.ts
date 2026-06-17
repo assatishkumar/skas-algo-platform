@@ -86,6 +86,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  // Persist a previewed backtest (its computed report + trades) without recomputing.
+  backtestSave: (body: { request: BacktestRequest; report: Report; trades: Trade[] }) =>
+    request<BacktestResponse>("/backtest/save", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   tradesCsvUrl: (id: number) => `${BASE}/runs/${id}/trades.csv`,
   benchmarks: () => request<{ benchmarks: string[] }>("/benchmarks"),
   dataSummary: () => request<DataSummary>("/data/summary"),

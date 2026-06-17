@@ -20,7 +20,7 @@ export interface Metrics {
   // Deployed-capital + idle-cash overlay (present only for opt-in strategies, e.g. SuperTrend).
   "Avg Deployed Capital"?: number;
   "Return on Deployed Capital %"?: number;
-  "Deployed CAGR %"?: number;
+  "Deployed Return %/yr"?: number;
   "Idle Interest (assumed)"?: number;
   "CAGR (idle @ 6%) %"?: number;
 }
@@ -356,7 +356,7 @@ export interface RunSummary {
 }
 
 export interface BacktestResponse {
-  run_id: number;
+  run_id: number | null; // null for a non-persisted preview
   strategy_id: string;
   report: Report;
   trades: Trade[];
@@ -528,6 +528,7 @@ export interface DeploymentMetrics {
   margin_source?: string | null;
   net_credit?: number | null;
   net_delta?: number | null;
+  realized_pnl?: number | null;
 }
 
 export interface Deployment {
@@ -701,4 +702,5 @@ export interface BacktestRequest {
   notes?: string;
   batch_id?: string;
   overrides: OverrideInput[];
+  persist?: boolean; // false = preview only (no DB write); save later via /backtest/save
 }

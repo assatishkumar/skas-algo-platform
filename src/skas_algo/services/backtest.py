@@ -142,7 +142,22 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
                                    req.start_date, req.end_date)
     trades = _serialize_trades(result.transactions)
 
-    # Persist as an Algo + AlgoRun (BACKTEST mode).
+    # Preview: hand back the computed report/trades WITHOUT writing to the DB. The client can
+    # later persist the same result via persist_backtest (/backtest/save) — no recompute.
+    if not req.persist:
+        return {"run_id": None, "algo_id": None, "strategy_id": req.strategy_id,
+                "report": report, "trades": trades}
+    return persist_backtest(session, req, report, trades)
+
+
+def persist_backtest(session: Session, req: BacktestRequest, report: dict, trades: list[dict]) -> dict:
+    """Persist an already-computed backtest as an Algo + AlgoRun (BACKTEST mode). No recompute —
+    used both by run_backtest (when persist=True) and by the explicit /backtest/save endpoint."""
+    is_deriv = req.instrument_class.upper() == "DERIV"
+    underlying = (req.underlying or req.params.get("underlying")
+                  or (req.symbols[0] if req.symbols else "NIFTY"))
+    factory = get_strategy(req.strategy_id)
+
     algo = Algo(
         name=req.name or f"{req.strategy_id} backtest",
         notes=req.notes,

@@ -188,6 +188,7 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
                 "margin_source": snap.get("margin_source"),
                 "net_credit": snap.get("net_credit"),
                 "net_delta": snap.get("net_delta"),
+                "realized_pnl": snap.get("realized_pnl"),
             }
         else:
             m = (run.metrics or {}).get("metrics", {})

@@ -56,6 +56,20 @@ function RunTile({
     navigate("/live/new", { state: { prefill } });
   }
 
+  async function clone() {
+    const full = await api.run(run.run_id);
+    navigate("/new", {
+      state: {
+        clonePrefill: {
+          strategy_id: full.strategy_id,
+          name: full.name,
+          capital: full.capital,
+          params: full.params,
+        },
+      },
+    });
+  }
+
   return (
     <Card className={selected ? "border-brand" : ""}>
       <div className="flex items-start justify-between gap-3">
@@ -136,6 +150,9 @@ function RunTile({
         </Link>
         <button onClick={forwardTest} className="rounded bg-emerald-900 hover:bg-emerald-800 text-white px-3 py-1.5">
           Forward-test →
+        </button>
+        <button onClick={clone} title="Prefill a new backtest from this run" className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
+          Clone
         </button>
         {run.archived ? (
           <button
@@ -272,6 +289,8 @@ export default function RunsPage() {
       if (r.batch_id) batches.set(r.batch_id, [...(batches.get(r.batch_id) ?? []), r]);
       else loose.push(r);
     }
+    // Pin the strategy's template run first (stable sort keeps the rest most-recent-first).
+    loose.sort((a, b) => Number(templateRunIds.has(b.run_id)) - Number(templateRunIds.has(a.run_id)));
     return (
       <div className="space-y-3">
         {Array.from(batches.entries()).map(([bid, brs]) => (

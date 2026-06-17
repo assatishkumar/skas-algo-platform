@@ -10,10 +10,12 @@ import type { ForwardTestPrefill } from "../types";
 function ParametersCard({
   capital,
   params,
+  strategyId,
   fallbackDates,
 }: {
   capital: number | null;
   params: Record<string, unknown>;
+  strategyId: string;
   fallbackDates: { start?: string; end?: string };
 }) {
   // Merge capital in, and backfill start/end from the equity curve for older runs.
@@ -22,18 +24,29 @@ function ParametersCard({
   if (merged.end_date == null && fallbackDates.end) merged.end_date = fallbackDates.end;
 
   const symbols = Array.isArray(merged.symbols) ? (merged.symbols as string[]) : null;
-  const keys = orderedParamKeys(Object.keys(merged));
+  const isSupertrend = strategyId === "supertrend_momentum";
+  // SuperTrend has its own ATR warmup, so the generic "Lookback (days)" knob is meaningless here.
+  let keys = orderedParamKeys(Object.keys(merged));
+  if (isSupertrend) keys = keys.filter((k) => k !== "lookback");
+  // The profit target is ignored when nothing is booked at it (book % = 0 → pure SuperTrend exit).
+  const profitTargetDisabled = merged.partial_book_pct === 0;
 
   return (
     <Card>
       <div className="text-sm font-medium text-slate-300 mb-3">Input parameters</div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-        {keys.map((k) => (
-          <div key={k} className="rounded-md bg-slate-800/40 px-3 py-2">
-            <div className="text-slate-400 text-xs">{paramLabel(k)}</div>
-            <div>{formatParamValue(k, merged[k])}</div>
-          </div>
-        ))}
+        {keys.map((k) => {
+          const disabled = k === "profit_target" && profitTargetDisabled;
+          return (
+            <div key={k} className={`rounded-md bg-slate-800/40 px-3 py-2 ${disabled ? "opacity-50" : ""}`}>
+              <div className="text-slate-400 text-xs">{paramLabel(k)}</div>
+              <div>
+                {formatParamValue(k, merged[k])}
+                {disabled && <span className="text-slate-500"> · n/a (book 0%)</span>}
+              </div>
+            </div>
+          );
+        })}
       </div>
       {symbols && symbols.length > 0 && (
         <details className="mt-3 text-sm">
@@ -87,6 +100,20 @@ export default function RunDetailPage() {
     navigate("/live/new", { state: { prefill } });
   }
 
+  function clone() {
+    // Open the New-Backtest form prefilled with this run's config to tweak + re-run.
+    navigate("/new", {
+      state: {
+        clonePrefill: {
+          strategy_id: data!.strategy_id,
+          name: data!.name,
+          capital: data!.capital,
+          params: data!.params,
+        },
+      },
+    });
+  }
+
   async function saveEdit() {
     setBusy(true);
     try {
@@ -128,7 +155,8 @@ export default function RunDetailPage() {
           ← Runs
         </Link>
         <h1 className="text-lg font-semibold">
-          {data.name || `Run #${runId}`} <span className="text-slate-500 text-sm">· {data.strategy_id}</span>
+          {data.name || `Run #${runId}`}{" "}
+          <span className="text-slate-500 text-sm">· {data.strategy_id} · #{runId}</span>
         </h1>
         <div className="ml-auto flex items-center gap-2 text-sm">
           {templatesData?.templates?.[data.strategy_id]?.run_id === runId ? (
@@ -147,6 +175,9 @@ export default function RunDetailPage() {
           )}
           <button onClick={() => setEditing((v) => !v)} className="rounded-md bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
             {editing ? "Close" : "Edit name/notes"}
+          </button>
+          <button onClick={clone} title="Open a prefilled New-Backtest form to tweak and re-run" className="rounded-md bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
+            Clone
           </button>
           <button onClick={remove} disabled={busy} className="rounded-md bg-rose-950 hover:bg-rose-900 text-rose-300 px-3 py-1.5 disabled:opacity-50">
             Delete
@@ -183,6 +214,7 @@ export default function RunDetailPage() {
       <ParametersCard
         capital={data.capital}
         params={data.params}
+        strategyId={data.strategy_id}
         fallbackDates={{
           start: data.report.equity_curve?.[0]?.date,
           end: data.report.equity_curve?.[(data.report.equity_curve?.length ?? 0) - 1]?.date,
