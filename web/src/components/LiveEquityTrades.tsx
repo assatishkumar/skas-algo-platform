@@ -69,6 +69,7 @@ export default function LiveEquityTrades({ runId, version }: { runId: number; ve
         <table className="w-full text-xs tabular-nums">
           <thead className="text-slate-400 text-left sticky top-0 bg-slate-900">
             <tr>
+              <th className="py-1 pr-3">Entry date</th>
               <th className="py-1 pr-3">Exit date</th>
               <th className="py-1 pr-3">Symbol</th>
               <th className="py-1 pr-3 text-right">Qty</th>
@@ -81,6 +82,7 @@ export default function LiveEquityTrades({ runId, version }: { runId: number; ve
           <tbody>
             {rows.map((r, i) => (
               <tr key={`${r.symbol}-${r.exitDate}-${i}`} className="border-t border-slate-800">
+                <td className="py-1 pr-3">{r.entryDate}</td>
                 <td className="py-1 pr-3">{r.exitDate}</td>
                 <td className="py-1 pr-3 font-medium">{r.symbol}</td>
                 <td className="py-1 pr-3 text-right">{r.qty}</td>

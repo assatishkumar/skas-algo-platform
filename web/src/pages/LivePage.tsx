@@ -501,6 +501,23 @@ function RunCard({
   // SST "Signals" is the equity Donchian watchlist (20d high/low breakout) — meaningless
   // for an options strategy, which decides on its own entry/exit schedule.
   const isOptions = run.lots != null;
+  // Sortable positions table — click a header to sort by that column.
+  type PosKey = "symbol" | "entry_date" | "units" | "avg_price" | "ltp" | "pos_delta" | "iv" | "unrealized_pnl";
+  const [sortKey, setSortKey] = useState<PosKey>("unrealized_pnl");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const sortPos = (k: PosKey) => {
+    setSortDir(k === sortKey ? (sortDir === "asc" ? "desc" : "asc") : k === "symbol" || k === "entry_date" ? "asc" : "desc");
+    setSortKey(k);
+  };
+  const sortedPositions = [...(run.positions ?? [])].sort((a, b) => {
+    const av = a[sortKey];
+    const bv = b[sortKey];
+    const c =
+      typeof av === "string" || typeof bv === "string"
+        ? String(av ?? "").localeCompare(String(bv ?? ""))
+        : Number(av ?? 0) - Number(bv ?? 0);
+    return sortDir === "asc" ? c : -c;
+  });
   const act = async (fn: () => Promise<unknown>) => {
     await fn();
     onChanged();
@@ -557,19 +574,37 @@ function RunCard({
           <table className="w-full text-sm">
             <thead className="text-slate-400 text-left">
               <tr>
-                <th className="py-1 pr-4">Symbol</th>
-                <th className="py-1 pr-4 text-right">Units</th>
-                <th className="py-1 pr-4 text-right">Avg</th>
-                <th className="py-1 pr-4 text-right">LTP</th>
-                {isOptions && <th className="py-1 pr-4 text-right">Δ</th>}
-                {isOptions && <th className="py-1 pr-4 text-right">IV</th>}
-                <th className="py-1 pr-4 text-right">Unrealized</th>
+                {(() => {
+                  const arrow = (k: PosKey) => (sortKey === k ? (sortDir === "asc" ? " ▲" : " ▼") : "");
+                  const Th = ({ k, label, right }: { k: PosKey; label: string; right?: boolean }) => (
+                    <th
+                      onClick={() => sortPos(k)}
+                      className={`py-1 pr-4 cursor-pointer select-none hover:text-slate-200 ${right ? "text-right" : "text-left"}`}
+                    >
+                      {label}
+                      {arrow(k)}
+                    </th>
+                  );
+                  return (
+                    <>
+                      <Th k="symbol" label="Symbol" />
+                      <Th k="entry_date" label="Entry" />
+                      <Th k="units" label="Units" right />
+                      <Th k="avg_price" label="Avg" right />
+                      <Th k="ltp" label="LTP" right />
+                      {isOptions && <Th k="pos_delta" label="Δ" right />}
+                      {isOptions && <Th k="iv" label="IV" right />}
+                      <Th k="unrealized_pnl" label="Unrealized" right />
+                    </>
+                  );
+                })()}
               </tr>
             </thead>
             <tbody>
-              {run.positions.map((p) => (
+              {sortedPositions.map((p) => (
                 <tr key={p.symbol} className="border-t border-slate-800">
                   <td className="py-1 pr-4">{p.symbol} <span className="text-slate-500">({p.lots})</span></td>
+                  <td className="py-1 pr-4">{p.entry_date ?? "—"}</td>
                   <td className="py-1 pr-4 text-right">{p.units}</td>
                   <td className="py-1 pr-4 text-right">{formatInr(p.avg_price, 2)}</td>
                   <td className="py-1 pr-4 text-right">{p.ltp != null ? formatInr(p.ltp, 2) : "—"}</td>

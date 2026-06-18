@@ -339,6 +339,7 @@ class LiveSession:
             ltp = closes.get(symbol)
             direction = lots[0].direction if lots else 1  # all lots of a symbol share it
             value = units * ltp if ltp is not None else cost
+            opened = min((lot.opened_at for lot in lots if lot.opened_at is not None), default=None)
             positions.append(
                 {
                     "symbol": symbol,
@@ -349,6 +350,9 @@ class LiveSession:
                     "ltp": ltp,
                     # Short legs profit when the mark falls: sign the unrealized P&L.
                     "unrealized_pnl": direction * (value - cost),
+                    # Earliest lot's open date (the position's entry date) as YYYY-MM-DD.
+                    "entry_date": (opened.isoformat()[:10] if hasattr(opened, "isoformat")
+                                   else (str(opened)[:10] if opened else None)),
                 }
             )
         net_delta, net_iv = self._enrich_greeks(positions)

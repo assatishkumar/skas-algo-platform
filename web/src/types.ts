@@ -393,6 +393,7 @@ export interface LivePosition {
   avg_price: number;
   ltp: number | null;
   unrealized_pnl: number;
+  entry_date?: string | null; // earliest lot's open date (YYYY-MM-DD)
   // Live greeks (options only; derived from live LTP + index spot + DTE).
   iv?: number | null; // implied vol (decimal, e.g. 0.14)
   delta?: number | null; // per-contract delta (signed by right)
