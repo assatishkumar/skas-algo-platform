@@ -19,9 +19,10 @@ class LiveMarketView:
         self._hist: dict[str, list[float]] = {}  # closes strictly before "today", chronological
         self._quotes: dict[str, float] = {}  # today's live prices
         self._order: list[str] = []  # universe order
-        # Latest completed-bar SuperTrend direction per symbol (set by the live manager from
-        # cached OHLC). +1 green / −1 red; None until set.
+        # Latest completed-bar SuperTrend direction + line per symbol (set by the live manager
+        # from cached OHLC). direction +1 green / −1 red; line = the trailing band; None until set.
         self._supertrend_dir: dict[str, float] = {}
+        self._supertrend_line: dict[str, float] = {}
 
     # ----------------------------------------------------------- building
     def seed(self, symbol: str, closes: list[float]) -> None:
@@ -65,15 +66,23 @@ class LiveMarketView:
         """The trailing N-close moving average (DMA), excluding today."""
         return self._rolling(symbol)[2]  # type: ignore[index]
 
-    def set_supertrend_dir(self, symbol: str, direction: float | None) -> None:
+    def set_supertrend_dir(self, symbol: str, direction: float | None, line: float | None = None) -> None:
         if direction is None:
             self._supertrend_dir.pop(symbol, None)
         else:
             self._supertrend_dir[symbol] = float(direction)
+        if line is None:
+            self._supertrend_line.pop(symbol, None)
+        else:
+            self._supertrend_line[symbol] = float(line)
 
     def supertrend_dir(self, symbol: str) -> float | None:
         """Latest completed-bar SuperTrend direction (set from cached OHLC by the manager)."""
         return self._supertrend_dir.get(symbol)
+
+    def supertrend_line(self, symbol: str) -> float | None:
+        """Latest completed-bar SuperTrend line (the trailing band), or None."""
+        return self._supertrend_line.get(symbol)
 
     def closes_today(self) -> dict[str, float]:
         return dict(self._quotes)

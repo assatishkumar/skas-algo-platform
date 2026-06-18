@@ -143,7 +143,9 @@ def _seed_supertrend(session, strategy, loader, symbols) -> None:
         return
     from datetime import timedelta
 
-    from skas_algo.engine.indicators.supertrend import supertrend_direction
+    import pandas as pd
+
+    from skas_algo.engine.indicators.supertrend import supertrend_bands
 
     cfg = strategy.supertrend_config()
     today = datetime.now(IST).date()
@@ -156,10 +158,20 @@ def _seed_supertrend(session, strategy, loader, symbols) -> None:
         if df is None or getattr(df, "empty", True):
             market.set_supertrend_dir(sym, None)
             continue
-        sd = supertrend_direction(
+        # Latest completed bar's direction (+1/−1) AND the trailing SuperTrend line — the line
+        # lets the watchlist show each name's trend + distance-to-flip.
+        bands = supertrend_bands(
             df, period=cfg["period"], multiplier=cfg["multiplier"], timeframe=cfg["timeframe"]
-        ).dropna()
-        market.set_supertrend_dir(sym, float(sd.iloc[-1]) if len(sd) else None)
+        ).dropna(subset=["direction"])
+        if len(bands):
+            last = bands.iloc[-1]
+            line = last["supertrend"]
+            market.set_supertrend_dir(
+                sym, float(last["direction"]),
+                float(line) if pd.notna(line) else None,
+            )
+        else:
+            market.set_supertrend_dir(sym, None)
 
 
 class Broadcaster:

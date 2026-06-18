@@ -22,8 +22,8 @@ function fmt(n: number | null, d = 2): string {
   return n == null ? "—" : n.toLocaleString("en-IN", { maximumFractionDigits: d });
 }
 
-function SignalsPanel({ runId, version }: { runId: number; version: number }) {
-  const [sortBy, setSortBy] = useState<"symbol" | "breakout" | "status">("symbol");
+function SignalsPanel({ runId, version, supertrend = false }: { runId: number; version: number; supertrend?: boolean }) {
+  const [sortBy, setSortBy] = useState<"symbol" | "breakout" | "status" | "trend">("symbol");
   const { data, isLoading } = useQuery({
     queryKey: ["watchlist", runId, version],
     queryFn: () => api.liveWatchlist(runId),
@@ -40,6 +40,7 @@ function SignalsPanel({ runId, version }: { runId: number; version: number }) {
     const rb = b.signal ? 0 : 1;
     if (ra !== rb) return ra - rb;
     if (sortBy === "breakout") return (a.to_breakout_pct ?? 1e9) - (b.to_breakout_pct ?? 1e9);
+    if (sortBy === "trend") return (b.direction ?? -2) - (a.direction ?? -2) || a.symbol.localeCompare(b.symbol);
     if (sortBy === "status") return a.status.localeCompare(b.status) || a.symbol.localeCompare(b.symbol);
     return a.symbol.localeCompare(b.symbol);
   };
@@ -47,6 +48,89 @@ function SignalsPanel({ runId, version }: { runId: number; version: number }) {
   const counts: Record<string, number> = {};
   rows.forEach((r) => (counts[r.status] = (counts[r.status] ?? 0) + 1));
   const wouldAct = rows.filter((r) => r.signal).length;
+
+  // SuperTrend runs: trend direction (green/red) + SuperTrend line + distance-to-flip,
+  // instead of SST's Donchian 20-day levels.
+  if (supertrend) {
+    const green = rows.filter((r) => (r.direction ?? 0) > 0).length;
+    const red = rows.filter((r) => (r.direction ?? 0) < 0).length;
+    const holding = rows.filter((r) => r.held).length;
+    return (
+      <div className="mt-3 border-t border-slate-800 pt-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs text-slate-400">
+            {wouldAct > 0 && <span className="text-amber-600 dark:text-amber-400 font-semibold">⚡ would act: {wouldAct}  ·  </span>}
+            <span className="text-emerald-600 dark:text-emerald-400">trend ↑ {green}</span>{"  ·  "}
+            <span className="text-rose-600 dark:text-rose-400">trend ↓ {red}</span>{"  ·  "}holding {holding}
+            <span className="text-slate-600">  —  green = SuperTrend up; → flip is % from price to the SuperTrend line</span>
+          </div>
+          <label className="text-xs text-slate-400 flex items-center gap-1">
+            sort
+            <select
+              className="rounded bg-slate-800 border border-slate-700 px-1.5 py-0.5"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as "symbol" | "trend" | "status")}
+            >
+              <option value="symbol">Symbol</option>
+              <option value="trend">Trend</option>
+              <option value="status">Status</option>
+            </select>
+          </label>
+        </div>
+        <div className="overflow-x-auto max-h-96 overflow-y-auto">
+          <table className="w-full text-xs tabular-nums">
+            <thead className="text-slate-400 text-left sticky top-0 bg-slate-900">
+              <tr>
+                <th className="py-1 pr-3">Symbol</th>
+                <th className="py-1 pr-3 text-right">LTP</th>
+                <th className="py-1 pr-3">Trend</th>
+                <th className="py-1 pr-3 text-right">ST line</th>
+                <th className="py-1 pr-3 text-right">→ flip</th>
+                <th className="py-1 pr-3 text-right">P&amp;L</th>
+                <th className="py-1 pr-3">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r) => {
+                const isGreen = (r.direction ?? 0) > 0;
+                const isRed = (r.direction ?? 0) < 0;
+                return (
+                  <tr key={r.symbol} className={`border-t border-slate-800 ${r.held ? "bg-slate-800/40" : ""}`}>
+                    <td className="py-1 pr-3 font-medium">
+                      {r.symbol}
+                      {r.excluded && <span title="excluded — no new entries" className="ml-1">🚫</span>}
+                    </td>
+                    <td className="py-1 pr-3 text-right">{fmt(r.ltp)}</td>
+                    <td className="py-1 pr-3">
+                      <span className={isGreen ? "text-emerald-600 dark:text-emerald-400" : isRed ? "text-rose-600 dark:text-rose-400" : "text-slate-500"}>
+                        {isGreen ? "▲ up" : isRed ? "▼ down" : "—"}
+                      </span>
+                    </td>
+                    <td className="py-1 pr-3 text-right text-slate-400">{r.supertrend != null ? fmt(r.supertrend) : "—"}</td>
+                    <td className="py-1 pr-3 text-right text-slate-300">
+                      {r.to_flip_pct == null ? "—" : `${r.to_flip_pct >= 0 ? "+" : ""}${r.to_flip_pct.toFixed(1)}%`}
+                    </td>
+                    <td className={`py-1 pr-3 text-right ${(r.pnl_pct ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                      {r.pnl_pct == null ? "—" : `${r.pnl_pct >= 0 ? "+" : ""}${r.pnl_pct.toFixed(1)}%`}
+                    </td>
+                    <td className="py-1 pr-3">
+                      {r.signal && (
+                        <span className={`mr-1 font-semibold ${r.signal === "BUY" ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
+                          ⚡{r.signal}
+                        </span>
+                      )}
+                      {r.status}
+                      {r.held ? ` · ${r.lots} lot${r.lots > 1 ? "s" : ""}` : ""}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-3 border-t border-slate-800 pt-3">
@@ -647,6 +731,7 @@ function RunCard({
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={refresh} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Refresh</button>
             <button onClick={() => act(() => api.liveRunDecision(run.run_id))} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs">Run decision</button>
+            <Link to={`/analyze?run=${run.run_id}`} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs" title="Round-trips, per-stock charts & P&L for this deployment">Analyze →</Link>
             {!isOptions && (
               <button onClick={() => setShowSignals((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
                 {showSignals ? "Hide signals" : "Signals"}
@@ -691,7 +776,9 @@ function RunCard({
             ) : (
               <OverridePanel runId={run.run_id} onDone={() => setShowOverride(false)} />
             ))}
-          {showSignals && !isOptions && <SignalsPanel runId={run.run_id} version={version} />}
+          {showSignals && !isOptions && (
+            <SignalsPanel runId={run.run_id} version={version} supertrend={run.strategy_id === "supertrend_momentum"} />
+          )}
         </>
       )}
     </div>

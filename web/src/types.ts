@@ -670,6 +670,10 @@ export interface WatchRow {
   to_breakout_pct: number | null;
   signal: string; // "BUY" | "SELL" | "" — would the next decision act?
   status: string;
+  // SuperTrend runs only (the watchlist is strategy-aware):
+  direction?: number | null; // +1 green / −1 red
+  supertrend?: number | null; // the trailing SuperTrend line
+  to_flip_pct?: number | null; // % from price to the line (flip cushion)
 }
 
 // WebSocket message envelope from /api/v1/live/ws

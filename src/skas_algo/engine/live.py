@@ -477,6 +477,8 @@ class LiveSession:
         Lets you see what the algo is 'thinking' for every name in the universe —
         which it's tracking (waiting for a breakout), holding, or just watching.
         """
+        if getattr(self.strategy, "needs_supertrend", False) and hasattr(self.market, "supertrend_dir"):
+            return self._watchlist_supertrend()
         if not hasattr(self.market, "universe"):
             return []  # options runs have no fixed Donchian universe to introspect
         tracking = getattr(self.strategy, "tracking", {})
@@ -540,6 +542,75 @@ class LiveSession:
                     "status": status,
                 }
             )
+        return rows
+
+    def _watchlist_supertrend(self) -> list[dict]:
+        """SuperTrend decision context per symbol: trend direction (green/red), the SuperTrend
+        line + distance-to-flip, holding/P&L, and pullback-setup state — instead of SST's
+        Donchian 20-day levels which are meaningless for a SuperTrend run."""
+        market = self.market
+        if not hasattr(market, "universe"):
+            return []
+        excluded = self.resolver.excluded
+        setup = getattr(self.strategy, "setup", {}) or {}
+        entry_mode = getattr(self.strategy, "entry_mode", "flip")
+        rows: list[dict] = []
+        for sym in market.universe():
+            ltp = market.last_close(sym)
+            direction = market.supertrend_dir(sym)
+            line = market.supertrend_line(sym) if hasattr(market, "supertrend_line") else None
+            lots = self.portfolio.lots(sym)
+            units = sum(lot.units for lot in lots)
+            cost = sum(lot.units * lot.price for lot in lots)
+            avg = cost / units if units else None
+            held = bool(lots)
+            upnl = (units * ltp - cost) if (held and ltp is not None) else 0.0
+            pnl_pct = ((ltp - avg) / avg * 100) if (held and ltp and avg) else None
+            is_excluded = sym in excluded
+            green = direction is not None and direction > 0
+            red = direction is not None and direction < 0
+            # Distance from price to the SuperTrend line, as % of price (the flip cushion).
+            to_flip = ((ltp - line) / ltp * 100) if (ltp and line) else None
+            s = setup.get(sym) if isinstance(setup, dict) else None
+            pulled_back = bool(s and s.get("pulled_back"))
+
+            signal = ""
+            if held and red:
+                signal = "SELL"  # a RED flip exits the position
+            elif not held and green and not is_excluded and entry_mode == "pullback" and pulled_back:
+                signal = "BUY"  # green + pulled back → a breakout entry is imminent
+
+            if is_excluded and not held:
+                status = "Excluded — no new entries"
+            elif held:
+                status = f"Holding {len(lots)} lot(s) · trend {'↑' if green else '↓' if red else '–'}"
+            elif green:
+                if entry_mode == "pullback":
+                    status = "Pullback done → buy on breakout" if pulled_back else (
+                        "Green — waiting for pullback" if s else "Trend ↑ (green)")
+                else:
+                    status = "Trend ↑ (green)"
+            elif red:
+                status = "Trend ↓ (red)"
+            else:
+                status = "Warming up"
+
+            rows.append({
+                "symbol": sym,
+                "ltp": ltp,
+                "direction": direction,           # +1 green / −1 red / None
+                "supertrend": line,               # the trailing SuperTrend line
+                "to_flip_pct": to_flip,           # % from price to the line
+                "held": held,
+                "lots": len(lots),
+                "units": units,
+                "avg_price": avg,
+                "unrealized_pnl": upnl,
+                "pnl_pct": pnl_pct,
+                "excluded": is_excluded,
+                "signal": signal,
+                "status": status,
+            })
         return rows
 
     def _would_exit(self, lots, ltp: float, avg: float | None) -> bool:
