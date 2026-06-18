@@ -100,7 +100,7 @@ async def start_live(
             decision_time=req.decision_time,
             ignore_market_hours=req.ignore_market_hours,
             auto=req.auto,
-            warm_from_date=req.warm_from_date if is_deriv else None,
+            warm_from_date=req.warm_from_date,
         )
         live = manager.start(config, loader, quote_source)
     except KeyError as exc:  # unknown strategy

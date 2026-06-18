@@ -1,12 +1,14 @@
-"""Seed a live (PAPER) options deployment from a historical backtest.
+"""Seed a live (PAPER) deployment from a historical backtest.
 
 When a deployment is started with ``warm_from_date`` in the past, we replay the strategy
 as a backtest from that date up to today and carry the resulting open position + strategy
-state forward as the live starting book. This lets an "enter a month before expiry"
-strategy (e.g. Batman) be forward-tested today instead of waiting for the next cycle.
+state forward as the live starting book. This lets a strategy that enters on a slow signal
+(e.g. an "enter a month before expiry" options spread, or an equity trend-rider mid-trend)
+be forward-tested today instead of waiting for the next entry.
 
-PAPER only. Requires the option chain (bhavcopy) to be cached back to ``warm_from_date``;
-a clear error is raised when the replay can't be built.
+PAPER only. Equity seeds need the price cache back to ``warm_from_date``; options seeds also
+need the option chain (bhavcopy) cached back to that date. A clear error is raised when the
+replay can't be built.
 """
 
 from __future__ import annotations
@@ -19,24 +21,58 @@ from skas_algo.engine.runner import BacktestRunner
 from skas_algo.strategies.registry import get_strategy
 
 
-def seed_state_from_backtest(config, loader, *, end_date: date) -> dict:
-    """Replay ``config``'s strategy from ``warm_from_date`` → ``end_date`` and return
-    ``{"state", "transactions", "history"}`` to load into a LiveSession before going live.
+def _state_from_result(result, strategy, overrides, end_date: date) -> dict:
+    """The LiveSession state (open book + strategy + overrides) at the end of a replay."""
+    return {
+        "portfolio": result.portfolio.export_state(),
+        "stops": [],  # trailing stops are re-managed live from the carried-forward lots
+        "strategy": strategy.export_state() if hasattr(strategy, "export_state") else {},
+        "overrides": [
+            {"scope": o.scope, "target": o.target, "rule": o.rule, "active": True}
+            for o in overrides
+        ],
+        "current_month": [end_date.year, end_date.month],
+    }
 
-    ``state`` is the LiveSession state (portfolio + strategy + overrides + month) — the final
-    open book becomes the live starting position. ``transactions``/``history`` carry the
-    replay's trades + equity curve so a run that booked (and is now flat) still shows its
-    realized P&L and trade log instead of looking like an empty deployment."""
+
+def _seed_equity(config, loader, start, end_date, strategy_params, overrides) -> dict:
+    symbols = list(config.symbols)
+    if not symbols:
+        raise ValueError("no symbols to seed the equity backtest")
+    strategy = get_strategy(config.strategy_id)(
+        universe=symbols, initial_capital=config.capital, **strategy_params,
+    )
+    # SuperTrend strategies precompute their direction from OHLC in the replay feed.
+    supertrend = (
+        strategy.supertrend_config()
+        if getattr(strategy, "needs_supertrend", False) and hasattr(strategy, "supertrend_config")
+        else None
+    )
+    runner = BacktestRunner(
+        strategy=strategy, universe=symbols, loader=loader,
+        initial_capital=config.capital, lookback=config.lookback,
+        tax_rate=config.tax_rate, withdrawal_rate=config.withdrawal_rate,
+        overrides=overrides, supertrend=supertrend,
+    )
+    try:
+        result = runner.run(start, end_date)
+    except Exception as exc:  # pragma: no cover - missing cache → clear message
+        raise ValueError(
+            f"could not replay the equity backtest from {start} — refresh the price cache "
+            f"for those symbols/range first ({exc})"
+        ) from exc
+    return {
+        "state": _state_from_result(result, strategy, overrides, end_date),
+        "transactions": result.transactions,
+        "history": result.history,
+    }
+
+
+def _seed_options(config, loader, start, end_date, strategy_params, overrides) -> dict:
     from skas_algo.data.provider import get_data_cache
     from skas_algo.data.synthetic_options import build_synthetic_options_run, is_synthetic
 
-    start = config.warm_from_date
-    if start is None or start >= end_date:
-        raise ValueError("warm_from_date must be a past date")
     underlying = (config.underlying or (config.symbols[0] if config.symbols else "NIFTY")).upper()
-
-    reserved = {"universe", "initial_capital", "start_date", "end_date"}
-    strategy_params = {k: v for k, v in config.params.items() if k not in reserved}
     strategy = get_strategy(config.strategy_id)(
         universe=[underlying], initial_capital=config.capital, **strategy_params,
     )
@@ -68,7 +104,6 @@ def seed_state_from_backtest(config, loader, *, end_date: date) -> dict:
             f"refresh the options cache for that range first ({exc})"
         ) from exc
 
-    overrides = [OverrideRule(scope=o.scope, target=o.target, rule=o.rule) for o in config.overrides]
     runner = BacktestRunner(
         strategy=strategy, universe=[underlying], loader=loader,
         initial_capital=config.capital, lookback=config.lookback,
@@ -76,17 +111,29 @@ def seed_state_from_backtest(config, loader, *, end_date: date) -> dict:
         market_view=mv, settler=settler, margin_model=margin, charge_model=ChargeModel(),
     )
     result = runner.run(start, end_date)
-
-    state = {
-        "portfolio": result.portfolio.export_state(),
-        "stops": [],  # option ratio strategies use MTM exits, not the StopBook
-        "strategy": (
-            runner.strategy.export_state() if hasattr(runner.strategy, "export_state") else {}
-        ),
-        "overrides": [
-            {"scope": o.scope, "target": o.target, "rule": o.rule, "active": True}
-            for o in overrides
-        ],
-        "current_month": [end_date.year, end_date.month],
+    return {
+        "state": _state_from_result(result, runner.strategy, overrides, end_date),
+        "transactions": result.transactions,
+        "history": result.history,
     }
-    return {"state": state, "transactions": result.transactions, "history": result.history}
+
+
+def seed_state_from_backtest(config, loader, *, end_date: date) -> dict:
+    """Replay ``config``'s strategy from ``warm_from_date`` → ``end_date`` and return
+    ``{"state", "transactions", "history"}`` to load into a LiveSession before going live.
+
+    ``state`` is the LiveSession state (portfolio + strategy + overrides) — the final open book
+    becomes the live starting position. ``transactions``/``history`` carry the replay's trades +
+    equity curve so a run that booked (and is now flat) still shows its realized P&L and trade
+    log instead of looking like an empty deployment. Dispatches by instrument class."""
+    start = config.warm_from_date
+    if start is None or start >= end_date:
+        raise ValueError("warm_from_date must be a past date")
+
+    reserved = {"universe", "initial_capital", "start_date", "end_date"}
+    strategy_params = {k: v for k, v in config.params.items() if k not in reserved}
+    overrides = [OverrideRule(scope=o.scope, target=o.target, rule=o.rule) for o in config.overrides]
+
+    if config.instrument_class.upper() == "DERIV":
+        return _seed_options(config, loader, start, end_date, strategy_params, overrides)
+    return _seed_equity(config, loader, start, end_date, strategy_params, overrides)

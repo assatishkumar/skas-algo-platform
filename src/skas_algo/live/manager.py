@@ -450,11 +450,11 @@ class LiveRunManager:
 
         session = _build_session(config, strategy, loader, is_deriv, underlying)
 
-        # Backtest-then-forward seed (options PAPER): replay from a past date and carry the
-        # resulting open book + strategy state forward as the live starting position. The
-        # replay's trades/equity curve are carried too, so a seeded run that already booked
+        # Backtest-then-forward seed (PAPER, equity or options): replay from a past date and
+        # carry the resulting open book + strategy state forward as the live starting position.
+        # The replay's trades/equity curve are carried too, so a seeded run that already booked
         # (and is now flat) still shows its realized P&L + trade log, not an empty deployment.
-        if config.warm_from_date and is_deriv:
+        if config.warm_from_date:
             from skas_algo.live.seed import seed_state_from_backtest
 
             seeded = seed_state_from_backtest(config, loader, end_date=date.today())

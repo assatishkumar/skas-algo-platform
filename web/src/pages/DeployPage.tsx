@@ -102,7 +102,7 @@ export default function DeployPage() {
       broker_account_id: quoteSource === "zerodha" ? accountId : null,
       ignore_market_hours: ignoreHours,
       auto,
-      ...(isOptions && warmFromDate ? { warm_from_date: warmFromDate } : {}),
+      ...(warmFromDate ? { warm_from_date: warmFromDate } : {}),
     };
     try {
       await api.liveStart(body);
@@ -278,6 +278,29 @@ export default function DeployPage() {
             </label>
           </div>
         ))}
+
+        {/* Equity seed date (options have their own seed field above). */}
+        {!isOptions && (
+          <div className="mb-3">
+            <label className="block max-w-xs">
+              <span className={lbl}>Seed from (optional)</span>
+              <input
+                type="date"
+                className={inputClass}
+                value={warmFromDate}
+                onChange={(e) => setWarmFromDate(e.target.value)}
+              />
+            </label>
+            {warmFromDate && (
+              <div className="text-[11px] text-sky-700 dark:text-sky-300/90 mt-1">
+                Replays the strategy from {warmFromDate} → today as a backtest, then carries the
+                resulting open positions + trade history forward as the live (PAPER) starting book —
+                so a mid-trade strategy can be forward-tested now. Needs price data cached back to
+                that date.
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="grid md:grid-cols-4 gap-3 items-end">
           <label className="block">

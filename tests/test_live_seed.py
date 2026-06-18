@@ -84,6 +84,39 @@ def test_seed_carries_open_book_forward(monkeypatch):
     assert any(s.split("|")[2] == "21000" for s in syms)  # the ATM straddle
 
 
+def _ramp_loader(symbol, start=None, end=None):
+    """Flat → a dip → recovery → a long ramp: an SST Donchian breakout enters after the dip and
+    (with a very high profit target) rides the ramp, so it's still long at the seed cutoff."""
+    dates = pd.bdate_range("2020-01-01", periods=80)
+    closes = [100.0] * 25 + [90.0] + [100.0] * 5
+    price = 101.0
+    while len(closes) < len(dates):
+        closes.append(price)
+        price += 1.5
+    closes = pd.array(closes[: len(dates)], dtype="float32")
+    return pd.DataFrame({
+        "date": dates, "open": closes, "high": closes, "low": closes,
+        "close": closes, "volume": [1000] * len(dates),
+    })
+
+
+def test_seed_equity_carries_open_position_forward():
+    # Replay sst_lifo over a dip-then-ramp → it breaks out and is still long at the cutoff, so the
+    # seeded LiveSession must carry that equity lot forward (and the replay's equity curve).
+    config = LiveConfig(
+        name="eq seed", strategy_id="sst_lifo", symbols=["RAMPCO"],
+        instrument_class="STOCK", capital=1_000_000,
+        params={"capital_parts": 5, "profit_target": 5.0, "allocation_mode": "fixed"},
+        lookback=20, warm_from_date=date(2020, 1, 1),
+    )
+    result = seed_state_from_backtest(config, loader=_ramp_loader, end_date=date(2020, 4, 15))
+
+    assert result["history"], "the replay's equity curve should be carried"
+    p = Portfolio(cash=0)
+    p.load_state(result["state"]["portfolio"])
+    assert p.lot_symbols() == ["RAMPCO"], "seed should carry the open equity position forward"
+
+
 def test_deploy_margin_guard_blocks_undercapitalized():
     # Batman ~₹2L margin per lot-set → 10 lot-sets needs ~₹20L; ₹1L must be rejected with
     # a suggested capital (the guard runs before any DB/data access).
