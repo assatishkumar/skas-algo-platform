@@ -12,6 +12,7 @@ import math
 from datetime import date, datetime, timedelta
 
 import pandas as pd
+import pytest
 
 from skas_algo.data.options_provider import build_live_options_run
 from skas_algo.engine.live import LiveSession
@@ -94,9 +95,13 @@ def test_live_profit_books_on_15min_cadence():
     sd = FakeLiveSD(cal)
     sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
     sess.run_decision(datetime(2026, 1, 5, 9, 50))  # enter
-    body = strat.legs[1]["symbol"]
     flat = {leg["symbol"]: leg["entry"] for leg in strat.legs}     # no P&L move
-    deep = dict(flat, **{body: flat[body] * 0.2})                  # body collapses → big profit
+    # Big profit on every leg (shorts' premium collapses, longs' spikes) so the MTM clearly
+    # clears the profit target — which is now 1% of the (larger) deployed margin, not the config.
+    deep = {
+        leg["symbol"]: (flat[leg["symbol"]] * 0.01 if leg["dir"] == -1 else flat[leg["symbol"]] * 3.0)
+        for leg in strat.legs
+    }
     # 10:00 — first profit check (records the boundary), body flat → no book.
     sess.update_quotes(flat)
     assert sess.run_decision(datetime(2026, 1, 5, 10, 0)) == []
@@ -141,9 +146,11 @@ def test_live_snapshot_includes_target_stop_and_realized():
     sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
     sess.run_decision(datetime(2026, 1, 5, 9, 50))  # enter
     snap = sess.snapshot()
-    # HNI target/stop = ±1% of deployed margin (margin_per_lotset × lots = 132000 × 1).
-    assert snap["profit_target_amt"] == 1320.0
-    assert snap["stop_loss_amt"] == 1320.0
+    # HNI target/stop = ±1% of the DEPLOYED margin (model estimate here; the real broker basket
+    # margin when live) — NOT the per-lot-set config estimate or account capital.
+    assert snap["margin_used"] and snap["margin_used"] > 0
+    assert snap["profit_target_amt"] == pytest.approx(0.01 * snap["margin_used"])
+    assert snap["stop_loss_amt"] == pytest.approx(0.01 * snap["margin_used"])
     assert snap["realized_pnl"] == 0.0  # nothing booked yet
 
 

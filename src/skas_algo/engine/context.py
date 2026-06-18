@@ -22,12 +22,26 @@ class AlgoContext:
         portfolio: Portfolio,
         market: MarketLike,
         stops: StopBook | None = None,
+        margin_fn=None,
     ):
         self.algo_id = algo_id
         self.params = params
         self.portfolio = portfolio
         self.market = market
         self.stops = stops or StopBook()
+        # Returns the deployed margin for the current options book (model margin in backtest, the
+        # real broker basket margin in live), or None when no margin model is wired. Used by
+        # %-of-margin profit/stop targets so the rule applies to actual capital at risk.
+        self._margin_fn = margin_fn
+
+    def position_margin(self) -> float | None:
+        """Deployed margin for the current book, or None for runs without a margin model."""
+        if self._margin_fn is None:
+            return None
+        try:
+            return self._margin_fn()
+        except Exception:  # pragma: no cover - never let a margin call break a decision
+            return None
 
     # ----- portfolio -----
     @property

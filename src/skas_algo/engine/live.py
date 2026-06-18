@@ -73,12 +73,15 @@ class LiveSession:
             price_fn=self.market.close, fill_model=fill_model or FillModel()
         )
         self.resolver = OverrideResolver(overrides, excluded=set(excluded_symbols or []))
+        # Real broker basket margin (set by the LiveRun ~1/min); falls back to the model estimate.
+        self._margin_override: float | None = None
         self.ctx = AlgoContext(
             algo_id=algo_id,
             params={},
             portfolio=self.portfolio,
             market=self.market,
             stops=self.stops,
+            margin_fn=self._decision_margin,
         )
         self.executor = SliceExecutor(
             self.portfolio, self.stops, self.resolver, self.broker, charge_model=charge_model
@@ -396,12 +399,25 @@ class LiveSession:
             return None, None
         base_fn = getattr(strat, "_risk_base", None)
         try:
-            base = base_fn() if base_fn else getattr(strat, "initial_capital", None)
+            # Pass the ctx so the displayed Target/Stop use the same deployed-margin base the
+            # decision uses (real broker margin when known); falls back to capital otherwise.
+            base = base_fn(self.ctx) if base_fn else getattr(strat, "initial_capital", None)
         except Exception:  # pragma: no cover
             base = getattr(strat, "initial_capital", None)
         if not base:
             return None, None
         return (pt * base if pt is not None else None), (sl * base if sl is not None else None)
+
+    def set_margin_override(self, margin: float | None) -> None:
+        """Record the real broker basket margin so %-of-margin targets use actual capital at risk."""
+        self._margin_override = margin
+
+    def _decision_margin(self) -> float | None:
+        """Deployed margin the strategy's %-targets apply to: the real broker margin if known,
+        else the model estimate."""
+        if self._margin_override is not None and self._margin_override > 0:
+            return self._margin_override
+        return self._model_margin()
 
     def _model_margin(self) -> float | None:
         if self.margin_model is None:

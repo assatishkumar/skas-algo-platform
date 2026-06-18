@@ -279,6 +279,8 @@ class LiveRun:
             m = None
         if m is not None:
             self._margin = m
+            # Let the strategy's %-of-margin profit/stop targets apply to the real basket margin.
+            self.session.set_margin_override(m)
 
     def _maybe_record_greeks(self, db, snap: dict) -> None:
         """Sample the deployment's live greeks to history at most once a minute."""

@@ -103,8 +103,12 @@ class HniWeeklyStrategy(CallRatioMonthlyStrategy):
             return None  # holiday-shifted week with no ~8-DTE weekly → skip
         return expiry
 
-    def _risk_base(self) -> float:
-        return self.margin_per_lotset * self.lots  # deployed margin, not account capital
+    def _risk_base(self, ctx=None) -> float:
+        # Actual deployed margin (real broker margin live, model estimate in backtest) when known;
+        # else the per-lot-set config estimate. Either way it's margin, not account capital.
+        fn = getattr(ctx, "position_margin", None) if ctx is not None else None
+        m = fn() if fn is not None else None
+        return m if m and m > 0 else self.margin_per_lotset * self.lots
 
     def _time_exit(self, today: date) -> bool:
         if self.entry_date is None:

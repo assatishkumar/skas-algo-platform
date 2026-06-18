@@ -85,7 +85,21 @@ class BacktestRunner:
         portfolio = Portfolio(cash=self.initial_capital)
         stops = StopBook()
         broker = BacktestBroker(price_fn=view.close, fill_model=self.fill_model)
-        ctx = AlgoContext(algo_id=None, params={}, portfolio=portfolio, market=view, stops=stops)
+
+        def _deployed_margin():
+            # Model-estimated deployed margin at the current bar (options runs only) — feeds
+            # %-of-margin profit/stop targets. None for equity runs (no margin model).
+            if self.margin_model is None:
+                return None
+            d = getattr(view, "current_date", None)
+            if d is None:
+                return None
+            return self.margin_model.margin_used(portfolio, d.date() if hasattr(d, "date") else d)
+
+        ctx = AlgoContext(
+            algo_id=None, params={}, portfolio=portfolio, market=view, stops=stops,
+            margin_fn=_deployed_margin,
+        )
         executor = SliceExecutor(portfolio, stops, self.resolver, broker, charge_model=self.charge_model)
 
         result = RunResult(portfolio=portfolio)

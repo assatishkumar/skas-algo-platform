@@ -151,9 +151,12 @@ class CallRatioMonthlyStrategy:
     def _select_expiry(self, chain, today: date) -> date | None:
         return self._next_monthly_expiry(chain, today)
 
-    def _risk_base(self) -> float:
-        """Rupee base the profit-target/stop percentages apply to."""
-        return self.initial_capital
+    def _risk_base(self, ctx=None) -> float:
+        """Rupee base the profit-target/stop percentages apply to: the deployed margin (real broker
+        margin live, model estimate in backtest) when known, else the account capital."""
+        fn = getattr(ctx, "position_margin", None) if ctx is not None else None
+        m = fn() if fn is not None else None
+        return m if m and m > 0 else self.initial_capital
 
     def _time_exit(self, today: date) -> bool:
         return bool(self.entry_date) and (today - self.entry_date).days >= self.max_holding_days
@@ -419,7 +422,7 @@ class CallRatioMonthlyStrategy:
                       for leg in self.legs)
         except KeyError:
             return []  # a leg didn't print today; manage next slice
-        base = self._risk_base()
+        base = self._risk_base(ctx)
         today = ctx.today()
         now = self._now(ctx)
         reason = None
