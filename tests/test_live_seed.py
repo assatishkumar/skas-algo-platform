@@ -106,7 +106,13 @@ def test_seed_equity_carries_open_position_forward():
     config = LiveConfig(
         name="eq seed", strategy_id="sst_lifo", symbols=["RAMPCO"],
         instrument_class="STOCK", capital=1_000_000,
-        params={"capital_parts": 5, "profit_target": 5.0, "allocation_mode": "fixed"},
+        # Persisted forward-test params carry bookkeeping (instrument_class/underlying/dates) that a
+        # strict SST constructor would reject — strategy_kwargs must strip them.
+        params={
+            "capital_parts": 5, "profit_target": 5.0, "allocation_mode": "fixed",
+            "instrument_class": "STOCK", "underlying": None,
+            "start_date": "2020-01-01", "end_date": "2020-04-15", "universe": None,
+        },
         lookback=20, warm_from_date=date(2020, 1, 1),
     )
     result = seed_state_from_backtest(config, loader=_ramp_loader, end_date=date(2020, 4, 15))

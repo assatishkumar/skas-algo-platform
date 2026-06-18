@@ -126,12 +126,13 @@ def seed_state_from_backtest(config, loader, *, end_date: date) -> dict:
     becomes the live starting position. ``transactions``/``history`` carry the replay's trades +
     equity curve so a run that booked (and is now flat) still shows its realized P&L and trade
     log instead of looking like an empty deployment. Dispatches by instrument class."""
+    from skas_algo.live.manager import strategy_kwargs
+
     start = config.warm_from_date
     if start is None or start >= end_date:
         raise ValueError("warm_from_date must be a past date")
 
-    reserved = {"universe", "initial_capital", "start_date", "end_date"}
-    strategy_params = {k: v for k, v in config.params.items() if k not in reserved}
+    strategy_params = strategy_kwargs(get_strategy(config.strategy_id), config.params)
     overrides = [OverrideRule(scope=o.scope, target=o.target, rule=o.rule) for o in config.overrides]
 
     if config.instrument_class.upper() == "DERIV":

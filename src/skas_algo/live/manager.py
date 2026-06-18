@@ -36,6 +36,36 @@ from .quotes import IST, QuoteSource, is_market_open, warmup_history
 logger = logging.getLogger("skas_algo.live")
 
 
+# Deploy/backtest bookkeeping that lives in a run's persisted params but is NOT a strategy
+# constructor arg (universe/capital are passed explicitly). Stripped before building a strategy.
+_BOOKKEEPING_PARAM_KEYS = {
+    "universe", "initial_capital", "start_date", "end_date", "instrument_class",
+    "symbols", "lookback", "tax_rate", "withdrawal_rate", "warm_from_date",
+    "quote_source", "broker_account_id", "name", "notes", "batch_id",
+}
+
+
+def strategy_kwargs(factory, params: dict) -> dict:
+    """Filter persisted params down to valid strategy constructor args.
+
+    Forward-testing a backtest replays its *persisted* params, which include bookkeeping keys
+    (instrument_class, underlying, dates, …). Strategies with **kwargs swallow extras; a strict
+    constructor (e.g. SST) would raise, so for those we keep only its named parameters.
+    """
+    import inspect
+
+    cleaned = {k: v for k, v in params.items() if k not in _BOOKKEEPING_PARAM_KEYS}
+    init = factory.__init__ if isinstance(factory, type) else factory
+    try:
+        sig = inspect.signature(init)
+    except (TypeError, ValueError):  # pragma: no cover - builtins
+        return cleaned
+    if any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+        return cleaned  # strategy accepts **kwargs (e.g. options strategies) → pass through
+    accepted = set(sig.parameters) - {"self", "universe", "initial_capital"}
+    return {k: v for k, v in cleaned.items() if k in accepted}
+
+
 def _quote_error_message(exc: Exception) -> str:
     """A short, user-facing reason for a failed live-quote fetch."""
     msg = str(exc)
@@ -418,11 +448,9 @@ class LiveRunManager:
 
     def start(self, config: LiveConfig, loader: PriceLoader, quote_source: QuoteSource) -> LiveRun:
         factory = get_strategy(config.strategy_id)
-        # `universe`/`initial_capital` are passed explicitly; `start_date`/`end_date` are
-        # backtest bookkeeping the run carries in its params. Drop them so they don't
-        # collide with the constructor args or get rejected as unknown kwargs.
-        reserved = {"universe", "initial_capital", "start_date", "end_date"}
-        strategy_params = {k: v for k, v in config.params.items() if k not in reserved}
+        # `universe`/`initial_capital` are passed explicitly; the run's params also carry deploy/
+        # backtest bookkeeping (instrument_class, dates, …) that strict constructors reject.
+        strategy_params = strategy_kwargs(factory, config.params)
         is_deriv = config.instrument_class.upper() == "DERIV"
         underlying = (config.underlying or (config.symbols[0] if config.symbols else "NIFTY")).upper()
         strategy = factory(
