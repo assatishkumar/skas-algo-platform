@@ -6,6 +6,7 @@ import { Badge, Card, StatusPill, timeAgo } from "../components/ui";
 import GreeksPanel from "../components/GreeksPanel";
 import LivePayoffChart from "../components/LivePayoffChart";
 import LiveTradesPanel from "../components/LiveTradesPanel";
+import LiveEquityTrades from "../components/LiveEquityTrades";
 import OptionMetricsPanel from "../components/OptionMetricsPanel";
 import { formatInr } from "../lib/format";
 import { isOptionsStrategy } from "../lib/params";
@@ -600,7 +601,11 @@ function RunCard({
       {/* Greeks/P&L history + the trade log stay visible after a cycle closes, so a booked
           position still shows how it evolved, when it exited and the realized P&L. */}
       {isOptions ? <GreeksPanel run={run} /> : null}
-      {isOptions ? <LiveTradesPanel runId={run.run_id} version={version} /> : null}
+      {isOptions ? (
+        <LiveTradesPanel runId={run.run_id} version={version} />
+      ) : (
+        <LiveEquityTrades runId={run.run_id} version={version} />
+      )}
 
       {!stopped && (
         <>
