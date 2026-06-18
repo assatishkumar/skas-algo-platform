@@ -514,6 +514,18 @@ function RunCard({
   const upnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
   return (
     <div className="mt-3 border-t border-slate-800 pt-3">
+      {run.quote_error && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-rose-300 bg-rose-100 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300 px-3 py-2 text-sm">
+          <span>⚠ {run.quote_error} LTP, greeks &amp; live margin stay frozen until then.</span>
+          <Link to="/brokers" className="underline font-medium">Open Brokers</Link>
+          <button
+            onClick={() => act(() => api.liveReconnectQuotes(run.run_id))}
+            className="rounded bg-rose-700 hover:bg-rose-800 text-white px-2.5 py-1 text-xs font-medium"
+          >
+            Reconnect quotes
+          </button>
+        </div>
+      )}
       {/* Options: Sensibull-style position metrics (max P/L, breakevens, POP, margin, …).
           Equity: deployed capital / parts / positions / unrealized P&L. */}
       {isOptions ? (
@@ -691,8 +703,11 @@ function BrokerChip({ dep }: { dep: Deployment }) {
   if (dep.quote_source !== "zerodha") return <Badge>cache quotes</Badge>;
   const label = dep.broker_label || "Zerodha";
   const fallback = dep.on_cache_fallback === true;
-  const ok = dep.broker_connected === true && !fallback;
-  const suffix = ok ? "live" : fallback ? "cache" : "offline";
+  // A live-quote error (e.g. a token Zerodha rejected) means "connected" per the stored session
+  // timestamp is misleading — flag it red as expired regardless of the timestamp check.
+  const err = !!dep.quote_error;
+  const ok = dep.broker_connected === true && !fallback && !err;
+  const suffix = err ? "expired" : ok ? "live" : fallback ? "cache" : "offline";
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
@@ -701,11 +716,13 @@ function BrokerChip({ dep }: { dep: Deployment }) {
           : "bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-900/40 dark:text-rose-300 dark:border-rose-700/50"
       }`}
       title={
-        ok
-          ? `Connected to ${label} — live Zerodha quotes`
-          : fallback
-            ? `${label}: session lost, using cache quotes. Log in again, then Reconnect.`
-            : `${label}: not connected. Log in (paste request token) to resume live quotes.`
+        err
+          ? `${label}: ${dep.quote_error}`
+          : ok
+            ? `Connected to ${label} — live Zerodha quotes`
+            : fallback
+              ? `${label}: session lost, using cache quotes. Log in again, then Reconnect.`
+              : `${label}: not connected. Log in (paste request token) to resume live quotes.`
       }
     >
       <span className={`h-1.5 w-1.5 rounded-full ${ok ? "bg-emerald-500" : "bg-rose-500"}`} />

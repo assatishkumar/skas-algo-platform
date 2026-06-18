@@ -431,6 +431,7 @@ export interface LiveRunSnapshot {
   underlying_spot?: number | null; // live index spot (payoff marker)
   quote_source: string;
   on_cache_fallback?: boolean;
+  quote_error?: string | null; // last live-quote fetch failure (e.g. rejected Zerodha token)
   realized_taxes: number;
   positions: LivePosition[];
   net_delta?: number | null; // options: Σ position delta (None for equity)
@@ -550,6 +551,7 @@ export interface Deployment {
   broker_label?: string | null;
   broker_connected?: boolean | null; // session valid right now
   on_cache_fallback?: boolean; // zerodha run currently falling back to cache quotes
+  quote_error?: string | null; // last live-quote fetch failure (rejected token, etc.)
 }
 
 export interface DataSummary {

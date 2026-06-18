@@ -36,6 +36,14 @@ from .quotes import IST, QuoteSource, is_market_open, warmup_history
 logger = logging.getLogger("skas_algo.live")
 
 
+def _quote_error_message(exc: Exception) -> str:
+    """A short, user-facing reason for a failed live-quote fetch."""
+    msg = str(exc)
+    if "access_token" in msg or "api_key" in msg or exc.__class__.__name__ == "TokenException":
+        return "Zerodha session rejected — log in again on Brokers, then Reconnect quotes."
+    return f"Live quotes unavailable: {msg[:160]}"
+
+
 @dataclass
 class LiveConfig:
     name: str
@@ -157,6 +165,9 @@ class LiveRun:
         # True when the run wants Zerodha live quotes but is degraded to cache (e.g.
         # recovered while logged out). A later login can promote it back to live.
         self.on_cache_fallback = False
+        # Last live-quote fetch error (e.g. a rejected Zerodha token), surfaced in the
+        # snapshot so the UI can flag "session expired — reconnect" instead of failing silently.
+        self.quote_error: str | None = None
         self.last_decision_day = None
         self.status = "running"
         # Greeks history is sampled (~1/min), not every refresh tick → keep a day's
@@ -189,7 +200,13 @@ class LiveRun:
             idx = INDEX_SYMBOL.get(self.config.underlying.upper())
             if idx:
                 symbols = symbols + [idx]  # also quote the index → live spot for strikes
-        quotes = self.quote_source.get_quotes(symbols) if symbols else {}
+        try:
+            quotes = self.quote_source.get_quotes(symbols) if symbols else {}
+            self.quote_error = None
+        except Exception as exc:  # e.g. a rejected Zerodha token — don't 500 / crash the loop
+            self.quote_error = _quote_error_message(exc)
+            logger.warning("quote fetch failed for run %s: %s", self.run_id, exc)
+            quotes = {}
         if idx and idx in quotes and hasattr(self.session.market, "set_index_spot"):
             self.session.market.set_index_spot(self.config.underlying, quotes.pop(idx))
         self.session.update_quotes(quotes)
@@ -349,6 +366,7 @@ class LiveRun:
             "underlying": self.config.underlying,
             "quote_source": self.config.quote_source,
             "on_cache_fallback": self.on_cache_fallback,
+            "quote_error": self.quote_error,
             "parts_total": self.config.params.get("capital_parts"),
             # Options deployments expose lot-sets (editable live while flat); equity
             # strategies have no `lots` attr → null → the UI hides the control.
@@ -559,7 +577,9 @@ class LiveRunManager:
         broker login succeeds, so a run no longer stays stuck on cache after you log in.
         """
         live = self.runs.get(run_id)
-        if live is None or not live.on_cache_fallback or not live.config.broker_account_id:
+        # Promote a run that's on cache fallback OR whose live quotes errored (rejected token):
+        # rebuilding the adapter from the account picks up the fresh session after a re-login.
+        if live is None or not (live.on_cache_fallback or live.quote_error) or not live.config.broker_account_id:
             return False
         from skas_algo.db.models import BrokerAccount
         from skas_algo.live.quotes import ZerodhaQuoteSource
@@ -570,13 +590,15 @@ class LiveRunManager:
             return False
         live.quote_source = ZerodhaQuoteSource(broker_svc.make_adapter(account))
         live.on_cache_fallback = False
+        live.quote_error = None
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
         return True
 
     def promote_account_runs(self, account_id: int, db) -> list[int]:
         """Promote every cache-fallback run on this account (called after a login)."""
         return [rid for rid, live in self.runs.items()
-                if live.on_cache_fallback and live.config.broker_account_id == account_id
+                if (live.on_cache_fallback or live.quote_error)
+                and live.config.broker_account_id == account_id
                 and self.promote_quote_source(rid, db)]
 
     # ----------------------------------------------------- async driver
@@ -598,11 +620,21 @@ class LiveRunManager:
                 market_ok = is_market_open() or (
                     live.config.ignore_market_hours and live.config.quote_source != "zerodha"
                 )
+                if market_ok and live.quote_error and live.config.quote_source == "zerodha":
+                    # Quotes are erroring (e.g. a rejected token). Stop auto-polling so we don't
+                    # re-block the event loop on a bad token every tick — manual Refresh and a
+                    # re-login (which clears quote_error via promote) resume live polling.
+                    await asyncio.sleep(live.config.refresh_seconds)
+                    continue
                 if market_ok:
                     try:
                         live.refresh()
                         now = datetime.now(IST)
-                        if is_deriv:
+                        if live.quote_error:
+                            # Quotes are dead (e.g. token rejected) — the snapshot already
+                            # broadcast the error; never make decisions on stale/empty marks.
+                            pass
+                        elif is_deriv:
                             # Options: decide EVERY tick — the strategy's entry-time +
                             # per-exit cadence gate what actually fires (e.g. profit every
                             # 15 min, stop at 15:15). Roll the day once after the close.

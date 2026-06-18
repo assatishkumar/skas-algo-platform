@@ -170,10 +170,12 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
                 tile["broker_label"] = account.label
                 tile["broker_connected"] = broker_svc.has_valid_session(account)
         tile["on_cache_fallback"] = False
+        tile["quote_error"] = None
         live = manager.get(run.id)
         if live is not None and st == "active":
             snap = live.snapshot()
             tile["on_cache_fallback"] = snap.get("on_cache_fallback", False)
+            tile["quote_error"] = snap.get("quote_error")
             upnl = sum(p["unrealized_pnl"] for p in snap.get("positions", []))
             tile["metrics"] = {
                 "equity": snap.get("equity"),
