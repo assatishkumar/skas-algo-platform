@@ -912,23 +912,24 @@ function DeploymentTile({
       {/* Key metrics */}
       <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
         <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
+          {/* Options still show live net credit/debit while a position is open; everything else
+              (equity, and an options run that has flattened) shows booked Realized P&L. The open
+              position COUNT lives in the third box, so it isn't duplicated here. */}
           <div className="text-slate-400 text-[11px] mb-0.5">
-            {!isOptions ? "Positions" : optFlat ? "Realized P&L" : netCredit != null && netCredit < 0 ? "Net debit" : "Net credit"}
+            {isOptions && !optFlat ? (netCredit != null && netCredit < 0 ? "Net debit" : "Net credit") : "Realized P&L"}
           </div>
           <div className="font-medium tabular-nums">
-            {!isOptions ? (
-              positions
-            ) : optFlat ? (
-              realized != null ? (
-                <span className={realized >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
-                  {formatInr(realized)}
+            {isOptions && !optFlat ? (
+              netCredit != null ? (
+                <span className={netCredit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
+                  {formatInr(Math.abs(netCredit))}
                 </span>
               ) : (
                 "—"
               )
-            ) : netCredit != null ? (
-              <span className={netCredit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
-                {formatInr(Math.abs(netCredit))}
+            ) : realized != null ? (
+              <span className={realized >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
+                {formatInr(realized)}
               </span>
             ) : (
               "—"
