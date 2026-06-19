@@ -11,6 +11,7 @@ import AnalysisPage from "./pages/AnalysisPage";
 import RunDetailPage from "./pages/RunDetailPage";
 import RunsPage from "./pages/RunsPage";
 import StrategiesPage from "./pages/StrategiesPage";
+import TradePage from "./pages/TradePage";
 
 function NavItem({ to, label }: { to: string; label: string }) {
   return (
@@ -56,6 +57,7 @@ export default function App() {
           </NavLink>
           <NavItem to="/" label="Runs" />
           <NavItem to="/new" label="New backtest" />
+          <NavItem to="/trade" label="Trade" />
           <NavItem to="/live" label="Live" />
           <NavItem to="/analyze" label="Analyze" />
           <NavItem to="/strategies" label="Strategies" />
@@ -68,6 +70,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<RunsPage />} />
           <Route path="/new" element={<NewBacktestPage />} />
+          <Route path="/trade" element={<TradePage />} />
           <Route path="/live" element={<LivePage />} />
           <Route path="/live/new" element={<DeployPage />} />
           <Route path="/analyze" element={<AnalysisPage />} />

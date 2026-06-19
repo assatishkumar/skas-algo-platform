@@ -114,6 +114,59 @@ class LiveStartRequest(BaseModel):
     warm_from_date: date | None = None
 
 
+class OptionTradeLeg(BaseModel):
+    """One leg of a custom option trade picked off the chain."""
+
+    right: str       # "CE" | "PE"
+    strike: float
+    side: str        # "buy" | "sell"
+    lots: int = 1    # lot-sets (× the contract lot size)
+
+
+class OptionsTradeDeploy(BaseModel):
+    """Deploy a user-built multi-leg option position (strategy_id=custom_options). Percentages
+    are entered as whole numbers (e.g. 50 = 50%) and converted to fractions for the strategy."""
+
+    name: str
+    underlying: str
+    expiry: str                                  # ISO date from the chain
+    legs: list[OptionTradeLeg] = Field(default_factory=list)
+    capital: float = 1_000_000
+    spot_upper: float | None = None              # exit-all band on the underlying spot
+    spot_lower: float | None = None
+    target_pct: float | None = None              # combined P&L target, % of net entry premium
+    stop_pct: float | None = None
+    leg_targets: dict[int, float] | None = None  # {leg_index: %} per-leg premium target
+    leg_stops: dict[int, float] | None = None
+    mode: str = "PAPER"
+    quote_source: str = "cache"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+    notes: str | None = None
+
+
+class EquityTradeDeploy(BaseModel):
+    """Deploy a single managed equity position (strategy_id=custom_equity)."""
+
+    name: str
+    symbol: str
+    qty: int = 0                  # explicit share count; 0 → size from capital
+    capital: float = 1_000_000
+    entry_mode: str = "immediate"  # "immediate" | "trigger" (engine-managed GTT)
+    trigger_price: float | None = None
+    target_pct: float | None = None   # % from entry
+    stop_pct: float | None = None     # % from entry
+    trailing: bool = False
+    trail_pct: float | None = None    # % below the high-water mark
+    mode: str = "PAPER"
+    quote_source: str = "cache"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+    notes: str | None = None
+
+
 class BrokerConnectRequest(BaseModel):
     broker: str = "zerodha"
     label: str

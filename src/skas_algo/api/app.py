@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from skas_algo import __version__
 from skas_algo.config import get_settings
 
-from .routes import backtest, brokers, data, health, live
+from .routes import backtest, brokers, data, health, live, trade
 
 logger = logging.getLogger("skas_algo")
 
@@ -59,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(brokers.router, prefix="/api/v1")
     app.include_router(data.router, prefix="/api/v1")
     app.include_router(live.router, prefix="/api/v1")
+    app.include_router(trade.router, prefix="/api/v1")
 
     return app
 

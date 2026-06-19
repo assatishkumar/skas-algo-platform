@@ -652,6 +652,10 @@ class LiveRunManager:
     async def _loop(self, live: LiveRun) -> None:
         try:
             is_deriv = live.config.instrument_class.upper() == "DERIV"
+            # Tick-driven runs decide every refresh (options, and custom equity trades whose
+            # GTT trigger / stop / trailing must react intraday). Plain equity decides once a day.
+            strategy = getattr(live.session, "strategy", None)
+            tick_driven = is_deriv or getattr(strategy, "intraday", False)
             decide_at = time.fromisoformat(live.config.decision_time)
             while True:
                 # Auto-refresh only during market hours (Mon–Fri 09:15–15:30 IST). A
@@ -676,10 +680,10 @@ class LiveRunManager:
                             # Quotes are dead (e.g. token rejected) — the snapshot already
                             # broadcast the error; never make decisions on stale/empty marks.
                             pass
-                        elif is_deriv:
-                            # Options: decide EVERY tick — the strategy's entry-time +
-                            # per-exit cadence gate what actually fires (e.g. profit every
-                            # 15 min, stop at 15:15). Roll the day once after the close.
+                        elif tick_driven:
+                            # Decide EVERY tick — the strategy's own gates decide what fires
+                            # (options exit cadences; an equity trade's trigger/stop/trailing).
+                            # Roll the day once after the close.
                             live.run_decision(now)
                             if now.time() >= time(15, 30) and live.last_decision_day != now.date():
                                 live.end_day()

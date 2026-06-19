@@ -59,13 +59,9 @@ def _quote_source(req: LiveStartRequest, loader: PriceLoader, db: Session):
     return _build_quote_source(req.quote_source, req.broker_account_id, loader, db)
 
 
-@router.post("/start")
-async def start_live(
-    req: LiveStartRequest,
-    db: Session = Depends(get_db),
-    loader: PriceLoader = Depends(get_price_loader),
-    avail: set[str] = Depends(get_available_symbols),
-) -> dict:
+def start_deployment(req: LiveStartRequest, db: Session, loader: PriceLoader, avail: set[str]):
+    """Resolve symbols, build a LiveConfig, start (and optionally loop) a deployment. Shared by
+    POST /live/start and the /trade/* deploy endpoints. Raises HTTPException on bad input."""
     is_deriv = req.instrument_class.upper() == "DERIV"
     underlying = (req.underlying or (req.symbols[0] if req.symbols else None))
     if is_deriv:
@@ -109,7 +105,17 @@ async def start_live(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if req.auto:
         manager.start_loop(live.run_id)
-    return live.snapshot()
+    return live
+
+
+@router.post("/start")
+async def start_live(
+    req: LiveStartRequest,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    return start_deployment(req, db, loader, avail).snapshot()
 
 
 def _get(run_id: int):

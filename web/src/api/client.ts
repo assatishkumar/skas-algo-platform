@@ -12,7 +12,9 @@ import type {
   AnalysisRunItem,
   Deployment,
   DerivCoverage,
+  EquityTradeDeploy,
   FuturesSeries,
+  OptionsTradeDeploy,
   GreeksHistory,
   RunAnalysis,
   StockSeries,
@@ -141,6 +143,12 @@ export const api = {
     request<FuturesSeries>(`/data/futures/${encodeURIComponent(u)}/series`),
   futuresRefresh: (body: { underlyings: string[]; start_date: string; end_date: string }) =>
     request<RefreshResult>("/data/futures/refresh", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- trade (deploy a user-built option / equity position) ---
+  deployOptionTrade: (body: OptionsTradeDeploy) =>
+    request<LiveRunSnapshot>("/trade/options/deploy", { method: "POST", body: JSON.stringify(body) }),
+  deployEquityTrade: (body: EquityTradeDeploy) =>
+    request<LiveRunSnapshot>("/trade/equity/deploy", { method: "POST", body: JSON.stringify(body) }),
 
   // --- live / paper ---
   liveList: () => request<LiveRunSnapshot[]>("/live"),
