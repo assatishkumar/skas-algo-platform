@@ -323,35 +323,39 @@ def analysis_runs(db: Session = Depends(get_db)) -> list[dict]:
     return out
 
 
+def _resolve_run_trades(run: AlgoRun, db: Session) -> list[dict]:
+    """Trades for any run, preferring the richest available source — so the Analysis page
+    shows exactly what the Live page does for an active deployment. Order of preference:
+    the running session's in-memory transactions (exit_reason/holding_days/per-leg P&L) →
+    the finalized ``trade_log`` (backtests + stopped deployments) → a reconstruction from
+    the durable Order rows. Mirrors the /live/{id}/trades resolution."""
+    from skas_algo.api.routes.live import _orders_to_trades
+    from skas_algo.live.manager import _serialize_event, manager
+
+    live = manager.get(run.id)
+    if live is not None and live.session.transactions:
+        return [_serialize_event(t) for t in live.session.transactions]
+    trades = run.trade_log or []
+    if trades:
+        return trades
+    if run.mode != TradingMode.BACKTEST:
+        orders = db.execute(
+            select(Order).where(Order.algo_id == run.algo_id).order_by(Order.id)
+        ).scalars().all()
+        return _orders_to_trades(orders)
+    return []
+
+
 @router.get("/runs/{run_id}/analysis")
 def run_analysis(run_id: int, db: Session = Depends(get_db)) -> dict:
-    """Unified trade feed for the analysis page — works for any run. Uses the finalized
-    ``trade_log`` (backtests + stopped deployments); falls back to filled orders for a
-    still-running live deployment (per-trade ``profit`` is then derived client-side from prices)."""
+    """Unified trade feed for the analysis page — works for any run. Prefers a running
+    deployment's in-memory transactions, then the finalized ``trade_log`` (backtests +
+    stopped deployments), then a reconstruction from the durable Order rows."""
     run = db.get(AlgoRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     algo = db.get(Algo, run.algo_id)
-    trades = run.trade_log or []
-    if not trades and run.mode != TradingMode.BACKTEST:
-        orders = db.execute(
-            select(Order).where(Order.algo_id == run.algo_id).order_by(Order.id)
-        ).scalars().all()
-        trades = [
-            {
-                "date": (o.created_at.date().isoformat() if o.created_at else None),
-                "ticker": o.symbol,
-                "action": o.side.value if hasattr(o.side, "value") else str(o.side),
-                "units": o.quantity,
-                "price": o.price or 0.0,
-                "amount": (o.price or 0.0) * o.quantity,
-                "profit": 0.0,
-                "pnl_pct": 0.0,
-                "lots": 1,
-                "tag": o.tag or "",
-            }
-            for o in orders
-        ]
+    trades = _resolve_run_trades(run, db)
     return {
         "run_id": run.id,
         "name": algo.name if algo else None,

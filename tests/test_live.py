@@ -336,6 +336,37 @@ def test_live_rest_lifecycle(api_client: TestClient):
     assert api_client.get(f"/api/v1/live/{run_id}").status_code == 404
 
 
+def test_run_analysis_surfaces_live_session_trades(api_client: TestClient):
+    """A seeded/warmed forward-test holds its replayed trades only in the live session's
+    memory (no persisted trade_log, no Order rows for the replay). The /runs/{id}/analysis
+    endpoint must surface those in-memory transactions — otherwise the Analyze page is empty."""
+    body = {
+        "strategy_id": "sst_lifo",
+        "name": "warmed forward test",
+        "symbols": ["AAA"],
+        "capital": 100000,
+        "params": {"capital_parts": 10, "profit_target": 0.06},
+        "lookback": 5,
+        "quote_source": "cache",
+        "ignore_market_hours": True,
+        "auto": False,
+    }
+    run_id = api_client.post("/api/v1/live/start", json=body).json()["run_id"]
+    try:
+        live = manager.get(run_id)
+        # Simulate a seed-replayed trade that exists only in the session (no Order row).
+        live.session.transactions.append({
+            "date": date(2026, 4, 15), "ticker": "AAA", "action": "BUY",
+            "units": 10, "price": 100.0, "amount": 1000.0,
+            "profit": 0.0, "pnl_pct": 0.0, "lots": 1, "tag": "STRATEGY",
+        })
+        j = api_client.get(f"/api/v1/runs/{run_id}/analysis").json()
+        assert j["strategy_id"] == "sst_lifo" and j["instrument_class"] == "STOCK"
+        assert any(t["ticker"] == "AAA" and t["date"] == "2026-04-15" for t in j["trades"])
+    finally:
+        api_client.post(f"/api/v1/live/{run_id}/stop")
+
+
 def test_deployment_lifecycle(api_client: TestClient):
     body = {
         "strategy_id": "sst_lifo",
