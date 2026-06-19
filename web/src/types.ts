@@ -686,6 +686,8 @@ export interface OptionChain {
   atm_strike: number | null;
   rows: OptionChainRow[];
   synthetic?: boolean; // GOLD: Black-Scholes model prices, not market premiums
+  live?: boolean;      // true when premiums are real-time Zerodha quotes
+  lot_size?: number;   // contract lot size (live chain only)
 }
 
 export interface RefreshResult {

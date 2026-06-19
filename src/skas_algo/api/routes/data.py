@@ -11,9 +11,13 @@ from datetime import UTC, date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from skas_algo.api.deps import get_db
 from skas_algo.data.options_provider import make_spot_provider
 from skas_algo.data.provider import get_data_cache
+from skas_algo.db.models import BrokerAccount
+from skas_algo.services import broker as broker_svc
 from skas_algo.data.synthetic_options import (
     SYNTHETIC_UNDERLYINGS,
     synthetic_chain_for_view,
@@ -350,6 +354,61 @@ def options_chain(
         "underlying": u, "date": date, "expiry": expiry,
         "spot": spot, "atm_strike": atm, "rows": rows, "synthetic": synthetic,
     }
+
+
+# ------------------------------------------------ live option chain (Zerodha)
+def _live_adapter(broker_account_id: int, db: Session):
+    """Adapter for a logged-in account, for real-time option quotes. 4xx if no session."""
+    account = db.get(BrokerAccount, broker_account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="broker account not found")
+    if not broker_svc.has_valid_session(account):
+        raise HTTPException(
+            status_code=400,
+            detail="broker account has no valid session — log in (paste request token) first",
+        )
+    return broker_svc.make_adapter(account)
+
+
+@router.get("/options/live/underlyings")
+def options_live_underlyings(broker_account_id: int, db: Session = Depends(get_db)) -> dict:
+    """Every F&O underlying Kite currently lists (indices + stocks), from the live session."""
+    adapter = _live_adapter(broker_account_id, db)
+    try:
+        return {"underlyings": adapter.option_underlyings()}
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - network/API hiccup
+        raise HTTPException(status_code=502, detail=f"live instruments fetch failed: {exc}") from exc
+
+
+@router.get("/options/live/{underlying}/expiries")
+def options_live_expiries(underlying: str, broker_account_id: int, db: Session = Depends(get_db)) -> dict:
+    adapter = _live_adapter(broker_account_id, db)
+    try:
+        return {"underlying": underlying.upper(), "date": None, "expiries": adapter.option_expiries(underlying)}
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=502, detail=f"live expiries fetch failed: {exc}") from exc
+
+
+@router.get("/options/live/{underlying}/chain")
+def options_live_chain(
+    underlying: str, expiry: str, broker_account_id: int, db: Session = Depends(get_db),
+) -> dict:
+    """Real-time chain (per-strike CE/PE LTP + OI, live spot, ATM, lot size) for one expiry."""
+    adapter = _live_adapter(broker_account_id, db)
+    try:
+        ch = adapter.live_option_chain(underlying, expiry)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"live chain fetch failed: {exc}") from exc
+    if ch is None:
+        raise HTTPException(status_code=404, detail=f"no listed {underlying.upper()} options for {expiry}")
+    return {"underlying": underlying.upper(), "date": datetime.now(UTC).date().isoformat(),
+            "expiry": expiry, "live": True, **ch}
 
 
 class _RefreshBody(BaseModel):

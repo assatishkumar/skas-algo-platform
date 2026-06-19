@@ -53,6 +53,8 @@ class ZerodhaAdapter:
         self._kite = kite  # injectable KiteConnect (lazily built if None)
         self.access_token: str | None = None
         self._nfo_lut: dict | None = None  # (name, expiry, strike, CE/PE) -> tradingsymbol
+        self._nfo_index: dict = {}  # name -> {expiry_iso -> {strike -> {"CE": ts, "PE": ts}}}
+        self._nfo_lot: dict = {}    # name -> contract lot size
 
     # ------------------------------------------------------------------ kite
     def _kite_client(self):
@@ -195,18 +197,84 @@ class ZerodhaAdapter:
         total = final.get("total")
         return float(total) if total is not None else None
 
+    def _build_nfo(self) -> None:
+        """Cache the NFO option instruments dump for the session: a (name,expiry,strike,type)
+        → tradingsymbol map, a name→expiry→strike→{CE,PE} index, and the per-name lot size."""
+        if self._nfo_lut is not None:
+            return
+        self._nfo_lut = {}
+        for r in self._kite_client().instruments("NFO"):
+            if r.get("instrument_type") not in ("CE", "PE"):
+                continue
+            name, it = r["name"], r["instrument_type"]
+            exp = r.get("expiry")
+            exp_iso = exp.isoformat() if hasattr(exp, "isoformat") else str(exp)[:10]
+            strike = float(r["strike"])
+            ts = r["tradingsymbol"]
+            self._nfo_lut[(name, exp_iso, strike, it)] = ts
+            self._nfo_index.setdefault(name, {}).setdefault(exp_iso, {}).setdefault(strike, {})[it] = ts
+            if r.get("lot_size"):
+                self._nfo_lot[name] = int(r["lot_size"])
+
     def _option_tradingsymbol(self, inst) -> str | None:
-        """Resolve an option instrument to its Kite NFO tradingsymbol via the instruments
-        dump (cached for the session)."""
-        if self._nfo_lut is None:
-            self._nfo_lut = {}
-            for r in self._kite_client().instruments("NFO"):
-                if r.get("instrument_type") not in ("CE", "PE"):
-                    continue
-                exp = r.get("expiry")
-                exp_iso = exp.isoformat() if hasattr(exp, "isoformat") else str(exp)[:10]
-                self._nfo_lut[(r["name"], exp_iso, float(r["strike"]), r["instrument_type"])] = \
-                    r["tradingsymbol"]
+        """Resolve an option instrument to its Kite NFO tradingsymbol via the instruments dump."""
+        self._build_nfo()
         return self._nfo_lut.get(
             (inst.underlying, inst.expiry.isoformat(), float(inst.strike), inst.right)
         )
+
+    # ----------------------------------------------------- live option chain
+    # Index underlyings quote their index symbol for spot; a stock F&O underlying quotes itself.
+    _INDEX_SPOT = {
+        "NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK",
+        "FINNIFTY": "NIFTY FIN SERVICE", "MIDCPNIFTY": "NIFTY MIDCAP SELECT",
+    }
+
+    def option_underlyings(self) -> list[str]:
+        """All F&O option underlyings Kite currently lists (indices + stocks)."""
+        self._build_nfo()
+        return sorted(self._nfo_index)
+
+    def option_expiries(self, underlying: str) -> list[str]:
+        """Listed expiries (ISO) for an underlying, today onward."""
+        self._build_nfo()
+        today = datetime.now().date().isoformat()
+        return sorted(e for e in self._nfo_index.get(underlying.upper(), {}) if e >= today)
+
+    def live_option_chain(self, underlying: str, expiry: str, window: int = 25) -> dict | None:
+        """Live chain for one expiry: per-strike CE/PE last price + OI, the live underlying
+        spot, ATM, and contract lot size — all from Kite (real-time). Strikes are windowed
+        ±``window`` around ATM to keep the quote() batch small. None if the contract isn't listed."""
+        self._build_nfo()
+        name = underlying.upper()
+        chain = self._nfo_index.get(name, {}).get(expiry)
+        if not chain:
+            return None
+        kite = self._kite_client()
+        spot_key = f"NSE:{self._INDEX_SPOT.get(name, name)}"
+        try:
+            spot = kite.ltp([spot_key]).get(spot_key, {}).get("last_price")
+        except Exception:  # pragma: no cover - network hiccup
+            spot = None
+        strikes = sorted(chain)
+        if spot:
+            atm = min(strikes, key=lambda k: abs(k - spot))
+            ai = strikes.index(atm)
+            sel = strikes[max(0, ai - window): ai + window + 1]
+        else:
+            atm, sel = None, strikes
+        keys = [f"NFO:{ts}" for k in sel for ts in (chain[k].get("CE"), chain[k].get("PE")) if ts]
+        try:
+            q = kite.quote(keys) if keys else {}
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError(f"live quote failed: {exc}") from exc
+
+        def info(ts: str | None) -> dict | None:
+            d = q.get(f"NFO:{ts}") if ts else None
+            if not d:
+                return None
+            return {"ltp": d.get("last_price"), "close": (d.get("ohlc") or {}).get("close"),
+                    "oi": d.get("oi"), "change_in_oi": None}
+
+        rows = [{"strike": k, "ce": info(chain[k].get("CE")), "pe": info(chain[k].get("PE"))} for k in sel]
+        return {"spot": spot, "atm_strike": atm, "lot_size": self._nfo_lot.get(name, 0), "rows": rows}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api, brokers } from "../../api/client";
@@ -11,8 +11,9 @@ import LivePayoffChart from "../LivePayoffChart";
 const inputClass =
   "w-full rounded-md bg-slate-800 border border-slate-700 px-2.5 py-1.5 text-sm focus:outline-none focus:border-brand";
 const lbl = "block text-xs text-slate-400 mb-1";
+const todayISO = () => new Date().toISOString().slice(0, 10);
 
-// Known index lot sizes (auto-filled, editable). Stock F&O lot size must be entered by the user.
+// Known index lot sizes (auto-filled, editable). Live chain supplies the authoritative size.
 const INDEX_LOTS: Record<string, number> = { NIFTY: 65, BANKNIFTY: 35, FINNIFTY: 65, MIDCPNIFTY: 140, GOLD: 100 };
 
 type Leg = { right: "CE" | "PE"; strike: number; side: "buy" | "sell"; lots: number; price: number };
@@ -28,48 +29,65 @@ export default function OptionTradeBuilder() {
   const [legStops, setLegStops] = useState<Record<number, number>>({});
   const [lotSize, setLotSize] = useState(INDEX_LOTS.NIFTY);
 
-  // Exit config — separated into Target vs Stop/Exit below.
   const [targetPct, setTargetPct] = useState(0);
   const [stopPct, setStopPct] = useState(0);
-  const [exitAbove, setExitAbove] = useState(0); // exit all if spot >= this (exact price)
-  const [exitBelow, setExitBelow] = useState(0); // exit all if spot <= this (exact price)
+  const [exitAbove, setExitAbove] = useState(0);
+  const [exitBelow, setExitBelow] = useState(0);
 
   const [name, setName] = useState("");
   const [capital, setCapital] = useState(1_000_000);
-  const [quoteSource, setQuoteSource] = useState("cache");
-  const [accountId, setAccountId] = useState<number | null>(null);
   const [mode, setMode] = useState("PAPER");
   const [ignoreHours, setIgnoreHours] = useState(true);
   const [auto, setAuto] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: unders } = useQuery({ queryKey: ["opt-underlyings"], queryFn: api.optionsUnderlyings, retry: false });
-  const choices = unders?.available ?? ["NIFTY", "BANKNIFTY", "GOLD"];
+  // Prices source: a logged-in Zerodha account → real-time chain; else the cached EOD chain.
+  const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
+  const sessioned = useMemo(() => (accounts ?? []).filter((a) => a.has_session), [accounts]);
+  const [priceSrc, setPriceSrc] = useState<"cache" | number>("cache");
+  const picked = useRef(false);
+  useEffect(() => {
+    if (!picked.current && sessioned.length) { setPriceSrc(sessioned[0].id); picked.current = true; }
+  }, [sessioned]);
+  const live = typeof priceSrc === "number";
+  const liveAcc = live ? (priceSrc as number) : null;
 
-  // Latest available chain date for this underlying (this screen always shows the most recent
-  // prices — no historical browsing). Live LTP is used once deployed with a Zerodha session.
-  const { data: cov } = useQuery({ queryKey: ["opt-cov", underlying], queryFn: () => api.optionsCoverage(underlying), retry: false });
-  const date = cov?.end_date ?? new Date().toISOString().slice(0, 10);
+  // --- underlyings ---
+  const liveUnders = useQuery({ queryKey: ["lu", liveAcc], queryFn: () => api.optionsLiveUnderlyings(liveAcc!), enabled: live });
+  const cacheUnders = useQuery({ queryKey: ["cu"], queryFn: api.optionsUnderlyings, enabled: !live, retry: false });
+  const choices = live ? (liveUnders.data?.underlyings ?? []) : (cacheUnders.data?.available ?? ["NIFTY", "BANKNIFTY", "GOLD"]);
 
-  const { data: expData } = useQuery({
-    queryKey: ["opt-exp", underlying, date], queryFn: () => api.optionsExpiries(underlying, date), enabled: !!cov?.end_date,
-  });
-  const expiries = expData?.expiries ?? [];
+  // --- date (cache only — live is always "now") ---
+  const cov = useQuery({ queryKey: ["opt-cov", underlying], queryFn: () => api.optionsCoverage(underlying), enabled: !live, retry: false });
+  const date = live ? todayISO() : (cov.data?.end_date ?? todayISO());
+
+  // --- expiries ---
+  const liveExp = useQuery({ queryKey: ["le", underlying, liveAcc], queryFn: () => api.optionsLiveExpiries(underlying, liveAcc!), enabled: live });
+  const cacheExp = useQuery({ queryKey: ["ce", underlying, date], queryFn: () => api.optionsExpiries(underlying, date), enabled: !live && !!cov.data?.end_date });
+  const expiries = (live ? liveExp.data?.expiries : cacheExp.data?.expiries) ?? [];
   useEffect(() => { if (expiries.length && !expiries.includes(expiry)) setExpiry(expiries[0]); }, [expiries, expiry]);
 
-  const { data: chain, isLoading, error: chainErr } = useQuery({
-    queryKey: ["opt-chain", underlying, date, expiry, greeks], queryFn: () => api.optionsChain(underlying, date, expiry, greeks),
-    enabled: !!cov?.end_date && !!expiry,
+  // --- chain (live refetches every 12s for true real-time premiums) ---
+  const liveChainQ = useQuery({
+    queryKey: ["lc", underlying, expiry, liveAcc], queryFn: () => api.optionsLiveChain(underlying, expiry, liveAcc!),
+    enabled: live && !!expiry, refetchInterval: 12_000,
   });
-  const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
-  const sessioned = (accounts ?? []).filter((a) => a.has_session);
+  const cacheChainQ = useQuery({
+    queryKey: ["cc", underlying, date, expiry, greeks], queryFn: () => api.optionsChain(underlying, date, expiry, greeks),
+    enabled: !live && !!expiry && !!cov.data?.end_date,
+  });
+  const chain = live ? liveChainQ.data : cacheChainQ.data;
+  const chainLoading = live ? liveChainQ.isLoading : cacheChainQ.isLoading;
+  const chainErr = live ? liveChainQ.error : cacheChainQ.error;
 
-  // Reset basket + default the lot size when the underlying or expiry changes.
+  // Reset basket + default lot size when underlying/expiry change.
   useEffect(() => {
     setLegs([]); setLegTargets({}); setLegStops({});
     setLotSize(INDEX_LOTS[underlying.toUpperCase()] ?? 0);
   }, [underlying, expiry]);
+  // The live chain carries the authoritative lot size.
+  useEffect(() => { if (live && chain?.lot_size) setLotSize(chain.lot_size); }, [live, chain?.lot_size]);
 
   const spot = chain?.spot ?? null;
 
@@ -82,12 +100,9 @@ export default function OptionTradeBuilder() {
     });
   }
   const selected = useMemo(() => new Map(legs.map((l) => [key(l.right, l.strike), l])), [legs]);
-
-  function updateLeg(i: number, patch: Partial<Leg>) {
-    setLegs((prev) => prev.map((l, j) => (j === i ? { ...l, ...patch } : l)));
-  }
+  const updateLeg = (i: number, patch: Partial<Leg>) => setLegs((p) => p.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   function removeLeg(i: number) {
-    setLegs((prev) => prev.filter((_, j) => j !== i));
+    setLegs((p) => p.filter((_, j) => j !== i));
     setLegTargets((m) => { const n = { ...m }; delete n[i]; return n; });
     setLegStops((m) => { const n = { ...m }; delete n[i]; return n; });
   }
@@ -115,8 +130,9 @@ export default function OptionTradeBuilder() {
       stop_pct: stopPct > 0 ? stopPct : null,
       leg_targets: Object.keys(legTargets).length ? legTargets : null,
       leg_stops: Object.keys(legStops).length ? legStops : null,
-      mode, quote_source: quoteSource,
-      broker_account_id: quoteSource === "zerodha" ? accountId : null,
+      mode,
+      quote_source: live ? "zerodha" : "cache",
+      broker_account_id: liveAcc,
       ignore_market_hours: ignoreHours, auto,
     };
     try {
@@ -134,6 +150,13 @@ export default function OptionTradeBuilder() {
       {/* Left: the chain */}
       <Card>
         <div className="flex flex-wrap items-end gap-3 mb-2">
+          <label className="block"><span className={lbl}>Prices</span>
+            <select className={inputClass} value={String(priceSrc)}
+              onChange={(e) => { picked.current = true; setPriceSrc(e.target.value === "cache" ? "cache" : +e.target.value); }}>
+              {sessioned.map((a) => <option key={a.id} value={a.id}>Live · {a.label}</option>)}
+              <option value="cache">Cached (EOD)</option>
+            </select>
+          </label>
           <label className="block"><span className={lbl}>Underlying (any F&amp;O)</span>
             <input className={`${inputClass} w-40`} list="opt-unders" value={underlying}
               onChange={(e) => setUnderlying(e.target.value.toUpperCase())} placeholder="NIFTY / RELIANCE…" />
@@ -144,16 +167,21 @@ export default function OptionTradeBuilder() {
               {expiries.length === 0 && <option value="">—</option>}
               {expiries.map((e) => <option key={e} value={e}>{e}</option>)}
             </select></label>
-          <label className="flex items-center gap-1.5 text-xs text-slate-300 pb-2">
-            <input type="checkbox" checked={greeks} onChange={(e) => setGreeks(e.target.checked)} /> IV / δ</label>
+          {!live && <label className="flex items-center gap-1.5 text-xs text-slate-300 pb-2">
+            <input type="checkbox" checked={greeks} onChange={(e) => setGreeks(e.target.checked)} /> IV / δ</label>}
         </div>
-        <div className="text-[11px] text-slate-500 mb-2">
-          {spot != null ? <>spot <b>{formatInr(spot)}</b> · ATM {chain?.atm_strike} · </> : null}
-          latest prices as of {date}{cov?.end_date ? "" : " (today)"} — click a CE / PE price to add a leg (defaults to <b>sell</b>; flip B/S in the basket).
+        <div className="text-[11px] mb-2">
+          {live
+            ? <span className="text-emerald-600 dark:text-emerald-400">● LIVE premiums (Zerodha, ~12s) </span>
+            : <span className="text-amber-600 dark:text-amber-400">○ Cached EOD as of {date} — pick a live Zerodha account above for real-time </span>}
+          <span className="text-slate-500">
+            {spot != null ? <> · spot <b>{formatInr(spot)}</b> · ATM {chain?.atm_strike}</> : null}
+            {" "}· click a CE / PE price to add a leg (defaults to <b>sell</b>; flip B/S in the basket).
+          </span>
         </div>
-        {isLoading ? <Spinner /> : chainErr ? <ErrorBox message={(chainErr as Error).message} /> : chain && chain.rows.length ? (
-          <SelectableChain rows={chain.rows} atm={chain.atm_strike} greeks={greeks} selected={selected} onToggle={toggleLeg} />
-        ) : <div className="text-sm text-slate-500">No chain cached for {underlying}. Refresh its option data on the Data tab.</div>}
+        {chainLoading ? <Spinner /> : chainErr ? <ErrorBox message={(chainErr as Error).message} /> : chain && chain.rows.length ? (
+          <SelectableChain rows={chain.rows} atm={chain.atm_strike} greeks={greeks && !live} selected={selected} onToggle={toggleLeg} />
+        ) : <div className="text-sm text-slate-500">No chain for {underlying} / {expiry || "—"}{live ? "" : " — refresh its option data on the Data tab."}.</div>}
       </Card>
 
       {/* Right: basket, payoff, exits, deploy */}
@@ -241,24 +269,16 @@ export default function OptionTradeBuilder() {
               <input className={inputClass} placeholder="e.g. Bear call spread" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="block"><span className={lbl}>Capital (₹)</span><NumberInput className={inputClass} value={capital} onChange={setCapital} /></label>
           </div>
-          <div className="grid md:grid-cols-4 gap-3 items-end">
+          <div className="grid md:grid-cols-3 gap-3 items-end">
             <label className="block"><span className={lbl}>Mode</span>
               <select className={inputClass} value={mode} onChange={(e) => setMode(e.target.value)}>
                 <option value="PAPER">Paper (simulated)</option>
                 <option value="LIVE">Live (real money)</option>
               </select></label>
-            <label className="block"><span className={lbl}>Quotes</span>
-              <select className={inputClass} value={quoteSource} onChange={(e) => setQuoteSource(e.target.value)}>
-                <option value="cache">Cache (offline)</option>
-                <option value="zerodha">Zerodha (live)</option>
-              </select></label>
-            {quoteSource === "zerodha" && (
-              <label className="block"><span className={lbl}>Account</span>
-                <select className={inputClass} value={accountId ?? ""} onChange={(e) => setAccountId(e.target.value ? +e.target.value : null)}>
-                  <option value="">select…</option>
-                  {sessioned.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-                </select></label>
-            )}
+            <div className="text-xs text-slate-500">
+              Quotes: {live ? <span className="text-emerald-600 dark:text-emerald-400">Zerodha (live)</span> : "Cache (offline)"}
+              {live ? "" : " — select a live account in Prices for real orders"}
+            </div>
             <div className="flex flex-col gap-1">
               <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={ignoreHours} onChange={(e) => setIgnoreHours(e.target.checked)} /> ignore market hours</label>
               <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto loop</label>
@@ -266,12 +286,12 @@ export default function OptionTradeBuilder() {
           </div>
           {mode === "LIVE" && <div className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">Live places real orders only on an armed Zerodha account with live trading enabled — otherwise it runs as paper.</div>}
           <div className="mt-3 flex items-center gap-3">
-            <button onClick={deploy} disabled={busy || legs.length === 0 || !expiry || lotSize <= 0 || (quoteSource === "zerodha" && !accountId)}
+            <button onClick={deploy} disabled={busy || legs.length === 0 || !expiry || lotSize <= 0 || (mode === "LIVE" && !live)}
               className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50">
               {busy ? "Deploying…" : "Save & deploy"}
             </button>
             {lotSize <= 0 && <span className="text-xs text-rose-500">Set a lot size first.</span>}
-            <span className="text-xs text-slate-500">Uses live quotes once deployed with a Zerodha session during market hours.</span>
+            {mode === "LIVE" && !live && <span className="text-xs text-rose-500">Live mode needs a live Zerodha account in Prices.</span>}
           </div>
           {error && <div className="mt-2"><ErrorBox message={error} /></div>}
         </Card>

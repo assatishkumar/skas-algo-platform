@@ -134,6 +134,13 @@ export const api = {
     request<OptionChain>(
       `/data/options/${encodeURIComponent(u)}/chain?date=${date}&expiry=${expiry}&greeks=${greeks}`,
     ),
+  // Real-time chain via a logged-in Zerodha session (live premiums + OI + lot size + spot).
+  optionsLiveUnderlyings: (accountId: number) =>
+    request<{ underlyings: string[] }>(`/data/options/live/underlyings?broker_account_id=${accountId}`),
+  optionsLiveExpiries: (u: string, accountId: number) =>
+    request<OptionsExpiries>(`/data/options/live/${encodeURIComponent(u)}/expiries?broker_account_id=${accountId}`),
+  optionsLiveChain: (u: string, expiry: string, accountId: number) =>
+    request<OptionChain>(`/data/options/live/${encodeURIComponent(u)}/chain?expiry=${expiry}&broker_account_id=${accountId}`),
   optionsRefresh: (body: { underlyings: string[]; start_date: string; end_date: string }) =>
     request<RefreshResult>("/data/options/refresh", { method: "POST", body: JSON.stringify(body) }),
   futuresUnderlyings: () => request<UnderlyingList>("/data/futures/underlyings"),
