@@ -41,6 +41,14 @@ body {
   margin: 0;
 }
 
+/* Native dropdown option lists (select / datalist popups) aren't reached by the Tailwind
+   classes on the control, so the browser renders them with default colors — invisible on the
+   inverted-slate light theme. Route them through the slate vars: readable in both themes. */
+option {
+  color: rgb(var(--slate-100));
+  background-color: rgb(var(--slate-900));
+}
+
 /* Hide number-input spinner arrows so numeric fields read as plain editable text. */
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button {

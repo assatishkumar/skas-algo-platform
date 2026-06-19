@@ -167,9 +167,10 @@ export default function OptionTradeBuilder() {
             </select>
           </label>
           <label className="block"><span className={lbl}>Underlying (any F&amp;O)</span>
-            <input className={`${inputClass} w-40`} list="opt-unders" value={underlying}
-              onChange={(e) => setUnderlying(e.target.value.toUpperCase())} placeholder="NIFTY / RELIANCE…" />
-            <datalist id="opt-unders">{choices.map((u) => <option key={u} value={u} />)}</datalist>
+            <select className={`${inputClass} w-44`} value={underlying} onChange={(e) => setUnderlying(e.target.value)}>
+              {!choices.includes(underlying) && <option value={underlying}>{underlying}</option>}
+              {choices.map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
           </label>
           <label className="block"><span className={lbl}>Expiry</span>
             <select className={inputClass} value={expiry} onChange={(e) => setExpiry(e.target.value)}>
@@ -189,7 +190,7 @@ export default function OptionTradeBuilder() {
           </span>
         </div>
         {chainLoading ? <Spinner /> : chainErr ? <ErrorBox message={(chainErr as Error).message} /> : chain && chain.rows.length ? (
-          <SelectableChain rows={chain.rows} atm={chain.atm_strike} greeks={greeks && !live} selected={selected} onToggle={toggleLeg} />
+          <SelectableChain rows={chain.rows} atm={chain.atm_strike} greeks={greeks && !live} lotSize={sz} selected={selected} onToggle={toggleLeg} />
         ) : <div className="text-sm text-slate-500">No chain for {underlying} / {expiry || "—"}{live ? "" : " — refresh its option data on the Data tab."}.</div>}
       </Card>
 
@@ -331,14 +332,16 @@ function Mini({ label, value, tone }: { label: string; value: string; tone?: "po
 // Selectable Sensibull-style chain, mirrored around STRIKE with fixed column widths so it
 // stays aligned. Click a CE/PE price to add/remove a leg.
 function SelectableChain({
-  rows, atm, greeks, selected, onToggle,
+  rows, atm, greeks, lotSize, selected, onToggle,
 }: {
   rows: { strike: number; ce: { ltp: number | null; close: number | null; oi: number | null; delta?: number | null } | null;
           pe: { ltp: number | null; close: number | null; oi: number | null; delta?: number | null } | null }[];
-  atm: number | null; greeks: boolean;
+  atm: number | null; greeks: boolean; lotSize: number;
   selected: Map<string, Leg>; onToggle: (right: "CE" | "PE", strike: number, price: number | null | undefined) => void;
 }) {
   const fmtOi = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("en-IN"));
+  // Cell shows the premium per lot (LTP × lot size); the raw per-unit LTP sits beneath it.
+  const prem = (p: number) => (lotSize > 1 ? formatInr(p * lotSize, 0) : p.toFixed(2));
   const priceCell = (right: "CE" | "PE", leg: Leg | undefined) =>
     `cursor-pointer py-1 px-2 text-right font-medium ${right === "CE" ? "text-emerald-700 dark:text-emerald-300" : "text-rose-700 dark:text-rose-300"} ` +
     (leg ? (leg.side === "sell" ? "bg-rose-500/20 ring-1 ring-inset ring-rose-500/40" : "bg-emerald-500/20 ring-1 ring-inset ring-emerald-500/40") : "hover:bg-slate-700/40");
@@ -353,9 +356,9 @@ function SelectableChain({
           <tr>
             <th className="py-1 px-2 text-right">CE OI</th>
             {greeks && <th className="py-1 px-2 text-right">CE δ</th>}
-            <th className="py-1 px-2 text-right text-emerald-700 dark:text-emerald-300">CE LTP</th>
+            <th className="py-1 px-2 text-right text-emerald-700 dark:text-emerald-300">CE premium</th>
             <th className="py-1 px-2 text-center">STRIKE</th>
-            <th className="py-1 px-2 text-right text-rose-700 dark:text-rose-300">PE LTP</th>
+            <th className="py-1 px-2 text-right text-rose-700 dark:text-rose-300">PE premium</th>
             {greeks && <th className="py-1 px-2 text-right">PE δ</th>}
             <th className="py-1 px-2 text-right">PE OI</th>
           </tr>
@@ -371,9 +374,13 @@ function SelectableChain({
               <tr key={r.strike} className={`border-t border-slate-800 ${isAtm ? "bg-amber-900/20" : ""}`}>
                 <td className="py-1 px-2 text-right text-slate-400">{fmtOi(r.ce?.oi)}</td>
                 {greeks && <td className="py-1 px-2 text-right text-slate-400">{r.ce?.delta?.toFixed(2) ?? "—"}</td>}
-                <td className={priceCell("CE", ceLeg)} onClick={() => onToggle("CE", r.strike, cePrice)}>{cePrice?.toFixed(2) ?? "—"}</td>
+                <td className={priceCell("CE", ceLeg)} onClick={() => onToggle("CE", r.strike, cePrice)}>
+                  {cePrice != null ? <>{prem(cePrice)}<div className="text-[10px] text-slate-500 font-normal">@{cePrice.toFixed(2)}</div></> : "—"}
+                </td>
                 <td className={`py-1 px-2 text-center font-semibold ${isAtm ? "text-amber-700 dark:text-amber-300" : "text-slate-200"}`}>{r.strike}</td>
-                <td className={priceCell("PE", peLeg)} onClick={() => onToggle("PE", r.strike, pePrice)}>{pePrice?.toFixed(2) ?? "—"}</td>
+                <td className={priceCell("PE", peLeg)} onClick={() => onToggle("PE", r.strike, pePrice)}>
+                  {pePrice != null ? <>{prem(pePrice)}<div className="text-[10px] text-slate-500 font-normal">@{pePrice.toFixed(2)}</div></> : "—"}
+                </td>
                 {greeks && <td className="py-1 px-2 text-right text-slate-400">{r.pe?.delta?.toFixed(2) ?? "—"}</td>}
                 <td className="py-1 px-2 text-right text-slate-400">{fmtOi(r.pe?.oi)}</td>
               </tr>

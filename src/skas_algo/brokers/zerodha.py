@@ -241,7 +241,7 @@ class ZerodhaAdapter:
         today = datetime.now().date().isoformat()
         return sorted(e for e in self._nfo_index.get(underlying.upper(), {}) if e >= today)
 
-    def live_option_chain(self, underlying: str, expiry: str, window: int = 25) -> dict | None:
+    def live_option_chain(self, underlying: str, expiry: str, window: int = 40) -> dict | None:
         """Live chain for one expiry: per-strike CE/PE last price + OI, the live underlying
         spot, ATM, and contract lot size — all from Kite (real-time). Strikes are windowed
         ±``window`` around ATM to keep the quote() batch small. None if the contract isn't listed."""
