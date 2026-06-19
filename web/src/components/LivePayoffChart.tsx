@@ -44,10 +44,13 @@ export default function LivePayoffChart({
   }, [positions, spot]);
 
   if (!pf) return null;
-  const ys = pf.data.flatMap((d) => [d.expiry, d.now]);
-  const yMax = Math.max(...ys);
-  const yMin = Math.min(...ys);
-  const off = yMax <= 0 ? 0 : yMin >= 0 ? 1 : yMax / (yMax - yMin);
+  // Split the fill green/red at P&L = 0. The gradient maps to the EXPIRY area's own bounding box,
+  // so the offset must come from the expiry series alone (not the dashed "now" line) — otherwise an
+  // all-profit position gets painted red.
+  const exp = pf.data.map((d) => d.expiry);
+  const eMax = Math.max(...exp);
+  const eMin = Math.min(...exp);
+  const off = eMax <= 0 ? 0 : eMin >= 0 ? 1 : eMax / (eMax - eMin);
 
   return (
     <div className="mt-3">

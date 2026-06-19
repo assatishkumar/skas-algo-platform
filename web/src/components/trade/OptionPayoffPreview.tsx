@@ -11,10 +11,12 @@ import { buildLivePayoff, type LiveLeg } from "../../lib/payoff";
 export default function OptionPayoffPreview({ legs, spot, expiry }: { legs: LiveLeg[]; spot: number; expiry: string }) {
   const pf = useMemo(() => buildLivePayoff(legs, spot, expiry), [legs, spot, expiry]);
   if (!pf) return null;
-  const ys = pf.data.flatMap((d) => [d.expiry, d.now]);
-  const yMax = Math.max(...ys, 0);
-  const yMin = Math.min(...ys, 0);
-  const off = yMax <= 0 ? 0 : yMin >= 0 ? 1 : yMax / (yMax - yMin); // green/red split at P&L = 0
+  // Green/red split at P&L = 0 — offset from the EXPIRY series only (the filled area's own
+  // bounding box), so an all-profit / all-loss position isn't mis-colored.
+  const exp = pf.data.map((d) => d.expiry);
+  const eMax = Math.max(...exp);
+  const eMin = Math.min(...exp);
+  const off = eMax <= 0 ? 0 : eMin >= 0 ? 1 : eMax / (eMax - eMin);
   const fmtY = (v: number) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(Math.round(v)));
 
   return (

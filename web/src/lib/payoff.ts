@@ -153,8 +153,11 @@ export function buildLivePayoff(
   const ivs = legs.map(
     (l) => (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, t, RISK_FREE, l.right) : null) ?? 0.15,
   );
-  const lo = spot * 0.9;
-  const hi = spot * 1.1;
+  // Span spot AND every strike (padded) so the payoff kinks + breakevens are visible even when a
+  // strike sits well outside ±10% of spot (e.g. a far-OTM short call).
+  const refs = [spot, ...legs.map((l) => l.strike)];
+  const lo = Math.min(...refs) * 0.9;
+  const hi = Math.max(...refs) * 1.1;
   const n = 81;
   const data = [];
   for (let i = 0; i < n; i++) {
