@@ -168,6 +168,15 @@ class EquityTradeDeploy(BaseModel):
     notes: str | None = None
 
 
+class GoLiveRequest(BaseModel):
+    """Promote a PAPER deployment to a fresh LIVE one (re-enters per the strategy)."""
+
+    broker_account_id: int
+    keep_paper_running: bool = True
+    capital: float | None = None  # optional resize (UI deferred)
+    lots: int | None = None       # optional resize (UI deferred)
+
+
 class BrokerConnectRequest(BaseModel):
     broker: str = "zerodha"
     label: str

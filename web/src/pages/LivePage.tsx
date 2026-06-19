@@ -610,7 +610,7 @@ function RunCard({
   // version (which refetches with keepPreviousData) — no full page re-seed, so the
   // scroll position and sort order stay put.
   const refresh = () => {
-    api.liveRefresh(run.run_id).catch(() => {});
+    api.liveRefresh(run.run_id, true).catch(() => {}); // re-price AND act on profit/SL
   };
   const stopped = run.status === "stopped";
   const upnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
@@ -879,6 +879,10 @@ function DeploymentTile({
   const [notes, setNotes] = useState(dep.notes ?? "");
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [showGoLive, setShowGoLive] = useState(false);
+  const [keepPaper, setKeepPaper] = useState(true);
+  const [goLiveAcct, setGoLiveAcct] = useState<number | null>(null);
 
   // Pulse a "live" dot each time a fresh WS snapshot bumps the version for this run.
   const [flash, setFlash] = useState(false);
@@ -896,9 +900,12 @@ function DeploymentTile({
   // resulting snapshot, so this also pulses the live dot and updates an expanded panel).
   async function refreshNow() {
     setRefreshing(true);
+    setErr(null);
     try {
-      await api.liveRefresh(dep.run_id);
+      await api.liveRefresh(dep.run_id, true); // re-price AND act on profit/SL
       onChanged();
+    } catch (e) {
+      setErr((e as Error).message);
     } finally {
       setRefreshing(false);
     }
@@ -941,13 +948,21 @@ function DeploymentTile({
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
+    setErr(null);
     try {
       await fn();
+    } catch (e) {
+      setErr((e as Error).message);
     } finally {
       setBusy(false);
       onChanged();
     }
   };
+
+  // Armed + logged-in accounts that can take this paper deployment live.
+  const goLiveOpen = showGoLive && dep.status === "active" && dep.mode === "PAPER";
+  const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list, enabled: goLiveOpen });
+  const liveAccounts = (accounts ?? []).filter((a) => a.armed && a.has_session);
 
   async function saveEdit() {
     await act(() => api.liveUpdate(dep.run_id, { name: name.trim(), notes: notes.trim() }));
@@ -1097,7 +1112,7 @@ function DeploymentTile({
             <button
               onClick={() => act(() => api.liveSetControls(dep.run_id, { auto: !auto }))}
               disabled={busy}
-              title={auto ? "Pause decisions (keeps marking live P&L)" : "Resume the decision loop"}
+              title={auto ? "Pause — halt all activity (no checking, no entries/exits)" : "Resume — act on live signals from here on"}
               className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50"
             >
               {auto ? "⏸ Pause" : "▶ Resume"}
@@ -1105,22 +1120,51 @@ function DeploymentTile({
             <button
               onClick={refreshNow}
               disabled={refreshing}
-              title="Refresh now — re-poll quotes and mark-to-market"
+              title="Refresh now — re-price positions and act on any profit-target / stop-loss"
               className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
             >
               <RefreshIcon spinning={refreshing} />
               Refresh
             </button>
             <button
+              onClick={() => { if (confirm("Exit ALL open positions for this strategy now, at live prices?")) act(() => api.liveFlatten(dep.run_id)); }}
+              disabled={busy || positions === 0}
+              title={positions === 0 ? "No open positions to exit" : "Exit every open position now"}
+              className="rounded bg-amber-200 text-amber-800 hover:bg-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-900/60 px-3 py-1.5 disabled:opacity-50"
+            >
+              Exit
+            </button>
+            <button
               onClick={() => act(() => api.liveStop(dep.run_id))}
               disabled={busy}
+              title="Stop and move to the Stopped tab (exit positions first)"
               className="rounded bg-rose-900 hover:bg-rose-800 text-white px-3 py-1.5 disabled:opacity-50"
             >
               Stop
             </button>
+            {dep.mode === "PAPER" && (
+              <button
+                onClick={() => setShowGoLive((v) => !v)}
+                disabled={busy}
+                title="Promote this paper strategy to a real-money LIVE deployment"
+                className="rounded bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 disabled:opacity-50"
+              >
+                ⚡ Go LIVE
+              </button>
+            )}
           </>
         ) : (
           <>
+            {dep.status === "stopped" && (
+              <button
+                onClick={() => act(() => api.liveActivate(dep.run_id))}
+                disabled={busy}
+                title="Re-activate — move back to the Active tab and resume"
+                className="rounded bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 disabled:opacity-50"
+              >
+                Activate
+              </button>
+            )}
             <Link to={`/runs/${dep.run_id}`} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
               Report
             </Link>
@@ -1143,10 +1187,14 @@ function DeploymentTile({
             )}
             <button
               onClick={() => {
-                if (confirm(`Delete "${dep.name}" permanently? This removes its report, orders, and positions.`))
+                if (confirm(
+                  `Delete "${dep.name}" permanently — its report, orders and positions are removed and ` +
+                  `can't be recovered. Prefer Archive to keep the record. Delete anyway?`,
+                ))
                   act(() => api.liveDelete(dep.run_id));
               }}
               disabled={busy}
+              title="Permanently delete (prefer Archive)"
               className="rounded bg-rose-950 hover:bg-rose-900 text-rose-300 px-3 py-1.5 disabled:opacity-50"
             >
               Delete
@@ -1168,6 +1216,45 @@ function DeploymentTile({
           </button>
         )}
       </div>
+
+      {err && <div className="mt-2 text-xs text-rose-600 dark:text-rose-400">{err}</div>}
+
+      {/* Go LIVE panel — pick an armed Zerodha account; optionally keep paper running in parallel. */}
+      {goLiveOpen && (
+        <div className="mt-3 rounded-md border border-emerald-300 dark:border-emerald-800/60 bg-emerald-50/60 dark:bg-emerald-950/30 p-3 text-xs space-y-2">
+          <div className="font-medium text-emerald-700 dark:text-emerald-300">Go LIVE — real-money orders</div>
+          {liveAccounts.length === 0 ? (
+            <div className="text-slate-600 dark:text-slate-300">
+              No armed, logged-in Zerodha account. <Link to="/brokers" className="text-brand underline">Arm one on Brokers</Link> first
+              (and ensure live trading is enabled).
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-1.5">Account
+                  <select className="rounded bg-slate-800 border border-slate-700 px-2 py-1" value={goLiveAcct ?? ""}
+                    onChange={(e) => setGoLiveAcct(e.target.value ? +e.target.value : null)}>
+                    <option value="">select…</option>
+                    {liveAccounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+                  </select>
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input type="checkbox" checked={keepPaper} onChange={(e) => setKeepPaper(e.target.checked)} />
+                  keep paper running in parallel
+                </label>
+              </div>
+              <div className="text-slate-500">Starts a fresh LIVE copy that re-enters per the strategy. {keepPaper ? "The paper run keeps running." : "The paper run will be stopped."}</div>
+              <button
+                onClick={() => { if (goLiveAcct != null && confirm("Deploy LIVE with real-money orders?")) act(() => api.liveGoLive(dep.run_id, { broker_account_id: goLiveAcct, keep_paper_running: keepPaper }).then(() => setShowGoLive(false))); }}
+                disabled={busy || goLiveAcct == null}
+                className="rounded bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 disabled:opacity-50"
+              >
+                ⚡ Deploy LIVE
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Inline live detail for an expanded active deployment.
           Minimize is the chevron icon at the card's top-right. */}

@@ -76,6 +76,21 @@ def recover_running_sessions() -> int:
     return recovered
 
 
+def reactivate(run_id: int) -> None:
+    """Restart a single stopped deployment: clear its stop timestamp and rebuild + register it
+    (resuming the loop if it was an auto run). State is null after a stop, so it resumes flat —
+    correct, since a deployment can only be stopped once its positions are exited."""
+    from skas_algo.data.provider import get_price_loader
+
+    loader = get_price_loader()
+    with session_scope() as db:
+        run = db.get(AlgoRun, run_id)
+        if run is None:
+            raise ValueError(f"run {run_id} not found")
+        run.stopped_at = None
+        _rebuild(db, run, loader)
+
+
 def _rebuild(db, run: AlgoRun, loader) -> None:
     from skas_algo.live.manager import _build_session
 

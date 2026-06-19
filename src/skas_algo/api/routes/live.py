@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
     DeploymentUpdate,
+    GoLiveRequest,
     LiveControlsInput,
     LiveStartRequest,
     ManualOrderInput,
@@ -21,6 +22,7 @@ from skas_algo.api.models import (
     QuoteSourceInput,
     iso_utc,
 )
+from skas_algo.config import get_settings
 from skas_algo.data import universes
 from skas_algo.data.provider import get_available_symbols, get_price_loader
 from skas_algo.db.enums import TradingMode
@@ -259,9 +261,13 @@ async def reconnect_quotes(run_id: int, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/{run_id}/refresh")
-async def refresh_live(run_id: int) -> dict:
+async def refresh_live(run_id: int, decide: bool = False) -> dict:
+    """Re-price all positions. With ``decide=true`` it then runs a decision so any
+    profit-booking / stop-loss that an auto-refresh would trigger fires now too."""
     live = _get(run_id)
     live.refresh()
+    if decide:
+        live.run_decision()
     return live.snapshot()
 
 
@@ -431,9 +437,87 @@ async def add_override(run_id: int, override: OverrideInput) -> dict:
 
 @router.post("/{run_id}/stop")
 async def stop_live(run_id: int) -> dict:
-    _get(run_id)
+    """Stop the deployment (→ Stopped tab). Blocked while positions are open — exit them first."""
+    live = _get(run_id)
+    open_syms = live.session.portfolio.lot_symbols()
+    if open_syms:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Exit the {len(open_syms)} open position(s) before stopping — use Exit.",
+        )
     manager.stop(run_id)
     return {"stopped": run_id}
+
+
+@router.post("/{run_id}/go-live")
+async def go_live(
+    run_id: int,
+    body: GoLiveRequest,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Promote a PAPER deployment to a fresh LIVE one (re-enters per the strategy). Real orders
+    require an armed account with a valid session + platform live-trading enabled."""
+    paper = _get(run_id)
+    if paper.config.mode.upper() != "PAPER":
+        raise HTTPException(status_code=422, detail="only a PAPER deployment can be taken live")
+    account = db.get(BrokerAccount, body.broker_account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="broker account not found")
+    if not broker_svc.has_valid_session(account):
+        raise HTTPException(status_code=400, detail="broker account has no valid session — log in first")
+    if not account.armed:
+        raise HTTPException(status_code=400, detail="arm the broker account on the Brokers page first")
+    if not get_settings().live_trading_enabled:
+        raise HTTPException(status_code=400, detail="live trading is disabled (SKAS_LIVE_TRADING_ENABLED)")
+
+    cfg = paper.config
+    params = dict(cfg.params)
+    if body.lots:
+        params["lots"] = int(body.lots)
+    req = LiveStartRequest(
+        strategy_id=cfg.strategy_id,
+        name=f"{cfg.name} [LIVE]",
+        notes=cfg.notes,
+        instrument_class=cfg.instrument_class,
+        underlying=cfg.underlying,
+        symbols=list(cfg.symbols),
+        capital=body.capital or cfg.capital,
+        params=params,
+        tax_rate=cfg.tax_rate,
+        withdrawal_rate=cfg.withdrawal_rate,
+        lookback=cfg.lookback,
+        mode="LIVE",
+        quote_source="zerodha",
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=cfg.refresh_seconds,
+        decision_time=cfg.decision_time,
+        ignore_market_hours=cfg.ignore_market_hours,
+        auto=True,
+    )
+    live = start_deployment(req, db, loader, avail)
+    if not body.keep_paper_running:
+        manager.stop(run_id)  # paper book is simulated — safe to drop
+    return live.snapshot()
+
+
+@router.post("/{run_id}/activate")
+async def activate(run_id: int, db: Session = Depends(get_db)) -> dict:
+    """Restart a stopped deployment (→ Active). Rebuilds from its saved config and resumes the loop."""
+    if run_id in manager.runs:
+        raise HTTPException(status_code=400, detail="deployment is already active")
+    run = _get_run(db, run_id)
+    if run.archived:
+        raise HTTPException(status_code=400, detail="unarchive the deployment before activating")
+    from skas_algo.live.recovery import reactivate
+
+    try:
+        reactivate(run_id)
+    except Exception as exc:  # pragma: no cover - cache/strategy rebuild failure
+        raise HTTPException(status_code=500, detail=f"activation failed: {exc}") from exc
+    live = manager.get(run_id)
+    return live.snapshot() if live is not None else {"run_id": run_id, "status": "active"}
 
 
 def _get_run(db: Session, run_id: int) -> AlgoRun:

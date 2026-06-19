@@ -168,8 +168,12 @@ export const api = {
   liveList: () => request<LiveRunSnapshot[]>("/live"),
   liveStart: (body: StartLiveRequest) =>
     request<LiveRunSnapshot>("/live/start", { method: "POST", body: JSON.stringify(body) }),
-  liveRefresh: (id: number) =>
-    request<LiveRunSnapshot>(`/live/${id}/refresh`, { method: "POST" }),
+  liveRefresh: (id: number, decide = false) =>
+    request<LiveRunSnapshot>(`/live/${id}/refresh${decide ? "?decide=true" : ""}`, { method: "POST" }),
+  liveActivate: (id: number) =>
+    request<LiveRunSnapshot>(`/live/${id}/activate`, { method: "POST" }),
+  liveGoLive: (id: number, body: { broker_account_id: number; keep_paper_running?: boolean }) =>
+    request<LiveRunSnapshot>(`/live/${id}/go-live`, { method: "POST", body: JSON.stringify(body) }),
   liveRunDecision: (id: number) =>
     request<{ run_id: number; trades: unknown[] }>(`/live/${id}/run-decision`, { method: "POST" }),
   liveStop: (id: number) => request<{ stopped: number }>(`/live/${id}/stop`, { method: "POST" }),

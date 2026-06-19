@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -12,8 +12,9 @@ from skas_algo.api import create_app
 from skas_algo.data.provider import get_available_symbols, get_price_loader
 from skas_algo.db.base import session_scope
 from skas_algo.db.enums import OrderSide, PositionStatus
-from skas_algo.db.models import AlgoRun, Fill, Order, Position
+from skas_algo.db.models import AlgoRun, BrokerAccount, Fill, Order, Position
 from skas_algo.live.manager import Broadcaster, LiveConfig, manager
+from skas_algo.security import encrypt
 
 
 class FakeQuoteSource:
@@ -445,3 +446,75 @@ def test_live_override_injection(api_client: TestClient):
         assert resp.json()["overrides"] == 1  # injected into the running resolver
     finally:
         api_client.post(f"/api/v1/live/{run_id}/stop")
+
+
+# ---------------------------------------------------------------- Live page rules
+def _start_equity_paper(api_client: TestClient, *, auto: bool = False) -> int:
+    body = {
+        "strategy_id": "custom_equity", "name": "rules-test", "symbols": ["AAA"], "capital": 100000,
+        "params": {"symbol": "AAA", "qty": 5, "entry_mode": "immediate"},
+        "lookback": 5, "quote_source": "cache", "ignore_market_hours": True, "auto": auto,
+    }
+    r = api_client.post("/api/v1/live/start", json=body)
+    assert r.status_code == 200, r.text
+    return r.json()["run_id"]
+
+
+def test_stop_blocked_until_positions_exited(api_client: TestClient):
+    rid = _start_equity_paper(api_client)
+    try:
+        api_client.post(f"/api/v1/live/{rid}/refresh")
+        api_client.post(f"/api/v1/live/{rid}/run-decision")  # immediate → BUY 5
+        assert api_client.get(f"/api/v1/live/{rid}").json()["open_positions"] == 1
+        blocked = api_client.post(f"/api/v1/live/{rid}/stop")
+        assert blocked.status_code == 409  # has an open position
+        api_client.post(f"/api/v1/live/{rid}/flatten")  # exit it
+        assert api_client.post(f"/api/v1/live/{rid}/stop").status_code == 200  # now flat → stops
+    finally:
+        api_client.delete(f"/api/v1/live/{rid}")
+
+
+def test_refresh_with_decide_runs_a_decision(api_client: TestClient):
+    rid = _start_equity_paper(api_client)
+    try:
+        snap = api_client.post(f"/api/v1/live/{rid}/refresh?decide=true").json()
+        assert snap["open_positions"] == 1  # refresh re-priced AND entered
+    finally:
+        api_client.post(f"/api/v1/live/{rid}/flatten")
+        api_client.post(f"/api/v1/live/{rid}/stop")
+        api_client.delete(f"/api/v1/live/{rid}")
+
+
+def test_activate_restarts_a_stopped_run(api_client: TestClient):
+    rid = _start_equity_paper(api_client)  # flat (no decision run yet)
+    try:
+        assert api_client.post(f"/api/v1/live/{rid}/stop").status_code == 200
+        assert any(d["run_id"] == rid for d in api_client.get("/api/v1/live/deployments?status=stopped").json())
+        assert api_client.post(f"/api/v1/live/{rid}/activate").status_code == 200
+        assert api_client.get(f"/api/v1/live/{rid}").status_code == 200  # back in memory (active)
+        assert api_client.post(f"/api/v1/live/{rid}/activate").status_code == 400  # already active
+    finally:
+        api_client.post(f"/api/v1/live/{rid}/stop")
+        api_client.delete(f"/api/v1/live/{rid}")
+
+
+def test_go_live_blocked_without_armed_account(api_client: TestClient):
+    rid = _start_equity_paper(api_client)
+    try:
+        # An account with a valid session but NOT armed → blocked with the arm message.
+        with session_scope() as db:
+            acct = BrokerAccount(
+                broker="zerodha", label="Test", api_key="k", enc_api_secret=encrypt("s"),
+                session_token=encrypt("tok"), session_expires_at=datetime.now(UTC) + timedelta(hours=2),
+                armed=False,
+            )
+            db.add(acct)
+            db.flush()
+            aid = acct.id
+        r = api_client.post(f"/api/v1/live/{rid}/go-live", json={"broker_account_id": aid})
+        assert r.status_code == 400 and "arm" in r.json()["detail"].lower()
+        # Unknown account → 404.
+        assert api_client.post(f"/api/v1/live/{rid}/go-live", json={"broker_account_id": 999999}).status_code == 404
+    finally:
+        api_client.post(f"/api/v1/live/{rid}/stop")
+        api_client.delete(f"/api/v1/live/{rid}")
