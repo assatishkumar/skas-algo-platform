@@ -8,16 +8,83 @@ tiles/metrics/reports. Real-money LIVE stays gated behind ``armed`` + ``SKAS_LIV
 
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
-from skas_algo.api.models import EquityTradeDeploy, LiveStartRequest, OptionsTradeDeploy
+from skas_algo.api.models import EquityTradeDeploy, LiveStartRequest, OptionTradeLeg, OptionsTradeDeploy
 from skas_algo.api.routes.live import start_deployment
-from skas_algo.data.provider import get_available_symbols, get_price_loader
+from skas_algo.data.options_provider import make_spot_provider
+from skas_algo.data.provider import get_available_symbols, get_data_cache, get_price_loader
+from skas_algo.db.models import BrokerAccount
 from skas_algo.engine.market import PriceLoader
+from skas_algo.engine.options.contract_specs import lot_size_for
+from skas_algo.engine.options.instrument import make
+from skas_algo.engine.options.margin import MarginParams, short_option_margin
+from skas_algo.services import broker as broker_svc
 
 router = APIRouter(prefix="/trade", tags=["trade"])
+
+
+class OptionMarginRequest(BaseModel):
+    underlying: str
+    expiry: str
+    lot_size: int = 0
+    legs: list[OptionTradeLeg]
+    broker_account_id: int | None = None
+
+
+def _per_lot(underlying: str, expiry: date, lot_size: int) -> int:
+    if lot_size:
+        return lot_size
+    try:
+        return lot_size_for(underlying, expiry)
+    except KeyError:
+        return 0
+
+
+@router.post("/options/margin")
+def option_trade_margin(
+    body: OptionMarginRequest,
+    db: Session = Depends(get_db),
+    cache=Depends(get_data_cache),
+) -> dict:
+    """Margin the basket would block. Prefers Zerodha's real basket margin (live session,
+    with spread benefit); falls back to a SPAN+exposure model estimate on the short legs."""
+    exp = date.fromisoformat(body.expiry[:10])
+    per_lot = _per_lot(body.underlying.upper(), exp, body.lot_size)
+    if per_lot <= 0 or not body.legs:
+        return {"margin": None, "source": None}
+    sized = [
+        {
+            "symbol": make(body.underlying.upper(), exp, float(leg.strike), leg.right.upper(),
+                           lot_size=per_lot).symbol,
+            "direction": -1 if leg.side.lower() == "sell" else 1,
+            "units": int(leg.lots) * per_lot,
+            "right": leg.right.upper(), "strike": float(leg.strike),
+        }
+        for leg in body.legs
+    ]
+    # Live basket margin (accurate, spread-netted) when a session is available.
+    if body.broker_account_id is not None:
+        account = db.get(BrokerAccount, body.broker_account_id)
+        if account is not None and broker_svc.has_valid_session(account):
+            try:
+                m = broker_svc.make_adapter(account).basket_margin(sized)
+            except Exception:  # pragma: no cover - API hiccup → fall through to model
+                m = None
+            if m is not None:
+                return {"margin": float(m), "source": "zerodha"}
+    # Model estimate: SPAN+exposure on each short leg (longs are debit-paid, no margin).
+    spot = make_spot_provider(cache)(body.underlying.upper(), date.today())
+    if spot is None:
+        return {"margin": None, "source": None}
+    p = MarginParams()
+    total = sum(short_option_margin(spot, leg["units"], 1, p) for leg in sized if leg["direction"] < 0)
+    return {"margin": float(total), "source": "model"}
 
 
 def _frac(v: float | None) -> float | None:

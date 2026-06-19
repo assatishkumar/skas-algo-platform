@@ -18,9 +18,10 @@ from __future__ import annotations
 from datetime import date
 
 from skas_algo.engine.options.contract_specs import lot_size_for
+from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import bad_close, snap
+from ._options_common import bad_close
 
 
 class CustomOptionsStrategy:
@@ -69,36 +70,50 @@ class CustomOptionsStrategy:
 
     # ------------------------------------------------------------------ slice
     def on_slice(self, ctx) -> list[Signal]:
-        chain = ctx.option_chain()
-        if chain is None or self.done:
+        if self.done:
             return []
         today = ctx.today()
         if not self.entered:
-            return self._enter(ctx, chain, today)
-        return self._manage(ctx, chain, today)
+            return self._enter(ctx, today)
+        return self._manage(ctx, ctx.option_chain(), today)
 
-    def _enter(self, ctx, chain, today) -> list[Signal]:
+    def _per_lot(self, expiry) -> int:
+        if self.lot_size:
+            return self.lot_size
+        try:
+            return lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
+        except KeyError:
+            return 0  # stock F&O with no explicit lot size — can't size
+
+    def _enter(self, ctx, today) -> list[Signal]:
+        """Enter the user-picked legs. The leg symbol is built directly from
+        (underlying, expiry, strike, right) — NOT looked up in the cached chain — and the
+        entry premium is read from ``ctx.close`` (live LTP on a live run, else the cached
+        mark). This lets a live deployment of ANY listed contract (incl. stock F&O whose
+        EOD chain isn't cached) fill at the real price."""
         expiry = self._expiry_date()
         if expiry is None:
             return []
-        rows = {(r.strike, r.right): r for r in chain.chain(self.underlying, today, expiry)}
-        if not rows:
-            return []  # chain not loaded yet — retry next slice
+        per_lot = self._per_lot(expiry)
+        if per_lot <= 0:
+            return []
         resolved: list[tuple[int, str, str, float, float]] = []
         for i, leg in enumerate(self.leg_defs):
             right = str(leg["right"]).upper()
             side = str(leg["side"]).lower()
             lots = int(leg.get("lots", 1) or 1)
-            right_strikes = sorted({k for (k, rr) in rows if rr == right})
-            k = snap(right_strikes, float(leg["strike"]))
-            row = rows.get((k, right)) if k is not None else None
-            if row is None or bad_close(row.close):
-                return []  # a leg isn't priceable yet — don't half-enter; retry next slice
-            per_lot = self.lot_size or lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
+            symbol = make(self.underlying, expiry, float(leg["strike"]), right,
+                          lot_size=per_lot, lot_overrides=self.lot_overrides).symbol
+            try:
+                close = ctx.close(symbol)
+            except KeyError:
+                return []  # no live/cached price for a leg yet — don't half-enter; retry
+            if bad_close(close):
+                return []
             units = lots * per_lot
             if units <= 0:
                 return []
-            resolved.append((i, row.symbol, side, float(units), float(row.close)))
+            resolved.append((i, symbol, side, float(units), float(close)))
 
         signals: list[Signal] = []
         for i, symbol, side, units, close in resolved:

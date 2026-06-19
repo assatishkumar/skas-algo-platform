@@ -4,9 +4,9 @@ import { useNavigate } from "react-router-dom";
 import { api, brokers } from "../../api/client";
 import { formatInr } from "../../lib/format";
 import { computeMetrics, type LiveLeg } from "../../lib/payoff";
-import type { LivePosition, OptionTradeLeg } from "../../types";
+import type { OptionTradeLeg } from "../../types";
 import { Card, ErrorBox, NumberInput, Spinner } from "../ui";
-import LivePayoffChart from "../LivePayoffChart";
+import OptionPayoffPreview from "./OptionPayoffPreview";
 
 const inputClass =
   "w-full rounded-md bg-slate-800 border border-slate-700 px-2.5 py-1.5 text-sm focus:outline-none focus:border-brand";
@@ -35,7 +35,6 @@ export default function OptionTradeBuilder() {
   const [exitBelow, setExitBelow] = useState(0);
 
   const [name, setName] = useState("");
-  const [capital, setCapital] = useState(1_000_000);
   const [mode, setMode] = useState("PAPER");
   const [ignoreHours, setIgnoreHours] = useState(true);
   const [auto, setAuto] = useState(true);
@@ -111,19 +110,29 @@ export default function OptionTradeBuilder() {
   const liveLegs: LiveLeg[] = legs.map((l) => ({
     strike: l.strike, right: l.right, direction: l.side === "sell" ? -1 : 1, units: l.lots * sz, entry: l.price, ltp: l.price,
   }));
-  const previewPositions: LivePosition[] = legs.map((l) => ({
-    symbol: `${underlying}|${expiry}|${l.strike}|${l.right}`,
-    units: l.lots * sz, lots: l.lots, direction: l.side === "sell" ? -1 : 1, avg_price: l.price, ltp: l.price, unrealized_pnl: 0,
-  }));
   const netCredit = legs.reduce((s, l) => s + (l.side === "sell" ? 1 : -1) * l.price * l.lots * sz, 0);
   const metrics = spot && expiry && liveLegs.length ? computeMetrics(liveLegs, spot, expiry) : null;
+
+  // Margin the basket would block (live Zerodha basket margin, else a model estimate). Replaces
+  // a capital input — for options the margin is what matters, and it's what we deploy with.
+  const legsKey = JSON.stringify(legs.map((l) => [l.right, l.strike, l.side, l.lots]));
+  const marginQ = useQuery({
+    queryKey: ["opt-margin", underlying, expiry, lotSize, legsKey, liveAcc],
+    queryFn: () => api.optionTradeMargin({
+      underlying, expiry, lot_size: lotSize, broker_account_id: liveAcc,
+      legs: legs.map((l): OptionTradeLeg => ({ right: l.right, strike: l.strike, side: l.side, lots: l.lots })),
+    }),
+    enabled: legs.length > 0 && !!expiry && lotSize > 0,
+  });
+  const margin = marginQ.data?.margin ?? null;
+  const marginSrc = marginQ.data?.source ?? null;
 
   async function deploy() {
     setBusy(true); setError(null);
     const body = {
       name: name.trim() || `${underlying} custom`, underlying: underlying.toUpperCase(), expiry,
       legs: legs.map((l): OptionTradeLeg => ({ right: l.right, strike: l.strike, side: l.side, lots: l.lots })),
-      lot_size: lotSize, capital,
+      lot_size: lotSize, capital: margin && margin > 0 ? Math.ceil(margin) : 1_000_000,
       spot_upper: exitAbove > 0 ? exitAbove : null,
       spot_lower: exitBelow > 0 ? exitBelow : null,
       target_pct: targetPct > 0 ? targetPct : null,
@@ -229,7 +238,7 @@ export default function OptionTradeBuilder() {
               <div className="text-[10px] text-slate-500 mt-1">Per-leg Tgt%/SL% are on each leg's own premium (0 = off). Sizing uses lot size {sz} × lots.</div>
             </div>
           )}
-          {legs.length > 0 && spot && <LivePayoffChart positions={previewPositions} spot={spot} />}
+          {legs.length > 0 && spot && <OptionPayoffPreview legs={liveLegs} spot={spot} expiry={expiry} />}
           {metrics && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs mt-2">
               <Mini label="Max profit" value={Number.isFinite(metrics.maxProfit) ? formatInr(metrics.maxProfit) : "Unlimited"} tone="pos" />
@@ -267,7 +276,16 @@ export default function OptionTradeBuilder() {
           <div className="grid md:grid-cols-2 gap-3 mb-3">
             <label className="block"><span className={lbl}>Strategy name</span>
               <input className={inputClass} placeholder="e.g. Bear call spread" value={name} onChange={(e) => setName(e.target.value)} /></label>
-            <label className="block"><span className={lbl}>Capital (₹)</span><NumberInput className={inputClass} value={capital} onChange={setCapital} /></label>
+            <div>
+              <span className={lbl}>Margin needed</span>
+              <div className="rounded-md bg-slate-800/60 border border-slate-700 px-3 py-2 text-sm">
+                {margin != null ? (
+                  <span className="font-medium">{formatInr(margin)} <span className="text-slate-500 text-xs">
+                    {marginSrc === "zerodha" ? "· Zerodha basket" : marginSrc === "model" ? "· model est." : ""}</span></span>
+                ) : marginQ.isFetching ? <span className="text-slate-500">computing…</span>
+                  : <span className="text-slate-500">add legs to estimate</span>}
+              </div>
+            </div>
           </div>
           <div className="grid md:grid-cols-3 gap-3 items-end">
             <label className="block"><span className={lbl}>Mode</span>

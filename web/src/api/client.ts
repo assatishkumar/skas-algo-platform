@@ -14,6 +14,7 @@ import type {
   DerivCoverage,
   EquityTradeDeploy,
   FuturesSeries,
+  OptionTradeLeg,
   OptionsTradeDeploy,
   GreeksHistory,
   RunAnalysis,
@@ -156,6 +157,12 @@ export const api = {
     request<LiveRunSnapshot>("/trade/options/deploy", { method: "POST", body: JSON.stringify(body) }),
   deployEquityTrade: (body: EquityTradeDeploy) =>
     request<LiveRunSnapshot>("/trade/equity/deploy", { method: "POST", body: JSON.stringify(body) }),
+  optionTradeMargin: (body: {
+    underlying: string; expiry: string; lot_size: number; legs: OptionTradeLeg[]; broker_account_id?: number | null;
+  }) =>
+    request<{ margin: number | null; source: string | null }>("/trade/options/margin", {
+      method: "POST", body: JSON.stringify(body),
+    }),
 
   // --- live / paper ---
   liveList: () => request<LiveRunSnapshot[]>("/live"),
