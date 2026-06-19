@@ -583,8 +583,10 @@ function RunCard({
   const [showSignals, setShowSignals] = useState(false);
   const [showControls, setShowControls] = useState(false);
   // SST "Signals" is the equity Donchian watchlist (20d high/low breakout) — meaningless
-  // for an options strategy, which decides on its own entry/exit schedule.
-  const isOptions = run.lots != null;
+  // for an options strategy, which decides on its own entry/exit schedule. Detect options by
+  // instrument class (covers custom_options, which has no `lots` attr), matching the tile.
+  const isOptions =
+    run.instrument_class === "DERIV" || isOptionsStrategy(run.strategy_id) || run.lots != null;
   // Sortable positions table — click a header to sort by that column.
   type PosKey = "symbol" | "entry_date" | "units" | "avg_price" | "ltp" | "pos_delta" | "iv" | "unrealized_pnl";
   const [sortKey, setSortKey] = useState<PosKey>("unrealized_pnl");
