@@ -80,13 +80,14 @@ export default function OptionTradeBuilder() {
   const chainLoading = live ? liveChainQ.isLoading : cacheChainQ.isLoading;
   const chainErr = live ? liveChainQ.error : cacheChainQ.error;
 
-  // Reset basket + default lot size when underlying/expiry change.
+  // Clear the basket when the underlying/expiry change.
+  useEffect(() => { setLegs([]); setLegTargets({}); setLegStops({}); }, [underlying, expiry]);
+  // Lot size — single source of truth (avoids two effects racing): the live chain's authoritative
+  // size when available, else the known index size, else 0 (user enters it). A manual edit sticks
+  // because none of these deps change on a refetch (the value is identical).
   useEffect(() => {
-    setLegs([]); setLegTargets({}); setLegStops({});
-    setLotSize(INDEX_LOTS[underlying.toUpperCase()] ?? 0);
-  }, [underlying, expiry]);
-  // The live chain carries the authoritative lot size.
-  useEffect(() => { if (live && chain?.lot_size) setLotSize(chain.lot_size); }, [live, chain?.lot_size]);
+    setLotSize(live && chain?.lot_size ? chain.lot_size : (INDEX_LOTS[underlying.toUpperCase()] ?? 0));
+  }, [underlying, expiry, live, chain?.lot_size]);
 
   const spot = chain?.spot ?? null;
 
@@ -345,8 +346,20 @@ function SelectableChain({
   const priceCell = (right: "CE" | "PE", leg: Leg | undefined) =>
     `cursor-pointer py-1 px-2 text-right font-medium ${right === "CE" ? "text-emerald-700 dark:text-emerald-300" : "text-rose-700 dark:text-rose-300"} ` +
     (leg ? (leg.side === "sell" ? "bg-rose-500/20 ring-1 ring-inset ring-rose-500/40" : "bg-emerald-500/20 ring-1 ring-inset ring-emerald-500/40") : "hover:bg-slate-700/40");
+  // Centre the ATM row when a new chain loads (keyed on atm + row count, NOT the array ref, so a
+  // live refetch every ~12s doesn't yank the user's scroll back).
+  const containerRef = useRef<HTMLDivElement>(null);
+  const atmRowRef = useRef<HTMLTableRowElement>(null);
+  useEffect(() => {
+    const c = containerRef.current;
+    const row = atmRowRef.current;
+    if (!c || !row) return;
+    const cRect = c.getBoundingClientRect();
+    const rRect = row.getBoundingClientRect();
+    c.scrollTop += rRect.top - cRect.top - c.clientHeight / 2 + rRect.height / 2;
+  }, [atm, rows.length]);
   return (
-    <div className="overflow-x-auto max-h-[58vh] overflow-y-auto">
+    <div ref={containerRef} className="overflow-x-auto max-h-[58vh] overflow-y-auto">
       <table className="w-full table-fixed text-xs tabular-nums">
         <colgroup>
           <col className="w-[18%]" />{greeks && <col className="w-[12%]" />}<col className="w-[18%]" />
@@ -371,7 +384,7 @@ function SelectableChain({
             const cePrice = r.ce?.ltp ?? r.ce?.close;
             const pePrice = r.pe?.ltp ?? r.pe?.close;
             return (
-              <tr key={r.strike} className={`border-t border-slate-800 ${isAtm ? "bg-amber-900/20" : ""}`}>
+              <tr key={r.strike} ref={isAtm ? atmRowRef : undefined} className={`border-t border-slate-800 ${isAtm ? "bg-amber-900/20" : ""}`}>
                 <td className="py-1 px-2 text-right text-slate-400">{fmtOi(r.ce?.oi)}</td>
                 {greeks && <td className="py-1 px-2 text-right text-slate-400">{r.ce?.delta?.toFixed(2) ?? "—"}</td>}
                 <td className={priceCell("CE", ceLeg)} onClick={() => onToggle("CE", r.strike, cePrice)}>
