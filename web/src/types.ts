@@ -169,6 +169,15 @@ export interface RoundTrip {
   won: boolean;
 }
 
+/** A position that has been entered but not yet fully exited (still held). */
+export interface OpenPosition {
+  symbol: string;
+  entryDate: string;
+  entryPrice: number;
+  qty: number;
+  invested: number;
+}
+
 // ---- Options report (additive; only populated for DERIV runs) ----
 export interface OptionPosition {
   symbol: string;
@@ -478,6 +487,53 @@ export interface StartLiveRequest {
   ignore_market_hours: boolean;
   auto: boolean;
   warm_from_date?: string; // options PAPER: seed from this past date (ISO)
+}
+
+// ---- Trade feature: deploy a user-built option / equity position ----
+export interface OptionTradeLeg {
+  right: "CE" | "PE";
+  strike: number;
+  side: "buy" | "sell";
+  lots: number;
+}
+
+export interface OptionsTradeDeploy {
+  name: string;
+  underlying: string;
+  expiry: string;
+  legs: OptionTradeLeg[];
+  capital: number;
+  spot_upper?: number | null;
+  spot_lower?: number | null;
+  target_pct?: number | null;          // combined P&L %, on net entry premium
+  stop_pct?: number | null;
+  leg_targets?: Record<number, number> | null; // {legIndex: %}
+  leg_stops?: Record<number, number> | null;
+  mode: string;
+  quote_source: string;
+  broker_account_id?: number | null;
+  ignore_market_hours: boolean;
+  auto: boolean;
+  notes?: string;
+}
+
+export interface EquityTradeDeploy {
+  name: string;
+  symbol: string;
+  qty: number;
+  capital: number;
+  entry_mode: string;                  // "immediate" | "trigger"
+  trigger_price?: number | null;
+  target_pct?: number | null;
+  stop_pct?: number | null;
+  trailing: boolean;
+  trail_pct?: number | null;
+  mode: string;
+  quote_source: string;
+  broker_account_id?: number | null;
+  ignore_market_hours: boolean;
+  auto: boolean;
+  notes?: string;
 }
 
 export interface BrokerAccount {

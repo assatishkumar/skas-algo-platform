@@ -1,4 +1,4 @@
-import type { RoundTrip, Trade } from "../types";
+import type { OpenPosition, RoundTrip, Trade } from "../types";
 
 const ENTRY = new Set(["BUY", "AVG_BUY"]);
 
@@ -6,13 +6,15 @@ function daysBetween(a: string, b: string): number {
   return Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000));
 }
 
-/** Pair trades into round-trips (positions): entry(s) → exit leg(s) per symbol, closing a
- *  round-trip when the open quantity returns to zero. Handles the SuperTrend 50%-book + red-flip
- *  exit (two exit legs). P&L is computed from prices (entry vs exit), which equals the engine's
- *  per-trade profit for equities (no per-trade charges/taxes there). */
-export function buildRoundTrips(trades: Trade[]): RoundTrip[] {
+type Open = { entryDate: string; cost: number; units: number; open: number; exits: RoundTrip["exits"] };
+
+/** Pair trades into completed round-trips AND the leftover still-open positions: entry(s) → exit
+ *  leg(s) per symbol, closing a round-trip when the open quantity returns to zero. Handles the
+ *  SuperTrend 50%-book + red-flip exit (two exit legs). P&L is computed from prices (entry vs
+ *  exit), which equals the engine's per-trade profit for equities (no per-trade charges/taxes).
+ *  Symbols still holding units after replay are returned as open positions (avg entry cost). */
+export function pairTrades(trades: Trade[]): { roundTrips: RoundTrip[]; openPositions: OpenPosition[] } {
   const sorted = [...trades].sort((a, b) => a.date.localeCompare(b.date));
-  type Open = { entryDate: string; cost: number; units: number; open: number; exits: RoundTrip["exits"] };
   const open: Record<string, Open> = {};
   const out: RoundTrip[] = [];
 
@@ -47,7 +49,22 @@ export function buildRoundTrips(trades: Trade[]): RoundTrip[] {
       }
     }
   }
-  return out;
+  const openPositions: OpenPosition[] = Object.entries(open)
+    .filter(([, p]) => p.open > 1e-6)
+    .map(([symbol, p]) => {
+      const entryPrice = p.units > 0 ? p.cost / p.units : 0; // avg entry over all lots
+      return { symbol, entryDate: p.entryDate, entryPrice, qty: p.open, invested: entryPrice * p.open };
+    })
+    .sort((a, b) => b.invested - a.invested);
+  return { roundTrips: out, openPositions };
+}
+
+export function buildRoundTrips(trades: Trade[]): RoundTrip[] {
+  return pairTrades(trades).roundTrips;
+}
+
+export function buildOpenPositions(trades: Trade[]): OpenPosition[] {
+  return pairTrades(trades).openPositions;
 }
 
 export interface SymbolStat {

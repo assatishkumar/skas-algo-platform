@@ -14,8 +14,8 @@ import {
 import { api } from "../../api/client";
 import { Card } from "../ui";
 import { formatInr } from "../../lib/format";
-import { buildRoundTrips, bySymbol, type SymbolStat } from "../../lib/roundtrips";
-import type { RoundTrip, RunAnalysis } from "../../types";
+import { bySymbol, pairTrades, type SymbolStat } from "../../lib/roundtrips";
+import type { OpenPosition, RoundTrip, RunAnalysis } from "../../types";
 
 const pct = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`;
 const tone = (v: number) => (v >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400");
@@ -51,6 +51,11 @@ function BookMarker({ cx, cy }: any) {
   if (cx == null || cy == null) return null;
   const s = 6;
   return <path d={`M ${cx} ${cy - s} L ${cx + s} ${cy} L ${cx} ${cy + s} L ${cx - s} ${cy} Z`} fill="#d97706" stroke="#fff" strokeWidth={1.25} />;
+}
+// Still-open position marked at the latest bar — a hollow blue dot ("now / holding").
+function HoldMarker({ cx, cy }: any) {
+  if (cx == null || cy == null) return null;
+  return <circle cx={cx} cy={cy} r={5} fill="#0ea5e9" stroke="#fff" strokeWidth={1.5} />;
 }
 
 type CandleRow = { t: number; open: number | null; high: number | null; low: number | null; close: number | null };
@@ -138,14 +143,14 @@ function ChartTooltip({ active, payload, label }: any) {
         </div>
       );
     }
+    const isOpen = marker.type === "Open";
+    const head = isOpen ? "text-sky-600 dark:text-sky-400" : marker.type === "Exit" ? "text-rose-600 dark:text-rose-400" : "text-amber-600 dark:text-amber-400";
     return (
       <div className={box}>
-        <div className={`font-medium ${marker.type === "Exit" ? "text-rose-600 dark:text-rose-400" : "text-amber-600 dark:text-amber-400"}`}>
-          {marker.type} · {fullDate(label)}
-        </div>
-        <div>entry {inr2(marker.entryPrice)} → {inr2(marker.exitPrice ?? 0)}</div>
+        <div className={`font-medium ${head}`}>{isOpen ? "Holding" : marker.type} · {fullDate(label)}</div>
+        <div>entry {inr2(marker.entryPrice)} → {isOpen ? "now " : ""}{inr2(marker.exitPrice ?? 0)}</div>
         <div>age {marker.ageDays}d</div>
-        <div className={tone(marker.pnl ?? 0)}>P&L {formatInr(marker.pnl ?? 0)}</div>
+        <div className={tone(marker.pnl ?? 0)}>{isOpen ? "Unrealized " : ""}P&L {formatInr(marker.pnl ?? 0)}</div>
       </div>
     );
   }
@@ -159,23 +164,53 @@ function ChartTooltip({ active, payload, label }: any) {
   );
 }
 
-function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[]; stParams: Record<string, unknown> }) {
+type StockItem = {
+  entryDate: string;
+  entryPrice: number;
+  qty: number;
+  exitDate: string | null; // null = still open
+  exitPrice: number | null;
+  holdingDays: number;
+  pnl: number | null; // realized; null for an open position (unrealized shown live)
+  pnlPct: number | null;
+  open: boolean;
+};
+
+const TODAY = new Date().toISOString().slice(0, 10);
+
+function StockChart({ symbol, rts, opens, stParams }: { symbol: string; rts: RoundTrip[]; opens: OpenPosition[]; stParams: Record<string, unknown> }) {
   const [range, setRange] = useState("all");
   const [logScale, setLogScale] = useState(true);
   const [chartType, setChartType] = useState<"line" | "candle">("line");
-  // A clicked trade focuses the chart on just that round-trip's window; index into sortedRts.
+  // A clicked trade focuses the chart on just that position's window; index into `items`.
   const [focusIdx, setFocusIdx] = useState<number | null>(null);
   const hasST = Object.keys(stParams).length > 0;
-  const sortedRts = [...rts].sort((a, b) => a.entryDate.localeCompare(b.entryDate));
-  const focus = focusIdx != null ? sortedRts[focusIdx] : null;
+  // Completed round-trips + still-open positions, oldest entry first.
+  const items: StockItem[] = [
+    ...rts.map((r) => ({
+      entryDate: r.entryDate, entryPrice: r.entryPrice, qty: r.qty, exitDate: r.exitDate,
+      exitPrice: r.exits[r.exits.length - 1]?.price ?? null, holdingDays: r.holdingDays,
+      pnl: r.pnl, pnlPct: r.pnlPct, open: false,
+    })),
+    ...opens.map((o) => ({
+      entryDate: o.entryDate, entryPrice: o.entryPrice, qty: o.qty, exitDate: null,
+      exitPrice: null, holdingDays: daysBetween(o.entryDate, TODAY), pnl: null, pnlPct: null, open: true,
+    })),
+  ].sort((a, b) => a.entryDate.localeCompare(b.entryDate));
+  const focus = focusIdx != null ? items[focusIdx] : null;
   const chartBoxRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (focus) chartBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusIdx]);
 
-  const start = rts.reduce((m, r) => (r.entryDate < m ? r.entryDate : m), rts[0].entryDate);
-  const end = rts.reduce((m, r) => (r.exitDate > m ? r.exitDate : m), rts[0].exitDate);
+  const hasOpen = opens.length > 0;
+  const start = items.reduce((m, it) => (it.entryDate < m ? it.entryDate : m), items[0].entryDate);
+  // Open positions run to today; closed ones end at their last exit.
+  const end = items.reduce((m, it) => {
+    const e = it.exitDate ?? TODAY;
+    return e > m ? e : m;
+  }, hasOpen ? TODAY : items[0].exitDate ?? TODAY);
   const pad = (d: string, days: number) => new Date(Date.parse(d) + days * 86_400_000).toISOString().slice(0, 10);
 
   const { data, isLoading } = useQuery({
@@ -193,15 +228,16 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
     stDown: p.direction != null && p.direction < 0 ? p.supertrend ?? null : null,
   }));
   const maxT = allRows.length ? allRows[allRows.length - 1].t : 0;
+  const lastClose = allRows.length ? allRows[allRows.length - 1].close : null;
   const years = RANGES.find((r) => r.key === range)!.years;
   const DAY = 86_400_000;
   // Focused on one trade → clip to [entry, exit] + a buffer (25% of the hold, min 12d) on each
-  // side. Otherwise the range buttons window back from the latest bar.
+  // side (open positions run to today). Otherwise the range buttons window back from the latest bar.
   let minVisT: number;
   let maxVisT: number;
   if (focus) {
     const fStart = Date.parse(focus.entryDate);
-    const fEnd = Date.parse(focus.exitDate);
+    const fEnd = Date.parse(focus.exitDate ?? TODAY);
     const buf = Math.max((fEnd - fStart) * 0.25, 12 * DAY);
     minVisT = fStart - buf;
     maxVisT = fEnd + buf;
@@ -214,10 +250,13 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
   const entries: Marker[] = [];
   const books: Marker[] = [];
   const exits: Marker[] = [];
-  for (const r of rts) {
-    const et = Date.parse(r.entryDate);
+  const holdings: Marker[] = [];
+  for (const it of items) {
+    const et = Date.parse(it.entryDate);
     if (et >= minVisT && et <= maxVisT)
-      entries.push({ t: et, y: r.entryPrice, m: { type: "Entry", entryPrice: r.entryPrice, invested: r.entryPrice * r.qty } });
+      entries.push({ t: et, y: it.entryPrice, m: { type: "Entry", entryPrice: it.entryPrice, invested: it.entryPrice * it.qty } });
+  }
+  for (const r of rts) {
     for (const e of r.exits) {
       const xt = Date.parse(e.date);
       if (xt < minVisT || xt > maxVisT) continue;
@@ -229,19 +268,38 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
       });
     }
   }
+  // Still-open positions: a "now / holding" dot at the latest bar, with unrealized P&L.
+  if (lastClose != null && maxT >= minVisT && maxT <= maxVisT) {
+    for (const o of opens) {
+      holdings.push({
+        t: maxT, y: lastClose,
+        m: { type: "Open", entryPrice: o.entryPrice, exitPrice: lastClose,
+             ageDays: daysBetween(o.entryDate, TODAY), pnl: (lastClose - o.entryPrice) * o.qty },
+      });
+    }
+  }
 
   const closes = rows.map((r) => r.close).filter((c): c is number => c != null);
   const yDomain: [number | string, number | string] = logScale && closes.length
     ? [Math.max(1, Math.min(...closes) * 0.9), Math.max(...closes) * 1.1]
     : ["auto", "auto"];
-  const total = rts.reduce((s, r) => s + r.pnl, 0);
+  const realized = rts.reduce((s, r) => s + r.pnl, 0);
+  const unrealized = lastClose != null ? opens.reduce((s, o) => s + (lastClose - o.entryPrice) * o.qty, 0) : null;
 
   return (
     <Card className="mt-3">
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
         <div className="font-medium">
-          {symbol} <span className="text-slate-500 text-sm">· {rts.length} trade{rts.length > 1 ? "s" : ""} · </span>
-          <span className={tone(total)}>{formatInr(total)}</span>
+          {symbol}
+          {rts.length > 0 && (
+            <>
+              <span className="text-slate-500 text-sm"> · {rts.length} closed · </span>
+              <span className={tone(realized)}>{formatInr(realized)}</span>
+            </>
+          )}
+          {hasOpen && unrealized != null && (
+            <span className="text-slate-500 text-sm"> · {opens.length} open · <span className={tone(unrealized)}>{formatInr(unrealized)} unreal.</span></span>
+          )}
         </div>
         <div className="flex items-center gap-2 text-xs">
           {focus && (
@@ -250,7 +308,7 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
               title="Back to the full range"
               className="px-2 py-0.5 rounded bg-brand text-white inline-flex items-center gap-1"
             >
-              {focus.entryDate} → {focus.exitDate} ✕
+              {focus.entryDate} → {focus.exitDate ?? "now"} ✕
             </button>
           )}
           <div className="flex rounded bg-slate-800/60 p-0.5">
@@ -297,6 +355,7 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
             <Scatter data={books} dataKey="y" shape={<BookMarker />} isAnimationActive={false} />
             <Scatter data={entries} dataKey="y" shape={<EntryArrow />} isAnimationActive={false} />
             <Scatter data={exits} dataKey="y" shape={<ExitArrow />} isAnimationActive={false} />
+            <Scatter data={holdings} dataKey="y" shape={<HoldMarker />} isAnimationActive={false} />
           </ComposedChart>
         </ResponsiveContainer>
       )}
@@ -304,11 +363,12 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
       <div className="text-xs text-slate-500 mt-1">
         <span className="text-emerald-600 dark:text-emerald-400">▲ entry</span> · <span className="text-amber-600 dark:text-amber-400">◆ 50% book</span> ·{" "}
         <span className="text-rose-600 dark:text-rose-400">▼ exit</span>
+        {hasOpen && <> · <span className="text-sky-600 dark:text-sky-400">● holding (now)</span></>}
         {hasST && <> · <span className="text-emerald-600 dark:text-emerald-400">— ST↑</span> / <span className="text-rose-600 dark:text-rose-400">ST↓</span></>}
         {" "}· hover a dot for details · click a trade below to zoom
       </div>
 
-      {/* All trades for this stock */}
+      {/* All trades for this stock (closed + open) */}
       <div className="overflow-x-auto mt-3">
         <table className="w-full text-sm tabular-nums">
           <thead className="text-slate-400 text-left">
@@ -322,23 +382,31 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
             </tr>
           </thead>
           <tbody>
-            {sortedRts.map((r, i) => {
-              const last = r.exits[r.exits.length - 1];
+            {items.map((it, i) => {
+              const unreal = it.open && lastClose != null ? (lastClose - it.entryPrice) * it.qty : null;
               return (
                 <tr
-                  key={`${r.entryDate}-${i}`}
+                  key={`${it.entryDate}-${i}`}
                   onClick={() => setFocusIdx(focusIdx === i ? null : i)}
                   title="Click to zoom the chart to this trade"
                   className={`border-t border-slate-800 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-800/50 ${
                     focusIdx === i ? "bg-brand/10" : ""
                   }`}
                 >
-                  <td className="py-1 pr-3">{r.entryDate}</td>
-                  <td className="py-1 pr-3 text-right">{inr2(r.entryPrice)}</td>
-                  <td className="py-1 pr-3">{r.exitDate}{r.exits.length > 1 ? <span className="text-slate-500"> (+book)</span> : null}</td>
-                  <td className="py-1 pr-3 text-right">{last ? inr2(last.price) : "—"}</td>
-                  <td className="py-1 pr-3 text-right">{r.holdingDays}d</td>
-                  <td className={`py-1 pr-3 text-right ${tone(r.pnl)}`}>{formatInr(r.pnl)} <span className="text-slate-500">({pct(r.pnlPct)})</span></td>
+                  <td className="py-1 pr-3">{it.entryDate}</td>
+                  <td className="py-1 pr-3 text-right">{inr2(it.entryPrice)}</td>
+                  <td className="py-1 pr-3">
+                    {it.open
+                      ? <span className="rounded bg-sky-500/15 text-sky-600 dark:text-sky-400 px-1.5 py-0.5 text-xs">open</span>
+                      : it.exitDate}
+                  </td>
+                  <td className="py-1 pr-3 text-right">{it.exitPrice != null ? inr2(it.exitPrice) : it.open && lastClose != null ? <span className="text-slate-500">{inr2(lastClose)}</span> : "—"}</td>
+                  <td className="py-1 pr-3 text-right">{it.holdingDays}d</td>
+                  <td className={`py-1 pr-3 text-right ${tone(it.open ? unreal ?? 0 : it.pnl ?? 0)}`}>
+                    {it.open
+                      ? unreal != null ? <>{formatInr(unreal)} <span className="text-slate-500">unreal.</span></> : <span className="text-slate-500">open</span>
+                      : <>{formatInr(it.pnl ?? 0)} <span className="text-slate-500">({pct(it.pnlPct ?? 0)})</span></>}
+                  </td>
                 </tr>
               );
             })}
@@ -350,8 +418,13 @@ function StockChart({ symbol, rts, stParams }: { symbol: string; rts: RoundTrip[
 }
 
 export default function EquityTradeAnalysis({ analysis }: { analysis: RunAnalysis }) {
-  const roundTrips = useMemo(() => buildRoundTrips(analysis.trades), [analysis.trades]);
+  const { roundTrips, openPositions } = useMemo(() => pairTrades(analysis.trades), [analysis.trades]);
   const stocks = useMemo(() => bySymbol(roundTrips), [roundTrips]);
+  const openBySymbol = useMemo(() => {
+    const m = new Map<string, OpenPosition[]>();
+    for (const o of openPositions) (m.get(o.symbol) ?? m.set(o.symbol, []).get(o.symbol)!).push(o);
+    return m;
+  }, [openPositions]);
   const stParams = useMemo(() => stParamsFor(analysis), [analysis]);
   const [selected, setSelected] = useState<string | null>(null);
   const [sort, setSort] = useState<"pnl" | "winRate" | "trades">("pnl");
@@ -362,13 +435,14 @@ export default function EquityTradeAnalysis({ analysis }: { analysis: RunAnalysi
     if (selected) chartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [selected]);
 
-  if (roundTrips.length === 0) {
-    return <Card><div className="text-slate-400 text-sm">No completed round-trips in this run yet.</div></Card>;
+  if (roundTrips.length === 0 && openPositions.length === 0) {
+    return <Card><div className="text-slate-400 text-sm">No trades in this run yet.</div></Card>;
   }
 
   const total = roundTrips.reduce((s, r) => s + r.pnl, 0);
   const wins = roundTrips.filter((r) => r.won).length;
-  const avgHold = roundTrips.reduce((s, r) => s + r.holdingDays, 0) / roundTrips.length;
+  const avgHold = roundTrips.length ? roundTrips.reduce((s, r) => s + r.holdingDays, 0) / roundTrips.length : 0;
+  const openInvested = openPositions.reduce((s, o) => s + o.invested, 0);
   const sorted = [...stocks].sort((a, b) =>
     sort === "pnl" ? b.pnl - a.pnl : sort === "winRate" ? b.winRate - a.winRate : b.trades - a.trades);
   const ranked = [...roundTrips].sort((a, b) => b.pnl - a.pnl);
@@ -378,14 +452,52 @@ export default function EquityTradeAnalysis({ analysis }: { analysis: RunAnalysi
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-sm">
         <Metric label="Realized P&L" value={formatInr(total)} valueClass={tone(total)} />
-        <Metric label="Win rate" value={`${(wins / roundTrips.length * 100).toFixed(0)}%`} />
+        <Metric label="Win rate" value={roundTrips.length ? `${(wins / roundTrips.length * 100).toFixed(0)}%` : "—"} />
         <Metric label="Round-trips" value={String(roundTrips.length)} />
-        <Metric label="Stocks traded" value={String(stocks.length)} />
-        <Metric label="Avg holding" value={`${avgHold.toFixed(0)}d`} />
+        <Metric label="Avg holding" value={roundTrips.length ? `${avgHold.toFixed(0)}d` : "—"} />
+        <Metric label="Open positions" value={String(openPositions.length)} />
+        <Metric label="Invested (open)" value={formatInr(openInvested)} />
       </div>
 
+      {openPositions.length > 0 && (
+        <Card>
+          <div className="text-sm font-medium text-slate-300 mb-2">
+            Open positions <span className="text-slate-500 font-normal">· {openPositions.length} held · {formatInr(openInvested)} deployed</span>
+          </div>
+          <div className="overflow-x-auto max-h-80 overflow-y-auto">
+            <table className="w-full text-sm tabular-nums">
+              <thead className="text-slate-400 text-left sticky top-0 bg-slate-900">
+                <tr>
+                  <th className="py-1 pr-3">Stock</th>
+                  <th className="py-1 pr-3">Entry date</th>
+                  <th className="py-1 pr-3 text-right">Held</th>
+                  <th className="py-1 pr-3 text-right">Qty</th>
+                  <th className="py-1 pr-3 text-right">Entry</th>
+                  <th className="py-1 pr-3 text-right">Invested</th>
+                </tr>
+              </thead>
+              <tbody>
+                {openPositions.map((o, i) => (
+                  <tr key={`${o.symbol}-${i}`} onClick={() => show(o.symbol)}
+                    className={`border-t border-slate-800 cursor-pointer hover:bg-slate-800/40 ${selected === o.symbol ? "bg-slate-800/60" : ""}`}>
+                    <td className="py-1 pr-3 font-medium">{o.symbol}</td>
+                    <td className="py-1 pr-3">{o.entryDate}</td>
+                    <td className="py-1 pr-3 text-right">{daysBetween(o.entryDate, TODAY)}d</td>
+                    <td className="py-1 pr-3 text-right">{o.qty}</td>
+                    <td className="py-1 pr-3 text-right">{inr2(o.entryPrice)}</td>
+                    <td className="py-1 pr-3 text-right">{formatInr(o.invested)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-xs text-slate-500 mt-1">Click a holding to chart it (entry, price-to-now, unrealized P&L).</div>
+        </Card>
+      )}
+
+      {roundTrips.length > 0 && (
       <div className="grid md:grid-cols-2 gap-3">
         {[["Best trades", best] as const, ["Worst trades", worst] as const].map(([title, list]) => (
           <Card key={title}>
@@ -402,7 +514,9 @@ export default function EquityTradeAnalysis({ analysis }: { analysis: RunAnalysi
           </Card>
         ))}
       </div>
+      )}
 
+      {roundTrips.length > 0 && (
       <Card>
         <div className="flex items-center justify-between mb-2">
           <div className="text-sm font-medium text-slate-300">By stock — P&L contribution</div>
@@ -442,11 +556,13 @@ export default function EquityTradeAnalysis({ analysis }: { analysis: RunAnalysi
         </div>
         <div className="text-xs text-slate-500 mt-1">Click a stock to chart its trades.</div>
       </Card>
+      )}
 
       <div ref={chartRef}>
         {selected && (
           <StockChart key={selected} symbol={selected} stParams={stParams}
-            rts={stocks.find((s) => s.symbol === selected)?.roundTrips ?? []} />
+            rts={stocks.find((s) => s.symbol === selected)?.roundTrips ?? []}
+            opens={openBySymbol.get(selected) ?? []} />
         )}
       </div>
     </div>
