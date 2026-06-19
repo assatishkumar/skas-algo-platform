@@ -11,12 +11,9 @@ import LivePayoffChart from "../LivePayoffChart";
 const inputClass =
   "w-full rounded-md bg-slate-800 border border-slate-700 px-2.5 py-1.5 text-sm focus:outline-none focus:border-brand";
 const lbl = "block text-xs text-slate-400 mb-1";
-const todayISO = () => new Date().toISOString().slice(0, 10);
 
-// Approximate lot sizes — for the payoff/metrics PREVIEW only. The backend sizes legs with
-// the authoritative contract spec in force on the trade date.
-const LOT_SIZE: Record<string, number> = { NIFTY: 65, BANKNIFTY: 35, GOLD: 100 };
-const UNDERLYINGS = ["NIFTY", "BANKNIFTY", "GOLD"];
+// Known index lot sizes (auto-filled, editable). Stock F&O lot size must be entered by the user.
+const INDEX_LOTS: Record<string, number> = { NIFTY: 65, BANKNIFTY: 35, FINNIFTY: 65, MIDCPNIFTY: 140, GOLD: 100 };
 
 type Leg = { right: "CE" | "PE"; strike: number; side: "buy" | "sell"; lots: number; price: number };
 const key = (right: string, strike: number) => `${right}:${strike}`;
@@ -24,18 +21,19 @@ const key = (right: string, strike: number) => `${right}:${strike}`;
 export default function OptionTradeBuilder() {
   const navigate = useNavigate();
   const [underlying, setUnderlying] = useState("NIFTY");
-  const [date, setDate] = useState(todayISO());
   const [expiry, setExpiry] = useState("");
   const [greeks, setGreeks] = useState(false);
   const [legs, setLegs] = useState<Leg[]>([]);
   const [legTargets, setLegTargets] = useState<Record<number, number>>({});
   const [legStops, setLegStops] = useState<Record<number, number>>({});
+  const [lotSize, setLotSize] = useState(INDEX_LOTS.NIFTY);
 
-  // Exit config + deploy controls.
-  const [spotUpper, setSpotUpper] = useState(0);
-  const [spotLower, setSpotLower] = useState(0);
+  // Exit config — separated into Target vs Stop/Exit below.
   const [targetPct, setTargetPct] = useState(0);
   const [stopPct, setStopPct] = useState(0);
+  const [exitAbove, setExitAbove] = useState(0); // exit all if spot >= this (exact price)
+  const [exitBelow, setExitBelow] = useState(0); // exit all if spot <= this (exact price)
+
   const [name, setName] = useState("");
   const [capital, setCapital] = useState(1_000_000);
   const [quoteSource, setQuoteSource] = useState("cache");
@@ -46,26 +44,33 @@ export default function OptionTradeBuilder() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const { data: unders } = useQuery({ queryKey: ["opt-underlyings"], queryFn: api.optionsUnderlyings, retry: false });
+  const choices = unders?.available ?? ["NIFTY", "BANKNIFTY", "GOLD"];
+
+  // Latest available chain date for this underlying (this screen always shows the most recent
+  // prices — no historical browsing). Live LTP is used once deployed with a Zerodha session.
   const { data: cov } = useQuery({ queryKey: ["opt-cov", underlying], queryFn: () => api.optionsCoverage(underlying), retry: false });
-  useEffect(() => { if (cov?.end_date) setDate(cov.end_date); }, [cov?.end_date]);
+  const date = cov?.end_date ?? new Date().toISOString().slice(0, 10);
 
   const { data: expData } = useQuery({
-    queryKey: ["opt-exp", underlying, date], queryFn: () => api.optionsExpiries(underlying, date), enabled: !!date,
+    queryKey: ["opt-exp", underlying, date], queryFn: () => api.optionsExpiries(underlying, date), enabled: !!cov?.end_date,
   });
   const expiries = expData?.expiries ?? [];
   useEffect(() => { if (expiries.length && !expiries.includes(expiry)) setExpiry(expiries[0]); }, [expiries, expiry]);
 
   const { data: chain, isLoading, error: chainErr } = useQuery({
     queryKey: ["opt-chain", underlying, date, expiry, greeks], queryFn: () => api.optionsChain(underlying, date, expiry, greeks),
-    enabled: !!date && !!expiry,
+    enabled: !!cov?.end_date && !!expiry,
   });
   const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
   const sessioned = (accounts ?? []).filter((a) => a.has_session);
 
-  // Reset the basket when the underlying or expiry changes (prices are expiry-specific).
-  useEffect(() => { setLegs([]); setLegTargets({}); setLegStops({}); }, [underlying, expiry]);
+  // Reset basket + default the lot size when the underlying or expiry changes.
+  useEffect(() => {
+    setLegs([]); setLegTargets({}); setLegStops({});
+    setLotSize(INDEX_LOTS[underlying.toUpperCase()] ?? 0);
+  }, [underlying, expiry]);
 
-  const lotSize = LOT_SIZE[underlying] ?? 1;
   const spot = chain?.spot ?? null;
 
   function toggleLeg(right: "CE" | "PE", strike: number, price: number | null | undefined) {
@@ -87,27 +92,25 @@ export default function OptionTradeBuilder() {
     setLegStops((m) => { const n = { ...m }; delete n[i]; return n; });
   }
 
-  // Preview payoff/metrics from the prospective legs (reuses the live components/lib).
+  const sz = lotSize > 0 ? lotSize : 1;
   const liveLegs: LiveLeg[] = legs.map((l) => ({
-    strike: l.strike, right: l.right, direction: l.side === "sell" ? -1 : 1,
-    units: l.lots * lotSize, entry: l.price, ltp: l.price,
+    strike: l.strike, right: l.right, direction: l.side === "sell" ? -1 : 1, units: l.lots * sz, entry: l.price, ltp: l.price,
   }));
   const previewPositions: LivePosition[] = legs.map((l) => ({
     symbol: `${underlying}|${expiry}|${l.strike}|${l.right}`,
-    units: l.lots * lotSize, lots: l.lots, direction: l.side === "sell" ? -1 : 1,
-    avg_price: l.price, ltp: l.price, unrealized_pnl: 0,
+    units: l.lots * sz, lots: l.lots, direction: l.side === "sell" ? -1 : 1, avg_price: l.price, ltp: l.price, unrealized_pnl: 0,
   }));
-  const netCredit = legs.reduce((s, l) => s + (l.side === "sell" ? 1 : -1) * l.price * l.lots * lotSize, 0);
+  const netCredit = legs.reduce((s, l) => s + (l.side === "sell" ? 1 : -1) * l.price * l.lots * sz, 0);
   const metrics = spot && expiry && liveLegs.length ? computeMetrics(liveLegs, spot, expiry) : null;
 
   async function deploy() {
     setBusy(true); setError(null);
     const body = {
-      name: name.trim() || `${underlying} custom`, underlying, expiry,
+      name: name.trim() || `${underlying} custom`, underlying: underlying.toUpperCase(), expiry,
       legs: legs.map((l): OptionTradeLeg => ({ right: l.right, strike: l.strike, side: l.side, lots: l.lots })),
-      capital,
-      spot_upper: spotUpper > 0 ? spotUpper : null,
-      spot_lower: spotLower > 0 ? spotLower : null,
+      lot_size: lotSize, capital,
+      spot_upper: exitAbove > 0 ? exitAbove : null,
+      spot_lower: exitBelow > 0 ? exitBelow : null,
       target_pct: targetPct > 0 ? targetPct : null,
       stop_pct: stopPct > 0 ? stopPct : null,
       leg_targets: Object.keys(legTargets).length ? legTargets : null,
@@ -130,41 +133,42 @@ export default function OptionTradeBuilder() {
     <div className="grid lg:grid-cols-2 gap-4">
       {/* Left: the chain */}
       <Card>
-        <div className="flex flex-wrap items-end gap-3 mb-3">
-          <div className="flex gap-1">
-            {UNDERLYINGS.map((u) => (
-              <button key={u} onClick={() => setUnderlying(u)}
-                className={`px-2.5 py-1.5 rounded-md text-sm font-medium ${underlying === u ? "bg-brand text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`}>
-                {u}
-              </button>
-            ))}
-          </div>
-          <label className="block"><span className={lbl}>Trade date</span>
-            <input type="date" className={inputClass} value={date} onChange={(e) => setDate(e.target.value)} /></label>
+        <div className="flex flex-wrap items-end gap-3 mb-2">
+          <label className="block"><span className={lbl}>Underlying (any F&amp;O)</span>
+            <input className={`${inputClass} w-40`} list="opt-unders" value={underlying}
+              onChange={(e) => setUnderlying(e.target.value.toUpperCase())} placeholder="NIFTY / RELIANCE…" />
+            <datalist id="opt-unders">{choices.map((u) => <option key={u} value={u} />)}</datalist>
+          </label>
           <label className="block"><span className={lbl}>Expiry</span>
             <select className={inputClass} value={expiry} onChange={(e) => setExpiry(e.target.value)}>
               {expiries.length === 0 && <option value="">—</option>}
               {expiries.map((e) => <option key={e} value={e}>{e}</option>)}
             </select></label>
-          <label className="flex items-center gap-1.5 text-xs text-slate-300 pb-1.5">
+          <label className="flex items-center gap-1.5 text-xs text-slate-300 pb-2">
             <input type="checkbox" checked={greeks} onChange={(e) => setGreeks(e.target.checked)} /> IV / δ</label>
-          {spot != null && <span className="text-xs text-slate-400 pb-1.5">spot {formatInr(spot)} · ATM {chain?.atm_strike}</span>}
         </div>
-        <div className="text-[11px] text-slate-500 mb-2">Click a CE / PE price to add a leg (defaults to <b>sell</b>; flip B/S below). Click again to remove.</div>
-        {isLoading ? <Spinner /> : chainErr ? <ErrorBox message={(chainErr as Error).message} /> : chain ? (
+        <div className="text-[11px] text-slate-500 mb-2">
+          {spot != null ? <>spot <b>{formatInr(spot)}</b> · ATM {chain?.atm_strike} · </> : null}
+          latest prices as of {date}{cov?.end_date ? "" : " (today)"} — click a CE / PE price to add a leg (defaults to <b>sell</b>; flip B/S in the basket).
+        </div>
+        {isLoading ? <Spinner /> : chainErr ? <ErrorBox message={(chainErr as Error).message} /> : chain && chain.rows.length ? (
           <SelectableChain rows={chain.rows} atm={chain.atm_strike} greeks={greeks} selected={selected} onToggle={toggleLeg} />
-        ) : <div className="text-sm text-slate-500">Pick a date and expiry.</div>}
+        ) : <div className="text-sm text-slate-500">No chain cached for {underlying}. Refresh its option data on the Data tab.</div>}
       </Card>
 
-      {/* Right: the basket, payoff, exits, deploy */}
+      {/* Right: basket, payoff, exits, deploy */}
       <div className="space-y-4">
         <Card>
-          <div className="text-sm font-medium text-slate-300 mb-2">
-            Position · {legs.length} leg{legs.length === 1 ? "" : "s"}
-            {legs.length > 0 && (
-              <span className="ml-2 text-slate-500">net {netCredit >= 0 ? "credit" : "debit"}{" "}
-                <span className={netCredit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>{formatInr(Math.abs(netCredit))}</span></span>
-            )}
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm font-medium text-slate-300">
+              Position · {legs.length} leg{legs.length === 1 ? "" : "s"}
+              {legs.length > 0 && (
+                <span className="ml-2 text-slate-500 font-normal">net {netCredit >= 0 ? "credit" : "debit"}{" "}
+                  <span className={netCredit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>{formatInr(Math.abs(netCredit))}</span></span>
+              )}
+            </div>
+            <label className="flex items-center gap-1.5 text-xs text-slate-400">lot size
+              <NumberInput className={`${inputClass} w-20 py-0.5`} value={lotSize} onChange={(n) => setLotSize(Math.max(0, Math.round(n)))} /></label>
           </div>
           {legs.length === 0 ? (
             <div className="text-sm text-slate-500">No legs yet — click prices in the chain.</div>
@@ -182,9 +186,7 @@ export default function OptionTradeBuilder() {
                       <td className="py-1 pr-2">
                         <button onClick={() => updateLeg(i, { side: l.side === "sell" ? "buy" : "sell" })}
                           className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${l.side === "sell" ? "bg-rose-500/20 text-rose-600 dark:text-rose-300" : "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"}`}>
-                          {l.side === "sell" ? "S" : "B"}
-                        </button>
-                      </td>
+                          {l.side === "sell" ? "S" : "B"}</button></td>
                       <td className="py-1 pr-2">{l.strike}</td>
                       <td className="py-1 pr-2">{l.right}</td>
                       <td className="py-1 pr-2 text-right w-16"><NumberInput className={`${inputClass} text-right py-0.5`} value={l.lots} onChange={(n) => updateLeg(i, { lots: Math.max(1, Math.round(n)) })} /></td>
@@ -196,7 +198,7 @@ export default function OptionTradeBuilder() {
                   ))}
                 </tbody>
               </table>
-              <div className="text-[10px] text-slate-500 mt-1">Per-leg Tgt%/SL% are on each leg's own premium (0 = off). Lot size for sizing/preview ≈ {lotSize} ({underlying}).</div>
+              <div className="text-[10px] text-slate-500 mt-1">Per-leg Tgt%/SL% are on each leg's own premium (0 = off). Sizing uses lot size {sz} × lots.</div>
             </div>
           )}
           {legs.length > 0 && spot && <LivePayoffChart positions={previewPositions} spot={spot} />}
@@ -210,16 +212,27 @@ export default function OptionTradeBuilder() {
           )}
         </Card>
 
-        {/* Exits */}
-        <Card>
-          <div className="text-sm font-medium text-slate-300 mb-2">Exit rules <span className="text-slate-500 font-normal">(all optional; 0 = off)</span></div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <label className="block"><span className={lbl}>Target % (on net premium)</span><NumberInput step="1" className={inputClass} value={targetPct} onChange={setTargetPct} /></label>
-            <label className="block"><span className={lbl}>Stop % (on net premium)</span><NumberInput step="1" className={inputClass} value={stopPct} onChange={setStopPct} /></label>
-            <label className="block"><span className={lbl}>Spot upper band</span><NumberInput className={inputClass} value={spotUpper} onChange={setSpotUpper} /></label>
-            <label className="block"><span className={lbl}>Spot lower band</span><NumberInput className={inputClass} value={spotLower} onChange={setSpotLower} /></label>
-          </div>
-        </Card>
+        {/* Exit rules — split into Target and Stop-loss / exit */}
+        <div className="grid md:grid-cols-2 gap-4">
+          <Card>
+            <div className="text-sm font-medium text-emerald-600 dark:text-emerald-400 mb-2">🎯 Target (book profit)</div>
+            <label className="block"><span className={lbl}>Profit target — % of net premium</span>
+              <NumberInput step="1" className={inputClass} value={targetPct} onChange={setTargetPct} placeholder="e.g. 50" /></label>
+            <div className="text-[10px] text-slate-500 mt-1">Books the whole position when its P&amp;L reaches this % of the net premium taken in. 0 = off.</div>
+          </Card>
+          <Card>
+            <div className="text-sm font-medium text-rose-600 dark:text-rose-400 mb-2">🛑 Stop-loss / exit</div>
+            <label className="block mb-2"><span className={lbl}>Stop-loss — % of net premium</span>
+              <NumberInput step="1" className={inputClass} value={stopPct} onChange={setStopPct} placeholder="e.g. 100" /></label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block"><span className={lbl}>Exit all if spot ≥</span>
+                <NumberInput className={inputClass} value={exitAbove} onChange={setExitAbove} placeholder={spot ? String(Math.round(spot)) : "price"} /></label>
+              <label className="block"><span className={lbl}>Exit all if spot ≤</span>
+                <NumberInput className={inputClass} value={exitBelow} onChange={setExitBelow} placeholder={spot ? String(Math.round(spot)) : "price"} /></label>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">Exact underlying price (not %). e.g. exit every leg if {underlying} ≥ {exitAbove > 0 ? exitAbove : "960"}. 0 = off.</div>
+          </Card>
+        </div>
 
         {/* Deploy */}
         <Card>
@@ -253,11 +266,12 @@ export default function OptionTradeBuilder() {
           </div>
           {mode === "LIVE" && <div className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">Live places real orders only on an armed Zerodha account with live trading enabled — otherwise it runs as paper.</div>}
           <div className="mt-3 flex items-center gap-3">
-            <button onClick={deploy} disabled={busy || legs.length === 0 || !expiry || (quoteSource === "zerodha" && !accountId)}
+            <button onClick={deploy} disabled={busy || legs.length === 0 || !expiry || lotSize <= 0 || (quoteSource === "zerodha" && !accountId)}
               className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50">
               {busy ? "Deploying…" : "Save & deploy"}
             </button>
-            <span className="text-xs text-slate-500">Deploys against today's cached chain — refresh option data to today (Data tab) if entry doesn't fill.</span>
+            {lotSize <= 0 && <span className="text-xs text-rose-500">Set a lot size first.</span>}
+            <span className="text-xs text-slate-500">Uses live quotes once deployed with a Zerodha session during market hours.</span>
           </div>
           {error && <div className="mt-2"><ErrorBox message={error} /></div>}
         </Card>
@@ -276,31 +290,36 @@ function Mini({ label, value, tone }: { label: string; value: string; tone?: "po
   );
 }
 
-// Selectable Sensibull-style chain: click a CE/PE price to add/remove a leg.
+// Selectable Sensibull-style chain, mirrored around STRIKE with fixed column widths so it
+// stays aligned. Click a CE/PE price to add/remove a leg.
 function SelectableChain({
   rows, atm, greeks, selected, onToggle,
 }: {
-  rows: { strike: number; ce: { ltp: number | null; close: number | null; oi: number | null; iv?: number | null; delta?: number | null } | null;
-          pe: { ltp: number | null; close: number | null; oi: number | null; iv?: number | null; delta?: number | null } | null }[];
+  rows: { strike: number; ce: { ltp: number | null; close: number | null; oi: number | null; delta?: number | null } | null;
+          pe: { ltp: number | null; close: number | null; oi: number | null; delta?: number | null } | null }[];
   atm: number | null; greeks: boolean;
   selected: Map<string, Leg>; onToggle: (right: "CE" | "PE", strike: number, price: number | null | undefined) => void;
 }) {
-  if (rows.length === 0) return <div className="text-sm text-slate-500">No chain for this date/expiry.</div>;
-  const cell = (right: "CE" | "PE", leg: Leg | undefined) =>
-    `cursor-pointer py-1 px-2 ${right === "CE" ? "text-right text-emerald-700 dark:text-emerald-300" : "text-left text-rose-700 dark:text-rose-300"} ` +
-    (leg ? (leg.side === "sell" ? "bg-rose-500/20 ring-1 ring-inset ring-rose-500/40 font-semibold" : "bg-emerald-500/20 ring-1 ring-inset ring-emerald-500/40 font-semibold") : "hover:bg-slate-700/40");
+  const fmtOi = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("en-IN"));
+  const priceCell = (right: "CE" | "PE", leg: Leg | undefined) =>
+    `cursor-pointer py-1 px-2 text-right font-medium ${right === "CE" ? "text-emerald-700 dark:text-emerald-300" : "text-rose-700 dark:text-rose-300"} ` +
+    (leg ? (leg.side === "sell" ? "bg-rose-500/20 ring-1 ring-inset ring-rose-500/40" : "bg-emerald-500/20 ring-1 ring-inset ring-emerald-500/40") : "hover:bg-slate-700/40");
   return (
-    <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
-      <table className="w-full text-xs tabular-nums">
+    <div className="overflow-x-auto max-h-[58vh] overflow-y-auto">
+      <table className="w-full table-fixed text-xs tabular-nums">
+        <colgroup>
+          <col className="w-[18%]" />{greeks && <col className="w-[12%]" />}<col className="w-[18%]" />
+          <col className="w-[16%]" /><col className="w-[18%]" />{greeks && <col className="w-[12%]" />}<col className="w-[18%]" />
+        </colgroup>
         <thead className="text-slate-400 sticky top-0 bg-slate-900">
           <tr>
             <th className="py-1 px-2 text-right">CE OI</th>
             {greeks && <th className="py-1 px-2 text-right">CE δ</th>}
             <th className="py-1 px-2 text-right text-emerald-700 dark:text-emerald-300">CE LTP</th>
             <th className="py-1 px-2 text-center">STRIKE</th>
-            <th className="py-1 px-2 text-left text-rose-700 dark:text-rose-300">PE LTP</th>
-            {greeks && <th className="py-1 px-2 text-left">PE δ</th>}
-            <th className="py-1 px-2 text-left">PE OI</th>
+            <th className="py-1 px-2 text-right text-rose-700 dark:text-rose-300">PE LTP</th>
+            {greeks && <th className="py-1 px-2 text-right">PE δ</th>}
+            <th className="py-1 px-2 text-right">PE OI</th>
           </tr>
         </thead>
         <tbody>
@@ -312,13 +331,13 @@ function SelectableChain({
             const pePrice = r.pe?.ltp ?? r.pe?.close;
             return (
               <tr key={r.strike} className={`border-t border-slate-800 ${isAtm ? "bg-amber-900/20" : ""}`}>
-                <td className="py-1 px-2 text-right text-slate-400">{r.ce?.oi?.toLocaleString("en-IN") ?? "—"}</td>
+                <td className="py-1 px-2 text-right text-slate-400">{fmtOi(r.ce?.oi)}</td>
                 {greeks && <td className="py-1 px-2 text-right text-slate-400">{r.ce?.delta?.toFixed(2) ?? "—"}</td>}
-                <td className={cell("CE", ceLeg)} onClick={() => onToggle("CE", r.strike, cePrice)}>{cePrice?.toFixed(2) ?? "—"}</td>
+                <td className={priceCell("CE", ceLeg)} onClick={() => onToggle("CE", r.strike, cePrice)}>{cePrice?.toFixed(2) ?? "—"}</td>
                 <td className={`py-1 px-2 text-center font-semibold ${isAtm ? "text-amber-700 dark:text-amber-300" : "text-slate-200"}`}>{r.strike}</td>
-                <td className={cell("PE", peLeg)} onClick={() => onToggle("PE", r.strike, pePrice)}>{pePrice?.toFixed(2) ?? "—"}</td>
-                {greeks && <td className="py-1 px-2 text-left text-slate-400">{r.pe?.delta?.toFixed(2) ?? "—"}</td>}
-                <td className="py-1 px-2 text-left text-slate-400">{r.pe?.oi?.toLocaleString("en-IN") ?? "—"}</td>
+                <td className={priceCell("PE", peLeg)} onClick={() => onToggle("PE", r.strike, pePrice)}>{pePrice?.toFixed(2) ?? "—"}</td>
+                {greeks && <td className="py-1 px-2 text-right text-slate-400">{r.pe?.delta?.toFixed(2) ?? "—"}</td>}
+                <td className="py-1 px-2 text-right text-slate-400">{fmtOi(r.pe?.oi)}</td>
               </tr>
             );
           })}

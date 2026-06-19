@@ -37,6 +37,7 @@ async def deploy_option_trade(
     params = {
         "expiry": body.expiry,
         "legs": [leg.model_dump() for leg in body.legs],
+        "lot_size": body.lot_size,
         "spot_upper": body.spot_upper,
         "spot_lower": body.spot_lower,
         "target_pct": _frac(body.target_pct),

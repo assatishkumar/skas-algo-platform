@@ -52,10 +52,8 @@ def make_spot_provider(sd):
     def _series(underlying: str) -> pd.Series | None:
         u = underlying.upper()
         if u not in cache:
-            idx = INDEX_SYMBOL.get(u)
-            if idx is None:
-                cache[u] = None
-                return None
+            # Index → its EOD index series; a stock F&O underlying → its own equity series.
+            idx = INDEX_SYMBOL.get(u) or u
             df = sd.get_prices(symbol=idx, asset_type="stock")
             if df is None or len(df) == 0:
                 cache[u] = None

@@ -40,6 +40,7 @@ class CustomOptionsStrategy:
         stop_pct: float | None = None,             # stop at -x of |net entry premium| (fraction)
         leg_targets: dict | None = None,           # {leg_index: fraction} per-leg premium target
         leg_stops: dict | None = None,             # {leg_index: fraction} per-leg premium stop
+        lot_size: int = 0,                         # explicit contract lot size (req. for stock F&O)
         lot_overrides: dict | None = None,
         **_ignored,
     ):
@@ -54,6 +55,7 @@ class CustomOptionsStrategy:
         self.leg_targets = {int(k): float(v) for k, v in (leg_targets or {}).items()}
         self.leg_stops = {int(k): float(v) for k, v in (leg_stops or {}).items()}
         self.initial_capital = initial_capital
+        self.lot_size = int(lot_size or 0)
         self.lot_overrides = lot_overrides
 
         # State (persisted for live recovery).
@@ -92,7 +94,8 @@ class CustomOptionsStrategy:
             row = rows.get((k, right)) if k is not None else None
             if row is None or bad_close(row.close):
                 return []  # a leg isn't priceable yet — don't half-enter; retry next slice
-            units = lots * lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
+            per_lot = self.lot_size or lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
+            units = lots * per_lot
             if units <= 0:
                 return []
             resolved.append((i, row.symbol, side, float(units), float(row.close)))

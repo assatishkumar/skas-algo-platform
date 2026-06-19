@@ -502,6 +502,7 @@ export interface OptionsTradeDeploy {
   underlying: string;
   expiry: string;
   legs: OptionTradeLeg[];
+  lot_size: number;
   capital: number;
   spot_upper?: number | null;
   spot_lower?: number | null;

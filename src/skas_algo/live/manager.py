@@ -239,9 +239,10 @@ class LiveRun:
         idx = None
         if self.config.instrument_class.upper() == "DERIV" and self.config.underlying:
             from skas_algo.data.options_provider import INDEX_SYMBOL
-            idx = INDEX_SYMBOL.get(self.config.underlying.upper())
-            if idx:
-                symbols = symbols + [idx]  # also quote the index → live spot for strikes
+            # Index → its index symbol; a stock F&O underlying → the stock itself, so spot bands
+            # and strike selection follow the live underlying price for either.
+            idx = INDEX_SYMBOL.get(self.config.underlying.upper()) or self.config.underlying.upper()
+            symbols = symbols + [idx]
         try:
             quotes = self.quote_source.get_quotes(symbols) if symbols else {}
             self.quote_error = None

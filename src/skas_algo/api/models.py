@@ -131,6 +131,7 @@ class OptionsTradeDeploy(BaseModel):
     underlying: str
     expiry: str                                  # ISO date from the chain
     legs: list[OptionTradeLeg] = Field(default_factory=list)
+    lot_size: int = 0                            # explicit contract lot size (required for stock F&O)
     capital: float = 1_000_000
     spot_upper: float | None = None              # exit-all band on the underlying spot
     spot_lower: float | None = None
