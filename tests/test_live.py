@@ -498,6 +498,26 @@ def test_activate_restarts_a_stopped_run(api_client: TestClient):
         api_client.delete(f"/api/v1/live/{rid}")
 
 
+def test_activate_preserves_trade_history(api_client: TestClient):
+    """Stop must keep the session state so Activate resumes with realized P&L / trades intact."""
+    rid = _start_equity_paper(api_client)
+    try:
+        api_client.post(f"/api/v1/live/{rid}/refresh")
+        api_client.post(f"/api/v1/live/{rid}/run-decision")  # BUY 5
+        api_client.post(f"/api/v1/live/{rid}/flatten")       # SELL 5 → flat, 2 transactions
+        before = api_client.get(f"/api/v1/live/{rid}/trades").json()["trades"]
+        assert len(before) >= 2
+        assert api_client.post(f"/api/v1/live/{rid}/stop").status_code == 200
+        with session_scope() as db:
+            assert db.get(AlgoRun, rid).state is not None  # state kept (not nulled) for resume
+        assert api_client.post(f"/api/v1/live/{rid}/activate").status_code == 200
+        after = api_client.get(f"/api/v1/live/{rid}/trades").json()["trades"]
+        assert len(after) == len(before)  # trade history survived the stop → activate round-trip
+    finally:
+        api_client.post(f"/api/v1/live/{rid}/stop")
+        api_client.delete(f"/api/v1/live/{rid}")
+
+
 def test_go_live_blocked_without_armed_account(api_client: TestClient):
     rid = _start_equity_paper(api_client)
     try:

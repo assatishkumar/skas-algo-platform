@@ -377,6 +377,7 @@ class LiveRun:
 
     def stop(self) -> None:
         self.status = "stopped"
+        self._persist_state()  # snapshot the final (flat) book so Activate can resume from it
         rr = RunResult(
             history=self.session.history,
             transactions=self.session.transactions,

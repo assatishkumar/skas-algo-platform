@@ -148,4 +148,6 @@ def finalize_live_run(session: Session, run: AlgoRun, *, metrics: dict, trade_lo
     run.stopped_at = datetime.now(UTC)
     run.metrics = metrics
     run.trade_log = trade_log
-    run.state = None  # no longer running
+    # Keep run.state (the last session snapshot) so Activate can resume the deployment with its
+    # realized P&L / trade history / strategy state intact. Recovery on boot still ignores it
+    # (it only rebuilds runs with stopped_at IS NULL); only an explicit Activate restores it.
