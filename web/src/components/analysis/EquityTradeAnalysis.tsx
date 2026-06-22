@@ -211,7 +211,7 @@ function priorHigh(rows: Candle[], entryT: number, pullbackPct: number): { pivot
 function StockChart({ symbol, rts, opens, stParams, pullback, pullbackPct }: { symbol: string; rts: RoundTrip[]; opens: OpenPosition[]; stParams: Record<string, unknown>; pullback: boolean; pullbackPct: number }) {
   const [range, setRange] = useState("all");
   const [logScale, setLogScale] = useState(true);
-  const [chartType, setChartType] = useState<"line" | "candle">("line");
+  const [chartType, setChartType] = useState<"line" | "candle">("candle");
   // A clicked trade focuses the chart on just that position's window; index into `items`.
   const [focusIdx, setFocusIdx] = useState<number | null>(null);
   const hasST = Object.keys(stParams).length > 0;
@@ -243,9 +243,12 @@ function StockChart({ symbol, rts, opens, stParams, pullback, pullbackPct }: { s
   }, hasOpen ? TODAY : items[0].exitDate ?? TODAY);
   const pad = (d: string, days: number) => new Date(Date.parse(d) + days * 86_400_000).toISOString().slice(0, 10);
 
+  // Fetch a generous history (≥5y, and always covering the trade span) so the range buttons
+  // (5Y/3Y/1Y/6M) and "All" render a full chart instead of a few sparse bars around the trade.
+  const histDays = Math.max(5 * 365, (Date.parse(end) - Date.parse(start)) / 86_400_000 + 120);
   const { data, isLoading } = useQuery({
     queryKey: ["stockSeries", symbol, start, end, stParams],
-    queryFn: () => api.stockSeries(symbol, { start: pad(start, -60), end: pad(end, 30), ...stParams }),
+    queryFn: () => api.stockSeries(symbol, { start: pad(end, -histDays), end: pad(end, 30), ...stParams }),
   });
 
   const allRows = (data?.points ?? []).map((p) => ({
