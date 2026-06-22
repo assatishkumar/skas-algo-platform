@@ -5,6 +5,7 @@ import {
   ComposedChart,
   Customized,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Scatter,
   Tooltip,
@@ -178,7 +179,36 @@ type StockItem = {
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
-function StockChart({ symbol, rts, opens, stParams }: { symbol: string; rts: RoundTrip[]; opens: OpenPosition[]; stParams: Record<string, unknown> }) {
+type Candle = { t: number; high: number | null; close: number | null; stUp: number | null; stDown: number | null };
+
+/** The "prior high" a pullback breakout crossed to enter — mirrors the strategy exactly: the running
+ *  max CLOSE since the most recent green (SuperTrend) flip, frozen at the bar where price had pulled
+ *  back ≥ pullbackPct from that peak. The entry then fires when close breaks back above it. null if no
+ *  flip precedes the entry or no qualifying pullback occurred. */
+function priorHigh(rows: Candle[], entryT: number, pullbackPct: number): { pivot: number; flipT: number } | null {
+  let idx = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].t <= entryT) idx = i;
+    else break;
+  }
+  if (idx < 1) return null;
+  let flipIdx = -1;
+  for (let j = idx; j >= 1; j--) {
+    if (rows[j].stUp != null && rows[j - 1].stUp == null) { flipIdx = j; break; } // red→green
+  }
+  if (flipIdx < 0) return null;
+  let peak = -Infinity;
+  let pivot: number | null = null;
+  for (let k = flipIdx; k < idx && pivot == null; k++) {
+    const c = rows[k].close;
+    if (c == null) continue;
+    if (c > peak) peak = c;
+    else if (peak > 0 && (peak - c) / peak >= pullbackPct && c < peak) pivot = peak; // pullback → lock
+  }
+  return pivot != null ? { pivot, flipT: rows[flipIdx].t } : null;
+}
+
+function StockChart({ symbol, rts, opens, stParams, pullback, pullbackPct }: { symbol: string; rts: RoundTrip[]; opens: OpenPosition[]; stParams: Record<string, unknown>; pullback: boolean; pullbackPct: number }) {
   const [range, setRange] = useState("all");
   const [logScale, setLogScale] = useState(true);
   const [chartType, setChartType] = useState<"line" | "candle">("line");
@@ -215,7 +245,7 @@ function StockChart({ symbol, rts, opens, stParams }: { symbol: string; rts: Rou
 
   const { data, isLoading } = useQuery({
     queryKey: ["stockSeries", symbol, start, end, stParams],
-    queryFn: () => api.stockSeries(symbol, { start: pad(start, -30), end: pad(end, 30), ...stParams }),
+    queryFn: () => api.stockSeries(symbol, { start: pad(start, -60), end: pad(end, 30), ...stParams }),
   });
 
   const allRows = (data?.points ?? []).map((p) => ({
@@ -231,6 +261,8 @@ function StockChart({ symbol, rts, opens, stParams }: { symbol: string; rts: Rou
   const lastClose = allRows.length ? allRows[allRows.length - 1].close : null;
   const years = RANGES.find((r) => r.key === range)!.years;
   const DAY = 86_400_000;
+  // For a focused pullback trade, the "prior high" it broke = the post-flip peak before the entry.
+  const focusPivot = focus && pullback && hasST ? priorHigh(allRows, Date.parse(focus.entryDate), pullbackPct) : null;
   // Focused on one trade → clip to [entry, exit] + a buffer (25% of the hold, min 12d) on each
   // side (open positions run to today). Otherwise the range buttons window back from the latest bar.
   let minVisT: number;
@@ -240,6 +272,8 @@ function StockChart({ symbol, rts, opens, stParams }: { symbol: string; rts: Rou
     const fEnd = Date.parse(focus.exitDate ?? TODAY);
     const buf = Math.max((fEnd - fStart) * 0.25, 12 * DAY);
     minVisT = fStart - buf;
+    // Reach back to the flip so the pullback setup (flip → peak → dip → breakout) is visible.
+    if (focusPivot && focusPivot.flipT < minVisT) minVisT = focusPivot.flipT - 3 * DAY;
     maxVisT = fEnd + buf;
   } else {
     minVisT = years === Infinity ? -Infinity : maxT - years * 365 * DAY;
@@ -352,6 +386,13 @@ function StockChart({ symbol, rts, opens, stParams }: { symbol: string; rts: Rou
             <Line type="monotone" dataKey="close" stroke={chartType === "candle" ? "transparent" : "#38bdf8"} strokeWidth={1.5} dot={false} name="Price" isAnimationActive={false} />
             <Line type="monotone" dataKey="stUp" stroke="#10b981" strokeWidth={1.5} dot={false} connectNulls={false} name="ST↑" isAnimationActive={false} />
             <Line type="monotone" dataKey="stDown" stroke="#f43f5e" strokeWidth={1.5} dot={false} connectNulls={false} name="ST↓" isAnimationActive={false} />
+            {focusPivot && focus && (
+              <ReferenceLine
+                segment={[{ x: Math.max(focusPivot.flipT, minVisT), y: focusPivot.pivot }, { x: Date.parse(focus.entryDate), y: focusPivot.pivot }]}
+                stroke="#f59e0b" strokeDasharray="5 3" strokeWidth={1.5}
+                label={{ value: `prior high ${Math.round(focusPivot.pivot)}`, position: "insideTopLeft", fill: "#d97706", fontSize: 10 }}
+                ifOverflow="extendDomain" isFront />
+            )}
             <Scatter data={books} dataKey="y" shape={<BookMarker />} isAnimationActive={false} />
             <Scatter data={entries} dataKey="y" shape={<EntryArrow />} isAnimationActive={false} />
             <Scatter data={exits} dataKey="y" shape={<ExitArrow />} isAnimationActive={false} />
@@ -365,6 +406,7 @@ function StockChart({ symbol, rts, opens, stParams }: { symbol: string; rts: Rou
         <span className="text-rose-600 dark:text-rose-400">▼ exit</span>
         {hasOpen && <> · <span className="text-sky-600 dark:text-sky-400">● holding (now)</span></>}
         {hasST && <> · <span className="text-emerald-600 dark:text-emerald-400">— ST↑</span> / <span className="text-rose-600 dark:text-rose-400">ST↓</span></>}
+        {focusPivot && <> · <span className="text-amber-600 dark:text-amber-400">┄ prior high (broken on entry)</span></>}
         {" "}· hover a dot for details · click a trade below to zoom
       </div>
 
@@ -426,6 +468,8 @@ export default function EquityTradeAnalysis({ analysis }: { analysis: RunAnalysi
     return m;
   }, [openPositions]);
   const stParams = useMemo(() => stParamsFor(analysis), [analysis]);
+  const pullback = String(analysis.params?.entry_mode ?? "") === "pullback";
+  const pullbackPct = Number(analysis.params?.pullback_pct ?? 0.1) || 0.1;
   const [selected, setSelected] = useState<string | null>(null);
   const [sort, setSort] = useState<"pnl" | "winRate" | "trades">("pnl");
   const chartRef = useRef<HTMLDivElement>(null);
@@ -560,7 +604,7 @@ export default function EquityTradeAnalysis({ analysis }: { analysis: RunAnalysi
 
       <div ref={chartRef}>
         {selected && (
-          <StockChart key={selected} symbol={selected} stParams={stParams}
+          <StockChart key={selected} symbol={selected} stParams={stParams} pullback={pullback} pullbackPct={pullbackPct}
             rts={stocks.find((s) => s.symbol === selected)?.roundTrips ?? []}
             opens={openBySymbol.get(selected) ?? []} />
         )}
