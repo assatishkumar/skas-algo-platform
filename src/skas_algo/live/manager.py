@@ -210,6 +210,9 @@ class LiveRun:
         # Last live-quote fetch error (e.g. a rejected Zerodha token), surfaced in the
         # snapshot so the UI can flag "session expired — reconnect" instead of failing silently.
         self.quote_error: str | None = None
+        # Last self-heal retry of a stuck (quote_error'd) zerodha run — throttles the loop's
+        # rebuild-and-repoll to ~once a minute so it doesn't hammer a rate-limited/dead token.
+        self._last_quote_retry: datetime | None = None
         self.last_decision_day = None
         self.status = "running"
         # Greeks history is sampled (~1/min), not every refresh tick → keep a day's
@@ -614,6 +617,30 @@ class LiveRunManager:
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
         return live
 
+    def _retry_quotes(self, live: "LiveRun") -> bool:
+        """Self-heal a zerodha run stuck on a quote_error: if a VALID session exists (honest
+        expiry → False once the token truly dies, so we never hammer a dead token), rebuild the
+        adapter from the current DB token and clear the error so the loop polls again. Throttled
+        to ~once/minute. Recovers a re-login (and transient rate-limits) without manual Reconnect."""
+        from skas_algo.db.models import BrokerAccount
+        from skas_algo.live.quotes import ZerodhaQuoteSource
+        from skas_algo.services import broker as broker_svc
+
+        if not live.config.broker_account_id:
+            return False
+        now = datetime.now(IST)
+        if live._last_quote_retry and (now - live._last_quote_retry).total_seconds() < 60:
+            return False
+        live._last_quote_retry = now
+        with session_scope() as db:
+            account = db.get(BrokerAccount, live.config.broker_account_id)
+            if account is None or not broker_svc.has_valid_session(account):
+                return False
+            live.quote_source = ZerodhaQuoteSource(broker_svc.make_adapter(account))
+        live.on_cache_fallback = False
+        live.quote_error = None
+        return True
+
     def promote_quote_source(self, run_id: int, db) -> bool:
         """Upgrade a cache-fallback run back to live Zerodha quotes if a session exists.
 
@@ -669,11 +696,14 @@ class LiveRunManager:
                     live.config.ignore_market_hours and live.config.quote_source != "zerodha"
                 )
                 if market_ok and live.quote_error and live.config.quote_source == "zerodha":
-                    # Quotes are erroring (e.g. a rejected token). Stop auto-polling so we don't
-                    # re-block the event loop on a bad token every tick — manual Refresh and a
-                    # re-login (which clears quote_error via promote) resume live polling.
-                    await asyncio.sleep(live.config.refresh_seconds)
-                    continue
+                    # Quotes are erroring (rejected/expired token, or a transient rate-limit). Try to
+                    # self-heal ~once/min: if a valid session exists (honest expiry → False once the
+                    # token truly dies, so we never hammer it), rebuild the adapter from the current
+                    # DB token and fall through to poll. Otherwise wait — a re-login auto-recovers
+                    # within a minute, no manual Reconnect needed.
+                    if not self._retry_quotes(live):
+                        await asyncio.sleep(live.config.refresh_seconds)
+                        continue
                 if market_ok:
                     try:
                         live.refresh()

@@ -14,11 +14,25 @@ NotArmedError. Forward-testing uses PaperBroker and never reaches this class.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from skas_algo.db.enums import OrderSide, OrderType
 
 from .base import BrokerOrder, Funds, Session
+
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _next_kite_expiry() -> datetime:
+    """Kite access tokens are invalidated at ~06:00 IST the next morning (NOT a rolling 12h) —
+    return that instant as naive-UTC so ``has_valid_session`` (which treats naive as UTC) goes red
+    when the token actually dies, instead of showing a misleading 'session ✓'."""
+    now = datetime.now(_IST)
+    exp = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    if now >= exp:
+        exp += timedelta(days=1)
+    return exp.astimezone(UTC).replace(tzinfo=None)
 
 
 class BrokerLoginError(RuntimeError):
@@ -78,11 +92,8 @@ class ZerodhaAdapter:
             raise BrokerLoginError(f"request token exchange failed: {exc}") from exc
         self.access_token = data["access_token"]
         kite.set_access_token(self.access_token)
-        # Kite access tokens expire at the next ~06:00 IST; treat as end-of-day.
-        return Session(
-            access_token=self.access_token,
-            expires_at=datetime.now() + timedelta(hours=12),
-        )
+        # Kite access tokens are invalidated at ~06:00 IST the next morning.
+        return Session(access_token=self.access_token, expires_at=_next_kite_expiry())
 
     def set_access_token(self, token: str) -> None:
         """Resume a previously-exchanged session (for quotes/orders) without re-login."""
