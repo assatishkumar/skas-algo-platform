@@ -43,9 +43,16 @@ export default function GreeksPanel({ run }: { run: LiveRunSnapshot }) {
   // gaps collapse). But fall back to ALL samples when none land in market hours, so a run that was
   // sampled off-hours (paper tests / backdated seed runs / evening sessions) still shows its history
   // instead of a perpetual "Collecting…".
+  // Scope the chart to the CURRENT position's cycle — samples since the earliest open lot opened —
+  // so a prior, already-expired cycle's greeks don't linger or mix in with today's (each weekly
+  // re-entry is its own chart). A flat run (no open lots) falls back to its full recorded history.
+  const entryDates = (run.positions ?? []).map((p) => p.entry_date).filter((d): d is string => !!d);
+  const cycleStartMs = entryDates.length
+    ? Math.min(...entryDates.map((d) => new Date(`${d}T00:00:00+05:30`).getTime()))
+    : 0;
   const allPts = (data?.points ?? [])
     .map((p) => ({ t: p.ts ? new Date(p.ts).getTime() : 0, delta: p.net_delta, iv: p.net_iv != null ? p.net_iv * 100 : null, pnl: p.pnl }))
-    .filter((r) => r.t);
+    .filter((r) => r.t && r.t >= cycleStartMs);
   const marketPts = allPts.filter((r) => marketHourIST(r.t));
   const mhOnly = marketPts.length > 1;
   const rows = (mhOnly ? marketPts : allPts).map((r, i) => ({ ...r, i }));
