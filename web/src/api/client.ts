@@ -13,6 +13,8 @@ import type {
   Deployment,
   DerivCoverage,
   EquityTradeDeploy,
+  FibRetRequest,
+  FibRetResult,
   FuturesSeries,
   OptionTradeLeg,
   OptionsTradeDeploy,
@@ -155,6 +157,8 @@ export const api = {
   // --- trade (deploy a user-built option / equity position) ---
   deployOptionTrade: (body: OptionsTradeDeploy) =>
     request<LiveRunSnapshot>("/trade/options/deploy", { method: "POST", body: JSON.stringify(body) }),
+  fibretAnalyze: (body: FibRetRequest) =>
+    request<FibRetResult>("/trade/options/fibret/analyze", { method: "POST", body: JSON.stringify(body) }),
   deployEquityTrade: (body: EquityTradeDeploy) =>
     request<LiveRunSnapshot>("/trade/equity/deploy", { method: "POST", body: JSON.stringify(body) }),
   optionTradeMargin: (body: {
@@ -177,6 +181,7 @@ export const api = {
   liveRunDecision: (id: number) =>
     request<{ run_id: number; trades: unknown[] }>(`/live/${id}/run-decision`, { method: "POST" }),
   liveStop: (id: number) => request<{ stopped: number }>(`/live/${id}/stop`, { method: "POST" }),
+  liveSnapshot: (id: number) => request<LiveRunSnapshot>(`/live/${id}`),
   liveWatchlist: (id: number) =>
     request<{ run_id: number; rows: WatchRow[] }>(`/live/${id}/watchlist`),
   liveSetQuoteSource: (id: number, quote_source: string, broker_account_id?: number | null) =>

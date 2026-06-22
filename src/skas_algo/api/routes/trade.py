@@ -8,7 +8,7 @@ tiles/metrics/reports. Real-money LIVE stays gated behind ``armed`` + ``SKAS_LIV
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
 from skas_algo.api.models import EquityTradeDeploy, LiveStartRequest, OptionTradeLeg, OptionsTradeDeploy
+from skas_algo.api.routes.data import _live_adapter
 from skas_algo.api.routes.live import start_deployment
 from skas_algo.data.options_provider import make_spot_provider
 from skas_algo.data.provider import get_available_symbols, get_data_cache, get_price_loader
@@ -25,6 +26,7 @@ from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.services import broker as broker_svc
+from skas_algo.services.fibret import FibParams, analyze_symbol
 
 router = APIRouter(prefix="/trade", tags=["trade"])
 
@@ -127,6 +129,80 @@ async def deploy_option_trade(
         auto=body.auto,
     )
     return start_deployment(req, db, loader, avail).snapshot()
+
+
+class FibRetRequest(BaseModel):
+    broker_account_id: int
+    symbols: list[str]
+    expiry: str | None = None        # ISO; default = nearest listed expiry with DTE ≥ min_dte
+    swing_lookback: int = 20         # trading days for the swing high/low (recent swing)
+    entry_fib: float = 1.618         # short-strike extension level
+    stop_fib: float = 0.786          # spot stop level
+    target_pct: float = 90.0         # whole percent (UI) → fraction at deploy
+    min_oi: int = 0                  # liquidity floor for the ⚑ flag
+    lots: int = 1
+    min_dte: int = 7
+
+
+def _pick_expiry(adapter, symbol: str, requested: str | None, on_date: date, min_dte: int) -> date | None:
+    if requested:
+        return date.fromisoformat(requested[:10])
+    try:
+        exps = adapter.option_expiries(symbol) or []
+    except Exception:  # pragma: no cover - network hiccup
+        return None
+    parsed = sorted({date.fromisoformat(str(e)[:10]) for e in exps})
+    future = [e for e in parsed if (e - on_date).days >= min_dte]
+    return future[0] if future else (parsed[-1] if parsed else None)
+
+
+@router.post("/options/fibret/analyze")
+def fibret_analyze(
+    body: FibRetRequest,
+    db: Session = Depends(get_db),
+    cache=Depends(get_data_cache),
+) -> dict:
+    """Screen a watchlist for the FibRet setup using LIVE chains (needs a broker session). One row
+    per symbol: suggested short leg, fib levels, live premium/OI/liquidity, R:R and margin. Errors
+    are reported per-row (illiquid strike, no swing, no chain) so the table shows what failed."""
+    adapter = _live_adapter(body.broker_account_id, db)  # 4xx if no valid session
+    on_date = date.today()
+    params = FibParams(
+        swing_lookback=body.swing_lookback, entry_fib=body.entry_fib, stop_fib=body.stop_fib,
+        target_pct=(body.target_pct / 100.0), lots=max(1, body.lots), min_oi=body.min_oi,
+    )
+    rows: list[dict] = []
+    for raw in body.symbols:
+        sym = raw.strip().upper()
+        if not sym:
+            continue
+        try:
+            df = cache.get_prices(sym, start_date=on_date - timedelta(days=400), end_date=on_date)
+        except Exception:
+            df = None
+        if df is None or len(df) == 0:
+            rows.append({"symbol": sym, "error": "no cached price history"})
+            continue
+        exp = _pick_expiry(adapter, sym, body.expiry, on_date, body.min_dte)
+        if exp is None:
+            rows.append({"symbol": sym, "error": "no listed option expiries"})
+            continue
+        try:
+            chain = adapter.live_option_chain(sym, exp.isoformat())
+        except Exception as exc:  # pragma: no cover - network hiccup
+            rows.append({"symbol": sym, "error": f"live chain failed: {exc}"})
+            continue
+        if not chain:
+            rows.append({"symbol": sym, "error": f"no listed options for {exp.isoformat()}"})
+            continue
+        rows.append(analyze_symbol(symbol=sym, df=df, chain=chain, expiry=exp, on_date=on_date, params=params))
+    return {
+        "as_of": on_date.isoformat(),
+        "target_pct": body.target_pct,
+        "entry_fib": body.entry_fib,
+        "stop_fib": body.stop_fib,
+        "rows": rows,
+    }
 
 
 @router.post("/equity/deploy")

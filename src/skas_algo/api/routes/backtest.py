@@ -22,7 +22,7 @@ from skas_algo.api.models import (
 )
 from skas_algo.data import universes
 from skas_algo.data.provider import get_available_symbols, get_price_loader
-from skas_algo.db.enums import TradingMode
+from skas_algo.db.enums import InstrumentClass, TradingMode
 from skas_algo.db.models import Algo, AlgoRun, Order, StrategyTemplate
 from skas_algo.engine.market import PriceLoader
 from skas_algo.services.backtest import persist_backtest, run_backtest
@@ -295,6 +295,20 @@ def get_run(run_id: int, db: Session = Depends(get_db)) -> dict:
     }
 
 
+def _instrument_class(algo: Algo | None, trades: list[dict] | None = None) -> str:
+    """Effective instrument class for the analysis view. Robust to older live deployments
+    whose Algo row was created before the class was threaded through (it was hardcoded to
+    STOCK): prefer the column, then ``params.instrument_class`` (the deploy carried it), then
+    detect option-symbol tickers (``UNDERLYING|EXPIRY|STRIKE|RIGHT``) in the trades."""
+    if algo is not None and algo.instrument_class == InstrumentClass.DERIV:
+        return "DERIV"
+    if algo is not None and str((algo.params or {}).get("instrument_class", "")).upper() == "DERIV":
+        return "DERIV"
+    if trades and any((t.get("ticker") or "").count("|") == 3 for t in trades):
+        return "DERIV"
+    return "STOCK"
+
+
 @router.get("/analysis/runs")
 def analysis_runs(db: Session = Depends(get_db)) -> list[dict]:
     """All runs selectable in the Trade Analysis page (backtests + paper/live deployments)."""
@@ -316,7 +330,7 @@ def analysis_runs(db: Session = Depends(get_db)) -> list[dict]:
             "run_id": run.id,
             "name": algo.name if algo else None,
             "strategy_id": algo.strategy_id if algo else None,
-            "instrument_class": algo.instrument_class.value if algo else "STOCK",
+            "instrument_class": _instrument_class(algo),
             "mode": mode,
             "status": status,
         })
@@ -360,7 +374,7 @@ def run_analysis(run_id: int, db: Session = Depends(get_db)) -> dict:
         "run_id": run.id,
         "name": algo.name if algo else None,
         "strategy_id": algo.strategy_id if algo else None,
-        "instrument_class": algo.instrument_class.value if algo else "STOCK",
+        "instrument_class": _instrument_class(algo, trades),
         "params": algo.params if algo else {},
         "capital": algo.capital if algo else None,
         "trades": trades,

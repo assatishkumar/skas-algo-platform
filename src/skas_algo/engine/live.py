@@ -389,7 +389,38 @@ class LiveSession:
             # show "Target +₹X / Stop −₹Y"). None for strategies without %-based exits.
             "profit_target_amt": target_amt,
             "stop_loss_amt": stop_amt,
+            # Human-readable exit criteria the strategy will act on (spot levels, %-targets,
+            # per-leg / calendar exits) — surfaced so the live card shows WHY a run would exit.
+            "exit_rules": self._exit_rules(),
         }
+
+    def _exit_rules(self) -> list[str]:
+        """Short, human-readable summary of the strategy's exit triggers (best-effort
+        introspection of the common exit attributes). Empty when none are configured —
+        the run then simply manages to expiry."""
+        s = self.strategy
+        rules: list[str] = []
+        pt = getattr(s, "profit_target_pct", None)
+        sl = getattr(s, "stop_loss_pct", None)
+        if pt is not None:
+            rules.append(f"Book profit at +{pt * 100:.0f}%")
+        if sl is not None:
+            rules.append(f"Stop out at −{sl * 100:.0f}%")
+        su = getattr(s, "spot_upper", None)
+        slo = getattr(s, "spot_lower", None)
+        if su is not None:
+            rules.append(f"Exit if spot ≥ {su:g}")
+        if slo is not None:
+            rules.append(f"Exit if spot ≤ {slo:g}")
+        if getattr(s, "leg_targets", None):
+            rules.append("Per-leg profit targets")
+        if getattr(s, "leg_stops", None):
+            rules.append("Per-leg stops")
+        ew = getattr(s, "exit_weekday", None)
+        if ew is not None:
+            days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            rules.append(f"Calendar exit from {days[int(ew) % 7]}")
+        return rules
 
     def _exit_amounts(self) -> tuple[float | None, float | None]:
         strat = self.strategy

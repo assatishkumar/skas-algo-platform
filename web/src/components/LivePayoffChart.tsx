@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   Area,
   ComposedChart,
@@ -19,9 +19,15 @@ import type { LivePosition } from "../types";
 export default function LivePayoffChart({
   positions,
   spot,
+  asOf,
+  caption,
+  spotLabel = "spot",
 }: {
   positions: LivePosition[];
   spot: number | null | undefined;
+  asOf?: string; // value-curve as-of date (defaults to today — i.e. the live "now" curve)
+  caption?: ReactNode; // overrides the default "Payoff at expiry …" caption
+  spotLabel?: string; // label on the vertical spot line
 }) {
   const pf = useMemo(() => {
     const legs: LiveLeg[] = [];
@@ -40,8 +46,8 @@ export default function LivePayoffChart({
       });
     }
     if (!legs.length || !spot || !expiry) return null;
-    return buildLivePayoff(legs, spot, expiry);
-  }, [positions, spot]);
+    return buildLivePayoff(legs, spot, expiry, asOf);
+  }, [positions, spot, asOf]);
 
   if (!pf) return null;
   // Split the fill green/red at P&L = 0. The gradient maps to the EXPIRY area's own bounding box,
@@ -55,8 +61,12 @@ export default function LivePayoffChart({
   return (
     <div className="mt-3">
       <div className="text-xs text-slate-400 mb-1">
-        Payoff at expiry {pf.expiryDate}{" "}
-        <span className="text-slate-500">— green/red = P&L if held to expiry; dashed = current value; line = live spot</span>
+        {caption ?? (
+          <>
+            Payoff at expiry {pf.expiryDate}{" "}
+            <span className="text-slate-500">— green/red = P&L if held to expiry; dashed = current value; line = live spot</span>
+          </>
+        )}
       </div>
       <ResponsiveContainer width="100%" height={240}>
         <ComposedChart data={pf.data} margin={{ top: 5, right: 12, bottom: 0, left: 12 }}>
@@ -86,7 +96,7 @@ export default function LivePayoffChart({
           <ReferenceLine y={0} stroke="#475569" />
           {spot != null && (
             <ReferenceLine x={spot} stroke="#38bdf8" strokeDasharray="3 3"
-              label={{ value: "spot", fill: "#38bdf8", fontSize: 10, position: "top" }} />
+              label={{ value: spotLabel, fill: "#38bdf8", fontSize: 10, position: "top" }} />
           )}
           <Area type="monotone" dataKey="expiry" stroke="#94a3b8" strokeWidth={1.5}
             fill="url(#livePayoff)" name="expiry" />

@@ -25,11 +25,12 @@ from skas_algo.db.models import Algo, AlgoRun, Fill, GreeksSnapshot, Order, Posi
 def start_live_run(
     session: Session, *, name, strategy_id, capital, mode, params, notes=None
 ) -> AlgoRun:
+    ic = str((params or {}).get("instrument_class", "STOCK")).upper()
     algo = Algo(
         name=name,
         notes=notes,
         strategy_id=strategy_id,
-        instrument_class=InstrumentClass.STOCK,
+        instrument_class=InstrumentClass.DERIV if ic == "DERIV" else InstrumentClass.STOCK,
         mode=TradingMode(mode),
         capital=capital,
         params=params,

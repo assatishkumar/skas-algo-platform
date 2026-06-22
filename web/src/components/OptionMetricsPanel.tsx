@@ -68,8 +68,21 @@ export default function OptionMetricsPanel({ run }: { run: LiveRunSnapshot }) {
           .join(", ")
       : "—";
 
+  // Expiry (from the open legs) + the strategy's exit triggers — so the card shows WHY it exits.
+  const expiry = (run.positions ?? [])
+    .map((p) => p.symbol.split("|"))
+    .find((parts) => parts.length === 4)?.[1];
+  const exitRules = [
+    ...(run.exit_rules ?? []),
+    ...(expiry ? [`Settles at expiry ${expiry}`] : []),
+  ];
+
   return (
+    <div className="space-y-2">
     <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+      {spot != null && (
+        <Metric label={`Spot · ${run.underlying ?? ""}`.trim()} value={formatInr(spot)} />
+      )}
       {metrics && (
         <>
           <Metric
@@ -125,6 +138,13 @@ export default function OptionMetricsPanel({ run }: { run: LiveRunSnapshot }) {
           value={formatInr(realized)}
           tone={realized >= 0 ? "pos" : "neg"}
         />
+      )}
+    </div>
+      {exitRules.length > 0 && (
+        <div className="text-xs text-slate-400">
+          <span className="text-slate-500">Exit criteria:</span>{" "}
+          {exitRules.join(" · ")}
+        </div>
       )}
     </div>
   );

@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { Card } from "../components/ui";
 import { formatParamValue, orderedParamKeys, paramLabel } from "../lib/params";
 import EquityTradeAnalysis from "../components/analysis/EquityTradeAnalysis";
+import OptionsTradeAnalysis from "../components/analysis/OptionsTradeAnalysis";
 
 function RunParams({ params, capital }: { params: Record<string, unknown>; capital: number | null }) {
   const merged: Record<string, unknown> = { ...(capital != null ? { capital } : {}), ...params };
@@ -27,6 +28,7 @@ function RunParams({ params, capital }: { params: Record<string, unknown>; capit
 
 export default function AnalysisPage() {
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const runId = params.get("run") ? Number(params.get("run")) : null;
   const [search, setSearch] = useState("");
 
@@ -51,12 +53,23 @@ export default function AnalysisPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold">Analyze trades</h1>
-        <p className="text-sm text-slate-400">
-          Pick a run (backtest, forward-test or live) to analyze its trades — round-trips grouped by
-          stock, per-stock P&L, and per-trade charts.
-        </p>
+      <div className="flex items-start gap-3">
+        {runId != null && (
+          <button
+            onClick={() => navigate(-1)}
+            className="mt-0.5 rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm inline-flex items-center gap-1.5 shrink-0"
+            title="Back to the previous screen"
+          >
+            ← Back
+          </button>
+        )}
+        <div>
+          <h1 className="text-lg font-semibold">Analyze trades</h1>
+          <p className="text-sm text-slate-400">
+            Pick a run (backtest, forward-test or live) to analyze its trades — round-trips grouped by
+            stock, per-stock P&L, and per-trade charts.
+          </p>
+        </div>
       </div>
 
       <Card>
@@ -93,13 +106,7 @@ export default function AnalysisPage() {
       {analysis && <RunParams params={analysis.params ?? {}} capital={analysis.capital} />}
       {analysis && (
         analysis.instrument_class === "DERIV" ? (
-          <Card>
-            <div className="text-slate-300 font-medium mb-1">Options trade analysis</div>
-            <div className="text-sm text-slate-400">
-              Coming soon — options runs ({analysis.strategy_id}) will get a legs/greeks-aware view.
-              For now, see the run's report page for the options analytics.
-            </div>
-          </Card>
+          <OptionsTradeAnalysis analysis={analysis} />
         ) : (
           <EquityTradeAnalysis analysis={analysis} />
         )

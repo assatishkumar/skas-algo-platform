@@ -5,6 +5,7 @@ import BrokersPage from "./pages/BrokersPage";
 import ComparePage from "./pages/ComparePage";
 import DataPage from "./pages/DataPage";
 import DeployPage from "./pages/DeployPage";
+import FibRetPage from "./pages/FibRetPage";
 import LivePage from "./pages/LivePage";
 import NewBacktestPage from "./pages/NewBacktestPage";
 import AnalysisPage from "./pages/AnalysisPage";
@@ -60,6 +61,7 @@ export default function App() {
           <NavItem to="/trade" label="Trade" />
           <NavItem to="/live" label="Live" />
           <NavItem to="/analyze" label="Analyze" />
+          <NavItem to="/fibret" label="FibRet" />
           <NavItem to="/strategies" label="Strategies" />
           <NavItem to="/data" label="Data" />
           <NavItem to="/brokers" label="Brokers" />
@@ -73,6 +75,7 @@ export default function App() {
           <Route path="/trade" element={<TradePage />} />
           <Route path="/live" element={<LivePage />} />
           <Route path="/live/new" element={<DeployPage />} />
+          <Route path="/fibret" element={<FibRetPage />} />
           <Route path="/analyze" element={<AnalysisPage />} />
           <Route path="/strategies" element={<StrategiesPage />} />
           <Route path="/brokers" element={<BrokersPage />} />

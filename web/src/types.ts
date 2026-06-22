@@ -452,6 +452,7 @@ export interface LiveRunSnapshot {
   realized_pnl?: number | null; // booked P&L so far (incl. a backtest seed's trades)
   profit_target_amt?: number | null; // ₹ profit target the strategy will act on
   stop_loss_amt?: number | null; // ₹ stop-loss the strategy will act on
+  exit_rules?: string[] | null; // human-readable exit triggers (spot levels, %-targets, …)
   // live controls + exclusion editing
   auto: boolean;
   ignore_market_hours: boolean;
@@ -459,6 +460,62 @@ export interface LiveRunSnapshot {
   decision_time: string;
   universe: string[];
   excluded_symbols: string[];
+}
+
+// ---- FibRet screener (Fibonacci-retracement option selling) ----
+export interface FibRetRow {
+  symbol: string;
+  error?: string | null;
+  spot?: number;
+  side?: "CE" | "PE";
+  swing_high?: number;
+  swing_high_date?: string;
+  swing_low?: number;
+  swing_low_date?: string;
+  entry_level?: number;
+  strike?: number;
+  expiry?: string;
+  dte?: number;
+  premium?: number | null;
+  oi?: number;
+  liquid?: boolean;
+  lot_size?: number;
+  lots?: number;
+  qty?: number;
+  iv?: number | null;
+  stop_level?: number;
+  est_stop_loss?: number | null;
+  max_profit?: number | null;
+  reward_risk?: number | null;
+  breakeven?: number | null;
+  realized_vol?: number | null;
+  iv_richness?: number | null;
+  margin?: number | null;
+  cushion_to_strike_pct?: number;
+  cushion_to_stop_pct?: number;
+  out_of_range?: boolean; // 1.618 level beyond the listed strikes (too far OTM)
+  note?: string | null;
+}
+
+export interface FibRetResult {
+  as_of: string;
+  target_pct: number; // whole percent
+  entry_fib: number;
+  stop_fib: number;
+  rows: FibRetRow[];
+}
+
+export interface FibRetRequest {
+  broker_account_id: number;
+  symbols: string[];
+  expiry?: string | null;
+  swing_lookback?: number;
+  entry_fib?: number;
+  stop_fib?: number;
+  target_pct?: number;
+  min_oi?: number;
+  lots?: number;
+  min_dte?: number;
 }
 
 export interface LiveControlsInput {

@@ -1106,11 +1106,13 @@ function DeploymentTile({
       <div className="mt-auto pt-3 flex flex-wrap items-center gap-2 text-xs">
         {dep.status === "active" ? (
           <>
-            {!expanded && (
-              <button onClick={onToggle} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
-                Open
-              </button>
-            )}
+            <button
+              onClick={onToggle}
+              className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5"
+              title={expanded ? "Minimize this strategy" : "Open this strategy's live detail"}
+            >
+              {expanded ? "Minimize" : "Open"}
+            </button>
             <button
               onClick={() => act(() => api.liveSetControls(dep.run_id, { auto: !auto }))}
               disabled={busy}
