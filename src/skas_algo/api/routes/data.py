@@ -182,8 +182,13 @@ def stock_series(
     (when ``st_period`` & ``st_multiplier`` are given). Powers the trade-analysis charts."""
     end = end or datetime.now(UTC).date()
     start = start or (end - timedelta(days=400))
+    # SuperTrend cold-starts (ATR needs ~period bars) — fetch a warmup buffer BEFORE start so the
+    # overlay's direction converges (matching the engine/TradingView), then display only [start, end].
+    st_on = bool(st_period and st_multiplier)
+    buffer_days = {"daily": 400, "weekly": 1500, "monthly": 3000}.get(st_timeframe.lower(), 400) if st_on else 0
+    fetch_start = start - timedelta(days=buffer_days)
     try:
-        df = cache.get_prices(symbol, start_date=start, end_date=end)
+        df = cache.get_prices(symbol, start_date=fetch_start, end_date=end)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"no cached data for {symbol!r}: {exc}") from exc
     if df is None or len(df) == 0:
@@ -191,7 +196,7 @@ def stock_series(
     df = df.copy()
 
     st_by_date: dict[str, tuple] = {}
-    if st_period and st_multiplier:
+    if st_on:
         from skas_algo.engine.indicators.supertrend import supertrend_bands
 
         try:
@@ -209,7 +214,10 @@ def stock_series(
     points: list[dict] = []
     for _, row in df.iterrows():
         d = row["date"]
-        ds = d.date().isoformat() if hasattr(d, "date") else str(d)[:10]
+        dd = d.date() if hasattr(d, "date") else d
+        if isinstance(dd, date) and dd < start:
+            continue  # warmup buffer — feeds the indicator only, not displayed
+        ds = dd.isoformat() if hasattr(dd, "isoformat") else str(dd)[:10]
         pt = {
             "date": ds,
             "open": _num(row.get("open", row["close"])),

@@ -9,7 +9,7 @@ bookkeeping kept here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Protocol
 
 from skas_algo.brokers.sim_broker import BacktestBroker
@@ -78,10 +78,18 @@ class BacktestRunner:
         # feed builds the equity view with SuperTrend when set.
         self.supertrend = supertrend
 
-    def run(self, start_date: date, end_date: date) -> RunResult:
+    def run(self, start_date: date, end_date: date, *, warmup_days: int = 0) -> RunResult:
+        """Replay from ``start_date`` to ``end_date``.
+
+        ``warmup_days`` (seed-replay only; default 0 = unchanged) loads OHLC from
+        ``start_date - warmup_days`` so Donchian/SuperTrend converge before trading, and drives the
+        strategy through those buffer bars (so flip/low-discovery state is warm) WITHOUT executing
+        or recording anything until ``start_date``. With ``warmup_days=0`` the loop is byte-identical
+        to before (regular backtests + the mode-equivalence parity path are untouched)."""
+        data_start = start_date - timedelta(days=warmup_days) if warmup_days > 0 else start_date
         view = self.market_view or HistoricalReplayFeed(
             self.loader, self.lookback, supertrend=self.supertrend
-        ).build(self.universe, start_date, end_date, verbose=self.verbose)
+        ).build(self.universe, data_start, end_date, verbose=self.verbose)
         portfolio = Portfolio(cash=self.initial_capital)
         stops = StopBook()
         broker = BacktestBroker(price_fn=view.close, fill_model=self.fill_model)
@@ -107,6 +115,14 @@ class BacktestRunner:
 
         for ts in view.unified_dates:
             view.set_date(ts)
+
+            # --- warmup buffer: drive the strategy so its indicator-derived state (SuperTrend
+            #     flip, Donchian low-discovery) is warm by start_date, but execute / settle / flush /
+            #     record nothing. Signals are discarded; the book stays empty until start_date. ---
+            ts_date = ts.date() if hasattr(ts, "date") else ts
+            if ts_date < start_date:
+                self.strategy.on_slice(ctx)
+                continue
 
             # --- month transition: flush previous month's tax/withdrawal ---
             this_month = (ts.year, ts.month)

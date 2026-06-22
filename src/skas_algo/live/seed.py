@@ -21,6 +21,18 @@ from skas_algo.engine.runner import BacktestRunner
 from skas_algo.strategies.registry import get_strategy
 
 
+def _warmup_days(strategy, lookback: int) -> int:
+    """Calendar-day buffer to load BEFORE warm_from_date so the strategy's indicators converge
+    (and a recent flip is observed) before it starts trading — sized by its slowest indicator.
+    SuperTrend ATR by timeframe dominates; otherwise the Donchian lookback. Mirrors the live
+    forward loop's depth so the seed and the live loop agree on direction."""
+    days = max(int(lookback) * 2, 60)  # Donchian: ~lookback bars → calendar days, padded
+    if getattr(strategy, "needs_supertrend", False) and hasattr(strategy, "supertrend_config"):
+        tf = str(strategy.supertrend_config().get("timeframe", "daily")).lower()
+        days = max(days, {"daily": 400, "weekly": 1500, "monthly": 3000}.get(tf, 400))
+    return days
+
+
 def _state_from_result(result, strategy, overrides, end_date: date) -> dict:
     """The LiveSession state (open book + strategy + overrides) at the end of a replay."""
     return {
@@ -55,7 +67,10 @@ def _seed_equity(config, loader, start, end_date, strategy_params, overrides) ->
         overrides=overrides, supertrend=supertrend,
     )
     try:
-        result = runner.run(start, end_date)
+        # Warm indicators on real history before warm_from_date so the seed replay's entries match
+        # a full-history backtest (no cold-start). Needs the price cache back that far; if it isn't
+        # cached the warmup bars are simply absent and it degrades to the prior behaviour.
+        result = runner.run(start, end_date, warmup_days=_warmup_days(strategy, config.lookback))
     except Exception as exc:  # pragma: no cover - missing cache → clear message
         raise ValueError(
             f"could not replay the equity backtest from {start} — refresh the price cache "
