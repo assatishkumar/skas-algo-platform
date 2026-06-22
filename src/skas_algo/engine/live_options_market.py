@@ -22,6 +22,7 @@ class LiveOptionsMarketView:
     def __init__(self, chain, *, loader=None, current_datetime: datetime | None = None,
                  index_spots: dict[str, float] | None = None):
         self.chain = chain                       # OptionChainView (ctx.option_chain())
+        self._cache_chain = chain                # the cache-backed view (LiveChainView falls back to it)
         self._loader = loader                    # optional cache loader(symbol, lo, hi)
         self._now = current_datetime or datetime.now()
         self._quotes: dict[str, float] = {}      # live LTP per contract symbol (today)
@@ -36,6 +37,16 @@ class LiveOptionsMarketView:
 
     def set_quote_fn(self, quote_fn) -> None:
         self._quote_fn = quote_fn
+
+    def set_chain_adapter(self, adapter, underlying: str, lot_overrides: dict | None = None) -> None:
+        """Source TODAY's expiries/strikes/premiums from the broker (live) for strike selection;
+        fall back to the cached chain for other dates / offline. None → revert to the cache."""
+        if adapter is None:
+            self.chain = self._cache_chain
+            return
+        from skas_algo.engine.options.live_chain import LiveChainView
+
+        self.chain = LiveChainView(self._cache_chain, adapter, underlying, lot_overrides)
 
     def set_index_spot(self, underlying: str, price: float) -> None:
         self._index_spots[underlying.upper()] = price

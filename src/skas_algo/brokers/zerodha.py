@@ -252,6 +252,14 @@ class ZerodhaAdapter:
         today = datetime.now().date().isoformat()
         return sorted(e for e in self._nfo_index.get(underlying.upper(), {}) if e >= today)
 
+    def underlying_ltp(self, underlying: str) -> float | None:
+        """Live spot for an option underlying (its index series, or the stock itself)."""
+        key = f"NSE:{self._INDEX_SPOT.get(underlying.upper(), underlying.upper())}"
+        try:
+            return self._kite_client().ltp([key]).get(key, {}).get("last_price")
+        except Exception:  # pragma: no cover - network hiccup
+            return None
+
     def live_option_chain(self, underlying: str, expiry: str, window: int = 40) -> dict | None:
         """Live chain for one expiry: per-strike CE/PE last price + OI, the live underlying
         spot, ATM, and contract lot size — all from Kite (real-time). Strikes are windowed

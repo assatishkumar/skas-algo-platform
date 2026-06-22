@@ -221,11 +221,23 @@ class LiveRun:
         # Real Zerodha basket margin, refreshed ~1/min (overrides the model estimate).
         self._margin: float | None = None
         self._last_margin_at: datetime | None = None
-        # Let the options view fetch a freshly-selected contract's live price at fill time
-        # (follows quote-source promotion since it reads self.quote_source each call).
+        self._wire_quote_source()
+
+    def _wire_quote_source(self) -> None:
+        """Point the options market view at the current quote source: live marks (quote_fn) AND,
+        when a Zerodha adapter is present, the live broker chain for strike/expiry selection (so a
+        live deployment doesn't depend on the stale bhavcopy cache). Re-called after a re-login
+        rebuilds the adapter. No-op for equity views."""
         market = getattr(self.session, "market", None)
-        if market is not None and hasattr(market, "set_quote_fn"):
+        if market is None:
+            return
+        if hasattr(market, "set_quote_fn"):
             market.set_quote_fn(lambda syms: self.quote_source.get_quotes(syms))
+        if hasattr(market, "set_chain_adapter"):
+            adapter = getattr(self.quote_source, "adapter", None)
+            market.set_chain_adapter(
+                adapter, self.config.underlying, self.config.params.get("contract_specs")
+            )
 
     # ----------------------------------------------------------- actions
     def _quote_symbols(self) -> list[str]:
@@ -639,6 +651,7 @@ class LiveRunManager:
             live.quote_source = ZerodhaQuoteSource(broker_svc.make_adapter(account))
         live.on_cache_fallback = False
         live.quote_error = None
+        live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter
         return True
 
     def promote_quote_source(self, run_id: int, db) -> bool:
@@ -662,6 +675,7 @@ class LiveRunManager:
         live.quote_source = ZerodhaQuoteSource(broker_svc.make_adapter(account))
         live.on_cache_fallback = False
         live.quote_error = None
+        live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
         return True
 
