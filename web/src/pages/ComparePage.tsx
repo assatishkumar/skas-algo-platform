@@ -396,7 +396,7 @@ export default function ComparePage() {
     return (
       <Card>
         <div className="text-slate-400">
-          Select 2–5 runs to compare from the <Link to="/" className="text-brand-light underline">Runs</Link> page.
+          Select 2–5 runs to compare from the <Link to="/backtest" className="text-brand-light underline">Runs</Link> page.
         </div>
       </Card>
     );
@@ -408,7 +408,7 @@ export default function ComparePage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <Link to="/" className="text-slate-400 hover:text-slate-200 text-sm">← Runs</Link>
+        <Link to="/backtest" className="text-slate-400 hover:text-slate-200 text-sm">← Runs</Link>
         <h1 className="text-lg font-semibold">Compare {runs.length} runs</h1>
       </div>
 

@@ -60,7 +60,7 @@ type ClonePrefill = {
   params: Record<string, unknown>;
 };
 
-export default function NewBacktestPage() {
+export default function NewBacktestPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { data: strategyData } = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const strategies = strategyData?.strategies ?? ["sst_lifo"];
 
@@ -610,7 +610,7 @@ export default function NewBacktestPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-lg font-semibold">New backtest</h1>
+      {!embedded && <h1 className="text-lg font-semibold">New backtest</h1>}
 
       <Card>
         <form onSubmit={submit} className="space-y-4">

@@ -1,16 +1,15 @@
 import { useState } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { applyTheme, getTheme, type Theme } from "./lib/theme";
+import AnalysisPage from "./pages/AnalysisPage";
+import BacktestPage from "./pages/BacktestPage";
 import BrokersPage from "./pages/BrokersPage";
 import ComparePage from "./pages/ComparePage";
 import DataPage from "./pages/DataPage";
 import DeployPage from "./pages/DeployPage";
-import FibRetPage from "./pages/FibRetPage";
+import HomePage from "./pages/HomePage";
 import LivePage from "./pages/LivePage";
-import NewBacktestPage from "./pages/NewBacktestPage";
-import AnalysisPage from "./pages/AnalysisPage";
 import RunDetailPage from "./pages/RunDetailPage";
-import RunsPage from "./pages/RunsPage";
 import StrategiesPage from "./pages/StrategiesPage";
 import TradePage from "./pages/TradePage";
 
@@ -56,13 +55,10 @@ export default function App() {
           <NavLink to="/" className="font-semibold text-brand-light mr-4 hover:text-brand">
             SKAS Algo
           </NavLink>
-          <NavItem to="/" label="Runs" />
-          <NavItem to="/new" label="New backtest" />
+          <NavItem to="/backtest" label="Backtest" />
           <NavItem to="/trade" label="Trade" />
           <NavItem to="/live" label="Live" />
-          <NavItem to="/analyze" label="Analyze" />
-          <NavItem to="/fibret" label="FibRet" />
-          <NavItem to="/strategies" label="Strategies" />
+          <NavItem to="/docs" label="Docs" />
           <NavItem to="/data" label="Data" />
           <NavItem to="/brokers" label="Brokers" />
           <div className="ml-auto"><ThemeToggle /></div>
@@ -70,18 +66,22 @@ export default function App() {
       </header>
       <main className="max-w-6xl mx-auto px-4 py-6">
         <Routes>
-          <Route path="/" element={<RunsPage />} />
-          <Route path="/new" element={<NewBacktestPage />} />
+          <Route path="/" element={<HomePage />} />
+          <Route path="/backtest" element={<BacktestPage />} />
           <Route path="/trade" element={<TradePage />} />
           <Route path="/live" element={<LivePage />} />
           <Route path="/live/new" element={<DeployPage />} />
-          <Route path="/fibret" element={<FibRetPage />} />
+          <Route path="/docs" element={<StrategiesPage />} />
           <Route path="/analyze" element={<AnalysisPage />} />
-          <Route path="/strategies" element={<StrategiesPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
           <Route path="/compare" element={<ComparePage />} />
           <Route path="/data" element={<DataPage />} />
+          {/* legacy routes → new IA */}
+          <Route path="/new" element={<Navigate to="/backtest?tab=new" replace />} />
+          <Route path="/runs" element={<Navigate to="/backtest" replace />} />
+          <Route path="/strategies" element={<Navigate to="/docs" replace />} />
+          <Route path="/fibret" element={<Navigate to="/trade?tab=screener" replace />} />
         </Routes>
       </main>
     </div>

@@ -132,7 +132,7 @@ export default function RunDetailPage() {
     try {
       await api.runDelete(runId);
       queryClient.invalidateQueries({ queryKey: ["runs"] });
-      navigate("/");
+      navigate("/backtest");
     } finally {
       setBusy(false);
     }
@@ -151,7 +151,7 @@ export default function RunDetailPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
-        <Link to="/" className="text-slate-400 hover:text-slate-200 text-sm">
+        <Link to="/backtest" className="text-slate-400 hover:text-slate-200 text-sm">
           ← Runs
         </Link>
         <h1 className="text-lg font-semibold">
@@ -159,6 +159,13 @@ export default function RunDetailPage() {
           <span className="text-slate-500 text-sm">· {data.strategy_id} · #{runId}</span>
         </h1>
         <div className="ml-auto flex items-center gap-2 text-sm">
+          <Link
+            to={`/analyze?run=${runId}`}
+            title="Analyze this run's trades — round-trips, per-stock P&L, payoff (options)"
+            className="rounded-md bg-slate-800 hover:bg-slate-700 px-3 py-1.5"
+          >
+            Analyze
+          </Link>
           {templatesData?.templates?.[data.strategy_id]?.run_id === runId ? (
             <span className="rounded-md bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 px-3 py-1.5" title="New backtests of this strategy prefill from this run">
               ★ Strategy template

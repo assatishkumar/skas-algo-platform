@@ -213,6 +213,9 @@ class LiveRun:
         # Last self-heal retry of a stuck (quote_error'd) zerodha run — throttles the loop's
         # rebuild-and-repoll to ~once a minute so it doesn't hammer a rate-limited/dead token.
         self._last_quote_retry: datetime | None = None
+        # Throttle for OFF-HOURS mark refreshes (post-market re-pricing so unrealized P&L stays
+        # correct after the close). None → re-price on the next tick (set after a login/self-heal).
+        self._last_offhours_refresh: datetime | None = None
         self.last_decision_day = None
         self.status = "running"
         # Greeks history is sampled (~1/min), not every refresh tick → keep a day's
@@ -652,6 +655,7 @@ class LiveRunManager:
         live.on_cache_fallback = False
         live.quote_error = None
         live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter
+        live._last_offhours_refresh = None  # re-price immediately (next tick) — even off-hours
         return True
 
     def promote_quote_source(self, run_id: int, db) -> bool:
@@ -676,6 +680,7 @@ class LiveRunManager:
         live.on_cache_fallback = False
         live.quote_error = None
         live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter
+        live._last_offhours_refresh = None  # the loop re-prices on the next tick — even off-hours
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
         return True
 
@@ -685,6 +690,17 @@ class LiveRunManager:
                 if (live.on_cache_fallback or live.quote_error)
                 and live.config.broker_account_id == account_id
                 and self.promote_quote_source(rid, db)]
+
+    @staticmethod
+    def _due_offhours_refresh(live: "LiveRun", now: datetime) -> bool:
+        """Throttle OFF-HOURS mark refreshes to ~once / 5 min (None → fire now, e.g. right after a
+        login or self-heal). Post-market prices are static, so this keeps unrealized P&L correct
+        without hammering the broker overnight."""
+        last = live._last_offhours_refresh
+        if last is not None and (now - last).total_seconds() < 300:
+            return False
+        live._last_offhours_refresh = now
+        return True
 
     # ----------------------------------------------------- async driver
     def start_loop(self, run_id: int) -> None:
@@ -701,43 +717,45 @@ class LiveRunManager:
             tick_driven = is_deriv or getattr(strategy, "intraday", False)
             decide_at = time.fromisoformat(live.config.decision_time)
             while True:
-                # Auto-refresh only during market hours (Mon–Fri 09:15–15:30 IST). A
-                # live (Zerodha) deployment NEVER polls outside hours — pointless and it
-                # hammers the broker with a stale token. ignore_market_hours still allows
-                # off-hours ticks for CACHE (offline) testing only. Manual refresh/decision
-                # via the REST endpoints is always available.
-                market_ok = is_market_open() or (
-                    live.config.ignore_market_hours and live.config.quote_source != "zerodha"
+                now = datetime.now(IST)
+                mkt = is_market_open()
+                is_zerodha = live.config.quote_source == "zerodha"
+
+                # Self-heal a stuck zerodha run as soon as a VALID session exists — even off-hours,
+                # so a re-login recovers the "expired" badge + P&L without waiting for market open.
+                # (Throttled ~1/min; honest expiry makes it a no-op once the token is truly dead, so
+                # it never hammers.) On success it resets the off-hours throttle → re-prices below.
+                if is_zerodha and live.quote_error:
+                    self._retry_quotes(live)
+
+                # Pull marks this tick when:
+                #   • the market is open (this also drives decisions), OR
+                #   • it's a zerodha run with a working session, off-hours — re-price on a slow
+                #     cadence so post-market unrealized P&L reflects last-traded prices (read-only;
+                #     we NEVER decide / place orders off-hours), OR
+                #   • it's an off-hours CACHE run with ignore_market_hours (offline testing).
+                should_price = (
+                    mkt
+                    or (is_zerodha and not live.quote_error and self._due_offhours_refresh(live, now))
+                    or (live.config.ignore_market_hours and not is_zerodha)
                 )
-                if market_ok and live.quote_error and live.config.quote_source == "zerodha":
-                    # Quotes are erroring (rejected/expired token, or a transient rate-limit). Try to
-                    # self-heal ~once/min: if a valid session exists (honest expiry → False once the
-                    # token truly dies, so we never hammer it), rebuild the adapter from the current
-                    # DB token and fall through to poll. Otherwise wait — a re-login auto-recovers
-                    # within a minute, no manual Reconnect needed.
-                    if not self._retry_quotes(live):
-                        await asyncio.sleep(live.config.refresh_seconds)
-                        continue
-                if market_ok:
+                if should_price:
                     try:
                         live.refresh()
                         now = datetime.now(IST)
-                        if live.quote_error:
-                            # Quotes are dead (e.g. token rejected) — the snapshot already
-                            # broadcast the error; never make decisions on stale/empty marks.
-                            pass
-                        elif tick_driven:
-                            # Decide EVERY tick — the strategy's own gates decide what fires
-                            # (options exit cadences; an equity trade's trigger/stop/trailing).
-                            # Roll the day once after the close.
-                            live.run_decision(now)
-                            if now.time() >= time(15, 30) and live.last_decision_day != now.date():
+                        if mkt and not live.quote_error:
+                            # Decisions / orders ONLY during market hours.
+                            if tick_driven:
+                                # Decide EVERY tick — the strategy's own gates decide what fires
+                                # (options exit cadences; an equity trade's trigger/stop/trailing).
+                                live.run_decision(now)
+                                if now.time() >= time(15, 30) and live.last_decision_day != now.date():
+                                    live.end_day()
+                                    live.last_decision_day = now.date()
+                            elif now.time() >= decide_at and live.last_decision_day != now.date():
+                                live.run_decision(now)
                                 live.end_day()
                                 live.last_decision_day = now.date()
-                        elif now.time() >= decide_at and live.last_decision_day != now.date():
-                            live.run_decision(now)
-                            live.end_day()
-                            live.last_decision_day = now.date()
                     except Exception:  # pragma: no cover - keep the loop alive
                         logger.exception("live loop tick failed for run %s", live.run_id)
                 await asyncio.sleep(live.config.refresh_seconds)

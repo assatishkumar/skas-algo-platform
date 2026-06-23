@@ -217,7 +217,7 @@ const STRATEGY_LABELS: Record<string, string> = {
 };
 const strategyLabel = (id: string) => STRATEGY_LABELS[id] ?? id;
 
-export default function RunsPage() {
+export default function RunsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [tab, setTab] = useState("active");
   const [search, setSearch] = useState("");
   const [compareMode, setCompareMode] = useState(false);
@@ -315,8 +315,8 @@ export default function RunsPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="text-lg font-semibold">Runs</h1>
-        <div className="flex items-center gap-2">
+        {!embedded && <h1 className="text-lg font-semibold">Runs</h1>}
+        <div className="flex items-center gap-2 ml-auto">
           <button
             onClick={() => {
               setCompareMode((v) => !v);
@@ -326,9 +326,11 @@ export default function RunsPage() {
           >
             {compareMode ? "Cancel compare" : "Compare"}
           </button>
-          <Link to="/new" className="rounded-md bg-brand hover:bg-brand-light px-3 py-2 text-sm font-medium">
-            + New backtest
-          </Link>
+          {!embedded && (
+            <Link to="/backtest?tab=new" className="rounded-md bg-brand hover:bg-brand-light px-3 py-2 text-sm font-medium">
+              + New backtest
+            </Link>
+          )}
         </div>
       </div>
 
@@ -369,7 +371,7 @@ export default function RunsPage() {
         <Card>
           <div className="text-slate-400">
             {tab === "active" ? (
-              <>No runs yet. Start with a <Link to="/new" className="text-brand-light underline">new backtest</Link>.</>
+              <>No runs yet. Start with a <Link to="/backtest?tab=new" className="text-brand-light underline">new backtest</Link>.</>
             ) : (
               "No archived runs."
             )}

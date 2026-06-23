@@ -15,6 +15,32 @@ type Rule = {
 // Curated from the strategy implementations (src/skas_algo/strategies/*) and the design decks.
 const STRATEGIES: Rule[] = [
   {
+    id: "fibret",
+    name: "FibRet (Fibonacci Retracement)",
+    kind: "Options",
+    bias: "Neutral · sell far-OTM premium in high-IVP names",
+    summary:
+      "Fade a recent daily swing in a high-IVP stock by SELLING an option at the Fibonacci 1.618 extension, with a spot-based stop at the 0.786 level. Semi-automated: screen candidates, then deploy via the option builder (custom_options).",
+    structure: [
+      "Pick a high-IVP underlying (from your screener CSV upload).",
+      "Find the recent daily swing — high H, low L; range R = H − L.",
+      "Down-leg → SELL CALL at the 1.618 extension above the high (L + 1.618·R).",
+      "Up-leg → SELL PUT at the 1.618 extension below the low (H − 1.618·R).",
+      "Strike snapped to the nearest listed strike for the chosen expiry.",
+    ],
+    entry: [
+      "Trade → Screener: upload the IVP screener CSV, filter by IVP, review premium / OI / R:R / margin, and deploy a row.",
+      "Swing detection blends the live broker spot so the current leg's endpoint isn't missed when the daily cache lags.",
+    ],
+    exit: [
+      "Spot stop: exit if the underlying crosses the 0.786 level (spot_upper for a short call, spot_lower for a short put).",
+      "Profit target: book at 90% of the premium collected.",
+      "Otherwise managed to expiry.",
+    ],
+    risk:
+      "Single short option → max profit = premium, with open risk beyond the stop (a naked short). Most far-OTM setups have poor R:R or thin liquidity — the screener flags out-of-range strikes and low OI so you pick selectively.",
+  },
+  {
     id: "hni_weekly",
     name: "HNI Weekly",
     kind: "Options",
@@ -236,10 +262,10 @@ export default function StrategiesPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold">Strategies</h1>
+        <h1 className="text-lg font-semibold">Docs</h1>
         <p className="text-sm text-slate-400">
-          Rules for every strategy on the platform — structure, entry, exit and risk. These reflect
-          the engine's implementations; tune the parameters per deployment.
+          Strategy documentation — structure, entry, exit and risk for every strategy on the platform.
+          These reflect the engine's implementations; tune the parameters per deployment.
         </p>
       </div>
 

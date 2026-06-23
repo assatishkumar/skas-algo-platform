@@ -106,22 +106,24 @@ function RefreshControl({
   underlying,
   kind,
   onDone,
+  coverageEnd,
 }: {
   underlying: string;
   kind: "options" | "futures";
   onDone: () => void;
+  coverageEnd?: string | null; // last cached date → enables incremental "Refresh to latest"
 }) {
   const [start, setStart] = useState("2024-07-08");
   const [end, setEnd] = useState(todayISO());
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  async function run() {
+  async function run(s: string, e: string) {
     setBusy(true);
     setMsg(null);
     try {
       const fn = kind === "options" ? api.optionsRefresh : api.futuresRefresh;
-      const r = await fn({ underlyings: [underlying], start_date: start, end_date: end });
+      const r = await fn({ underlyings: [underlying], start_date: s, end_date: e });
       setMsg(
         `Saved ${r.rows_saved.toLocaleString("en-IN")} rows over ${r.days_saved} days` +
           (r.errors.length ? ` · ${r.errors.length} day(s) failed` : ""),
@@ -134,9 +136,23 @@ function RefreshControl({
     }
   }
 
+  const today = todayISO();
+  const upToDate = !!coverageEnd && coverageEnd >= today;
+
   return (
     <Card>
       <div className="flex flex-wrap items-end gap-3">
+        {coverageEnd && (
+          <button
+            onClick={() => run(coverageEnd, today)}
+            disabled={busy || upToDate}
+            title={upToDate ? "Already up to date" : `Fetch ${coverageEnd} → ${today}`}
+            className="rounded-md bg-emerald-700 hover:bg-emerald-600 text-white px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+          >
+            {busy ? "Refreshing…" : upToDate ? "Up to date" : "Refresh to latest"}
+          </button>
+        )}
+        <span className="text-xs text-slate-500">or a date range:</span>
         <label className="block">
           <span className="block text-xs text-slate-400 mb-1">From</span>
           <input type="date" className={inputClass} value={start} onChange={(e) => setStart(e.target.value)} />
@@ -146,13 +162,13 @@ function RefreshControl({
           <input type="date" className={inputClass} value={end} onChange={(e) => setEnd(e.target.value)} />
         </label>
         <button
-          onClick={run}
+          onClick={() => run(start, end)}
           disabled={busy}
           className="rounded-md bg-brand hover:bg-brand-light px-3 py-1.5 text-sm font-medium disabled:opacity-50"
         >
           {busy ? "Refreshing…" : `Refresh ${kind}`}
         </button>
-        <span className="text-xs text-slate-500">downloads NSE bhavcopy (≤120 days/run; ~1 file per trading day)</span>
+        <span className="text-xs text-slate-500">NSE bhavcopy (≤120 days/run; ~1 file per trading day)</span>
         {msg && <span className="text-xs text-slate-400">{msg}</span>}
       </div>
     </Card>
@@ -375,7 +391,7 @@ export function OptionsDataSection() {
       {isGold ? (
         <GoldRefreshControl onDone={() => setRefreshKey((k) => k + 1)} />
       ) : (
-        <RefreshControl underlying={underlying} kind="options" onDone={() => setRefreshKey((k) => k + 1)} />
+        <RefreshControl underlying={underlying} kind="options" onDone={() => setRefreshKey((k) => k + 1)} coverageEnd={cov?.end_date} />
       )}
       <OptionChainViewer underlying={underlying} coverageEnd={cov?.end_date} />
     </div>
