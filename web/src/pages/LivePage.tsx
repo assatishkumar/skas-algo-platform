@@ -1320,6 +1320,8 @@ export default function LivePage() {
   const [tab, setTab] = useState("active");
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<number | null>(null);
+  // Which strategy groups are expanded (collapsed by default to declutter). Keyed by strategy_id.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const queryClient = useQueryClient();
 
   // WebSocket feed keeps active tiles fresh (live equity / positions / fills).
@@ -1396,18 +1398,55 @@ export default function LivePage() {
           </div>
         </Card>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {filtered.map((dep) => (
-            <DeploymentTile
-              key={dep.run_id}
-              dep={dep}
-              snapshot={snapshots[dep.run_id]}
-              version={versions[dep.run_id] ?? 0}
-              expanded={expanded === dep.run_id}
-              onToggle={() => setExpanded((prev) => (prev === dep.run_id ? null : dep.run_id))}
-              onChanged={onChanged}
-            />
-          ))}
+        <div className="space-y-3">
+          {[...filtered.reduce((m, d) => {
+            (m.get(d.strategy_id) ?? m.set(d.strategy_id, []).get(d.strategy_id)!).push(d);
+            return m;
+          }, new Map<string, Deployment[]>()).entries()].map(([sid, deps]) => {
+            const open = q ? true : (openGroups[sid] ?? false); // search force-expands
+            const upnl = deps.reduce((s, d) => s + (d.metrics?.unrealized_pnl ?? 0), 0);
+            const positions = deps.reduce((s, d) => s + (d.metrics?.open_positions ?? 0), 0);
+            const isOpt = deps.some((d) => d.instrument_class === "DERIV" || isOptionsStrategy(d.strategy_id));
+            return (
+              <div key={sid}>
+                <button
+                  onClick={() => setOpenGroups((g) => ({ ...g, [sid]: !(g[sid] ?? false) }))}
+                  className="w-full flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 hover:bg-slate-800/40 transition-colors"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="text-slate-400 text-xs w-3 shrink-0">{open ? "▾" : "▸"}</span>
+                    <span className="font-medium truncate">{sid}</span>
+                    <Badge>{isOpt ? "OPT" : "EQ"}</Badge>
+                    <span className="rounded-full bg-slate-800 text-slate-300 text-xs px-2 py-0.5 shrink-0">{deps.length}</span>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs shrink-0">
+                    <span className="text-slate-400">
+                      Unrealized{" "}
+                      <span className={`tabular-nums font-medium ${upnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                        {formatInr(upnl)}
+                      </span>
+                    </span>
+                    <span className="text-slate-400">{positions} open</span>
+                  </div>
+                </button>
+                {open && (
+                  <div className="grid gap-3 md:grid-cols-2 mt-3">
+                    {deps.map((dep) => (
+                      <DeploymentTile
+                        key={dep.run_id}
+                        dep={dep}
+                        snapshot={snapshots[dep.run_id]}
+                        version={versions[dep.run_id] ?? 0}
+                        expanded={expanded === dep.run_id}
+                        onToggle={() => setExpanded((prev) => (prev === dep.run_id ? null : dep.run_id))}
+                        onChanged={onChanged}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

@@ -1,26 +1,32 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, brokers } from "../api/client";
 import { Card } from "../components/ui";
 import { formatInr } from "../lib/format";
-import type { FibRetResult, FibRetRow, OptionsTradeDeploy } from "../types";
+import type { FibRetResult, FibRetRow, OptionChain, OptionChainLeg, OptionsTradeDeploy } from "../types";
 
 const n2 = (v?: number | null) => (v == null ? "—" : v.toFixed(2));
 const n1 = (v?: number | null) => (v == null ? "—" : v.toFixed(1));
 const pct = (v?: number | null) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
 const money = (v?: number | null) => (v == null ? "—" : formatInr(v));
 
+/** Relative bid-ask spread (% of mid). null when one-sided / missing. */
+function spreadPct(bid?: number | null, ask?: number | null): number | null {
+  if (!bid || !ask || bid <= 0 || ask <= 0 || ask < bid) return null;
+  const mid = (bid + ask) / 2;
+  return mid > 0 ? ((ask - bid) / mid) * 100 : null;
+}
+const isLiquid = (s: number | null) => s != null && s <= 10;
+
 interface CsvRow {
   symbol: string;
-  ivp?: number; // IV percentile (0–100)
+  ivp?: number;
   atmIv?: number;
   futPrice?: number;
   pcr?: number;
 }
 
-/** Parse an options-screener CSV export (header: Instrument, …, ATMIV, …, IVPercentile, …, PCR).
- *  Column matching is case-insensitive and order-independent; rows without an Instrument are skipped. */
 function parseScreenerCsv(text: string): CsvRow[] {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
   if (!lines.length) return [];
@@ -47,7 +53,32 @@ function parseScreenerCsv(text: string): CsvRow[] {
   return out;
 }
 
-/** Confirm + deploy one screener row as a custom_options short leg (spot-stop + 90% target). */
+const inputCls = "rounded bg-slate-800 border border-slate-700 px-2 py-1";
+
+function legAt(chain: OptionChain | undefined, strike: number, right: "CE" | "PE"): OptionChainLeg | null {
+  const r = chain?.rows.find((x) => x.strike === strike);
+  return r ? (right === "CE" ? r.ce : r.pe) : null;
+}
+
+/** Premium / bid-ask / spread display + liquidity flag for one option leg. */
+function LegLine({ leg }: { leg: OptionChainLeg | null }) {
+  const prem = leg?.ltp ?? leg?.close ?? null;
+  const s = spreadPct(leg?.bid, leg?.ask);
+  const liq = isLiquid(s);
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 text-xs">
+      <span className="text-slate-400">prem <span className="text-slate-200">{n2(prem)}</span></span>
+      <span className="text-slate-400">bid/ask <span className="text-slate-200">{n2(leg?.bid)} / {n2(leg?.ask)}</span></span>
+      <span className={liq ? "text-emerald-500" : "text-amber-500"}>
+        spread {s == null ? "—" : `${s.toFixed(1)}%`} {liq ? "" : "⚑ illiquid"}
+      </span>
+      {leg?.oi != null && <span className="text-slate-500">OI {leg.oi.toLocaleString("en-IN")}</span>}
+    </div>
+  );
+}
+
+/** Confirm + deploy one row as a custom_options short leg (+ optional long hedge), with an
+ *  in-modal live-chain strike picker and bid-ask liquidity checks. */
 function DeployPanel({
   row,
   result,
@@ -59,10 +90,66 @@ function DeployPanel({
   accountId: number;
   onClose: () => void;
 }) {
+  const side = (row.side ?? "CE") as "CE" | "PE";
   const [mode, setMode] = useState("PAPER");
   const [lots, setLots] = useState(row.lots ?? 1);
-  const [capital, setCapital] = useState(1_000_000);
   const [name, setName] = useState(`${row.symbol}_FibRet`);
+  const [shortStrike, setShortStrike] = useState<number>(row.strike ?? 0);
+  const [hedgeOn, setHedgeOn] = useState(false);
+  const [hedgeStrike, setHedgeStrike] = useState<number | null>(null);
+
+  const chainQ = useQuery({
+    queryKey: ["fibChain", accountId, row.symbol, row.expiry],
+    queryFn: () => api.optionsLiveChain(row.symbol, row.expiry!, accountId),
+    enabled: !!row.expiry,
+    retry: false,
+    staleTime: 15_000,
+  });
+  const chain = chainQ.data;
+  const strikes = useMemo(
+    () => (chain?.rows ?? []).map((r) => r.strike).sort((a, b) => a - b),
+    [chain],
+  );
+  // Hedge is a LONG leg further OTM than the short: above for a short call, below for a short put.
+  const hedgeCands = useMemo(
+    () => (side === "CE" ? strikes.filter((k) => k > shortStrike) : strikes.filter((k) => k < shortStrike).reverse()),
+    [strikes, shortStrike, side],
+  );
+
+  const enableHedge = () => {
+    setHedgeOn(true);
+    if (hedgeStrike == null && hedgeCands.length) setHedgeStrike(hedgeCands[Math.min(2, hedgeCands.length - 1)]);
+  };
+
+  const shortLeg = legAt(chain, shortStrike, side);
+  const hedgeLeg = hedgeOn && hedgeStrike != null ? legAt(chain, hedgeStrike, side) : null;
+  const lot = chain?.lot_size || row.lot_size || 0;
+  const shortPrem = shortLeg?.ltp ?? shortLeg?.close ?? row.premium ?? 0;
+  const hedgePrem = hedgeLeg?.ltp ?? hedgeLeg?.close ?? 0;
+  const netCredit = (shortPrem - (hedgeOn ? hedgePrem : 0)) * lot * lots;
+  const targetAmt = (result.target_pct / 100) * netCredit; // book X% of the premium collected
+  const shortIlliquid = chain ? !isLiquid(spreadPct(shortLeg?.bid, shortLeg?.ask)) : false;
+  const spot = chain?.spot ?? row.spot ?? null;
+  const stopCushion =
+    spot != null && row.stop_level != null
+      ? (side === "CE" ? (row.stop_level - spot) / spot : (spot - row.stop_level) / spot) * 100
+      : row.cushion_to_stop_pct ?? null;
+
+  const legs = useMemo<OptionsTradeDeploy["legs"]>(() => {
+    const l: OptionsTradeDeploy["legs"] = [{ right: side, strike: shortStrike, side: "sell", lots }];
+    if (hedgeOn && hedgeStrike != null) l.push({ right: side, strike: hedgeStrike, side: "buy", lots });
+    return l;
+  }, [side, shortStrike, hedgeOn, hedgeStrike, lots]);
+
+  // Live margin for the exact structure (real Zerodha basket if sessioned, else model) — shown in
+  // place of an arbitrary capital, and used as the deployment's capital.
+  const marginQ = useQuery({
+    queryKey: ["fibMargin", row.symbol, row.expiry, accountId, lot, JSON.stringify(legs)],
+    queryFn: () => api.optionTradeMargin({ underlying: row.symbol, expiry: row.expiry!, lot_size: lot, legs, broker_account_id: accountId }),
+    enabled: !!row.expiry && lot > 0,
+    retry: false,
+  });
+  const margin = marginQ.data?.margin ?? null;
 
   const deploy = useMutation({
     mutationFn: () => {
@@ -70,78 +157,121 @@ function DeployPanel({
         name,
         underlying: row.symbol,
         expiry: row.expiry!,
-        legs: [{ right: row.side!, strike: row.strike!, side: "sell", lots }],
-        lot_size: row.lot_size ?? 0,
-        capital,
-        // spot-based stop at the 0.786 level: above for a short call, below for a short put.
-        spot_upper: row.side === "CE" ? row.stop_level : null,
-        spot_lower: row.side === "PE" ? row.stop_level : null,
-        target_pct: result.target_pct, // whole percent (e.g. 90) — backend converts to fraction
+        legs,
+        lot_size: lot,
+        capital: Math.round(margin ?? row.margin ?? 1_000_000),
+        spot_upper: side === "CE" ? row.stop_level : null,
+        spot_lower: side === "PE" ? row.stop_level : null,
+        target_pct: result.target_pct,
         mode,
-        quote_source: mode === "LIVE" ? "zerodha" : "zerodha",
+        quote_source: "zerodha",
         broker_account_id: accountId,
         ignore_market_hours: true,
         auto: true,
-        notes: `FibRet ${row.side} ${row.strike} · swing ${n2(row.swing_low)}–${n2(row.swing_high)} · stop spot ${n2(row.stop_level)}`,
+        notes: `FibRet ${side} ${shortStrike}${hedgeOn && hedgeStrike != null ? ` / hedge ${hedgeStrike}` : ""} · stop spot ${n2(row.stop_level)}`,
       };
       return api.deployOptionTrade(body);
     },
   });
 
   return (
-    <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div className="w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <Card className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="font-medium text-slate-200">
-              Deploy {row.symbol} — SELL {row.strike} {row.side}
-            </div>
-            <button onClick={onClose} className="text-slate-500 hover:text-slate-300 px-1">×</button>
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-2xl space-y-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <div className="font-medium text-slate-200">
+            Deploy {row.symbol} — SELL {side}
           </div>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-            <div className="flex justify-between"><span className="text-slate-400">Expiry</span><span>{row.expiry} ({row.dte}d)</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Premium</span><span>{n2(row.premium)} ×{row.lot_size}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Stop (spot {row.side === "CE" ? "≥" : "≤"})</span><span>{n2(row.stop_level)}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Target</span><span>book {result.target_pct}% of premium</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Max profit</span><span className="text-emerald-500">{money((row.premium ?? 0) * (row.lot_size ?? 0) * lots)}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">R:R</span><span>{row.reward_risk != null ? `${row.reward_risk.toFixed(2)}x` : "NA"}</span></div>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <label className="flex items-center gap-1.5">Mode
-              <select value={mode} onChange={(e) => setMode(e.target.value)} className="rounded bg-slate-800 border border-slate-700 px-2 py-1">
-                <option value="PAPER">PAPER</option>
-                <option value="LIVE">LIVE (real money)</option>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 px-1">×</button>
+        </div>
+
+        {/* short leg + strike picker */}
+        <div className="rounded-md border border-slate-800 p-2.5 space-y-1.5">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-rose-400 font-medium w-16">SELL {side}</span>
+            {chain ? (
+              <select value={shortStrike} onChange={(e) => setShortStrike(Number(e.target.value))} className={inputCls}>
+                {strikes.map((k) => <option key={k} value={k}>{k}</option>)}
               </select>
-            </label>
-            <label className="flex items-center gap-1.5">Lots
-              <input type="number" min={1} value={lots} onChange={(e) => setLots(Math.max(1, Number(e.target.value) || 1))}
-                className="w-16 rounded bg-slate-800 border border-slate-700 px-2 py-1" />
-            </label>
-            <label className="flex items-center gap-1.5">Capital
-              <input type="number" min={0} step={100000} value={capital} onChange={(e) => setCapital(Number(e.target.value) || 0)}
-                className="w-28 rounded bg-slate-800 border border-slate-700 px-2 py-1" />
-            </label>
+            ) : (
+              <span className="text-slate-200">{shortStrike}</span>
+            )}
+            <span className="text-xs text-slate-500">× {lot} × {lots} lots</span>
           </div>
-          <input value={name} onChange={(e) => setName(e.target.value)}
-            className="w-full rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm" placeholder="Deployment name" />
-          {mode === "LIVE" && (
-            <div className="text-xs text-amber-500">Real-money LIVE also requires the account to be armed and trading enabled.</div>
-          )}
-          {deploy.isError && <div className="text-xs text-rose-500">{(deploy.error as Error).message}</div>}
-          {deploy.isSuccess ? (
-            <div className="text-sm text-emerald-500">
-              Deployed. <Link to="/live" className="underline">Open the Live tab →</Link>
-            </div>
+          {chainQ.isLoading && <div className="text-xs text-slate-500">Loading live chain…</div>}
+          {chainQ.isError && <div className="text-xs text-amber-500">Couldn't load live chain — deploying at the suggested strike.</div>}
+          {chain && <LegLine leg={shortLeg} />}
+        </div>
+
+        {/* hedge */}
+        <div className="rounded-md border border-slate-800 p-2.5 space-y-1.5">
+          {!hedgeOn ? (
+            <button onClick={enableHedge} className="text-sm text-brand-light hover:underline" disabled={!hedgeCands.length}>
+              + Buy a hedge ({side === "CE" ? "long call above" : "long put below"}){!hedgeCands.length ? " — no strikes" : ""}
+            </button>
           ) : (
-            <div className="flex gap-2">
-              <button onClick={() => deploy.mutate()} disabled={deploy.isPending}
-                className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-sm text-white disabled:opacity-50">
-                {deploy.isPending ? "Deploying…" : `Deploy (${mode})`}
-              </button>
-              <button onClick={onClose} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm">Cancel</button>
-            </div>
+            <>
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-emerald-400 font-medium w-16">BUY {side}</span>
+                <select value={hedgeStrike ?? ""} onChange={(e) => setHedgeStrike(Number(e.target.value))} className={inputCls}>
+                  {hedgeCands.map((k) => <option key={k} value={k}>{k}</option>)}
+                </select>
+                <button onClick={() => { setHedgeOn(false); setHedgeStrike(null); }} className="text-xs text-slate-500 hover:text-slate-300 underline">remove</button>
+              </div>
+              {chain && <LegLine leg={hedgeLeg} />}
+            </>
           )}
-        </Card>
+        </div>
+
+        {/* summary */}
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+          <div className="flex justify-between"><span className="text-slate-400">Spot</span><span>{n2(spot)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-400">Expiry</span><span>{row.expiry} ({row.dte}d)</span></div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">Stop (spot {side === "CE" ? "≥" : "≤"})</span>
+            <span>{n2(row.stop_level)}{stopCushion != null ? ` (${stopCushion >= 0 ? "+" : ""}${stopCushion.toFixed(1)}%)` : ""}</span>
+          </div>
+          <div className="flex justify-between"><span className="text-slate-400">{netCredit >= 0 ? "Net credit" : "Net debit"}</span><span className={netCredit >= 0 ? "text-emerald-500" : "text-rose-500"}>{money(Math.abs(netCredit))}</span></div>
+          <div className="flex justify-between"><span className="text-slate-400">Target (book {result.target_pct}%)</span><span className="text-emerald-500">{money(targetAmt)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-400">Margin{marginQ.data?.source ? ` (${marginQ.data.source === "zerodha" ? "basket" : "est"})` : ""}</span><span>{marginQ.isLoading ? "…" : money(margin)}</span></div>
+        </div>
+
+        {shortIlliquid && (
+          <div className="text-xs text-amber-500">⚑ The selected short strike has a wide bid-ask spread (&gt;10%) — consider another strike. You can still deploy.</div>
+        )}
+        {row.out_of_range && shortStrike === row.strike && (
+          <div className="text-xs text-amber-500">The suggested strike is the chain edge ({row.note ?? "far OTM"}). Pick a nearer strike above if you want a tradeable contract.</div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <label className="flex items-center gap-1.5">Mode
+            <select value={mode} onChange={(e) => setMode(e.target.value)} className={inputCls}>
+              <option value="PAPER">PAPER</option>
+              <option value="LIVE">LIVE (real money)</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5">Lots
+            <input type="number" min={1} value={lots} onChange={(e) => setLots(Math.max(1, Number(e.target.value) || 1))} className={`w-16 ${inputCls}`} />
+          </label>
+        </div>
+        <input value={name} onChange={(e) => setName(e.target.value)} className={`w-full text-sm ${inputCls}`} placeholder="Deployment name" />
+        {mode === "LIVE" && (
+          <div className="text-xs text-amber-500">Real-money LIVE also requires the account to be armed and trading enabled.</div>
+        )}
+        {deploy.isError && <div className="text-xs text-rose-500">{(deploy.error as Error).message}</div>}
+        {deploy.isSuccess ? (
+          <div className="text-sm text-emerald-500">Deployed. <Link to="/live" className="underline">Open the Live tab →</Link></div>
+        ) : (
+          <div className="flex gap-2">
+            <button onClick={() => deploy.mutate()} disabled={deploy.isPending}
+              className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-sm text-white disabled:opacity-50">
+              {deploy.isPending ? "Deploying…" : `Deploy (${mode})`}
+            </button>
+            <button onClick={onClose} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm">Cancel</button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -151,31 +281,39 @@ function Th({ children, right }: { children?: React.ReactNode; right?: boolean }
   return <th className={`font-medium py-1.5 px-2 ${right ? "text-right" : "text-left"}`}>{children}</th>;
 }
 
+// ── persistence ──────────────────────────────────────────────────────────────────────────────
+const PKEY = "fibret.state.v1";
+interface Persisted {
+  csvRows?: CsvRow[]; csvName?: string; symbolsText?: string; ivpMin?: number; lookback?: number;
+  minOi?: number; lots?: number; expiry?: string; accountId?: number | null; result?: FibRetResult | null;
+}
+function loadPersisted(): Persisted {
+  try { return JSON.parse(localStorage.getItem(PKEY) || "{}"); } catch { return {}; }
+}
+
 export default function FibRetPage() {
   const { data: accounts = [] } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
   const sessioned = accounts.filter((a) => a.has_session);
 
-  const [accountId, setAccountId] = useState<number | null>(null);
-  const [symbolsText, setSymbolsText] = useState("");
-  const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
-  const [csvName, setCsvName] = useState("");
-  const [ivpMin, setIvpMin] = useState(70);
-  const [lookback, setLookback] = useState(20);
-  const [minOi, setMinOi] = useState(0);
-  const [lots, setLots] = useState(1);
-  const [expiry, setExpiry] = useState("");
+  const saved = useRef(loadPersisted()).current;
+  const [accountId, setAccountId] = useState<number | null>(saved.accountId ?? null);
+  const [symbolsText, setSymbolsText] = useState(saved.symbolsText ?? "");
+  const [csvRows, setCsvRows] = useState<CsvRow[]>(saved.csvRows ?? []);
+  const [csvName, setCsvName] = useState(saved.csvName ?? "");
+  const [ivpMin, setIvpMin] = useState(saved.ivpMin ?? 70);
+  const [lookback, setLookback] = useState(saved.lookback ?? 20);
+  const [lots, setLots] = useState(saved.lots ?? 1);
+  const [expiry, setExpiry] = useState(saved.expiry ?? "");
+  const [result, setResult] = useState<FibRetResult | null>(saved.result ?? null);
   const [deployRow, setDeployRow] = useState<FibRetRow | null>(null);
 
   const effectiveAccount = accountId ?? sessioned[0]?.id ?? null;
 
-  // IVP lookup (from the uploaded CSV) keyed by symbol, for merging into the results table.
   const ivpMap = useMemo(() => new Map(csvRows.map((r) => [r.symbol, r])), [csvRows]);
-  // CSV rows that pass the IVP filter, sorted high-IVP first.
   const csvFiltered = useMemo(
     () => csvRows.filter((r) => (r.ivp ?? -1) >= ivpMin).sort((a, b) => (b.ivp ?? 0) - (a.ivp ?? 0)),
     [csvRows, ivpMin],
   );
-  // When a CSV is loaded, the filtered names drive the scan; otherwise fall back to the textarea.
   const symbols = useMemo(
     () =>
       csvRows.length
@@ -184,25 +322,27 @@ export default function FibRetPage() {
     [csvRows.length, csvFiltered, symbolsText],
   );
 
+  // Persist the uploaded CSV, the inputs and the last results so the screen survives reloads /
+  // navigation — retained until replaced or cleared.
+  useEffect(() => {
+    localStorage.setItem(PKEY, JSON.stringify({
+      csvRows, csvName, symbolsText, ivpMin, lookback, lots, expiry, accountId, result,
+    }));
+  }, [csvRows, csvName, symbolsText, ivpMin, lookback, lots, expiry, accountId, result]);
+
   const onUpload = (file: File) => {
     setCsvName(file.name);
     const reader = new FileReader();
     reader.onload = () => setCsvRows(parseScreenerCsv(String(reader.result ?? "")));
     reader.readAsText(file);
   };
+  const clearCsv = () => { setCsvRows([]); setCsvName(""); };
 
   const analyze = useMutation({
     mutationFn: (): Promise<FibRetResult> =>
-      api.fibretAnalyze({
-        broker_account_id: effectiveAccount!,
-        symbols,
-        expiry: expiry || null,
-        swing_lookback: lookback,
-        min_oi: minOi,
-        lots,
-      }),
+      api.fibretAnalyze({ broker_account_id: effectiveAccount!, symbols, expiry: expiry || null, swing_lookback: lookback, min_oi: 0, lots }),
+    onSuccess: (d) => setResult(d),
   });
-  const result = analyze.data;
 
   return (
     <div className="space-y-4">
@@ -211,8 +351,8 @@ export default function FibRetPage() {
         <p className="text-sm text-slate-400">
           Fibonacci-retracement option selling. Upload your IVP screener CSV (or paste symbols); for each
           stock the tool finds the recent daily swing, suggests a short option at the 1.618 extension with
-          a spot-stop at the 0.786 level, and shows live premium, liquidity, R:R and margin. Pick rows and
-          deploy. Needs a logged-in broker session for live chains.
+          a spot-stop at the 0.786 level, and shows live premium, bid-ask liquidity, R:R and margin. Pick
+          rows and deploy. Needs a logged-in broker session for live chains.
         </p>
       </div>
 
@@ -220,37 +360,28 @@ export default function FibRetPage() {
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <label className="inline-flex items-center gap-2 rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 cursor-pointer">
             📄 Upload screener CSV
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ""; }}
-            />
+            <input type="file" accept=".csv,text/csv" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ""; }} />
           </label>
           {csvRows.length > 0 && (
             <span className="text-xs text-slate-400">
-              {csvName} — {csvRows.length} instruments · {csvFiltered.length} with IVP ≥ {ivpMin}
-              <button onClick={() => { setCsvRows([]); setCsvName(""); }} className="ml-2 text-slate-500 hover:text-slate-300 underline">clear</button>
+              {csvName || "uploaded"} — {csvRows.length} instruments · {csvFiltered.length} with IVP ≥ {ivpMin}
+              <button onClick={clearCsv} className="ml-2 text-slate-500 hover:text-slate-300 underline">clear</button>
             </span>
           )}
         </div>
         <div className="flex flex-wrap items-end gap-3 text-sm">
           <label className="flex flex-col gap-1">
             <span className="text-slate-400">Broker session</span>
-            <select
-              value={effectiveAccount ?? ""}
-              onChange={(e) => setAccountId(Number(e.target.value) || null)}
-              className="rounded bg-slate-800 border border-slate-700 px-2 py-1.5 min-w-[14rem]"
-            >
+            <select value={effectiveAccount ?? ""} onChange={(e) => setAccountId(Number(e.target.value) || null)}
+              className="rounded bg-slate-800 border border-slate-700 px-2 py-1.5 min-w-[14rem]">
               {sessioned.length === 0 && <option value="">No logged-in account</option>}
-              {sessioned.map((a) => (
-                <option key={a.id} value={a.id}>{a.label} {a.armed ? "· armed" : ""}</option>
-              ))}
+              {sessioned.map((a) => <option key={a.id} value={a.id}>{a.label} {a.armed ? "· armed" : ""}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-slate-400">Swing lookback (days)</span>
-            <input type="number" min={10} value={lookback} onChange={(e) => setLookback(Number(e.target.value) || 60)}
+            <input type="number" min={10} value={lookback} onChange={(e) => setLookback(Number(e.target.value) || 20)}
               className="w-28 rounded bg-slate-800 border border-slate-700 px-2 py-1.5" />
           </label>
           <label className="flex flex-col gap-1">
@@ -258,11 +389,6 @@ export default function FibRetPage() {
             <input type="number" min={0} max={100} value={ivpMin} onChange={(e) => setIvpMin(Number(e.target.value) || 0)}
               disabled={csvRows.length === 0}
               className="w-20 rounded bg-slate-800 border border-slate-700 px-2 py-1.5 disabled:opacity-50" />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-slate-400">Min OI</span>
-            <input type="number" min={0} value={minOi} onChange={(e) => setMinOi(Number(e.target.value) || 0)}
-              className="w-24 rounded bg-slate-800 border border-slate-700 px-2 py-1.5" />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-slate-400">Lots</span>
@@ -276,25 +402,18 @@ export default function FibRetPage() {
           </label>
         </div>
         {csvRows.length === 0 ? (
-          <textarea
-            value={symbolsText}
-            onChange={(e) => setSymbolsText(e.target.value)}
-            rows={2}
+          <textarea value={symbolsText} onChange={(e) => setSymbolsText(e.target.value)} rows={2}
             placeholder="Watchlist — symbols separated by space, comma or newline (e.g. INFY, BAJFINANCE, RELIANCE) — or upload your screener CSV above"
-            className="w-full rounded bg-slate-800 border border-slate-700 px-3 py-2 text-sm font-mono"
-          />
+            className="w-full rounded bg-slate-800 border border-slate-700 px-3 py-2 text-sm font-mono" />
         ) : (
           <div className="text-xs text-slate-400 font-mono break-words">
             {symbols.length ? symbols.join(", ") : "No instruments pass the IVP filter — lower IVP ≥."}
           </div>
         )}
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => analyze.mutate()}
-            disabled={analyze.isPending || !effectiveAccount || symbols.length === 0}
-            className="rounded bg-brand hover:bg-brand-light px-4 py-1.5 text-sm text-white disabled:opacity-50"
-          >
-            {analyze.isPending ? "Analyzing…" : `Analyze ${symbols.length || ""}`.trim()}
+          <button onClick={() => analyze.mutate()} disabled={analyze.isPending || !effectiveAccount || symbols.length === 0}
+            className="rounded bg-brand hover:bg-brand-light px-4 py-1.5 text-sm text-white disabled:opacity-50">
+            {analyze.isPending ? "Analyzing…" : result ? `Refresh (${symbols.length})` : `Analyze ${symbols.length || ""}`.trim()}
           </button>
           {analyze.isError && <span className="text-sm text-rose-500">{(analyze.error as Error).message}</span>}
           {result && <span className="text-xs text-slate-500">as of {result.as_of} · stop at {result.stop_fib} · entry at {result.entry_fib} · target {result.target_pct}%</span>}
@@ -308,9 +427,9 @@ export default function FibRetPage() {
               <thead>
                 <tr className="text-slate-400 text-xs border-b border-slate-800">
                   <Th>Stock</Th><Th right>IVP</Th><Th right>ATM IV</Th><Th right>Spot</Th><Th>Side</Th><Th>Swing (L→H)</Th>
-                  <Th right>Strike</Th><Th right>DTE</Th><Th right>Premium</Th><Th right>OI</Th>
+                  <Th right>Strike</Th><Th right>DTE</Th><Th right>Premium</Th><Th right>OI</Th><Th right>Bid/Ask (spr)</Th>
                   <Th right>Stop spot</Th><Th right>R:R</Th><Th right>Max profit</Th>
-                  <Th right>Margin</Th><Th right>IV/RV</Th><Th right>Cushion→K</Th><Th></Th>
+                  <Th right>Margin</Th><Th right>IV/RV</Th><Th right>Cushion→K</Th><Th right>Cush→Stop</Th><Th></Th>
                 </tr>
               </thead>
               <tbody>
@@ -320,33 +439,32 @@ export default function FibRetPage() {
                     <td className="py-1.5 px-2 text-right">{ivpMap.get(r.symbol)?.ivp ?? "—"}</td>
                     <td className="py-1.5 px-2 text-right">{n1(ivpMap.get(r.symbol)?.atmIv)}</td>
                     {r.error ? (
-                      <td colSpan={14} className="py-1.5 px-2 text-rose-500/80 text-xs">{r.error}</td>
+                      <td colSpan={16} className="py-1.5 px-2 text-rose-500/80 text-xs">{r.error}</td>
                     ) : (
                       <>
                         <td className="py-1.5 px-2 text-right">{n1(r.spot)}</td>
-                        <td className="py-1.5 px-2">
-                          <span className={r.side === "CE" ? "text-rose-400" : "text-emerald-400"}>SELL {r.side}</span>
-                        </td>
+                        <td className="py-1.5 px-2"><span className={r.side === "CE" ? "text-rose-400" : "text-emerald-400"}>SELL {r.side}</span></td>
                         <td className="py-1.5 px-2 text-xs text-slate-400">{n1(r.swing_low)}→{n1(r.swing_high)}</td>
                         <td className={`py-1.5 px-2 text-right ${r.out_of_range ? "text-amber-500" : ""}`} title={r.note ?? undefined}>
                           {r.strike}{r.out_of_range ? " ⚑" : ""}
                         </td>
                         <td className="py-1.5 px-2 text-right">{r.dte}</td>
                         <td className="py-1.5 px-2 text-right">{n2(r.premium)}</td>
-                        <td className={`py-1.5 px-2 text-right ${r.liquid ? "" : "text-amber-500"}`}>{r.oi?.toLocaleString("en-IN")}{r.liquid ? "" : " ⚑"}</td>
+                        <td className="py-1.5 px-2 text-right">{r.oi?.toLocaleString("en-IN")}</td>
+                        <td className={`py-1.5 px-2 text-right ${r.liquid ? "" : "text-amber-500"}`}
+                          title={r.liquid ? undefined : "wide bid-ask spread (>10% of mid) — illiquid"}>
+                          {n2(r.bid)}/{n2(r.ask)} {r.spread_pct == null ? "" : `(${r.spread_pct.toFixed(0)}%)`}{r.liquid ? "" : " ⚑"}
+                        </td>
                         <td className="py-1.5 px-2 text-right">{n1(r.stop_level)}</td>
                         <td className="py-1.5 px-2 text-right">{r.reward_risk != null ? `${r.reward_risk.toFixed(2)}x` : "NA"}</td>
                         <td className="py-1.5 px-2 text-right text-emerald-500">{money(r.max_profit)}</td>
                         <td className="py-1.5 px-2 text-right">{money(r.margin)}</td>
                         <td className="py-1.5 px-2 text-right">{r.iv_richness != null ? `${r.iv_richness.toFixed(2)}x` : "—"}</td>
                         <td className="py-1.5 px-2 text-right">{pct(r.cushion_to_strike_pct)}</td>
+                        <td className="py-1.5 px-2 text-right">{pct(r.cushion_to_stop_pct)}</td>
                         <td className="py-1.5 px-2 text-right">
-                          <button
-                            onClick={() => setDeployRow(r)}
-                            disabled={!r.premium || r.out_of_range}
-                            title={r.out_of_range ? r.note ?? "1.618 level beyond listed strikes" : undefined}
-                            className="rounded bg-emerald-700 hover:bg-emerald-600 text-white px-2.5 py-1 text-xs disabled:opacity-40"
-                          >
+                          <button onClick={() => setDeployRow(r)}
+                            className="rounded bg-emerald-700 hover:bg-emerald-600 text-white px-2.5 py-1 text-xs">
                             Deploy
                           </button>
                         </td>
@@ -358,8 +476,9 @@ export default function FibRetPage() {
             </table>
           </div>
           <div className="text-[11px] text-slate-500 mt-2">
-            ⚑ = OI below your min. R:R = max profit ÷ estimated loss if spot hits the stop (BS, current IV).
-            IV/RV = live ATM-ish IV ÷ realized vol (sanity check that IV is rich). All gross of charges.
+            ⚑ on Bid/Ask = wide spread (&gt;10% of mid) → illiquid. ⚑ on Strike = 1.618 level beyond listed
+            strikes. R:R = max profit ÷ estimated loss if spot hits the stop. IV/RV = live IV ÷ realized vol.
+            Deploy lets you change the strike and add a hedge. Gross of charges.
           </div>
         </Card>
       )}

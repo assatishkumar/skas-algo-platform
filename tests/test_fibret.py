@@ -67,9 +67,9 @@ def test_analyze_symbol_builds_short_call_row():
         "spot": 910.0,
         "lot_size": 400,
         "rows": [
-            {"strike": 1040.0, "ce": {"ltp": 8.0, "oi": 1200}, "pe": {"ltp": 130.0, "oi": 500}},
-            {"strike": 1060.0, "ce": {"ltp": 5.0, "oi": 900}, "pe": {"ltp": 150.0, "oi": 400}},
-            {"strike": 1080.0, "ce": {"ltp": 3.0, "oi": 300}, "pe": {"ltp": 170.0, "oi": 200}},
+            {"strike": 1040.0, "ce": {"ltp": 8.0, "oi": 1200, "bid": 7.9, "ask": 8.1}, "pe": {"ltp": 130.0, "oi": 500}},
+            {"strike": 1060.0, "ce": {"ltp": 5.0, "oi": 900, "bid": 4.9, "ask": 5.1}, "pe": {"ltp": 150.0, "oi": 400}},
+            {"strike": 1080.0, "ce": {"ltp": 3.0, "oi": 300, "bid": 2.0, "ask": 4.0}, "pe": {"ltp": 170.0, "oi": 200}},
         ],
     }
     on = date(2026, 6, 22)
@@ -86,7 +86,9 @@ def test_analyze_symbol_builds_short_call_row():
     assert row["est_stop_loss"] > 0         # option richens as spot rises toward the stop
     assert row["reward_risk"] is not None and row["reward_risk"] > 0
     assert row["margin"] is not None
-    assert row["liquid"] is True            # oi 900 ≥ min_oi 500
+    assert row["bid"] == 4.9 and row["ask"] == 5.1
+    assert round(row["spread_pct"], 1) == 4.0   # (5.1-4.9)/5.0 = 4%
+    assert row["liquid"] is True                # tight spread (≤10%)
     assert round(row["stop_level"], 1) == 978.6
 
 

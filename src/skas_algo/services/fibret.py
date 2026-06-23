@@ -98,6 +98,15 @@ def _nearest_strike(strikes: list[float], level: float) -> float | None:
     return min(strikes, key=lambda s: abs(s - level)) if strikes else None
 
 
+def spread_pct(bid: float | None, ask: float | None) -> float | None:
+    """Relative bid-ask spread as a % of the mid price (a liquidity gauge). None when either side
+    is missing/non-positive (no two-sided market)."""
+    if not bid or not ask or bid <= 0 or ask <= 0 or ask < bid:
+        return None
+    mid = (bid + ask) / 2
+    return (ask - bid) / mid * 100 if mid > 0 else None
+
+
 def analyze_symbol(
     *,
     symbol: str,
@@ -139,6 +148,10 @@ def analyze_symbol(
     leg = (row.get("ce") if sw.side == "CE" else row.get("pe")) or {}
     premium = leg.get("ltp") or leg.get("close")
     oi = int(leg.get("oi") or 0)
+    bid, ask = leg.get("bid"), leg.get("ask")
+    spread = spread_pct(bid, ask)
+    # Liquidity by the bid-ask spread (>10% of mid → illiquid); spread None (one-sided) also flags.
+    liquid = spread is not None and spread <= 10.0
 
     dte = max((expiry - on_date).days, 0)
     t = dte / 365.0
@@ -177,7 +190,10 @@ def analyze_symbol(
         "dte": dte,
         "premium": premium,
         "oi": oi,
-        "liquid": oi >= params.min_oi,
+        "bid": bid,
+        "ask": ask,
+        "spread_pct": spread,
+        "liquid": liquid,
         "lot_size": lot_size,
         "lots": params.lots,
         "qty": qty,

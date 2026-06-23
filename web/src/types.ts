@@ -478,7 +478,10 @@ export interface FibRetRow {
   dte?: number;
   premium?: number | null;
   oi?: number;
-  liquid?: boolean;
+  bid?: number | null;
+  ask?: number | null;
+  spread_pct?: number | null; // (ask−bid)/mid·100 — liquidity gauge
+  liquid?: boolean; // spread ≤ 10%
   lot_size?: number;
   lots?: number;
   qty?: number;
@@ -722,6 +725,8 @@ export interface OptionChainLeg {
   close: number | null;
   oi: number | null;
   change_in_oi: number | null;
+  bid?: number | null; // top-of-book (live chain only)
+  ask?: number | null;
   iv?: number | null;
   delta?: number | null;
   gamma?: number | null;

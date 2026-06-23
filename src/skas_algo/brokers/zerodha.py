@@ -292,8 +292,13 @@ class ZerodhaAdapter:
             d = q.get(f"NFO:{ts}") if ts else None
             if not d:
                 return None
+            depth = d.get("depth") or {}
+            buy = depth.get("buy") or []
+            sell = depth.get("sell") or []
             return {"ltp": d.get("last_price"), "close": (d.get("ohlc") or {}).get("close"),
-                    "oi": d.get("oi"), "change_in_oi": None}
+                    "oi": d.get("oi"), "change_in_oi": None,
+                    "bid": (buy[0].get("price") if buy else None),
+                    "ask": (sell[0].get("price") if sell else None)}
 
         rows = [{"strike": k, "ce": info(chain[k].get("CE")), "pe": info(chain[k].get("PE"))} for k in sel]
         return {"spot": spot, "atm_strike": atm, "lot_size": self._nfo_lot.get(name, 0), "rows": rows}

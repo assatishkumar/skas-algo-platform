@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Navigate, NavLink, Route, Routes } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { applyTheme, getTheme, type Theme } from "./lib/theme";
 import AnalysisPage from "./pages/AnalysisPage";
 import BacktestPage from "./pages/BacktestPage";
@@ -48,13 +48,16 @@ function ThemeToggle() {
 }
 
 export default function App() {
+  const isHome = useLocation().pathname === "/";
   return (
     <div className="min-h-screen">
       <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-2">
-          <NavLink to="/" className="font-semibold text-brand-light mr-4 hover:text-brand">
+          <NavLink to="/" className="flex items-center gap-2 font-semibold text-brand-light mr-4 hover:text-brand">
+            <span className="w-6 h-6 rounded-[7px] bg-brand inline-block" />
             SKAS Algo
           </NavLink>
+          <NavItem to="/" label="Home" />
           <NavItem to="/backtest" label="Backtest" />
           <NavItem to="/trade" label="Trade" />
           <NavItem to="/live" label="Live" />
@@ -64,7 +67,7 @@ export default function App() {
           <div className="ml-auto"><ThemeToggle /></div>
         </div>
       </header>
-      <main className="max-w-6xl mx-auto px-4 py-6">
+      <main className={isHome ? "" : "max-w-6xl mx-auto px-4 py-6"}>
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/backtest" element={<BacktestPage />} />
