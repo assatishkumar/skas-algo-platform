@@ -1,8 +1,8 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
-import { Badge, Card, StatusPill, timeAgo } from "../components/ui";
+import { Badge, timeAgo } from "../components/ui";
 import GreeksPanel from "../components/GreeksPanel";
 import LivePayoffChart from "../components/LivePayoffChart";
 import LiveTradesPanel from "../components/LiveTradesPanel";
@@ -10,6 +10,7 @@ import LiveEquityTrades from "../components/LiveEquityTrades";
 import OptionMetricsPanel from "../components/OptionMetricsPanel";
 import { formatInr } from "../lib/format";
 import { isOptionsStrategy } from "../lib/params";
+import { KebabMenu, Sparkline, Segmented, Tag, type MenuItem } from "../components/redesign";
 import type {
   Deployment,
   LiveRunSnapshot,
@@ -876,6 +877,7 @@ function DeploymentTile({
   onToggle: () => void;
   onChanged: () => void;
 }) {
+  const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(dep.name);
   const [notes, setNotes] = useState(dep.notes ?? "");
@@ -971,62 +973,84 @@ function DeploymentTile({
     setEditing(false);
   }
 
+  // Overall-P&L sparkline from the sampled greeks/PnL history (active deployments only).
+  const { data: pnlHist } = useQuery({
+    queryKey: ["pnlspark", dep.run_id],
+    queryFn: () => api.liveGreeksHistory(dep.run_id),
+    enabled: dep.status === "active",
+    staleTime: 30000,
+    refetchInterval: 60000,
+  });
+  const pnlSeries = (pnlHist?.points ?? []).map((p) => p.pnl ?? 0).slice(-60);
+
+  const menuItems: MenuItem[] =
+    dep.status === "active"
+      ? [
+          ...(dep.mode === "PAPER" ? [{ label: "⚡ Go LIVE", onClick: () => setShowGoLive(true) }] : []),
+          { label: "Exit positions", tone: "warn", onClick: () => { if (positions > 0 && confirm("Exit ALL open positions for this strategy now, at live prices?")) act(() => api.liveFlatten(dep.run_id)); } },
+          { label: "Stop deployment", tone: "danger", onClick: () => act(() => api.liveStop(dep.run_id)) },
+          { label: "Edit name / notes", onClick: () => setEditing(true) },
+        ]
+      : dep.status === "stopped"
+        ? [
+            { label: "Open report", onClick: () => navigate(`/runs/${dep.run_id}`) },
+            { label: "Archive", onClick: () => act(() => api.liveArchive(dep.run_id)) },
+            { label: "Delete", tone: "danger", onClick: () => { if (confirm(`Delete "${dep.name}" permanently — its report, orders and positions are removed and can't be recovered. Prefer Archive. Delete anyway?`)) act(() => api.liveDelete(dep.run_id)); } },
+            { label: "Edit name / notes", onClick: () => setEditing(true) },
+          ]
+        : [
+            { label: "Open report", onClick: () => navigate(`/runs/${dep.run_id}`) },
+            { label: "Unarchive", onClick: () => act(() => api.liveUnarchive(dep.run_id)) },
+            { label: "Delete", tone: "danger", onClick: () => { if (confirm(`Delete "${dep.name}" permanently? This cannot be undone.`)) act(() => api.liveDelete(dep.run_id)); } },
+            { label: "Edit name / notes", onClick: () => setEditing(true) },
+          ];
+
   return (
-    <Card className={`flex flex-col ${expanded ? "md:col-span-2" : ""}`}>
+    <div className={`flex flex-col rounded-[16px] border border-[var(--border)] bg-[var(--card)] p-5 ${expanded ? "md:col-span-2" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           {editing ? (
             <input
-              className="w-full rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm"
+              className="w-full rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-2 py-1 text-sm text-[var(--strong)]"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
           ) : (
-            <div className="font-medium truncate">{dep.name}</div>
+            <div className="font-semibold text-[var(--strong)] truncate">{dep.name}</div>
           )}
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-            <StatusPill status={dep.status} />
-            {dep.status === "active" && <LivePulse flash={flash} label="live" />}
-            {paused && (
-              <span className="rounded-full bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-900/40 dark:border-amber-700/50 dark:text-amber-300 px-2 py-0.5 text-[11px] font-medium">
-                Paused
-              </span>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+            {dep.status === "active" ? (
+              paused
+                ? <Tag bg="var(--warn-bg)" color="var(--warn-text)">paused</Tag>
+                : <Tag bg="var(--ok-bg)" color="var(--ok-text)">active</Tag>
+            ) : (
+              <Tag>{dep.status}</Tag>
             )}
-            <span
-              className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                isOptions
-                  ? "bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-900/40 dark:border-indigo-600/50 dark:text-indigo-300"
-                  : "bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300"
-              }`}
+            {dep.status === "active" && <LivePulse flash={flash} label={dep.mode === "LIVE" ? "live" : "paper"} />}
+            <Tag
+              bg={isOptions ? "var(--opt-bg)" : "var(--chip)"}
+              color={isOptions ? "var(--opt-text)" : "var(--chip-text)"}
               title={isOptions ? "Options (DERIV) strategy" : "Equity (STOCK) strategy"}
             >
               {isOptions ? `OPT${underlying ? ` · ${underlying}` : ""}` : "EQ"}
-            </span>
-            <Badge>{dep.strategy_id}</Badge>
+            </Tag>
+            <Tag>{dep.strategy_id}</Tag>
             <BrokerChip dep={dep} />
-            <span>#{dep.run_id}</span>
+            <span className="text-[var(--faint)]">#{dep.run_id}</span>
           </div>
         </div>
         <div className="flex items-start gap-2 shrink-0">
           <div className="text-right text-sm">
-            <div className="text-slate-400 text-xs">{isOptions ? "Margin" : "Equity"}</div>
-            <div>
+            <div className="text-[var(--muted)] text-[11px]">{isOptions ? "Margin" : "Equity"}</div>
+            <div className="font-semibold tabular-nums text-[var(--strong)]">
               {isOptions
-                ? marginUsed != null
-                  ? formatInr(marginUsed)
-                  : "—"
-                : equity != null
-                  ? formatInr(equity)
-                  : "—"}
+                ? marginUsed != null ? formatInr(marginUsed) : "—"
+                : equity != null ? formatInr(equity) : "—"}
             </div>
           </div>
           {expanded && dep.status === "active" && (
-            <button
-              onClick={onToggle}
-              title="Minimize"
-              aria-label="Minimize"
-              className="rounded p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            >
+            <button onClick={onToggle} title="Minimize" aria-label="Minimize"
+              className="rounded p-1 text-[var(--muted)] hover:text-[var(--strong)] hover:bg-[var(--row-hover)]">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="18 15 12 9 6 15" />
               </svg>
@@ -1035,193 +1059,94 @@ function DeploymentTile({
         </div>
       </div>
 
-      {/* Notes (preview + inline edit) */}
+      {/* Subline (notes) / inline edit */}
       {editing ? (
         <textarea
-          className="mt-2 w-full rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm"
+          className="mt-2 w-full rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-2 py-1 text-sm text-[var(--strong)]"
           rows={2}
           placeholder="notes"
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
       ) : dep.notes ? (
-        <div className="mt-2 text-xs text-slate-400 line-clamp-2">{dep.notes}</div>
+        <div className="mt-1.5 text-xs text-[var(--muted)] line-clamp-2">{dep.notes}</div>
       ) : null}
 
-      {/* Key metrics */}
+      {/* Stat tiles */}
       <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
-        <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          {/* Options still show live net credit/debit while a position is open; everything else
-              (equity, and an options run that has flattened) shows booked Realized P&L. The open
-              position COUNT lives in the third box, so it isn't duplicated here. */}
-          <div className="text-slate-400 text-[11px] mb-0.5">
+        <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2">
+          <div className="text-[var(--muted)] text-[11px] mb-0.5">
             {isOptions && !optFlat ? (netCredit != null && netCredit < 0 ? "Net debit" : "Net credit") : "Realized P&L"}
           </div>
-          <div className="font-medium tabular-nums">
-            {isOptions && !optFlat ? (
-              netCredit != null ? (
-                <span className={netCredit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
-                  {formatInr(Math.abs(netCredit))}
-                </span>
-              ) : (
-                "—"
-              )
-            ) : realized != null ? (
-              <span className={realized >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
-                {formatInr(realized)}
-              </span>
-            ) : (
-              "—"
-            )}
+          <div className="font-semibold tabular-nums">
+            {isOptions && !optFlat
+              ? (netCredit != null
+                  ? <span className={netCredit >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}>{formatInr(Math.abs(netCredit))}</span>
+                  : <span className="text-[var(--strong)]">—</span>)
+              : realized != null
+                ? <span className={realized >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}>{formatInr(realized)}</span>
+                : <span className="text-[var(--strong)]">—</span>}
           </div>
         </div>
-        <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          <div className="text-slate-400 text-[11px] mb-0.5">Unrealized</div>
-          <div className="font-medium tabular-nums">
-            {upnl != null ? (
-              <span className={upnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>{formatInr(upnl)}</span>
-            ) : (
-              "—"
-            )}
+        <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2">
+          <div className="text-[var(--muted)] text-[11px] mb-0.5">Unrealized</div>
+          <div className="font-semibold tabular-nums">
+            {upnl != null
+              ? <span className={upnl >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}>{formatInr(upnl)}</span>
+              : <span className="text-[var(--strong)]">—</span>}
           </div>
         </div>
-        <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          <div className="text-slate-400 text-[11px] mb-0.5">{dep.status === "active" ? "Open positions" : "Return"}</div>
-          <div className="font-medium tabular-nums">
+        <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2">
+          <div className="text-[var(--muted)] text-[11px] mb-0.5">{dep.status === "active" ? "Open positions" : "Return"}</div>
+          <div className="font-semibold tabular-nums text-[var(--strong)]">
             {dep.status === "active" ? (
-              <>
-                {positions}
-                <span className="text-slate-500 text-[11px] font-normal"> · {timeAgo(dep.started_at)}</span>
-              </>
+              <>{positions}<span className="text-[var(--faint)] text-[11px] font-normal"> · {timeAgo(dep.started_at)}</span></>
             ) : m.total_return_pct != null ? (
               `${m.total_return_pct >= 0 ? "+" : ""}${m.total_return_pct.toFixed(1)}%`
-            ) : (
-              "—"
-            )}
+            ) : "—"}
           </div>
         </div>
       </div>
+
+      {/* Overall-P&L sparkline */}
+      {dep.status === "active" && pnlSeries.length > 1 && (
+        <div className="mt-3">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--faint)] mb-1">Overall P&L</div>
+          <Sparkline values={pnlSeries} up={pnlSeries[pnlSeries.length - 1] >= pnlSeries[0]} height={40} />
+        </div>
+      )}
 
       {/* Actions */}
       <div className="mt-auto pt-3 flex flex-wrap items-center gap-2 text-xs">
-        {dep.status === "active" ? (
-          <>
-            <button
-              onClick={onToggle}
-              className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5"
-              title={expanded ? "Minimize this strategy" : "Open this strategy's live detail"}
-            >
-              {expanded ? "Minimize" : "Open"}
-            </button>
-            <button
-              onClick={() => act(() => api.liveSetControls(dep.run_id, { auto: !auto }))}
-              disabled={busy}
-              title={auto ? "Pause — halt all activity (no checking, no entries/exits)" : "Resume — act on live signals from here on"}
-              className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50"
-            >
-              {auto ? "⏸ Pause" : "▶ Resume"}
-            </button>
-            <button
-              onClick={refreshNow}
-              disabled={refreshing}
-              title="Refresh now — re-price positions and act on any profit-target / stop-loss"
-              className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
-            >
-              <RefreshIcon spinning={refreshing} />
-              Refresh
-            </button>
-            <button
-              onClick={() => { if (confirm("Exit ALL open positions for this strategy now, at live prices?")) act(() => api.liveFlatten(dep.run_id)); }}
-              disabled={busy || positions === 0}
-              title={positions === 0 ? "No open positions to exit" : "Exit every open position now"}
-              className="rounded bg-amber-200 text-amber-800 hover:bg-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-900/60 px-3 py-1.5 disabled:opacity-50"
-            >
-              Exit
-            </button>
-            <button
-              onClick={() => act(() => api.liveStop(dep.run_id))}
-              disabled={busy}
-              title="Stop and move to the Stopped tab (exit positions first)"
-              className="rounded bg-rose-900 hover:bg-rose-800 text-white px-3 py-1.5 disabled:opacity-50"
-            >
-              Stop
-            </button>
-            {dep.mode === "PAPER" && (
-              <button
-                onClick={() => setShowGoLive((v) => !v)}
-                disabled={busy}
-                title="Promote this paper strategy to a real-money LIVE deployment"
-                className="rounded bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 disabled:opacity-50"
-              >
-                ⚡ Go LIVE
-              </button>
-            )}
-          </>
-        ) : (
-          <>
-            {dep.status === "stopped" && (
-              <button
-                onClick={() => act(() => api.liveActivate(dep.run_id))}
-                disabled={busy}
-                title="Re-activate — move back to the Active tab and resume"
-                className="rounded bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 disabled:opacity-50"
-              >
-                Activate
-              </button>
-            )}
-            <Link to={`/runs/${dep.run_id}`} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
-              Report
-            </Link>
-            {dep.status === "stopped" ? (
-              <button
-                onClick={() => act(() => api.liveArchive(dep.run_id))}
-                disabled={busy}
-                className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50"
-              >
-                Archive
-              </button>
-            ) : (
-              <button
-                onClick={() => act(() => api.liveUnarchive(dep.run_id))}
-                disabled={busy}
-                className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50"
-              >
-                Unarchive
-              </button>
-            )}
-            <button
-              onClick={() => {
-                if (confirm(
-                  `Delete "${dep.name}" permanently — its report, orders and positions are removed and ` +
-                  `can't be recovered. Prefer Archive to keep the record. Delete anyway?`,
-                ))
-                  act(() => api.liveDelete(dep.run_id));
-              }}
-              disabled={busy}
-              title="Permanently delete (prefer Archive)"
-              className="rounded bg-rose-950 hover:bg-rose-900 text-rose-300 px-3 py-1.5 disabled:opacity-50"
-            >
-              Delete
-            </button>
-          </>
-        )}
         {editing ? (
           <>
-            <button onClick={saveEdit} disabled={busy} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 disabled:opacity-50">
-              Save
-            </button>
-            <button onClick={() => { setEditing(false); setName(dep.name); setNotes(dep.notes ?? ""); }} className="text-slate-500 px-2">
-              Cancel
-            </button>
+            <button onClick={saveEdit} disabled={busy} className="rounded-[10px] bg-[var(--ft)] text-white px-3 py-1.5 disabled:opacity-50">Save</button>
+            <button onClick={() => { setEditing(false); setName(dep.name); setNotes(dep.notes ?? ""); }} className="text-[var(--muted)] px-2">Cancel</button>
           </>
         ) : (
-          <button onClick={() => setEditing(true)} className="ml-auto text-slate-500 hover:text-slate-300">
-            Edit name/notes
-          </button>
+          <>
+            {dep.status === "active" && (
+              <>
+                <button onClick={onToggle} className="rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] hover:opacity-80 px-3 py-1.5">{expanded ? "Minimize" : "Open"}</button>
+                <button onClick={() => act(() => api.liveSetControls(dep.run_id, { auto: !auto }))} disabled={busy}
+                  title={auto ? "Pause — halt all activity" : "Resume — act on live signals"}
+                  className="rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] hover:opacity-80 px-3 py-1.5 disabled:opacity-50">{auto ? "⏸ Pause" : "▶ Resume"}</button>
+                <button onClick={refreshNow} disabled={refreshing}
+                  title="Refresh now — re-price positions and act on any profit-target / stop-loss"
+                  className="rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] hover:opacity-80 px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"><RefreshIcon spinning={refreshing} />Refresh</button>
+              </>
+            )}
+            {dep.status === "stopped" && (
+              <button onClick={() => act(() => api.liveActivate(dep.run_id))} disabled={busy}
+                title="Re-activate — move back to Active and resume"
+                className="rounded-[10px] bg-[var(--accent-deep)] text-white px-3 py-1.5 disabled:opacity-50">Start</button>
+            )}
+            <div className="ml-auto"><KebabMenu items={menuItems} /></div>
+          </>
         )}
       </div>
 
-      {err && <div className="mt-2 text-xs text-rose-600 dark:text-rose-400">{err}</div>}
+      {err && <div className="mt-2 text-xs text-[var(--danger)]">{err}</div>}
 
       {/* Go LIVE panel — pick an armed Zerodha account; optionally keep paper running in parallel. */}
       {goLiveOpen && (
@@ -1265,59 +1190,46 @@ function DeploymentTile({
       {expanded && dep.status === "active" && snapshot && (
         <RunCard run={snapshot} version={version} onChanged={onChanged} />
       )}
-    </Card>
+    </div>
   );
 }
 
 function PortfolioBar({ deployments }: { deployments: Deployment[] }) {
-  const totals = deployments.reduce(
+  const t = deployments.reduce(
     (acc, d) => {
       acc.equity += d.metrics?.equity ?? 0;
       acc.invested += d.metrics?.invested ?? 0;
+      acc.realized += d.metrics?.realized_pnl ?? 0;
       acc.upnl += d.metrics?.unrealized_pnl ?? 0;
       acc.positions += d.metrics?.open_positions ?? 0;
       return acc;
     },
-    { equity: 0, invested: 0, upnl: 0, positions: 0 },
+    { equity: 0, invested: 0, realized: 0, upnl: 0, positions: 0 },
+  );
+  const Kpi = ({ label, value, tone }: { label: string; value: string; tone?: number }) => (
+    <div>
+      <div className="text-[var(--muted)] text-xs">{label}</div>
+      <div className={`text-[22px] font-bold font-['Space_Grotesk'] tabular-nums ${tone == null ? "text-[var(--strong)]" : tone >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{value}</div>
+    </div>
   );
   return (
-    <Card>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
-        <div>
-          <div className="text-slate-400 text-xs">Active deployments</div>
-          <div className="text-lg font-semibold">{deployments.length}</div>
-        </div>
-        <div>
-          <div className="text-slate-400 text-xs">Total equity</div>
-          <div className="text-lg font-semibold">{formatInr(totals.equity)}</div>
-        </div>
-        <div>
-          <div className="text-slate-400 text-xs">Deployed</div>
-          <div className="text-lg font-semibold">{formatInr(totals.invested)}</div>
-        </div>
-        <div>
-          <div className="text-slate-400 text-xs">Unrealized P&amp;L</div>
-          <div className={`text-lg font-semibold ${totals.upnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
-            {formatInr(totals.upnl)}
-          </div>
-        </div>
-        <div>
-          <div className="text-slate-400 text-xs">Open positions</div>
-          <div className="text-lg font-semibold">{totals.positions}</div>
-        </div>
+    <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-5">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
+        <Kpi label="Active deployments" value={String(deployments.length)} />
+        <Kpi label="Total equity" value={formatInr(t.equity)} />
+        <Kpi label="Deployed" value={formatInr(t.invested)} />
+        <Kpi label="Realized P&L" value={formatInr(t.realized)} tone={t.realized} />
+        <Kpi label="Unrealized P&L" value={formatInr(t.upnl)} tone={t.upnl} />
+        <Kpi label="Open positions" value={String(t.positions)} />
       </div>
-    </Card>
+    </div>
   );
 }
 
-const TABS: { key: string; label: string }[] = [
-  { key: "active", label: "Active" },
-  { key: "stopped", label: "Stopped" },
-  { key: "archived", label: "Archived" },
-];
 
 export default function LivePage() {
-  const [tab, setTab] = useState("active");
+  const [tab, setTab] = useState<"active" | "stopped" | "archived">("active");
+  const [mode, setMode] = useState<"paper" | "live">("paper");
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<number | null>(null);
   // Which strategy groups are expanded (collapsed by default to declutter). Keyed by strategy_id.
@@ -1339,133 +1251,123 @@ export default function LivePage() {
   }, [queryClient, seed]);
 
   const q = search.trim().toLowerCase();
-  const filtered = q
-    ? deployments.filter(
-        (d) =>
-          d.name.toLowerCase().includes(q) ||
-          d.strategy_id.toLowerCase().includes(q) ||
-          (d.notes ?? "").toLowerCase().includes(q),
-      )
-    : deployments;
+  const wantLive = mode === "live";
+  const filtered = deployments.filter((d) => {
+    if ((d.mode === "LIVE") !== wantLive) return false; // Paper vs Live ₹ toggle
+    if (!q) return true;
+    return (
+      d.name.toLowerCase().includes(q) ||
+      d.strategy_id.toLowerCase().includes(q) ||
+      (d.notes ?? "").toLowerCase().includes(q)
+    );
+  });
+
+  const groups = [...filtered.reduce((m, d) => {
+    (m.get(d.strategy_id) ?? m.set(d.strategy_id, []).get(d.strategy_id)!).push(d);
+    return m;
+  }, new Map<string, Deployment[]>()).entries()];
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="text-lg font-semibold">Live (paper)</h1>
-        <div className="flex items-center gap-3 text-xs">
-          <span className={connected ? "text-emerald-600 dark:text-emerald-400" : "text-slate-500"}>
-            {connected ? "● live" : "○ disconnected"}
-          </span>
-          <Link
-            to="/live/new"
-            className="rounded-md bg-brand hover:bg-brand-light px-3 py-1.5 text-sm font-medium"
-          >
-            + Deploy new strategy
-          </Link>
+    <div className="font-['Manrope'] bg-[var(--page)] min-h-[calc(100vh-3.5rem)] text-[var(--strong)]">
+      <div className="max-w-[1240px] mx-auto px-8 pt-[30px] pb-16 space-y-4">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-[27px] font-bold font-['Space_Grotesk']">Live</h1>
+            <Segmented value={mode} onChange={setMode} options={[{ value: "paper", label: "Paper" }, { value: "live", label: "Live ₹" }]} />
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--ok-bg)] text-[var(--ok-text)] px-2.5 py-1 text-xs font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+              Market data · {connected ? "live" : "offline"}
+            </span>
+          </div>
+          <Link to="/live/new" className="rounded-[11px] bg-[var(--ft)] text-white px-4 py-2 text-sm font-semibold">+ Deploy new strategy</Link>
         </div>
-      </div>
 
-      {tab === "active" && filtered.length > 0 && <PortfolioBar deployments={filtered} />}
+        {filtered.length > 0 && <PortfolioBar deployments={filtered} />}
 
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex gap-1 rounded-lg bg-slate-800/50 p-1 text-sm">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={`rounded-md px-3 py-1 ${tab === t.key ? "bg-brand text-white" : "text-slate-400 hover:text-slate-200"}`}
-            >
-              {t.label}
-            </button>
-          ))}
+        {/* Filters */}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <Segmented value={tab} onChange={setTab} options={[{ value: "active", label: "Active" }, { value: "stopped", label: "Stopped" }, { value: "archived", label: "Archived" }]} />
+          <input
+            className="rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-3 py-1.5 text-sm w-64 text-[var(--strong)] placeholder:text-[var(--faint)] focus:outline-none focus:border-[var(--accent)]"
+            placeholder="Search name / strategy / notes"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
-        <input
-          className="rounded-md bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm w-56 focus:outline-none focus:border-brand"
-          placeholder="Search name / strategy / notes"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-      </div>
 
-      {filtered.length === 0 ? (
-        <Card>
-          <div className="text-slate-400">
+        {filtered.length === 0 ? (
+          <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-6 text-[var(--muted)]">
             {tab === "active" ? (
-              <>No active deployments. <Link to="/live/new" className="text-brand hover:underline">Deploy a strategy →</Link></>
+              <>No active {mode} deployments. <Link to="/live/new" className="text-[var(--accent-deep)] hover:underline">Deploy a strategy →</Link></>
             ) : (
-              `No ${tab} deployments.`
+              `No ${tab} ${mode} deployments.`
             )}
           </div>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {[...filtered.reduce((m, d) => {
-            (m.get(d.strategy_id) ?? m.set(d.strategy_id, []).get(d.strategy_id)!).push(d);
-            return m;
-          }, new Map<string, Deployment[]>()).entries()].map(([sid, deps]) => {
-            const open = q ? true : (openGroups[sid] ?? false); // search force-expands
-            const upnl = deps.reduce((s, d) => s + (d.metrics?.unrealized_pnl ?? 0), 0);
-            const positions = deps.reduce((s, d) => s + (d.metrics?.open_positions ?? 0), 0);
-            const isOpt = deps.some((d) => d.instrument_class === "DERIV" || isOptionsStrategy(d.strategy_id));
-            return (
-              <div key={sid}>
-                <button
-                  onClick={() => setOpenGroups((g) => ({ ...g, [sid]: !(g[sid] ?? false) }))}
-                  className="w-full flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 hover:bg-slate-800/40 transition-colors"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span className="text-slate-400 text-xs w-3 shrink-0">{open ? "▾" : "▸"}</span>
-                    <span className="font-medium truncate">{sid}</span>
-                    <Badge>{isOpt ? "OPT" : "EQ"}</Badge>
-                    <span className="rounded-full bg-slate-800 text-slate-300 text-xs px-2 py-0.5 shrink-0">{deps.length}</span>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs shrink-0">
-                    <span className="text-slate-400">
-                      Unrealized{" "}
-                      <span className={`tabular-nums font-medium ${upnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
-                        {formatInr(upnl)}
+        ) : (
+          <div className="space-y-3">
+            {groups.map(([sid, deps]) => {
+              const open = q ? true : (openGroups[sid] ?? false); // search force-expands
+              const upnl = deps.reduce((s, d) => s + (d.metrics?.unrealized_pnl ?? 0), 0);
+              const positions = deps.reduce((s, d) => s + (d.metrics?.open_positions ?? 0), 0);
+              const isOpt = deps.some((d) => d.instrument_class === "DERIV" || isOptionsStrategy(d.strategy_id));
+              return (
+                <div key={sid}>
+                  <button
+                    onClick={() => setOpenGroups((g) => ({ ...g, [sid]: !(g[sid] ?? false) }))}
+                    className="w-full flex items-center justify-between gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--card)] px-4 py-3 hover:bg-[var(--row-hover)]"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="text-[var(--muted)] text-xs w-3 shrink-0">{open ? "▾" : "▸"}</span>
+                      <span className="font-semibold font-['Space_Grotesk'] truncate text-[var(--strong)]">{sid}</span>
+                      {isOpt && <Tag bg="var(--opt-bg)" color="var(--opt-text)">OPT</Tag>}
+                      <Tag>{deps.length}</Tag>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs shrink-0">
+                      <span className="text-[var(--muted)]">
+                        Unrealized{" "}
+                        <span className={`tabular-nums font-medium ${upnl >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{formatInr(upnl)}</span>
                       </span>
-                    </span>
-                    <span className="text-slate-400">{positions} open</span>
-                  </div>
-                </button>
-                {open && (
-                  <div className="grid gap-3 md:grid-cols-2 mt-3">
-                    {deps.map((dep) => (
-                      <DeploymentTile
-                        key={dep.run_id}
-                        dep={dep}
-                        snapshot={snapshots[dep.run_id]}
-                        version={versions[dep.run_id] ?? 0}
-                        expanded={expanded === dep.run_id}
-                        onToggle={() => setExpanded((prev) => (prev === dep.run_id ? null : dep.run_id))}
-                        onChanged={onChanged}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {trades.length > 0 && (
-        <Card>
-          <div className="text-sm font-medium text-slate-300 mb-2">Recent fills</div>
-          <div className="space-y-1 text-sm max-h-60 overflow-y-auto">
-            {trades.map((t, i) => (
-              <div key={i} className="flex justify-between border-b border-slate-800/50 py-0.5">
-                <span>
-                  <span className="text-slate-400">#{t.run_id}</span> {t.action} {t.units} {t.ticker}
-                  {" "}<Badge>{t.tag}</Badge>
-                </span>
-                <span className="text-slate-400">{formatInr(t.price, 2)}</span>
-              </div>
-            ))}
+                      <span className="text-[var(--muted)]">{positions} open</span>
+                    </div>
+                  </button>
+                  {open && (
+                    <div className="grid gap-3 md:grid-cols-2 mt-3">
+                      {deps.map((dep) => (
+                        <DeploymentTile
+                          key={dep.run_id}
+                          dep={dep}
+                          snapshot={snapshots[dep.run_id]}
+                          version={versions[dep.run_id] ?? 0}
+                          expanded={expanded === dep.run_id}
+                          onToggle={() => setExpanded((prev) => (prev === dep.run_id ? null : dep.run_id))}
+                          onChanged={onChanged}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        </Card>
-      )}
+        )}
+
+        {trades.length > 0 && (
+          <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-5">
+            <div className="text-sm font-medium text-[var(--strong)] mb-2">Recent fills</div>
+            <div className="space-y-1 text-sm max-h-60 overflow-y-auto">
+              {trades.map((t, i) => (
+                <div key={i} className="flex justify-between border-b border-[var(--divider)] py-0.5">
+                  <span className="text-[var(--strong)]">
+                    <span className="text-[var(--muted)]">#{t.run_id}</span> {t.action} {t.units} {t.ticker} <Badge>{t.tag}</Badge>
+                  </span>
+                  <span className="text-[var(--muted)]">{formatInr(t.price, 2)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -72,3 +72,25 @@ input[type="number"] {
 .recharts-cartesian-axis-tick-value {
   fill: rgb(var(--slate-400));
 }
+
+/* Calm-Hero design tokens (Backtest / Live / Trade redesign) — teal-neutral surfaces that swap on
+   the .dark class (same mechanism as the slate ramp). Use via Tailwind arbitrary values, e.g.
+   bg-[var(--card)] text-[var(--strong)] border-[var(--border)]. */
+:root {
+  --page: #f6f8f8; --card: #ffffff; --border: #eaeeed; --strong: #0f2723; --muted: #5c6f6b;
+  --faint: #9aa8a4; --chip: #f1f5f4; --chip-text: #5c6f6b; --stat: #f7faf9; --menu: #ffffff;
+  --seg: #eef2f1; --divider: #eef2f1; --field: #f4f7f6; --field-border: #e2e8e6; --row-hover: #fafcfb;
+  --pos: #0f9d63; --danger: #d9544a; --accent: #12b3a4; --accent-deep: #0d8a7e;
+  --ft: #0d6b4f; --golive: #13a05a;
+  --ok-bg: #e6f6ef; --ok-text: #0f9d63; --warn-bg: #fdf3df; --warn-text: #b07d10;
+  --opt-bg: #efebfd; --opt-text: #6a4fd0; --atm: #f3ece1;
+}
+.dark {
+  --page: #0c1a18; --card: #142926; --border: #24403b; --strong: #f1f6f5; --muted: #92aaa4;
+  --faint: #6f8782; --chip: #1c322e; --chip-text: #bcd3cd; --stat: #19302b; --menu: #173430;
+  --seg: #16302b; --divider: #23413c; --field: #16302b; --field-border: #2a4640; --row-hover: #1a342f;
+  --pos: #34d399; --danger: #f0766a; --accent: #15c2b2; --accent-deep: #5fd8c9;
+  --ft: #12916b; --golive: #16b364;
+  --ok-bg: rgba(52,211,153,.16); --ok-text: #34d399; --warn-bg: rgba(240,189,94,.16); --warn-text: #f0bd5e;
+  --opt-bg: rgba(139,108,240,.20); --opt-text: #b39cf5; --atm: #26352b;
+}
