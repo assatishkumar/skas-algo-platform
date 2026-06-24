@@ -2,11 +2,12 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api, brokers } from "../../api/client";
-import { Card, ErrorBox, NumberInput } from "../ui";
+import { ErrorBox, NumberInput } from "../ui";
+import { Panel } from "../redesign";
 
 const inputClass =
-  "w-full rounded-md bg-slate-800 border border-slate-700 px-2.5 py-1.5 text-sm focus:outline-none focus:border-brand";
-const lbl = "block text-xs text-slate-400 mb-1";
+  "w-full rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-2.5 py-1.5 text-sm text-[var(--strong)] focus:outline-none focus:border-[var(--accent)]";
+const lbl = "block text-xs text-[var(--muted)] mb-1";
 
 export default function EquityTradeBuilder() {
   const navigate = useNavigate();
@@ -63,7 +64,7 @@ export default function EquityTradeBuilder() {
     !(entryMode === "trigger" && triggerPrice <= 0);
 
   return (
-    <Card className="max-w-3xl">
+    <Panel className="max-w-3xl p-5">
       <div className="grid md:grid-cols-2 gap-3 mb-3">
         <label className="block"><span className={lbl}>Trade name</span>
           <input className={inputClass} placeholder="e.g. RELIANCE swing" value={name} onChange={(e) => setName(e.target.value)} /></label>
@@ -87,7 +88,7 @@ export default function EquityTradeBuilder() {
       {entryMode === "trigger" && (
         <div className="grid md:grid-cols-3 gap-3 mb-3">
           <label className="block"><span className={lbl}>Trigger price</span><NumberInput className={inputClass} value={triggerPrice} onChange={setTriggerPrice} /></label>
-          <div className="md:col-span-2 text-[11px] text-slate-500 self-end pb-2">
+          <div className="md:col-span-2 text-[11px] text-[var(--faint)] self-end pb-2">
             The platform watches the LTP and buys with a market order when price crosses this level
             (either direction from where it is now). Needs the deployment loop running.
           </div>
@@ -97,7 +98,7 @@ export default function EquityTradeBuilder() {
       <div className="grid md:grid-cols-4 gap-3 mb-3">
         <label className="block"><span className={lbl}>Target % (0 = off)</span><NumberInput step="0.5" className={inputClass} value={targetPct} onChange={setTargetPct} /></label>
         <label className="block"><span className={lbl}>Stop-loss % (0 = off)</span><NumberInput step="0.5" className={inputClass} value={stopPct} onChange={setStopPct} /></label>
-        <label className="flex items-center gap-2 text-sm text-slate-300 pb-1.5 self-end">
+        <label className="flex items-center gap-2 text-sm text-[var(--strong)] pb-1.5 self-end">
           <input type="checkbox" checked={trailing} onChange={(e) => setTrailing(e.target.checked)} /> trailing SL</label>
         <label className="block"><span className={lbl}>Trail %</span><NumberInput step="0.5" className={inputClass} value={trailPct} onChange={setTrailPct} disabled={!trailing} /></label>
       </div>
@@ -121,8 +122,8 @@ export default function EquityTradeBuilder() {
             </select></label>
         )}
         <div className="flex flex-col gap-1">
-          <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={ignoreHours} onChange={(e) => setIgnoreHours(e.target.checked)} /> ignore market hours</label>
-          <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto loop</label>
+          <label className="flex items-center gap-2 text-sm text-[var(--strong)]"><input type="checkbox" checked={ignoreHours} onChange={(e) => setIgnoreHours(e.target.checked)} /> ignore market hours</label>
+          <label className="flex items-center gap-2 text-sm text-[var(--strong)]"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto loop</label>
         </div>
       </div>
 
@@ -132,9 +133,9 @@ export default function EquityTradeBuilder() {
           className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50">
           {busy ? "Deploying…" : "Save & deploy"}
         </button>
-        <span className="text-xs text-slate-500">Long-only managed position; exits on target / stop / trailing.</span>
+        <span className="text-xs text-[var(--faint)]">Long-only managed position; exits on target / stop / trailing.</span>
       </div>
       {error && <div className="mt-2"><ErrorBox message={error} /></div>}
-    </Card>
+    </Panel>
   );
 }

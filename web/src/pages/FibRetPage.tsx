@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, brokers } from "../api/client";
-import { Card } from "../components/ui";
+import { Panel } from "../components/redesign";
 import { formatInr } from "../lib/format";
 import type { FibRetResult, FibRetRow, OptionChain, OptionChainLeg, OptionsTradeDeploy } from "../types";
 
@@ -53,7 +53,7 @@ function parseScreenerCsv(text: string): CsvRow[] {
   return out;
 }
 
-const inputCls = "rounded bg-slate-800 border border-slate-700 px-2 py-1";
+const inputCls = "rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-2 py-1 text-[var(--strong)]";
 
 function legAt(chain: OptionChain | undefined, strike: number, right: "CE" | "PE"): OptionChainLeg | null {
   const r = chain?.rows.find((x) => x.strike === strike);
@@ -67,12 +67,12 @@ function LegLine({ leg }: { leg: OptionChainLeg | null }) {
   const liq = isLiquid(s);
   return (
     <div className="flex flex-wrap items-center gap-x-3 text-xs">
-      <span className="text-slate-400">prem <span className="text-slate-200">{n2(prem)}</span></span>
-      <span className="text-slate-400">bid/ask <span className="text-slate-200">{n2(leg?.bid)} / {n2(leg?.ask)}</span></span>
-      <span className={liq ? "text-emerald-500" : "text-amber-500"}>
+      <span className="text-[var(--muted)]">prem <span className="text-[var(--strong)]">{n2(prem)}</span></span>
+      <span className="text-[var(--muted)]">bid/ask <span className="text-[var(--strong)]">{n2(leg?.bid)} / {n2(leg?.ask)}</span></span>
+      <span className={liq ? "text-[var(--pos)]" : "text-[var(--warn-text)]"}>
         spread {s == null ? "—" : `${s.toFixed(1)}%`} {liq ? "" : "⚑ illiquid"}
       </span>
-      {leg?.oi != null && <span className="text-slate-500">OI {leg.oi.toLocaleString("en-IN")}</span>}
+      {leg?.oi != null && <span className="text-[var(--faint)]">OI {leg.oi.toLocaleString("en-IN")}</span>}
     </div>
   );
 }
@@ -177,48 +177,48 @@ function DeployPanel({
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
-        className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-2xl space-y-3"
+        className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--menu)] p-4 shadow-2xl space-y-3"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
-          <div className="font-medium text-slate-200">
+          <div className="font-medium text-[var(--strong)]">
             Deploy {row.symbol} — SELL {side}
           </div>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 px-1">×</button>
+          <button onClick={onClose} className="text-[var(--faint)] hover:text-[var(--strong)] px-1">×</button>
         </div>
 
         {/* short leg + strike picker */}
-        <div className="rounded-md border border-slate-800 p-2.5 space-y-1.5">
+        <div className="rounded-md border border-[var(--divider)] p-2.5 space-y-1.5">
           <div className="flex items-center gap-2 text-sm">
-            <span className="text-rose-400 font-medium w-16">SELL {side}</span>
+            <span className="text-[var(--danger)] font-medium w-16">SELL {side}</span>
             {chain ? (
               <select value={shortStrike} onChange={(e) => setShortStrike(Number(e.target.value))} className={inputCls}>
                 {strikes.map((k) => <option key={k} value={k}>{k}</option>)}
               </select>
             ) : (
-              <span className="text-slate-200">{shortStrike}</span>
+              <span className="text-[var(--strong)]">{shortStrike}</span>
             )}
-            <span className="text-xs text-slate-500">× {lot} × {lots} lots</span>
+            <span className="text-xs text-[var(--faint)]">× {lot} × {lots} lots</span>
           </div>
-          {chainQ.isLoading && <div className="text-xs text-slate-500">Loading live chain…</div>}
-          {chainQ.isError && <div className="text-xs text-amber-500">Couldn't load live chain — deploying at the suggested strike.</div>}
+          {chainQ.isLoading && <div className="text-xs text-[var(--faint)]">Loading live chain…</div>}
+          {chainQ.isError && <div className="text-xs text-[var(--warn-text)]">Couldn't load live chain — deploying at the suggested strike.</div>}
           {chain && <LegLine leg={shortLeg} />}
         </div>
 
         {/* hedge */}
-        <div className="rounded-md border border-slate-800 p-2.5 space-y-1.5">
+        <div className="rounded-md border border-[var(--divider)] p-2.5 space-y-1.5">
           {!hedgeOn ? (
-            <button onClick={enableHedge} className="text-sm text-brand-light hover:underline" disabled={!hedgeCands.length}>
+            <button onClick={enableHedge} className="text-sm text-[var(--accent-deep)] hover:underline" disabled={!hedgeCands.length}>
               + Buy a hedge ({side === "CE" ? "long call above" : "long put below"}){!hedgeCands.length ? " — no strikes" : ""}
             </button>
           ) : (
             <>
               <div className="flex items-center gap-2 text-sm">
-                <span className="text-emerald-400 font-medium w-16">BUY {side}</span>
+                <span className="text-[var(--pos)] font-medium w-16">BUY {side}</span>
                 <select value={hedgeStrike ?? ""} onChange={(e) => setHedgeStrike(Number(e.target.value))} className={inputCls}>
                   {hedgeCands.map((k) => <option key={k} value={k}>{k}</option>)}
                 </select>
-                <button onClick={() => { setHedgeOn(false); setHedgeStrike(null); }} className="text-xs text-slate-500 hover:text-slate-300 underline">remove</button>
+                <button onClick={() => { setHedgeOn(false); setHedgeStrike(null); }} className="text-xs text-[var(--faint)] hover:text-[var(--strong)] underline">remove</button>
               </div>
               {chain && <LegLine leg={hedgeLeg} />}
             </>
@@ -227,22 +227,22 @@ function DeployPanel({
 
         {/* summary */}
         <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-          <div className="flex justify-between"><span className="text-slate-400">Spot</span><span>{n2(spot)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-400">Expiry</span><span>{row.expiry} ({row.dte}d)</span></div>
+          <div className="flex justify-between"><span className="text-[var(--muted)]">Spot</span><span>{n2(spot)}</span></div>
+          <div className="flex justify-between"><span className="text-[var(--muted)]">Expiry</span><span>{row.expiry} ({row.dte}d)</span></div>
           <div className="flex justify-between">
-            <span className="text-slate-400">Stop (spot {side === "CE" ? "≥" : "≤"})</span>
+            <span className="text-[var(--muted)]">Stop (spot {side === "CE" ? "≥" : "≤"})</span>
             <span>{n2(row.stop_level)}{stopCushion != null ? ` (${stopCushion >= 0 ? "+" : ""}${stopCushion.toFixed(1)}%)` : ""}</span>
           </div>
-          <div className="flex justify-between"><span className="text-slate-400">{netCredit >= 0 ? "Net credit" : "Net debit"}</span><span className={netCredit >= 0 ? "text-emerald-500" : "text-rose-500"}>{money(Math.abs(netCredit))}</span></div>
-          <div className="flex justify-between"><span className="text-slate-400">Target (book {result.target_pct}%)</span><span className="text-emerald-500">{money(targetAmt)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-400">Margin{marginQ.data?.source ? ` (${marginQ.data.source === "zerodha" ? "basket" : "est"})` : ""}</span><span>{marginQ.isLoading ? "…" : money(margin)}</span></div>
+          <div className="flex justify-between"><span className="text-[var(--muted)]">{netCredit >= 0 ? "Net credit" : "Net debit"}</span><span className={netCredit >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}>{money(Math.abs(netCredit))}</span></div>
+          <div className="flex justify-between"><span className="text-[var(--muted)]">Target (book {result.target_pct}%)</span><span className="text-[var(--pos)]">{money(targetAmt)}</span></div>
+          <div className="flex justify-between"><span className="text-[var(--muted)]">Margin{marginQ.data?.source ? ` (${marginQ.data.source === "zerodha" ? "basket" : "est"})` : ""}</span><span>{marginQ.isLoading ? "…" : money(margin)}</span></div>
         </div>
 
         {shortIlliquid && (
-          <div className="text-xs text-amber-500">⚑ The selected short strike has a wide bid-ask spread (&gt;10%) — consider another strike. You can still deploy.</div>
+          <div className="text-xs text-[var(--warn-text)]">⚑ The selected short strike has a wide bid-ask spread (&gt;10%) — consider another strike. You can still deploy.</div>
         )}
         {row.out_of_range && shortStrike === row.strike && (
-          <div className="text-xs text-amber-500">The suggested strike is the chain edge ({row.note ?? "far OTM"}). Pick a nearer strike above if you want a tradeable contract.</div>
+          <div className="text-xs text-[var(--warn-text)]">The suggested strike is the chain edge ({row.note ?? "far OTM"}). Pick a nearer strike above if you want a tradeable contract.</div>
         )}
 
         <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -258,18 +258,18 @@ function DeployPanel({
         </div>
         <input value={name} onChange={(e) => setName(e.target.value)} className={`w-full text-sm ${inputCls}`} placeholder="Deployment name" />
         {mode === "LIVE" && (
-          <div className="text-xs text-amber-500">Real-money LIVE also requires the account to be armed and trading enabled.</div>
+          <div className="text-xs text-[var(--warn-text)]">Real-money LIVE also requires the account to be armed and trading enabled.</div>
         )}
-        {deploy.isError && <div className="text-xs text-rose-500">{(deploy.error as Error).message}</div>}
+        {deploy.isError && <div className="text-xs text-[var(--danger)]">{(deploy.error as Error).message}</div>}
         {deploy.isSuccess ? (
-          <div className="text-sm text-emerald-500">Deployed. <Link to="/live" className="underline">Open the Live tab →</Link></div>
+          <div className="text-sm text-[var(--pos)]">Deployed. <Link to="/live" className="underline">Open the Live tab →</Link></div>
         ) : (
           <div className="flex gap-2">
             <button onClick={() => deploy.mutate()} disabled={deploy.isPending}
-              className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-sm text-white disabled:opacity-50">
+              className="rounded bg-[var(--ft)] px-3 py-1.5 text-sm text-white disabled:opacity-50">
               {deploy.isPending ? "Deploying…" : `Deploy (${mode})`}
             </button>
-            <button onClick={onClose} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-sm">Cancel</button>
+            <button onClick={onClose} className="rounded bg-[var(--chip)] text-[var(--chip-text)] hover:opacity-80 px-3 py-1.5 text-sm">Cancel</button>
           </div>
         )}
       </div>
@@ -348,7 +348,7 @@ export default function FibRetPage() {
     <div className="space-y-4">
       <div>
         <h1 className="text-lg font-semibold">FibRet screener</h1>
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-[var(--muted)]">
           Fibonacci-retracement option selling. Upload your IVP screener CSV (or paste symbols); for each
           stock the tool finds the recent daily swing, suggests a short option at the 1.618 extension with
           a spot-stop at the 0.786 level, and shows live premium, bid-ask liquidity, R:R and margin. Pick
@@ -356,76 +356,76 @@ export default function FibRetPage() {
         </p>
       </div>
 
-      <Card className="space-y-3">
+      <Panel className="space-y-3 p-5">
         <div className="flex flex-wrap items-center gap-3 text-sm">
-          <label className="inline-flex items-center gap-2 rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 cursor-pointer">
+          <label className="inline-flex items-center gap-2 rounded bg-[var(--chip)] text-[var(--chip-text)] hover:opacity-80 px-3 py-1.5 cursor-pointer">
             📄 Upload screener CSV
             <input type="file" accept=".csv,text/csv" className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ""; }} />
           </label>
           {csvRows.length > 0 && (
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-[var(--muted)]">
               {csvName || "uploaded"} — {csvRows.length} instruments · {csvFiltered.length} with IVP ≥ {ivpMin}
-              <button onClick={clearCsv} className="ml-2 text-slate-500 hover:text-slate-300 underline">clear</button>
+              <button onClick={clearCsv} className="ml-2 text-[var(--faint)] hover:text-[var(--strong)] underline">clear</button>
             </span>
           )}
         </div>
         <div className="flex flex-wrap items-end gap-3 text-sm">
           <label className="flex flex-col gap-1">
-            <span className="text-slate-400">Broker session</span>
+            <span className="text-[var(--muted)]">Broker session</span>
             <select value={effectiveAccount ?? ""} onChange={(e) => setAccountId(Number(e.target.value) || null)}
-              className="rounded bg-slate-800 border border-slate-700 px-2 py-1.5 min-w-[14rem]">
+              className="rounded bg-[var(--field)] border border-[var(--field-border)] px-2 py-1.5 min-w-[14rem]">
               {sessioned.length === 0 && <option value="">No logged-in account</option>}
               {sessioned.map((a) => <option key={a.id} value={a.id}>{a.label} {a.armed ? "· armed" : ""}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-400">Swing lookback (days)</span>
+            <span className="text-[var(--muted)]">Swing lookback (days)</span>
             <input type="number" min={10} value={lookback} onChange={(e) => setLookback(Number(e.target.value) || 20)}
-              className="w-28 rounded bg-slate-800 border border-slate-700 px-2 py-1.5" />
+              className="w-28 rounded bg-[var(--field)] border border-[var(--field-border)] px-2 py-1.5" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-400">IVP ≥ {csvRows.length ? "" : "(CSV only)"}</span>
+            <span className="text-[var(--muted)]">IVP ≥ {csvRows.length ? "" : "(CSV only)"}</span>
             <input type="number" min={0} max={100} value={ivpMin} onChange={(e) => setIvpMin(Number(e.target.value) || 0)}
               disabled={csvRows.length === 0}
-              className="w-20 rounded bg-slate-800 border border-slate-700 px-2 py-1.5 disabled:opacity-50" />
+              className="w-20 rounded bg-[var(--field)] border border-[var(--field-border)] px-2 py-1.5 disabled:opacity-50" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-400">Lots</span>
+            <span className="text-[var(--muted)]">Lots</span>
             <input type="number" min={1} value={lots} onChange={(e) => setLots(Math.max(1, Number(e.target.value) || 1))}
-              className="w-20 rounded bg-slate-800 border border-slate-700 px-2 py-1.5" />
+              className="w-20 rounded bg-[var(--field)] border border-[var(--field-border)] px-2 py-1.5" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-400">Expiry (optional)</span>
+            <span className="text-[var(--muted)]">Expiry (optional)</span>
             <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)}
-              className="rounded bg-slate-800 border border-slate-700 px-2 py-1.5" />
+              className="rounded bg-[var(--field)] border border-[var(--field-border)] px-2 py-1.5" />
           </label>
         </div>
         {csvRows.length === 0 ? (
           <textarea value={symbolsText} onChange={(e) => setSymbolsText(e.target.value)} rows={2}
             placeholder="Watchlist — symbols separated by space, comma or newline (e.g. INFY, BAJFINANCE, RELIANCE) — or upload your screener CSV above"
-            className="w-full rounded bg-slate-800 border border-slate-700 px-3 py-2 text-sm font-mono" />
+            className="w-full rounded bg-[var(--field)] border border-[var(--field-border)] px-3 py-2 text-sm font-mono" />
         ) : (
-          <div className="text-xs text-slate-400 font-mono break-words">
+          <div className="text-xs text-[var(--muted)] font-mono break-words">
             {symbols.length ? symbols.join(", ") : "No instruments pass the IVP filter — lower IVP ≥."}
           </div>
         )}
         <div className="flex items-center gap-3">
           <button onClick={() => analyze.mutate()} disabled={analyze.isPending || !effectiveAccount || symbols.length === 0}
-            className="rounded bg-brand hover:bg-brand-light px-4 py-1.5 text-sm text-white disabled:opacity-50">
+            className="rounded bg-[var(--ft)] px-4 py-1.5 text-sm text-white disabled:opacity-50">
             {analyze.isPending ? "Analyzing…" : result ? `Refresh (${symbols.length})` : `Analyze ${symbols.length || ""}`.trim()}
           </button>
-          {analyze.isError && <span className="text-sm text-rose-500">{(analyze.error as Error).message}</span>}
-          {result && <span className="text-xs text-slate-500">as of {result.as_of} · stop at {result.stop_fib} · entry at {result.entry_fib} · target {result.target_pct}%</span>}
+          {analyze.isError && <span className="text-sm text-[var(--danger)]">{(analyze.error as Error).message}</span>}
+          {result && <span className="text-xs text-[var(--faint)]">as of {result.as_of} · stop at {result.stop_fib} · entry at {result.entry_fib} · target {result.target_pct}%</span>}
         </div>
-      </Card>
+      </Panel>
 
       {result && (
-        <Card>
+        <Panel className="p-4">
           <div className="overflow-x-auto">
             <table className="w-full text-sm tabular-nums whitespace-nowrap">
               <thead>
-                <tr className="text-slate-400 text-xs border-b border-slate-800">
+                <tr className="text-[var(--muted)] text-xs border-b border-[var(--divider)]">
                   <Th>Stock</Th><Th right>IVP</Th><Th right>ATM IV</Th><Th right>Spot</Th><Th>Side</Th><Th>Swing (L→H)</Th>
                   <Th right>Strike</Th><Th right>DTE</Th><Th right>Premium</Th><Th right>OI</Th><Th right>Bid/Ask (spr)</Th>
                   <Th right>Stop spot</Th><Th right>R:R</Th><Th right>Max profit</Th>
@@ -434,37 +434,37 @@ export default function FibRetPage() {
               </thead>
               <tbody>
                 {result.rows.map((r) => (
-                  <tr key={r.symbol} className="border-b border-slate-800/40">
+                  <tr key={r.symbol} className="border-b border-[var(--divider)]/40">
                     <td className="py-1.5 px-2 font-medium">{r.symbol}</td>
                     <td className="py-1.5 px-2 text-right">{ivpMap.get(r.symbol)?.ivp ?? "—"}</td>
                     <td className="py-1.5 px-2 text-right">{n1(ivpMap.get(r.symbol)?.atmIv)}</td>
                     {r.error ? (
-                      <td colSpan={16} className="py-1.5 px-2 text-rose-500/80 text-xs">{r.error}</td>
+                      <td colSpan={16} className="py-1.5 px-2 text-[var(--danger)]/80 text-xs">{r.error}</td>
                     ) : (
                       <>
                         <td className="py-1.5 px-2 text-right">{n1(r.spot)}</td>
-                        <td className="py-1.5 px-2"><span className={r.side === "CE" ? "text-rose-400" : "text-emerald-400"}>SELL {r.side}</span></td>
-                        <td className="py-1.5 px-2 text-xs text-slate-400">{n1(r.swing_low)}→{n1(r.swing_high)}</td>
-                        <td className={`py-1.5 px-2 text-right ${r.out_of_range ? "text-amber-500" : ""}`} title={r.note ?? undefined}>
+                        <td className="py-1.5 px-2"><span className={r.side === "CE" ? "text-[var(--danger)]" : "text-[var(--pos)]"}>SELL {r.side}</span></td>
+                        <td className="py-1.5 px-2 text-xs text-[var(--muted)]">{n1(r.swing_low)}→{n1(r.swing_high)}</td>
+                        <td className={`py-1.5 px-2 text-right ${r.out_of_range ? "text-[var(--warn-text)]" : ""}`} title={r.note ?? undefined}>
                           {r.strike}{r.out_of_range ? " ⚑" : ""}
                         </td>
                         <td className="py-1.5 px-2 text-right">{r.dte}</td>
                         <td className="py-1.5 px-2 text-right">{n2(r.premium)}</td>
                         <td className="py-1.5 px-2 text-right">{r.oi?.toLocaleString("en-IN")}</td>
-                        <td className={`py-1.5 px-2 text-right ${r.liquid ? "" : "text-amber-500"}`}
+                        <td className={`py-1.5 px-2 text-right ${r.liquid ? "" : "text-[var(--warn-text)]"}`}
                           title={r.liquid ? undefined : "wide bid-ask spread (>10% of mid) — illiquid"}>
                           {n2(r.bid)}/{n2(r.ask)} {r.spread_pct == null ? "" : `(${r.spread_pct.toFixed(0)}%)`}{r.liquid ? "" : " ⚑"}
                         </td>
                         <td className="py-1.5 px-2 text-right">{n1(r.stop_level)}</td>
                         <td className="py-1.5 px-2 text-right">{r.reward_risk != null ? `${r.reward_risk.toFixed(2)}x` : "NA"}</td>
-                        <td className="py-1.5 px-2 text-right text-emerald-500">{money(r.max_profit)}</td>
+                        <td className="py-1.5 px-2 text-right text-[var(--pos)]">{money(r.max_profit)}</td>
                         <td className="py-1.5 px-2 text-right">{money(r.margin)}</td>
                         <td className="py-1.5 px-2 text-right">{r.iv_richness != null ? `${r.iv_richness.toFixed(2)}x` : "—"}</td>
                         <td className="py-1.5 px-2 text-right">{pct(r.cushion_to_strike_pct)}</td>
                         <td className="py-1.5 px-2 text-right">{pct(r.cushion_to_stop_pct)}</td>
                         <td className="py-1.5 px-2 text-right">
                           <button onClick={() => setDeployRow(r)}
-                            className="rounded bg-emerald-700 hover:bg-emerald-600 text-white px-2.5 py-1 text-xs">
+                            className="rounded bg-[var(--ft)] text-white px-2.5 py-1 text-xs">
                             Deploy
                           </button>
                         </td>
@@ -475,12 +475,12 @@ export default function FibRetPage() {
               </tbody>
             </table>
           </div>
-          <div className="text-[11px] text-slate-500 mt-2">
+          <div className="text-[11px] text-[var(--faint)] mt-2">
             ⚑ on Bid/Ask = wide spread (&gt;10% of mid) → illiquid. ⚑ on Strike = 1.618 level beyond listed
             strikes. R:R = max profit ÷ estimated loss if spot hits the stop. IV/RV = live IV ÷ realized vol.
             Deploy lets you change the strike and add a hedge. Gross of charges.
           </div>
-        </Card>
+        </Panel>
       )}
 
       {deployRow && result && effectiveAccount && (
