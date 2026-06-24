@@ -191,7 +191,9 @@ function SignalsPanel({ runId, version, supertrend = false }: { runId: number; v
                       ⚡{r.signal}
                     </span>
                   )}
-                  {r.status}
+                  <span className={r.no_cash ? "text-amber-600 dark:text-amber-400" : ""}>
+                    {r.no_cash && "🛑 "}{r.status}
+                  </span>
                   {r.held ? ` · ${r.lots} lot${r.lots > 1 ? "s" : ""}` : ""}
                 </td>
               </tr>

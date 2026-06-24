@@ -514,6 +514,18 @@ class LiveSession:
             return []  # options runs have no fixed Donchian universe to introspect
         tracking = getattr(self.strategy, "tracking", {})
         excluded = self.resolver.excluded
+        # Can the strategy fund a new entry? SST sizes each buy at one "capital part"
+        # (equity/parts when equity_scaled, else a fixed amount). A breakout can't be bought
+        # without a free part, so flag those instead of showing a green BUY it can't act on.
+        strat = self.strategy
+        parts = getattr(strat, "capital_parts", 0) or 0
+        cash = self.portfolio.cash
+        if parts and getattr(strat, "allocation_mode", "fixed") == "equity_scaled":
+            marks = self.market.mark_prices() if hasattr(self.market, "mark_prices") else {}
+            allocation = (cash + self.portfolio.holdings_value(marks)) / parts
+        else:
+            allocation = getattr(strat, "allocation_amount", None)
+        fundable = allocation is None or cash >= allocation
         rows: list[dict] = []
         for sym in self.market.universe():
             ltp = self.market.last_close(sym)
@@ -530,18 +542,23 @@ class LiveSession:
             is_tracking = bool(tracking.get(sym, False))
 
             is_excluded = sym in excluded
+            # A tracking name whose LTP is above the 20-day high — a breakout we'd buy, if not
+            # excluded and a capital part is fundable.
+            breakout = is_tracking and high is not None and ltp is not None and ltp > high
+            no_cash = breakout and not is_excluded and not fundable
             # Would the next decision act on this name? (breakout buy / target sell)
             signal = ""
             if held and ltp is not None and self._would_exit(lots, ltp, avg):
                 signal = "SELL"
-            elif is_tracking and high is not None and ltp is not None and ltp > high:
-                # Excluded names won't be bought, even on a breakout.
-                signal = "" if is_excluded else "BUY"
+            elif breakout and not is_excluded and fundable:
+                signal = "BUY"
 
             if is_excluded and not held:
                 status = "Excluded — no new entries"
             elif held:
                 status = f"Holding {len(lots)} lot(s)" + (" · excluded" if is_excluded else "")
+            elif no_cash:
+                status = "Breakout · no free capital"
             elif is_tracking and high is not None:
                 status = "Tracking → buy on breakout"
             elif ltp is not None and low is not None and ltp <= low:
@@ -570,6 +587,7 @@ class LiveSession:
                     "pnl_pct": pnl_pct,
                     "to_breakout_pct": to_breakout,
                     "signal": signal,
+                    "no_cash": no_cash,
                     "status": status,
                 }
             )

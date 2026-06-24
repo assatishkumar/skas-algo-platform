@@ -790,6 +790,7 @@ export interface WatchRow {
   pnl_pct: number | null;
   to_breakout_pct: number | null;
   signal: string; // "BUY" | "SELL" | "" — would the next decision act?
+  no_cash?: boolean; // breakout that can't be funded (no free capital part)
   status: string;
   // SuperTrend runs only (the watchlist is strategy-aware):
   direction?: number | null; // +1 green / −1 red
