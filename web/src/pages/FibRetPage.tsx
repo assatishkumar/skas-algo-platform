@@ -277,8 +277,20 @@ function DeployPanel({
   );
 }
 
-function Th({ children, right }: { children?: React.ReactNode; right?: boolean }) {
-  return <th className={`font-medium py-1.5 px-2 ${right ? "text-right" : "text-left"}`}>{children}</th>;
+type Sort = { col: string; dir: 1 | -1 };
+
+function Th({ children, right, col, sort, onSort }: {
+  children?: React.ReactNode; right?: boolean; col?: string; sort?: Sort | null; onSort?: (c: string) => void;
+}) {
+  const active = !!col && sort?.col === col;
+  return (
+    <th
+      onClick={col ? () => onSort?.(col) : undefined}
+      className={`font-medium py-1.5 px-2 ${right ? "text-right" : "text-left"} ${col ? "cursor-pointer select-none hover:text-[var(--strong)]" : ""} ${active ? "text-[var(--strong)]" : ""}`}
+    >
+      {children}{active ? (sort!.dir === 1 ? " ↑" : " ↓") : col ? " ⇅" : ""}
+    </th>
+  );
 }
 
 // ── persistence ──────────────────────────────────────────────────────────────────────────────
@@ -306,10 +318,53 @@ export default function FibRetPage() {
   const [expiry, setExpiry] = useState(saved.expiry ?? "");
   const [result, setResult] = useState<FibRetResult | null>(saved.result ?? null);
   const [deployRow, setDeployRow] = useState<FibRetRow | null>(null);
+  const [sort, setSort] = useState<Sort | null>(null);
 
   const effectiveAccount = accountId ?? sessioned[0]?.id ?? null;
 
   const ivpMap = useMemo(() => new Map(csvRows.map((r) => [r.symbol, r])), [csvRows]);
+
+  // Click a column header to sort (first click descending). Rows missing the value sort last.
+  const onSort = (c: string) => setSort((s) => (s?.col === c ? { col: c, dir: (s.dir === 1 ? -1 : 1) as 1 | -1 } : { col: c, dir: -1 }));
+  const sortVal = (r: FibRetRow, col: string): number | string | null | undefined => {
+    switch (col) {
+      case "stock": return r.symbol;
+      case "ivp": return ivpMap.get(r.symbol)?.ivp;
+      case "atmiv": return ivpMap.get(r.symbol)?.atmIv;
+      case "spot": return r.spot;
+      case "side": return r.side;
+      case "swing": return r.swing_low;
+      case "strike": return r.strike;
+      case "dte": return r.dte;
+      case "premium": return r.premium;
+      case "oi": return r.oi;
+      case "spread": return r.spread_pct;
+      case "stop": return r.stop_level;
+      case "rr": return r.reward_risk;
+      case "maxprofit": return r.max_profit;
+      case "margin": return r.margin;
+      case "ivrv": return r.iv_richness;
+      case "cushK": return r.cushion_to_strike_pct;
+      case "cushStop": return r.cushion_to_stop_pct;
+      default: return null;
+    }
+  };
+  const sortedRows = useMemo(() => {
+    if (!result) return [];
+    if (!sort) return result.rows;
+    const out = [...result.rows];
+    out.sort((a, b) => {
+      const va = sortVal(a, sort.col);
+      const vb = sortVal(b, sort.col);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1; // missing values always last
+      if (vb == null) return -1;
+      if (typeof va === "string" || typeof vb === "string") return String(va).localeCompare(String(vb)) * sort.dir;
+      return (va - vb) * sort.dir;
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result, sort, ivpMap]);
   const csvFiltered = useMemo(
     () => csvRows.filter((r) => (r.ivp ?? -1) >= ivpMin).sort((a, b) => (b.ivp ?? 0) - (a.ivp ?? 0)),
     [csvRows, ivpMin],
@@ -426,14 +481,29 @@ export default function FibRetPage() {
             <table className="w-full text-sm tabular-nums whitespace-nowrap">
               <thead>
                 <tr className="text-[var(--muted)] text-xs border-b border-[var(--divider)]">
-                  <Th>Stock</Th><Th right>IVP</Th><Th right>ATM IV</Th><Th right>Spot</Th><Th>Side</Th><Th>Swing (L→H)</Th>
-                  <Th right>Strike</Th><Th right>DTE</Th><Th right>Premium</Th><Th right>OI</Th><Th right>Bid/Ask (spr)</Th>
-                  <Th right>Stop spot</Th><Th right>R:R</Th><Th right>Max profit</Th>
-                  <Th right>Margin</Th><Th right>IV/RV</Th><Th right>Cushion→K</Th><Th right>Cush→Stop</Th><Th></Th>
+                  <Th col="stock" sort={sort} onSort={onSort}>Stock</Th>
+                  <Th right col="ivp" sort={sort} onSort={onSort}>IVP</Th>
+                  <Th right col="atmiv" sort={sort} onSort={onSort}>ATM IV</Th>
+                  <Th right col="spot" sort={sort} onSort={onSort}>Spot</Th>
+                  <Th col="side" sort={sort} onSort={onSort}>Side</Th>
+                  <Th col="swing" sort={sort} onSort={onSort}>Swing (L→H)</Th>
+                  <Th right col="strike" sort={sort} onSort={onSort}>Strike</Th>
+                  <Th right col="dte" sort={sort} onSort={onSort}>DTE</Th>
+                  <Th right col="premium" sort={sort} onSort={onSort}>Premium</Th>
+                  <Th right col="oi" sort={sort} onSort={onSort}>OI</Th>
+                  <Th right col="spread" sort={sort} onSort={onSort}>Bid/Ask (spr)</Th>
+                  <Th right col="stop" sort={sort} onSort={onSort}>Stop spot</Th>
+                  <Th right col="rr" sort={sort} onSort={onSort}>R:R</Th>
+                  <Th right col="maxprofit" sort={sort} onSort={onSort}>Max profit</Th>
+                  <Th right col="margin" sort={sort} onSort={onSort}>Margin</Th>
+                  <Th right col="ivrv" sort={sort} onSort={onSort}>IV/RV</Th>
+                  <Th right col="cushK" sort={sort} onSort={onSort}>Cushion→K</Th>
+                  <Th right col="cushStop" sort={sort} onSort={onSort}>Cush→Stop</Th>
+                  <Th></Th>
                 </tr>
               </thead>
               <tbody>
-                {result.rows.map((r) => (
+                {sortedRows.map((r) => (
                   <tr key={r.symbol} className="border-b border-[var(--divider)]/40">
                     <td className="py-1.5 px-2 font-medium">{r.symbol}</td>
                     <td className="py-1.5 px-2 text-right">{ivpMap.get(r.symbol)?.ivp ?? "—"}</td>

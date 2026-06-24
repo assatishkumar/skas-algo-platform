@@ -91,7 +91,10 @@ export default function LivePayoffChart({
           <Tooltip
             contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }}
             formatter={(v: number, n: string) => [formatInr(v), n === "expiry" ? "At expiry" : "Current"]}
-            labelFormatter={(v: number) => `Spot ${Math.round(v)}`}
+            labelFormatter={(v: number) => {
+              const chg = spot ? ((v - spot) / spot) * 100 : null;
+              return chg == null ? `Spot ${Math.round(v)}` : `Spot ${Math.round(v)} (${chg >= 0 ? "+" : ""}${chg.toFixed(1)}% vs spot)`;
+            }}
           />
           <ReferenceLine y={0} stroke="#475569" />
           {spot != null && (
