@@ -2,208 +2,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import { Badge, Card, ErrorBox, Spinner, StatusPill, timeAgo } from "../components/ui";
+import { ErrorBox, Spinner, timeAgo } from "../components/ui";
+import { KebabMenu, Segmented, Tag, type MenuItem } from "../components/redesign";
 import { formatInr, pct } from "../lib/format";
 import type { ForwardTestPrefill, RunSummary } from "../types";
-
-/** A backtest run tile: name, notes, key metrics, and rename/archive/delete actions. */
-function RunTile({
-  run,
-  onChanged,
-  selectMode = false,
-  selected = false,
-  onSelect,
-  isTemplate = false,
-}: {
-  run: RunSummary;
-  onChanged: () => void;
-  selectMode?: boolean;
-  selected?: boolean;
-  onSelect?: () => void;
-  isTemplate?: boolean;
-}) {
-  const navigate = useNavigate();
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(run.name);
-  const [notes, setNotes] = useState(run.notes ?? "");
-  const [busy, setBusy] = useState(false);
-
-  const ret = run.metrics["Total Return %"];
-  const act = async (fn: () => Promise<unknown>) => {
-    setBusy(true);
-    try {
-      await fn();
-    } finally {
-      setBusy(false);
-      onChanged();
-    }
-  };
-
-  async function saveEdit() {
-    await act(() => api.runUpdate(run.run_id, { name: name.trim(), notes: notes.trim() }));
-    setEditing(false);
-  }
-
-  async function forwardTest() {
-    // The list summary lacks capital/params, so pull the full run first.
-    const full = await api.run(run.run_id);
-    const prefill: ForwardTestPrefill = {
-      strategy_id: full.strategy_id,
-      name: full.name,
-      capital: full.capital,
-      params: full.params,
-    };
-    navigate("/live/new", { state: { prefill } });
-  }
-
-  async function clone() {
-    const full = await api.run(run.run_id);
-    navigate("/new", {
-      state: {
-        clonePrefill: {
-          strategy_id: full.strategy_id,
-          name: full.name,
-          capital: full.capital,
-          params: full.params,
-        },
-      },
-    });
-  }
-
-  return (
-    <Card className={selected ? "border-brand" : ""}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex items-start gap-2">
-          {selectMode && (
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={selected}
-              onChange={onSelect}
-            />
-          )}
-          <div className="min-w-0">
-          {editing ? (
-            <input
-              className="w-full rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          ) : (
-            <Link to={`/runs/${run.run_id}`} className="font-medium truncate hover:text-brand-light">
-              {run.name}
-            </Link>
-          )}
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-            {run.archived && <StatusPill status="archived" />}
-            {isTemplate && (
-              <span className="text-amber-700 dark:text-amber-300" title="Strategy template — new backtests prefill from this run">
-                ★ template
-              </span>
-            )}
-            <Badge>{run.strategy_id}</Badge>
-            <Badge>{run.mode}</Badge>
-            <span>#{run.run_id}</span>
-            <span>· {timeAgo(run.started_at)}</span>
-          </div>
-          </div>
-        </div>
-        <div className="text-right text-sm shrink-0">
-          <div className="text-slate-400 text-xs">Return</div>
-          <div className={ret >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>{pct(ret)}</div>
-        </div>
-      </div>
-
-      {/* Notes (preview + inline edit) */}
-      {editing ? (
-        <textarea
-          className="mt-2 w-full rounded bg-slate-800 border border-slate-700 px-2 py-1 text-sm"
-          rows={2}
-          placeholder="notes"
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-        />
-      ) : run.notes ? (
-        <div className="mt-2 text-xs text-slate-400 line-clamp-2">{run.notes}</div>
-      ) : null}
-
-      {/* Key metrics */}
-      <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
-        <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          <div className="text-slate-400 text-[11px]">Final equity</div>
-          {formatInr(run.metrics["Final Equity"])}
-        </div>
-        <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          <div className="text-slate-400 text-[11px]">Max DD</div>
-          <span className="text-rose-600 dark:text-rose-400">{pct(run.metrics["Max Drawdown %"])}</span>
-        </div>
-        <div className="rounded-md bg-slate-800/40 px-2.5 py-1.5">
-          <div className="text-slate-400 text-[11px]">Trades</div>
-          {run.metrics["Total Trades"]}
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-        <Link to={`/runs/${run.run_id}`} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
-          Open
-        </Link>
-        <button onClick={forwardTest} className="rounded bg-emerald-900 hover:bg-emerald-800 text-white px-3 py-1.5">
-          Forward-test →
-        </button>
-        <button onClick={clone} title="Prefill a new backtest from this run" className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5">
-          Clone
-        </button>
-        {run.archived ? (
-          <button
-            onClick={() => act(() => api.runUnarchive(run.run_id))}
-            disabled={busy}
-            className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50"
-          >
-            Unarchive
-          </button>
-        ) : (
-          <button
-            onClick={() => act(() => api.runArchive(run.run_id))}
-            disabled={busy}
-            className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 disabled:opacity-50"
-          >
-            Archive
-          </button>
-        )}
-        <button
-          onClick={() => {
-            if (confirm(`Delete "${run.name}" permanently? This removes its report and trades.`))
-              act(() => api.runDelete(run.run_id));
-          }}
-          disabled={busy}
-          className="rounded bg-rose-950 hover:bg-rose-900 text-rose-300 px-3 py-1.5 disabled:opacity-50"
-        >
-          Delete
-        </button>
-        {editing ? (
-          <>
-            <button onClick={saveEdit} disabled={busy} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 disabled:opacity-50">
-              Save
-            </button>
-            <button onClick={() => { setEditing(false); setName(run.name); setNotes(run.notes ?? ""); }} className="text-slate-500 px-2">
-              Cancel
-            </button>
-          </>
-        ) : (
-          <button onClick={() => setEditing(true)} className="ml-auto text-slate-500 hover:text-slate-300">
-            Edit name/notes
-          </button>
-        )}
-      </div>
-    </Card>
-  );
-}
-
-const TABS: { key: string; label: string }[] = [
-  { key: "active", label: "Active" },
-  { key: "archived", label: "Archived" },
-];
 
 const STRATEGY_LABELS: Record<string, string> = {
   sst_lifo: "SST (LIFO)",
@@ -214,195 +16,204 @@ const STRATEGY_LABELS: Record<string, string> = {
   batman_ratio_monthly: "Batman Ratio Monthly (options)",
   hni_weekly: "HNI Weekly (options)",
   staggered_covered_call: "Staggered Covered Call (options)",
+  custom_options: "Custom options",
+  supertrend_momentum: "supertrend_momentum",
 };
 const strategyLabel = (id: string) => STRATEGY_LABELS[id] ?? id;
+const ret = (r: RunSummary) => r.metrics["Total Return %"] ?? 0;
+const isBatch = (r: RunSummary) => !!r.batch_id;
+
+/** Per-run navigation + lifecycle actions, reused by the winner card and ranked rows. */
+function useRunActions(run: RunSummary, onChanged: () => void) {
+  const navigate = useNavigate();
+  return {
+    open: () => navigate(`/runs/${run.run_id}`),
+    forwardTest: async () => {
+      const full = await api.run(run.run_id);
+      const prefill: ForwardTestPrefill = { strategy_id: full.strategy_id, name: full.name, capital: full.capital, params: full.params };
+      navigate("/live/new", { state: { prefill } });
+    },
+    clone: async () => {
+      const full = await api.run(run.run_id);
+      navigate("/backtest?tab=new", { state: { clonePrefill: { strategy_id: full.strategy_id, name: full.name, capital: full.capital, params: full.params } } });
+    },
+    archive: () => api.runArchive(run.run_id).then(onChanged),
+    unarchive: () => api.runUnarchive(run.run_id).then(onChanged),
+    del: () => { if (confirm(`Delete "${run.name}" permanently? This removes its report and trades.`)) api.runDelete(run.run_id).then(onChanged); },
+  };
+}
+
+function menuFor(run: RunSummary, a: ReturnType<typeof useRunActions>, navigate: ReturnType<typeof useNavigate>): MenuItem[] {
+  return [
+    { label: "Clone", onClick: a.clone },
+    run.archived ? { label: "Unarchive", onClick: a.unarchive } : { label: "Archive", onClick: a.archive },
+    { label: "Edit name / notes", onClick: () => navigate(`/runs/${run.run_id}`) },
+    { label: "Delete", tone: "danger", onClick: a.del },
+  ];
+}
+
+function Metric({ label, value, tone, big }: { label: string; value: string; tone?: "pos" | "danger"; big?: boolean; }) {
+  return (
+    <div className="text-right">
+      <div className={`text-[11px] ${big ? "opacity-90" : "text-[var(--muted)]"}`}>{label}</div>
+      <div className={`tabular-nums font-['Space_Grotesk'] font-bold ${big ? "text-[25px]" : "text-sm"} ${tone === "pos" ? "text-[var(--pos)]" : tone === "danger" ? "text-[var(--danger)]" : ""}`}>{value}</div>
+    </div>
+  );
+}
+
+/** Winner (rank 1) — full-bleed teal gradient card. */
+function WinnerCard({ run, isTemplate, onChanged }: { run: RunSummary; isTemplate: boolean; onChanged: () => void }) {
+  const a = useRunActions(run, onChanged);
+  const m = run.metrics;
+  return (
+    <div className="rounded-[16px] p-5 text-white bg-[linear-gradient(110deg,#0f9e90,#12b3a4_60%,#2bc7a6)]">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex h-[46px] w-[46px] items-center justify-center rounded-[12px] bg-white/20 text-2xl font-bold font-['Space_Grotesk']">1</div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap text-[11.5px]">
+            <span className="rounded-[7px] bg-white/20 px-1.5 py-0.5 font-semibold">★ BEST RUN</span>
+            {isTemplate && <span className="rounded-[7px] bg-[var(--warn-bg)] text-[var(--warn-text)] px-1.5 py-0.5 font-semibold">★ template</span>}
+            <span className="rounded-[7px] bg-white/15 px-1.5 py-0.5">{isBatch(run) ? "Batch" : "Individual"}</span>
+            <span className="opacity-90">#{run.run_id} · {timeAgo(run.started_at)} · {(m["Total Trades"] ?? 0).toLocaleString("en-IN")} trades</span>
+          </div>
+          <div className="font-semibold font-['Space_Grotesk'] text-lg truncate mt-0.5">{run.name}</div>
+        </div>
+        <div className="flex items-center gap-5">
+          <div className="text-right"><div className="text-[11px] opacity-90">Final equity</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-sm">{formatInr(m["Final Equity"])}</div></div>
+          <div className="text-right"><div className="text-[11px] opacity-90">Max DD</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-sm">{pct(m["Max Drawdown %"])}</div></div>
+          <div className="text-right"><div className="text-[11px] opacity-90">Sharpe</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-sm">—</div></div>
+          <div className="text-right"><div className="text-[11px] opacity-90">Win rate</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-sm">{(m["Win Rate %"] ?? 0).toFixed(0)}%</div></div>
+          <div className="text-right"><div className="text-[11px] opacity-90">Return</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-[25px]">{pct(ret(run))}</div></div>
+          <div className="flex flex-col gap-1.5">
+            <button onClick={a.open} className="rounded-[10px] bg-white text-[#0d6b4f] px-3 py-1.5 text-xs font-semibold">Open</button>
+            <button onClick={a.forwardTest} className="rounded-[10px] bg-white/20 text-white px-3 py-1.5 text-xs font-semibold">Forward-test →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Ranks 2…n — token-styled rows. */
+function RankedRow({ run, rank, isTemplate, onChanged }: { run: RunSummary; rank: number; isTemplate: boolean; onChanged: () => void }) {
+  const navigate = useNavigate();
+  const a = useRunActions(run, onChanged);
+  const m = run.metrics;
+  return (
+    <div className="rounded-[13px] border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--row-hover)] px-4 py-3 flex items-center gap-4">
+      <div className="flex h-8 w-8 items-center justify-center rounded-[9px] bg-[var(--chip)] text-[var(--chip-text)] text-sm font-bold font-['Space_Grotesk'] shrink-0">{rank}</div>
+      <div className="min-w-0 flex-1">
+        <Link to={`/runs/${run.run_id}`} className="font-semibold font-['Space_Grotesk'] truncate hover:text-[var(--accent-deep)] text-[var(--strong)]">{run.name}</Link>
+        <div className="mt-0.5 flex items-center gap-1.5 flex-wrap text-[11.5px] text-[var(--muted)]">
+          {isBatch(run)
+            ? <Tag bg="var(--ok-bg)" color="var(--ok-text)">Batch</Tag>
+            : <Tag>Individual</Tag>}
+          {isTemplate && <span className="text-[var(--warn-text)]">★ template</span>}
+          <span>#{run.run_id} · {timeAgo(run.started_at)} · {(m["Total Trades"] ?? 0).toLocaleString("en-IN")} trades</span>
+        </div>
+      </div>
+      <div className="hidden md:flex items-center gap-5 shrink-0">
+        <Metric label="Final equity" value={formatInr(m["Final Equity"])} />
+        <Metric label="Max DD" value={pct(m["Max Drawdown %"])} tone="danger" />
+        <Metric label="Sharpe" value="—" />
+        <Metric label="Win rate" value={`${(m["Win Rate %"] ?? 0).toFixed(0)}%`} />
+        <Metric label="Return" value={pct(ret(run))} tone={ret(run) >= 0 ? "pos" : "danger"} />
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <button onClick={a.open} className="rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] px-3 py-1.5 text-xs">Open</button>
+        <button onClick={a.forwardTest} className="rounded-[10px] bg-[var(--ft)] text-white px-3 py-1.5 text-xs">Forward-test →</button>
+        <KebabMenu items={menuFor(run, a, navigate)} />
+      </div>
+    </div>
+  );
+}
+
+type TypeFilter = "all" | "Batch" | "Individual";
 
 export default function RunsPage({ embedded = false }: { embedded?: boolean } = {}) {
-  const [tab, setTab] = useState("active");
+  const [tab, setTab] = useState<"active" | "archived">("active");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [search, setSearch] = useState("");
-  const [compareMode, setCompareMode] = useState(false);
-  const [selected, setSelected] = useState<number[]>([]);
-  // Per-strategy collapse: a group is open if explicitly toggled, else the first group
-  // (most recent strategy) defaults open and the rest collapsed.
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["runs", tab],
-    queryFn: () => api.runs(tab),
-  });
+  const { data, isLoading, error } = useQuery({ queryKey: ["runs", tab], queryFn: () => api.runs(tab) });
   const { data: templatesData } = useQuery({ queryKey: ["templates"], queryFn: api.templates });
-  const templateRunIds = new Set(
-    Object.values(templatesData?.templates ?? {}).map((t) => t.run_id),
-  );
-
+  const templateRunIds = new Set(Object.values(templatesData?.templates ?? {}).map((t) => t.run_id));
   const onChanged = () => queryClient.invalidateQueries({ queryKey: ["runs"] });
-
-  const toggleSelect = (id: number) =>
-    setSelected((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 5 ? prev : [...prev, id],
-    );
 
   if (isLoading) return <Spinner />;
   if (error) return <ErrorBox message={(error as Error).message} />;
   const runs = data ?? [];
 
   const q = search.trim().toLowerCase();
-  const filtered = q
-    ? runs.filter(
-        (r) =>
-          r.name.toLowerCase().includes(q) ||
-          r.strategy_id.toLowerCase().includes(q) ||
-          (r.notes ?? "").toLowerCase().includes(q),
-      )
-    : runs;
+  const filtered = runs.filter((r) => {
+    if (typeFilter === "Batch" && !isBatch(r)) return false;
+    if (typeFilter === "Individual" && isBatch(r)) return false;
+    if (!q) return true;
+    return r.name.toLowerCase().includes(q) || r.strategy_id.toLowerCase().includes(q) || (r.notes ?? "").toLowerCase().includes(q);
+  });
 
-  // Group by strategy first (collapsible sections), preserving most-recent-first order.
-  const strategyOrder: string[] = [];
+  // Group by strategy (most-recent-first), rank each group's runs by return desc.
+  const order: string[] = [];
   const byStrategy = new Map<string, RunSummary[]>();
   for (const r of filtered) {
-    if (!byStrategy.has(r.strategy_id)) {
-      byStrategy.set(r.strategy_id, []);
-      strategyOrder.push(r.strategy_id);
-    }
+    if (!byStrategy.has(r.strategy_id)) { byStrategy.set(r.strategy_id, []); order.push(r.strategy_id); }
     byStrategy.get(r.strategy_id)!.push(r);
   }
 
-  const tile = (r: RunSummary) => (
-    <RunTile
-      key={r.run_id}
-      run={r}
-      onChanged={onChanged}
-      selectMode={compareMode}
-      selected={selected.includes(r.run_id)}
-      onSelect={() => toggleSelect(r.run_id)}
-      isTemplate={templateRunIds.has(r.run_id)}
-    />
-  );
-
-  // Within a strategy: nest the existing batch grouping, then loose runs.
-  const renderGroupedRuns = (rs: RunSummary[]) => {
-    const batches = new Map<string, RunSummary[]>();
-    const loose: RunSummary[] = [];
-    for (const r of rs) {
-      if (r.batch_id) batches.set(r.batch_id, [...(batches.get(r.batch_id) ?? []), r]);
-      else loose.push(r);
-    }
-    // Pin the strategy's template run first (stable sort keeps the rest most-recent-first).
-    loose.sort((a, b) => Number(templateRunIds.has(b.run_id)) - Number(templateRunIds.has(a.run_id)));
-    return (
-      <div className="space-y-3">
-        {Array.from(batches.entries()).map(([bid, brs]) => (
-          <div key={bid} className="rounded-lg border border-slate-800 p-3 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-slate-300">Batch · {brs.length} runs</div>
-              <button
-                onClick={() => navigate(`/compare?ids=${brs.slice(0, 5).map((r) => r.run_id).join(",")}`)}
-                className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs"
-              >
-                Compare batch →
-              </button>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">{brs.map(tile)}</div>
-          </div>
-        ))}
-        {loose.length > 0 && <div className="grid gap-3 md:grid-cols-2">{loose.map(tile)}</div>}
-      </div>
-    );
-  };
-
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        {!embedded && <h1 className="text-lg font-semibold">Runs</h1>}
-        <div className="flex items-center gap-2 ml-auto">
-          <button
-            onClick={() => {
-              setCompareMode((v) => !v);
-              setSelected([]);
-            }}
-            className={`rounded-md px-3 py-2 text-sm font-medium ${compareMode ? "bg-brand text-white" : "bg-slate-800 hover:bg-slate-700 text-slate-300"}`}
-          >
-            {compareMode ? "Cancel compare" : "Compare"}
-          </button>
-          {!embedded && (
-            <Link to="/backtest?tab=new" className="rounded-md bg-brand hover:bg-brand-light px-3 py-2 text-sm font-medium">
-              + New backtest
-            </Link>
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex gap-1 rounded-lg bg-slate-800/50 p-1 text-sm">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={`rounded-md px-3 py-1 ${tab === t.key ? "bg-brand text-white" : "text-slate-400 hover:text-slate-200"}`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      {/* Runs filters */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <Segmented value={tab} onChange={setTab} options={[{ value: "active", label: "Active" }, { value: "archived", label: "Archived" }]} />
+        <span className="text-xs text-[var(--muted)]">Type</span>
+        <Segmented value={typeFilter} onChange={setTypeFilter} options={[{ value: "all", label: "All" }, { value: "Batch", label: "Batch" }, { value: "Individual", label: "Individual" }]} />
+        <span className="rounded-full bg-[var(--chip)] text-[var(--chip-text)] px-3 py-1 text-xs font-medium">Return ↓</span>
         <input
-          className="rounded-md bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm w-56 focus:outline-none focus:border-brand"
-          placeholder="Search name / strategy / notes"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          className="ml-auto rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-3 py-1.5 text-sm w-56 text-[var(--strong)] placeholder:text-[var(--faint)] focus:outline-none focus:border-[var(--accent)]"
+          placeholder="Search runs" value={search} onChange={(e) => setSearch(e.target.value)}
         />
       </div>
 
-      {compareMode && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-800/50 px-3 py-2 text-sm">
-          <span className="text-slate-300">{selected.length} selected (pick 2–5)</span>
-          <button
-            disabled={selected.length < 2}
-            onClick={() => navigate(`/compare?ids=${selected.join(",")}`)}
-            className="rounded-md bg-brand hover:bg-brand-light px-3 py-1.5 font-medium disabled:opacity-40"
-          >
-            Compare selected →
-          </button>
-        </div>
-      )}
-
       {filtered.length === 0 ? (
-        <Card>
-          <div className="text-slate-400">
-            {tab === "active" ? (
-              <>No runs yet. Start with a <Link to="/backtest?tab=new" className="text-brand-light underline">new backtest</Link>.</>
-            ) : (
-              "No archived runs."
-            )}
-          </div>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {strategyOrder.map((sid, i) => {
-            const rs = byStrategy.get(sid)!;
-            const open = openMap[sid] ?? i === 0;
-            const best = Math.max(...rs.map((r) => r.metrics["Total Return %"] ?? -Infinity));
-            return (
-              <div key={sid} className="rounded-lg border border-slate-800">
-                <button
-                  onClick={() => setOpenMap((m) => ({ ...m, [sid]: !(m[sid] ?? i === 0) }))}
-                  className="w-full flex items-center justify-between gap-3 px-3 py-2.5 hover:bg-slate-800/40"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-slate-500">{open ? "▾" : "▸"}</span>
-                    <span className="font-medium truncate">{strategyLabel(sid)}</span>
-                    <Badge>{rs.length} run{rs.length === 1 ? "" : "s"}</Badge>
-                  </div>
-                  <div className="text-xs text-slate-400 shrink-0">
-                    best <span className={best >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>{pct(best)}</span>
-                  </div>
-                </button>
-                {open && <div className="px-3 pb-3">{renderGroupedRuns(rs)}</div>}
-              </div>
-            );
-          })}
+        <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-6 text-[var(--muted)]">
+          {embedded ? "No runs yet. Open the New backtest tab to launch one." : <>No runs yet. <Link to="/backtest?tab=new" className="text-[var(--accent-deep)] underline">new backtest</Link>.</>}
         </div>
+      ) : (
+        order.map((sid) => {
+          const rs = [...byStrategy.get(sid)!].sort((x, y) => ret(y) - ret(x)); // rank by return desc
+          const open = q ? true : (openMap[sid] ?? false);
+          const best = rs.length ? ret(rs[0]) : 0;
+          const top3 = rs.slice(0, 3).map((r) => r.run_id).join(",");
+          return (
+            <div key={sid} className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-4">
+              <button onClick={() => setOpenMap((g) => ({ ...g, [sid]: !(g[sid] ?? false) }))} className="w-full flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="text-[var(--muted)] text-sm w-3 shrink-0">{open ? "▾" : "▸"}</span>
+                  <span className="font-bold font-['Space_Grotesk'] text-[19px] truncate text-[var(--strong)]">{strategyLabel(sid)}</span>
+                  <Tag>{rs.length} runs</Tag>
+                </div>
+                <span className="text-sm text-[var(--muted)] shrink-0">best <span className="text-[var(--pos)] font-semibold tabular-nums">{pct(best)}</span></span>
+              </button>
+              {open && (
+                <div className="mt-3 space-y-2.5">
+                  <div className="flex items-center justify-between text-[11px] text-[var(--faint)] uppercase tracking-wide">
+                    <span>Ranked by return · {rs.length} run{rs.length === 1 ? "" : "s"}</span>
+                    {rs.length > 1 && (
+                      <button onClick={() => navigate(`/compare?ids=${top3}`)} className="rounded-full bg-[var(--chip)] text-[var(--chip-text)] px-2.5 py-0.5 normal-case">Compare top 3 →</button>
+                    )}
+                  </div>
+                  <WinnerCard run={rs[0]} isTemplate={templateRunIds.has(rs[0].run_id)} onChanged={onChanged} />
+                  {rs.slice(1).map((r, i) => (
+                    <RankedRow key={r.run_id} run={r} rank={i + 2} isTemplate={templateRunIds.has(r.run_id)} onChanged={onChanged} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })
       )}
     </div>
   );

@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import ReportView from "../components/ReportView";
-import { Card, ErrorBox, NumberInput } from "../components/ui";
+import { ErrorBox, NumberInput } from "../components/ui";
+import { Panel } from "../components/redesign";
 import type { BacktestRequest, OverrideInput, StrategyTemplate } from "../types";
 
 // Fields a sweep can vary, with how each value maps into the request.
@@ -43,14 +44,14 @@ function applySweep(body: BacktestRequest, field: SweepField, raw: number): Back
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="block text-xs uppercase tracking-wide text-slate-400 mb-1">{label}</span>
+      <span className="block text-xs uppercase tracking-wide text-[var(--muted)] mb-1">{label}</span>
       {children}
     </label>
   );
 }
 
 const inputClass =
-  "w-full rounded-md bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:border-brand";
+  "w-full rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-3 py-2 text-sm text-[var(--strong)] focus:outline-none focus:border-[var(--accent)]";
 
 // Carried via router state from a run's "Clone" button into the prefilled backtest form.
 type ClonePrefill = {
@@ -612,7 +613,7 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
     <div className="space-y-6">
       {!embedded && <h1 className="text-lg font-semibold">New backtest</h1>}
 
-      <Card>
+      <Panel className="p-5 max-w-[760px]">
         <form onSubmit={submit} className="space-y-4">
           <div className="grid md:grid-cols-2 gap-4">
             <Field label="Name">
@@ -673,7 +674,7 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
                   </Field>
                 ) : (
                   <Field label="Symbols">
-                    <div className={`${inputClass} text-slate-400`}>
+                    <div className={`${inputClass} text-[var(--muted)]`}>
                       {universes.find((u) => u.name === universe)?.count ?? "…"} symbols from{" "}
                       {universes.find((u) => u.name === universe)?.label ?? universe}
                     </div>
@@ -784,7 +785,7 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
               <label className="flex items-center gap-2 text-sm md:col-span-3">
                 <input type="checkbox" checked={ccKeepAboveCost} onChange={(e) => setCcKeepAboveCost(e.target.checked)} />
                 <span>Never sell/roll the call below the ETF's average cost</span>
-                <span className="text-slate-500">— so a called-away always books a profit (don't roll into a loss)</span>
+                <span className="text-[var(--faint)]">— so a called-away always books a profit (don't roll into a loss)</span>
               </label>
               <Field label="Min return % on assignment (0 = breakeven)">
                 <NumberInput step="0.5" className={inputClass} value={ccMinReturnPct} onChange={setCcMinReturnPct} />
@@ -796,7 +797,7 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
               <label className="flex items-center gap-2 text-sm md:col-span-3">
                 <input type="checkbox" checked={ccSellPuts} onChange={(e) => setCcSellPuts(e.target.checked)} />
                 <span>Wheel: accumulate by selling cash-secured puts</span>
-                <span className="text-slate-500">— premium income on the way down; assigned on dips (replaces GTT up-buys)</span>
+                <span className="text-[var(--faint)]">— premium income on the way down; assigned on dips (replaces GTT up-buys)</span>
               </label>
               {ccSellPuts && (
                 <Field label="Put OTM % (strike below spot)">
@@ -887,17 +888,17 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
                 </Field>
               )}
               {tailOffset > 0 && (
-                <div className="md:col-span-3 text-[11px] text-slate-500 -mt-2">
+                <div className="md:col-span-3 text-[11px] text-[var(--faint)] -mt-2">
                   The tail is an extra far long per wing: its vega/gamma convexity cushions{" "}
-                  <span className="text-slate-400">gap moves the MTM stop can't catch</span>, and beyond it
+                  <span className="text-[var(--muted)]">gap moves the MTM stop can't catch</span>, and beyond it
                   the wing turns net long. Its cost counts against the entry credit — a negative min credit
                   lets the strategy pay a small debit for the insurance instead of skipping the month.
                 </div>
               )}
-              <div className="md:col-span-3 text-[11px] text-slate-500 -mt-2">
-                Entry always requires a <span className="text-slate-400">net credit</span> ≤ the max above
+              <div className="md:col-span-3 text-[11px] text-[var(--faint)] -mt-2">
+                Entry always requires a <span className="text-[var(--muted)]">net credit</span> ≤ the max above
                 (strikes auto-shift further OTM when the credit is too rich). Debit months (low IV / thin
-                premiums) are <span className="text-slate-400">skipped</span>. NIFTY lot sizes are historical
+                premiums) are <span className="text-[var(--muted)]">skipped</span>. NIFTY lot sizes are historical
                 (50 → 25 → 75 → 65 per SEBI revisions).
               </div>
               <Field label="Tax rate %">
@@ -1054,11 +1055,11 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
           )}
 
           {!isOptions && (
-          <div className="rounded-lg border border-slate-800 p-3">
+          <div className="rounded-lg border border-[var(--divider)] p-3">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={ovEnabled} onChange={(e) => setOvEnabled(e.target.checked)} />
               <span className="font-medium">Apply exit override</span>
-              <span className="text-slate-500">— book a portion at a target, trail the rest</span>
+              <span className="text-[var(--faint)]">— book a portion at a target, trail the rest</span>
             </label>
             {ovEnabled && (
               <div className="grid md:grid-cols-5 gap-3 mt-3">
@@ -1091,11 +1092,11 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
           </div>
           )}
 
-          <div className="rounded-lg border border-slate-800 p-3">
+          <div className="rounded-lg border border-[var(--divider)] p-3">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={sweepMode} onChange={(e) => setSweepMode(e.target.checked)} />
               <span className="font-medium">Sweep a parameter (multi-run)</span>
-              <span className="text-slate-500">— run up to 5 variants and compare them</span>
+              <span className="text-[var(--faint)]">— run up to 5 variants and compare them</span>
             </label>
             {sweepMode && (
               <div className="grid md:grid-cols-2 gap-3 mt-3">
@@ -1121,7 +1122,7 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
           <button
             type="submit"
             disabled={mutation.isPending || sweepProgress != null}
-            className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50"
+            className="rounded-md bg-[var(--ft)] px-4 py-2 text-sm font-medium disabled:opacity-50"
           >
             {sweepProgress
               ? `Running ${sweepProgress.done + 1}/${sweepProgress.total}…`
@@ -1132,7 +1133,7 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
                   : "Run backtest"}
           </button>
         </form>
-      </Card>
+      </Panel>
 
       {sweepError && <ErrorBox message={sweepError} />}
       {mutation.error && <ErrorBox message={(mutation.error as Error).message} />}
@@ -1142,19 +1143,19 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
           <div className="flex items-center gap-3 flex-wrap">
             <h2 className="font-semibold">Result</h2>
             {result.run_id != null ? (
-              <Link to={`/runs/${result.run_id}`} className="text-brand-light text-sm underline">
+              <Link to={`/runs/${result.run_id}`} className="text-[var(--accent-deep)] text-sm underline">
                 open run #{result.run_id}
               </Link>
             ) : (
               <>
-                <span className="text-slate-500 text-sm">preview · not saved</span>
+                <span className="text-[var(--faint)] text-sm">preview · not saved</span>
                 <button
                   onClick={() =>
                     mutation.variables &&
                     saveMutation.mutate({ request: mutation.variables, report: result.report, trades: result.trades })
                   }
                   disabled={saveMutation.isPending}
-                  className="rounded-md bg-brand hover:bg-brand-light text-white px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+                  className="rounded-md bg-[var(--ft)] text-white px-3 py-1.5 text-sm font-medium disabled:opacity-50"
                 >
                   {saveMutation.isPending ? "Saving…" : "Save backtest"}
                 </button>
