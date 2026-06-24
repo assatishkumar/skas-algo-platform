@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, brokers } from "../api/client";
@@ -277,6 +277,14 @@ function DeployPanel({
   );
 }
 
+function Detail({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <span className="whitespace-nowrap">
+      <span className="text-[var(--faint)]">{label}</span> <span className="text-[var(--strong)]">{value}</span>
+    </span>
+  );
+}
+
 type Sort = { col: string; dir: 1 | -1 };
 
 function Th({ children, right, col, sort, onSort }: {
@@ -319,6 +327,7 @@ export default function FibRetPage() {
   const [result, setResult] = useState<FibRetResult | null>(saved.result ?? null);
   const [deployRow, setDeployRow] = useState<FibRetRow | null>(null);
   const [sort, setSort] = useState<Sort | null>(null);
+  const [detail, setDetail] = useState<Record<string, boolean>>({});
 
   const effectiveAccount = accountId ?? sessioned[0]?.id ?? null;
 
@@ -483,72 +492,82 @@ export default function FibRetPage() {
                 <tr className="text-[var(--muted)] text-xs border-b border-[var(--divider)]">
                   <Th col="stock" sort={sort} onSort={onSort}>Stock</Th>
                   <Th right col="ivp" sort={sort} onSort={onSort}>IVP</Th>
-                  <Th right col="atmiv" sort={sort} onSort={onSort}>ATM IV</Th>
                   <Th right col="spot" sort={sort} onSort={onSort}>Spot</Th>
-                  <Th col="side" sort={sort} onSort={onSort}>Side</Th>
                   <Th col="swing" sort={sort} onSort={onSort}>Swing (L→H)</Th>
+                  <Th col="side" sort={sort} onSort={onSort}>Side</Th>
                   <Th right col="strike" sort={sort} onSort={onSort}>Strike</Th>
-                  <Th right col="dte" sort={sort} onSort={onSort}>DTE</Th>
-                  <Th right col="premium" sort={sort} onSort={onSort}>Premium</Th>
-                  <Th right col="oi" sort={sort} onSort={onSort}>OI</Th>
-                  <Th right col="spread" sort={sort} onSort={onSort}>Bid/Ask (spr)</Th>
                   <Th right col="stop" sort={sort} onSort={onSort}>Stop spot</Th>
-                  <Th right col="rr" sort={sort} onSort={onSort}>R:R</Th>
                   <Th right col="maxprofit" sort={sort} onSort={onSort}>Max profit</Th>
                   <Th right col="margin" sort={sort} onSort={onSort}>Margin</Th>
-                  <Th right col="ivrv" sort={sort} onSort={onSort}>IV/RV</Th>
-                  <Th right col="cushK" sort={sort} onSort={onSort}>Cushion→K</Th>
-                  <Th right col="cushStop" sort={sort} onSort={onSort}>Cush→Stop</Th>
+                  <Th right col="spread" sort={sort} onSort={onSort}>Bid/Ask (spr)</Th>
+                  <Th></Th>
                   <Th></Th>
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map((r) => (
-                  <tr key={r.symbol} className="border-b border-[var(--divider)]/40">
+                {sortedRows.map((r) => {
+                  const isOpen = !!detail[r.symbol];
+                  return (
+                  <Fragment key={r.symbol}>
+                  <tr className="border-b border-[var(--divider)]/40">
                     <td className="py-1.5 px-2 font-medium">{r.symbol}</td>
                     <td className="py-1.5 px-2 text-right">{ivpMap.get(r.symbol)?.ivp ?? "—"}</td>
-                    <td className="py-1.5 px-2 text-right">{n1(ivpMap.get(r.symbol)?.atmIv)}</td>
                     {r.error ? (
-                      <td colSpan={16} className="py-1.5 px-2 text-[var(--danger)]/80 text-xs">{r.error}</td>
+                      <td colSpan={10} className="py-1.5 px-2 text-[var(--danger)]/80 text-xs">{r.error}</td>
                     ) : (
                       <>
                         <td className="py-1.5 px-2 text-right">{n1(r.spot)}</td>
-                        <td className="py-1.5 px-2"><span className={r.side === "CE" ? "text-[var(--danger)]" : "text-[var(--pos)]"}>SELL {r.side}</span></td>
                         <td className="py-1.5 px-2 text-xs text-[var(--muted)]">{n1(r.swing_low)}→{n1(r.swing_high)}</td>
+                        <td className="py-1.5 px-2"><span className={r.side === "CE" ? "text-[var(--danger)]" : "text-[var(--pos)]"}>SELL {r.side}</span></td>
                         <td className={`py-1.5 px-2 text-right ${r.out_of_range ? "text-[var(--warn-text)]" : ""}`} title={r.note ?? undefined}>
                           {r.strike}{r.out_of_range ? " ⚑" : ""}
                         </td>
-                        <td className="py-1.5 px-2 text-right">{r.dte}</td>
-                        <td className="py-1.5 px-2 text-right">{n2(r.premium)}</td>
-                        <td className="py-1.5 px-2 text-right">{r.oi?.toLocaleString("en-IN")}</td>
+                        <td className="py-1.5 px-2 text-right">{n1(r.stop_level)}</td>
+                        <td className="py-1.5 px-2 text-right text-[var(--pos)]">{money(r.max_profit)}</td>
+                        <td className="py-1.5 px-2 text-right">{money(r.margin)}</td>
                         <td className={`py-1.5 px-2 text-right ${r.liquid ? "" : "text-[var(--warn-text)]"}`}
                           title={r.liquid ? undefined : "wide bid-ask spread (>10% of mid) — illiquid"}>
                           {n2(r.bid)}/{n2(r.ask)} {r.spread_pct == null ? "" : `(${r.spread_pct.toFixed(0)}%)`}{r.liquid ? "" : " ⚑"}
                         </td>
-                        <td className="py-1.5 px-2 text-right">{n1(r.stop_level)}</td>
-                        <td className="py-1.5 px-2 text-right">{r.reward_risk != null ? `${r.reward_risk.toFixed(2)}x` : "NA"}</td>
-                        <td className="py-1.5 px-2 text-right text-[var(--pos)]">{money(r.max_profit)}</td>
-                        <td className="py-1.5 px-2 text-right">{money(r.margin)}</td>
-                        <td className="py-1.5 px-2 text-right">{r.iv_richness != null ? `${r.iv_richness.toFixed(2)}x` : "—"}</td>
-                        <td className="py-1.5 px-2 text-right">{pct(r.cushion_to_strike_pct)}</td>
-                        <td className="py-1.5 px-2 text-right">{pct(r.cushion_to_stop_pct)}</td>
-                        <td className="py-1.5 px-2 text-right">
-                          <button onClick={() => setDeployRow(r)}
-                            className="rounded bg-[var(--ft)] text-white px-2.5 py-1 text-xs">
-                            Deploy
+                        <td className="py-1.5 px-1 text-right">
+                          <button onClick={() => setDetail((d) => ({ ...d, [r.symbol]: !d[r.symbol] }))}
+                            title="More details" className="rounded px-2 py-1 text-[var(--muted)] hover:bg-[var(--row-hover)] hover:text-[var(--strong)]">
+                            {isOpen ? "▾" : "⋯"}
                           </button>
+                        </td>
+                        <td className="py-1.5 px-2 text-right">
+                          <button onClick={() => setDeployRow(r)} className="rounded bg-[var(--ft)] text-white px-2.5 py-1 text-xs">Deploy</button>
                         </td>
                       </>
                     )}
                   </tr>
-                ))}
+                  {isOpen && !r.error && (
+                    <tr className="border-b border-[var(--divider)]/40 bg-[var(--stat)]">
+                      <td colSpan={12} className="px-3 py-2">
+                        <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
+                          <Detail label="ATM IV" value={n1(ivpMap.get(r.symbol)?.atmIv)} />
+                          <Detail label="DTE" value={r.dte ?? "—"} />
+                          <Detail label="Premium" value={n2(r.premium)} />
+                          <Detail label="OI" value={r.oi?.toLocaleString("en-IN") ?? "—"} />
+                          <Detail label="R:R" value={r.reward_risk != null ? `${r.reward_risk.toFixed(2)}x` : "NA"} />
+                          <Detail label="IV/RV" value={r.iv_richness != null ? `${r.iv_richness.toFixed(2)}x` : "—"} />
+                          <Detail label="Cushion→K" value={pct(r.cushion_to_strike_pct)} />
+                          <Detail label="Cush→Stop" value={pct(r.cushion_to_stop_pct)} />
+                          <Detail label="Entry (1.618)" value={n1(r.entry_level)} />
+                          <Detail label="Swing dates" value={`${r.swing_low_date ?? "—"} → ${r.swing_high_date ?? "—"}`} />
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
           <div className="text-[11px] text-[var(--faint)] mt-2">
-            ⚑ on Bid/Ask = wide spread (&gt;10% of mid) → illiquid. ⚑ on Strike = 1.618 level beyond listed
-            strikes. R:R = max profit ÷ estimated loss if spot hits the stop. IV/RV = live IV ÷ realized vol.
-            Deploy lets you change the strike and add a hedge. Gross of charges.
+            ⚑ Bid/Ask = wide spread (&gt;10% of mid) → illiquid · ⚑ Strike = 1.618 level beyond listed strikes.
+            Click ⋯ for ATM IV, DTE, premium, OI, R:R, IV/RV and cushions. Deploy lets you change the strike and add a hedge.
           </div>
         </Panel>
       )}
