@@ -333,6 +333,25 @@ export default function FibRetPage() {
 
   const ivpMap = useMemo(() => new Map(csvRows.map((r) => [r.symbol, r])), [csvRows]);
 
+  // Active deployments keyed by underlying → mark screener rows already running (paper/live).
+  const { data: activeDeps = [] } = useQuery({
+    queryKey: ["deployments", "active"],
+    queryFn: () => api.liveDeployments("active"),
+    refetchInterval: 30000,
+  });
+  const deployedBy = useMemo(() => {
+    const m = new Map<string, { live: boolean; ids: number[] }>();
+    for (const d of activeDeps) {
+      const u = (d.underlying ?? "").toUpperCase();
+      if (!u) continue;
+      const e = m.get(u) ?? { live: false, ids: [] as number[] };
+      if (d.mode === "LIVE") e.live = true;
+      e.ids.push(d.run_id);
+      m.set(u, e);
+    }
+    return m;
+  }, [activeDeps]);
+
   // Click a column header to sort (first click descending). Rows missing the value sort last.
   const onSort = (c: string) => setSort((s) => (s?.col === c ? { col: c, dir: (s.dir === 1 ? -1 : 1) as 1 | -1 } : { col: c, dir: -1 }));
   const sortVal = (r: FibRetRow, col: string): number | string | null | undefined => {
@@ -510,7 +529,18 @@ export default function FibRetPage() {
                   return (
                   <Fragment key={r.symbol}>
                   <tr className="border-b border-[var(--divider)]/40">
-                    <td className="py-1.5 px-2 font-medium">{r.symbol}</td>
+                    <td className="py-1.5 px-2 font-medium">
+                      {r.symbol}
+                      {deployedBy.has(r.symbol) && (
+                        <Link
+                          to="/live"
+                          title={`Already deployed — run${deployedBy.get(r.symbol)!.ids.length > 1 ? "s" : ""} #${deployedBy.get(r.symbol)!.ids.join(", #")}`}
+                          className={`ml-2 align-middle rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${deployedBy.get(r.symbol)!.live ? "bg-[var(--ok-bg)] text-[var(--ok-text)]" : "bg-[var(--chip)] text-[var(--chip-text)]"}`}
+                        >
+                          ● {deployedBy.get(r.symbol)!.live ? "LIVE" : "deployed"}
+                        </Link>
+                      )}
+                    </td>
                     <td className="py-1.5 px-2 text-right">{ivpMap.get(r.symbol)?.ivp ?? "—"}</td>
                     {r.error ? (
                       <td colSpan={10} className="py-1.5 px-2 text-[var(--danger)]/80 text-xs">{r.error}</td>
