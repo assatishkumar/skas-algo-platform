@@ -493,7 +493,7 @@ export default function FibRetPage() {
                   <Th col="stock" sort={sort} onSort={onSort}>Stock</Th>
                   <Th right col="ivp" sort={sort} onSort={onSort}>IVP</Th>
                   <Th right col="spot" sort={sort} onSort={onSort}>Spot</Th>
-                  <Th col="swing" sort={sort} onSort={onSort}>Swing (L→H)</Th>
+                  <Th col="swing" sort={sort} onSort={onSort}>Swing</Th>
                   <Th col="side" sort={sort} onSort={onSort}>Side</Th>
                   <Th right col="strike" sort={sort} onSort={onSort}>Strike</Th>
                   <Th right col="stop" sort={sort} onSort={onSort}>Stop spot</Th>
@@ -517,7 +517,9 @@ export default function FibRetPage() {
                     ) : (
                       <>
                         <td className="py-1.5 px-2 text-right">{n1(r.spot)}</td>
-                        <td className="py-1.5 px-2 text-xs text-[var(--muted)]">{n1(r.swing_low)}→{n1(r.swing_high)}</td>
+                        <td className="py-1.5 px-2 text-xs text-[var(--muted)]" title={r.side === "CE" ? "down-leg (high→low) → sell call" : "up-leg (low→high) → sell put"}>
+                          {r.side === "CE" ? `${n1(r.swing_high)}→${n1(r.swing_low)}` : `${n1(r.swing_low)}→${n1(r.swing_high)}`}
+                        </td>
                         <td className="py-1.5 px-2"><span className={r.side === "CE" ? "text-[var(--danger)]" : "text-[var(--pos)]"}>SELL {r.side}</span></td>
                         <td className={`py-1.5 px-2 text-right ${r.out_of_range ? "text-[var(--warn-text)]" : ""}`} title={r.note ?? undefined}>
                           {r.strike}{r.out_of_range ? " ⚑" : ""}
@@ -554,7 +556,7 @@ export default function FibRetPage() {
                           <Detail label="Cushion→K" value={pct(r.cushion_to_strike_pct)} />
                           <Detail label="Cush→Stop" value={pct(r.cushion_to_stop_pct)} />
                           <Detail label="Entry (1.618)" value={n1(r.entry_level)} />
-                          <Detail label="Swing dates" value={`${r.swing_low_date ?? "—"} → ${r.swing_high_date ?? "—"}`} />
+                          <Detail label="Swing dates" value={r.side === "CE" ? `${r.swing_high_date ?? "—"} → ${r.swing_low_date ?? "—"}` : `${r.swing_low_date ?? "—"} → ${r.swing_high_date ?? "—"}`} />
                         </div>
                       </td>
                     </tr>
