@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { api, brokers } from "../api/client";
@@ -23,6 +23,14 @@ const NIFTY_50 = [
   "NTPC", "ONGC", "POWERGRID", "RELIANCE", "SBILIFE", "SBIN", "SHRIRAMFIN", "SUNPHARMA", "TCS",
   "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "TRENT", "ULTRACEMCO", "WIPRO", "ZOMATO",
 ];
+
+// Index underlyings are the hedge instrument, not basket constituents — never strangle them.
+const INDEX_SYMS = new Set(["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"]);
+
+const PKEY = "donchian.state.v1";
+function loadPersisted(): Record<string, unknown> {
+  try { return JSON.parse(localStorage.getItem(PKEY) || "{}"); } catch { return {}; }
+}
 
 interface CsvRow { symbol: string; ivp?: number; atmIv?: number; event?: string }
 
@@ -94,22 +102,24 @@ export default function DonchianStranglePage() {
   const { data: accounts = [] } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
   const sessioned = accounts.filter((a) => a.has_session);
 
-  const [accountId, setAccountId] = useState<number | null>(null);
-  const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
-  const [csvName, setCsvName] = useState("");
-  const [symbolsText, setSymbolsText] = useState("");
+  const saved = useRef(loadPersisted()).current as any;
+  const [accountId, setAccountId] = useState<number | null>(saved.accountId ?? null);
+  const [csvRows, setCsvRows] = useState<CsvRow[]>(saved.csvRows ?? []);
+  const [csvName, setCsvName] = useState(saved.csvName ?? "");
+  const [symbolsText, setSymbolsText] = useState<string>(saved.symbolsText ?? "");
   // Screener params (spec §3).
-  const [ivpMin, setIvpMin] = useState(50);
-  const [hvWindow, setHvWindow] = useState(20);
-  const [skipLegPct, setSkipLegPct] = useState(0.5);
-  const [roundOut, setRoundOut] = useState(false);
-  const [lots, setLots] = useState(1);
+  const [ivpMin, setIvpMin] = useState(saved.ivpMin ?? 50);
+  const [hvWindow, setHvWindow] = useState(saved.hvWindow ?? 20);
+  const [skipLegPct, setSkipLegPct] = useState(saved.skipLegPct ?? 0.5);
+  const [roundOut, setRoundOut] = useState(saved.roundOut ?? false);
+  const [requireIvGtHv, setRequireIvGtHv] = useState(saved.requireIvGtHv ?? true);
+  const [lots, setLots] = useState(saved.lots ?? 1);
   // Portfolio params.
-  const [hedgeOtm, setHedgeOtm] = useState(4.5);
-  const [betaWeight, setBetaWeight] = useState(false);
-  const [slPct, setSlPct] = useState(2);
-  const [targetEnabled, setTargetEnabled] = useState(false);
-  const [targetPct, setTargetPct] = useState(50);
+  const [hedgeOtm, setHedgeOtm] = useState(saved.hedgeOtm ?? 4.5);
+  const [betaWeight, setBetaWeight] = useState(saved.betaWeight ?? false);
+  const [slPct, setSlPct] = useState(saved.slPct ?? 2);
+  const [targetEnabled, setTargetEnabled] = useState(saved.targetEnabled ?? false);
+  const [targetPct, setTargetPct] = useState(saved.targetPct ?? 50);
   // Cycle overrides (prefilled from the analyze response; blank = auto).
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
@@ -120,9 +130,20 @@ export default function DonchianStranglePage() {
   const [deployName, setDeployName] = useState("");
   const [capital, setCapital] = useState(5_000_000);
 
-  const [result, setResult] = useState<DonchianResult | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [result, setResult] = useState<DonchianResult | null>(saved.result ?? null);
+  const [selected, setSelected] = useState<Set<string>>(
+    new Set((saved.result?.rows ?? []).filter((r: DonchianRow) => SELECTABLE.has(r.status)).map((r: DonchianRow) => r.symbol)),
+  );
   const [panel, setPanel] = useState<DonchianPanel | null>(null);
+
+  // Persist screener inputs + last result so the table survives a reload.
+  useEffect(() => {
+    localStorage.setItem(PKEY, JSON.stringify({
+      accountId, csvRows, csvName, symbolsText, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
+      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, result,
+    }));
+  }, [accountId, csvRows, csvName, symbolsText, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
+      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, result]);
 
   const effectiveAccount = accountId ?? sessioned[0]?.id ?? null;
   const ivpMap = useMemo(() => new Map(csvRows.map((r) => [r.symbol, r])), [csvRows]);
@@ -136,9 +157,12 @@ export default function DonchianStranglePage() {
   );
 
   // Names to screen: the CSV (with Sensibull fields) if present, else the pasted/preset symbols.
+  // Index underlyings are dropped — they're the hedge instrument, not basket constituents.
   const names = useMemo(() => {
-    if (csvRows.length) return csvRows.map((r) => ({ symbol: r.symbol, atm_iv: r.atmIv ?? null, ivp: r.ivp ?? null, event: r.event ?? null }));
-    return symbolsText.split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean).map((symbol) => ({ symbol }));
+    const src = csvRows.length
+      ? csvRows.map((r) => ({ symbol: r.symbol, atm_iv: r.atmIv ?? null, ivp: r.ivp ?? null, event: r.event ?? null }))
+      : symbolsText.split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean).map((symbol) => ({ symbol }));
+    return src.filter((n) => !INDEX_SYMS.has(n.symbol));
   }, [csvRows, symbolsText]);
 
   const analyze = useMutation({
@@ -148,8 +172,8 @@ export default function DonchianStranglePage() {
         names,
         range_start: rangeStart || null, range_end: rangeEnd || null,
         entry_date: entryDate || null, sell_expiry: sellExpiry || null,
-        ivp_min: ivpMin, hv_window: hvWindow, skip_leg_min_premium_pct: skipLegPct,
-        round_out: roundOut, lots_per_name: lots,
+        ivp_min: ivpMin, require_iv_gt_hv: requireIvGtHv, hv_window: hvWindow,
+        skip_leg_min_premium_pct: skipLegPct, round_out: roundOut, lots_per_name: lots,
       }),
     onSuccess: (res) => {
       setResult(res);
@@ -271,6 +295,9 @@ export default function DonchianStranglePage() {
           <label className="flex items-center gap-2 mt-5">
             <input type="checkbox" checked={roundOut} onChange={(e) => setRoundOut(e.target.checked)} /> Round-out strikes
           </label>
+          <label className="flex items-center gap-2 mt-5" title="Keep only names whose ATM IV exceeds their annualised HV">
+            <input type="checkbox" checked={requireIvGtHv} onChange={(e) => setRequireIvGtHv(e.target.checked)} /> Require IV &gt; HV
+          </label>
         </div>
 
         {/* Cycle anchors (auto-resolved; override + re-run if needed). */}
@@ -335,7 +362,13 @@ export default function DonchianStranglePage() {
                           <Link to="/live" className="ml-2 align-middle rounded-full bg-[var(--chip)] text-[var(--chip-text)] px-1.5 py-0.5 text-[10px] font-semibold">● deployed</Link>
                         )}
                       </td>
-                      <td className="py-1.5 px-2 text-right">{ivpMap.get(r.symbol)?.ivp ?? r.ivp ?? "—"}</td>
+                      <td className="py-1.5 px-2 text-right"
+                        title={`ATM IV ${n1(r.atm_iv)}% · HV ${n1(r.hv)}%${r.beta != null ? ` · β ${r.beta.toFixed(2)}` : ""}`}>
+                        {ivpMap.get(r.symbol)?.ivp ?? r.ivp ?? "—"}
+                        {r.atm_iv != null && r.hv != null && (
+                          <span className={r.atm_iv > r.hv ? "text-[var(--pos)]" : "text-[var(--warn-text)]"}> {r.atm_iv > r.hv ? "▲" : "▼"}</span>
+                        )}
+                      </td>
                       <td className="py-1.5 px-2 text-right">{n1(r.spot)}</td>
                       <td className="py-1.5 px-2 text-right text-xs text-[var(--muted)]">{r.range_low != null ? `${n1(r.range_low)}–${n1(r.range_high)}` : "—"}</td>
                       <td className="py-1.5 px-2 text-[var(--danger)]"><LegCell leg={r.ce} units={(r.lot_size ?? 0) * (r.lots ?? 1)} /></td>
