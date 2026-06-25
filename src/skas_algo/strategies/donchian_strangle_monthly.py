@@ -83,6 +83,8 @@ class DonchianStrangleMonthlyStrategy:
         self.name_step: dict[str, float] = {}        # underlying -> strike step (for ATM flip)
         self.flip_count: dict[str, int] = {}         # underlying -> flips so far
         self.closed_names: list[str] = []            # names closed for the cycle (no re-entry)
+        self.realized_by_name: dict[str, float] = {}  # underlying -> realized P&L booked on its flips
+        self.leg_origin: dict[str, str] = {}          # symbol -> "entry" | "flip" (for the live state tag)
 
     # ------------------------------------------------------------------ slice
     def on_slice(self, ctx) -> list[Signal]:
@@ -127,8 +129,12 @@ class DonchianStrangleMonthlyStrategy:
                 (self.leg_right[s] == "CE" and sp >= self.leg_strike[s])
                 or (self.leg_right[s] == "PE" and sp <= self.leg_strike[s]))
             opened = is_open(s)
-            d["legs"].append({"right": self.leg_right[s], "strike": self.leg_strike[s], "units": self.units[s],
-                              "entry": entry, "mark": m, "open": opened, "breached": breached and opened})
+            origin = self.leg_origin.get(s, "entry")
+            state = ("flip-open" if (origin == "flip" and opened) else "flip-covered" if origin == "flip"
+                     else "open" if opened else "covered")
+            d["legs"].append({"side": f"SELL {self.leg_right[s]}", "right": self.leg_right[s],
+                              "strike": self.leg_strike[s], "units": self.units[s], "entry": entry, "mark": m,
+                              "open": opened, "breached": breached and opened, "state": state})
             if opened and m is not None and entry is not None:
                 d["mtm"] += (entry - m) * self.units[s]  # short: profit as the premium decays
         for u, d in names.items():
@@ -137,32 +143,62 @@ class DonchianStrangleMonthlyStrategy:
             d["status"] = ("closed" if u in self.closed_names else
                            "flipped" if (d["flip_count"] > 0 and has_open) else
                            "open" if has_open else "settled")
-            # Name-level economics (clubbing CE+PE): credit collected, current value, contract units.
+            # The option STRUCTURE from the open legs (independent of open/closed status).
+            rights = {leg["right"] for leg in open_legs}
+            d["struct"] = ("strangle" if {"CE", "PE"} <= rights else "CE-only" if rights == {"CE"}
+                           else "PE-only" if rights == {"PE"} else "closed")
+            # Name-level economics (clubbing CE+PE): credit collected, current value, units, realized.
             d["units"] = max((leg["units"] for leg in open_legs), default=0)
             d["credit"] = sum((leg["entry"] or 0) * leg["units"] for leg in open_legs)
             d["value"] = sum((leg["mark"] or 0) * leg["units"] for leg in open_legs)
+            d["lot_size"] = self.name_lot.get(u)
+            d["lots"] = self.name_lots.get(u)
+            d["realized"] = self.realized_by_name.get(u, 0.0)
 
-        hedge_legs, hedge_mtm = [], 0.0
+        nifty_spot = spot_fn("NIFTY") if spot_fn else None
+        hedge_legs, hedge_mtm, hedge_cost = [], 0.0, 0.0
         for s in self.legs:
             if self.leg_side.get(s) != "buy" or not is_open(s):
                 continue
             m, entry = mark(s), self.entry_close.get(s)
             if m is not None and entry is not None:
                 hedge_mtm += (m - entry) * self.units[s]  # long: profit as the option richens
+            hedge_cost += (entry or 0) * self.units[s]
+            otm = (abs(self.leg_strike[s] - nifty_spot) / nifty_spot * 100) if nifty_spot else None
             hedge_legs.append({"underlying": self.leg_underlying[s], "right": self.leg_right[s],
-                               "strike": self.leg_strike[s], "units": self.units[s], "entry": entry, "mark": m})
+                               "strike": self.leg_strike[s], "units": self.units[s], "entry": entry,
+                               "mark": m, "otm_pct": otm})
         current_notional = 0.0
         for u, d in names.items():
             units = next((leg["units"] for leg in d["legs"] if leg["open"]), 0)
             if d["spot"] and units:
                 current_notional += d["spot"] * units
 
+        net_credit = sum(d.get("credit", 0.0) for d in names.values())
+        basket_mtm = sum(d.get("mtm", 0.0) for d in names.values())
+        combined_mtm = basket_mtm + hedge_mtm
+        stop_amount = self.portfolio_sl_pct / 100.0 * self.agg_notional
+        expiry = self._expiry_date()
+        today = getattr(market, "current_date", None) or date.today()
         return {
             "names": sorted(names.values(), key=lambda x: -(x["mtm"] or 0)),
-            "hedge": {"legs": hedge_legs, "mtm": hedge_mtm, "spot": (spot_fn("NIFTY") if spot_fn else None),
-                      "entry_notional": self.agg_notional, "current_notional": current_notional},
-            "net_credit": sum(d.get("credit", 0.0) for d in names.values()),
+            "hedge": {
+                "legs": hedge_legs, "mtm": hedge_mtm, "spot": nifty_spot,
+                "lots": self.name_lots.get("NIFTY"), "cost": hedge_cost,
+                "cost_pct": (hedge_cost / net_credit * 100.0) if net_credit > 0 else None,
+                "entry_notional": self.agg_notional, "current_notional": current_notional,
+            },
+            "net_credit": net_credit,
+            "basket_mtm": basket_mtm,
+            "hedge_mtm": hedge_mtm,
+            "combined_mtm": combined_mtm,
             "realized_pnl": self.realized_pnl,
+            "total_flips": sum(self.flip_count.values()),
+            "closed_count": len(self.closed_names),
+            "portfolio_stop_amount": stop_amount,
+            "buffer_to_stop": combined_mtm + stop_amount,
+            "expiry": expiry.isoformat() if expiry else None,
+            "dte": (max((expiry - today).days, 0) if expiry else None),
             "payoff": self._aggregate_payoff(market, portfolio),
         }
 
@@ -242,10 +278,11 @@ class DonchianStrangleMonthlyStrategy:
             signals.append(Signal(symbol, action, quantity=int(units), reason="donchian_basket",
                                   meta={"multiplier": 1}))
             self._record_leg(symbol, underlying, right, strike, side, units, close)
+            self.leg_origin[symbol] = "entry"
+            self.name_lot[underlying] = per_lot      # lot size per name (incl. the NIFTY hedge)
+            self.name_lots[underlying] = lots
             if side == "sell":  # short stock legs drive notional (once/name) + premium + flip sizing
                 premium_collected += close * units
-                self.name_lot[underlying] = per_lot
-                self.name_lots[underlying] = lots
                 if step:
                     self.name_step[underlying] = float(step)
                 if underlying not in counted:
@@ -325,7 +362,9 @@ class DonchianStrangleMonthlyStrategy:
             # Commit: close the name's open legs (realize their P&L), then add the rolled short.
             for s in [x for x in open_legs if self.leg_underlying[x] == name]:
                 signals.append(Signal(s, SignalAction.EXIT_ALL, reason="flip"))
-                self.realized_pnl += self._sign(s) * (self.entry_close[s] - ctx.close(s)) * self.units[s]
+                contrib = self._sign(s) * (self.entry_close[s] - ctx.close(s)) * self.units[s]
+                self.realized_pnl += contrib
+                self.realized_by_name[name] = self.realized_by_name.get(name, 0.0) + contrib
             self.flip_count[name] = self.flip_count.get(name, 0) + 1
             if will_close:
                 self.closed_names.append(name)
@@ -334,6 +373,7 @@ class DonchianStrangleMonthlyStrategy:
             signals.append(Signal(sym, SignalAction.ENTER_SHORT, quantity=int(units), reason="flip",
                                   meta={"multiplier": 1}))
             self._record_leg(sym, name, "PE" if breach_side == "CE" else "CE", atm, "sell", units, close)
+            self.leg_origin[sym] = "flip"
         return signals
 
     def _breach_side(self, name: str, open_legs, spot: float) -> str | None:
@@ -442,6 +482,8 @@ class DonchianStrangleMonthlyStrategy:
             "name_step": dict(self.name_step),
             "flip_count": dict(self.flip_count),
             "closed_names": list(self.closed_names),
+            "realized_by_name": dict(self.realized_by_name),
+            "leg_origin": dict(self.leg_origin),
         }
 
     def load_state(self, state: dict) -> None:
@@ -462,3 +504,5 @@ class DonchianStrangleMonthlyStrategy:
         self.name_step = {k: float(v) for k, v in state.get("name_step", {}).items()}
         self.flip_count = {k: int(v) for k, v in state.get("flip_count", {}).items()}
         self.closed_names = list(state.get("closed_names", []))
+        self.realized_by_name = {k: float(v) for k, v in state.get("realized_by_name", {}).items()}
+        self.leg_origin = dict(state.get("leg_origin", {}))

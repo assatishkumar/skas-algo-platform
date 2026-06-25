@@ -465,6 +465,7 @@ export interface LiveRunSnapshot {
 }
 
 export interface DonchianBasketLeg {
+  side: string; // "SELL CE" | "SELL PE"
   right: "CE" | "PE";
   strike: number;
   units: number;
@@ -472,16 +473,21 @@ export interface DonchianBasketLeg {
   mark?: number | null;
   open: boolean;
   breached: boolean;
+  state: string; // open | flip-open | covered | flip-covered
 }
 export interface DonchianBasketName {
   symbol: string;
   spot?: number | null;
   flip_count: number;
   status: string; // open | flipped | closed | settled
+  struct: string; // strangle | CE-only | PE-only | closed
   legs: DonchianBasketLeg[];
   units?: number;   // per-leg contract units
+  lot_size?: number | null;
+  lots?: number | null;
   credit?: number;  // entry credit collected for the name (Σ entry·units, open legs)
   value?: number;   // current value of the name's open legs (Σ ltp·units)
+  realized?: number; // realized P&L booked on this name's flips
   mtm: number;
 }
 export interface DonchianHedgeLeg {
@@ -491,12 +497,25 @@ export interface DonchianHedgeLeg {
   units: number;
   entry?: number | null;
   mark?: number | null;
+  otm_pct?: number | null;
 }
 export interface DonchianBasket {
   names: DonchianBasketName[];
-  hedge: { legs: DonchianHedgeLeg[]; mtm: number; spot?: number | null; entry_notional: number; current_notional: number };
+  hedge: {
+    legs: DonchianHedgeLeg[]; mtm: number; spot?: number | null; lots?: number | null;
+    cost?: number; cost_pct?: number | null; entry_notional: number; current_notional: number;
+  };
   net_credit?: number;
+  basket_mtm?: number;
+  hedge_mtm?: number;
+  combined_mtm?: number;
   realized_pnl: number;
+  total_flips?: number;
+  closed_count?: number;
+  portfolio_stop_amount?: number;
+  buffer_to_stop?: number;
+  expiry?: string | null;
+  dte?: number | null;
   payoff: { move_pct: number; expiry_pnl: number }[];
 }
 

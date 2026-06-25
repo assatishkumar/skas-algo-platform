@@ -84,6 +84,7 @@ input[type="number"] {
   --ft: #0d6b4f; --golive: #13a05a;
   --ok-bg: #e6f6ef; --ok-text: #0f9d63; --warn-bg: #fdf3df; --warn-text: #b07d10;
   --opt-bg: #efebfd; --opt-text: #6a4fd0; --atm: #f3ece1;
+  --track: #edf1f0; --ghost: #ffffff; --overlay: rgba(15,30,27,.42);
 }
 .dark {
   --page: #0c1a18; --card: #142926; --border: #24403b; --strong: #f1f6f5; --muted: #92aaa4;
@@ -93,4 +94,5 @@ input[type="number"] {
   --ft: #12916b; --golive: #16b364;
   --ok-bg: rgba(52,211,153,.16); --ok-text: #34d399; --warn-bg: rgba(240,189,94,.16); --warn-text: #f0bd5e;
   --opt-bg: rgba(139,108,240,.20); --opt-text: #b39cf5; --atm: #26352b;
+  --track: #1c322e; --ghost: #142926; --overlay: rgba(0,0,0,.58);
 }
