@@ -5,7 +5,6 @@ import { api, brokers, liveWsUrl } from "../api/client";
 import { Badge, timeAgo } from "../components/ui";
 import GreeksPanel from "../components/GreeksPanel";
 import LivePayoffChart from "../components/LivePayoffChart";
-import DonchianBasketPanel from "../components/DonchianBasketPanel";
 import LiveTradesPanel from "../components/LiveTradesPanel";
 import LiveEquityTrades from "../components/LiveEquityTrades";
 import OptionMetricsPanel from "../components/OptionMetricsPanel";
@@ -723,10 +722,12 @@ function RunCard({
         <div className="text-slate-500 text-sm mt-3">No open positions.</div>
       )}
 
-      {/* A basket spans many underlyings → the single-spot payoff is meaningless; show the
-          per-name breakdown + aggregate (correlated-move) payoff instead. */}
-      {run.strategy_id === "donchian_strangle_monthly" && run.basket ? (
-        <DonchianBasketPanel basket={run.basket} />
+      {/* A basket spans many underlyings → its rich per-name monitor lives on a dedicated page
+          (the single-spot payoff is meaningless for a basket). */}
+      {isDonchian ? (
+        <Link to={`/live/${run.run_id}`} className="mt-3 inline-flex items-center gap-2 rounded-[11px] bg-[var(--ft)] text-white px-4 py-2 text-sm font-semibold">
+          Open basket monitor →
+        </Link>
       ) : isOptions && run.positions?.length ? (
         <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
       ) : null}

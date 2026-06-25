@@ -96,3 +96,6 @@ input[type="number"] {
   --opt-bg: rgba(139,108,240,.20); --opt-text: #b39cf5; --atm: #26352b;
   --track: #1c322e; --ghost: #142926; --overlay: rgba(0,0,0,.58);
 }
+
+/* Donchian detail drawer slide-in (transform only — resting state fully opaque). */
+@keyframes drawerIn { from { transform: translateX(34px); } to { transform: translateX(0); } }

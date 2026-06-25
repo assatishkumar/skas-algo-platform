@@ -7,6 +7,7 @@ import BrokersPage from "./pages/BrokersPage";
 import ComparePage from "./pages/ComparePage";
 import DataPage from "./pages/DataPage";
 import DeployPage from "./pages/DeployPage";
+import DonchianLivePage from "./pages/DonchianLivePage";
 import HomePage from "./pages/HomePage";
 import LivePage from "./pages/LivePage";
 import RunDetailPage from "./pages/RunDetailPage";
@@ -50,7 +51,8 @@ function ThemeToggle() {
 const FULL_BLEED = new Set(["/", "/backtest", "/live", "/trade"]);
 
 export default function App() {
-  const isHome = FULL_BLEED.has(useLocation().pathname);
+  const path = useLocation().pathname;
+  const isHome = FULL_BLEED.has(path) || /^\/live\/\d+$/.test(path); // donchian detail is full-bleed too
   return (
     <div className="min-h-screen">
       <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10">
@@ -76,6 +78,7 @@ export default function App() {
           <Route path="/trade" element={<TradePage />} />
           <Route path="/live" element={<LivePage />} />
           <Route path="/live/new" element={<DeployPage />} />
+          <Route path="/live/:id" element={<DonchianLivePage />} />
           <Route path="/docs" element={<StrategiesPage />} />
           <Route path="/analyze" element={<AnalysisPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
