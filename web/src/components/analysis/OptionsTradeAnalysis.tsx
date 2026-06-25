@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../../api/client";
@@ -93,10 +93,10 @@ function LegsTable({ legs }: { legs: CycleLeg[] }) {
 }
 
 function CycleCard({ cycle, points, live }: { cycle: ReconCycle; points: StockSeriesPoint[]; live?: LiveRunSnapshot | null }) {
-  // For an OPEN cycle prefer the broker's LIVE spot (and live leg LTPs); fall back to the cached
-  // index close (which lags bhavcopy for a just-entered cycle). Closed cycles use the cache only.
-  const entrySpot = (cycle.open ? live?.underlying_spot ?? null : null) ?? spotOn(points, cycle.entry_date);
-  const exitSpot = spotOn(points, cycle.exit_date);
+  // Prefer the spot captured AT TRADE TIME (immune to a lagging bhavcopy cache); then, for an open
+  // cycle, the broker's live spot; finally the cached index close on that date.
+  const entrySpot = cycle.entry_spot ?? (cycle.open ? live?.underlying_spot ?? null : null) ?? spotOn(points, cycle.entry_date);
+  const exitSpot = cycle.exit_spot ?? spotOn(points, cycle.exit_date);
   const net = netPremium(cycle.legs);
   const liveOpen = cycle.open && !!live?.positions?.length;
 
@@ -208,6 +208,116 @@ function CycleCard({ cycle, points, live }: { cycle: ReconCycle; points: StockSe
   );
 }
 
+type SumKey = "entered" | "exited" | "held" | "espot" | "xspot" | "move" | "net" | "pnl" | "legs" | "result";
+
+/** Compact, sortable P&L table across all cycles (one row per weekly/monthly position) + aggregates. */
+function CycleSummary({ cycles, points }: { cycles: ReconCycle[]; points: StockSeriesPoint[] }) {
+  const [sortKey, setSortKey] = useState<SumKey>("entered");
+  const [dir, setDir] = useState<1 | -1>(-1);
+  const rows = cycles.map((c) => {
+    const eSpot = c.entry_spot ?? spotOn(points, c.entry_date);
+    const xSpot = c.exit_spot ?? spotOn(points, c.exit_date);
+    return {
+      c, eSpot, xSpot,
+      move: eSpot && xSpot ? ((xSpot - eSpot) / eSpot) * 100 : null,
+      net: netPremium(c.legs),
+      pnl: c.realized_pnl,
+      held: c.holding_days ?? null,
+      legs: c.legs.length,
+      result: c.open ? "open" : c.realized_pnl >= 0 ? "win" : "loss",
+    };
+  });
+  const val = (r: (typeof rows)[number]): number | string | null => ({
+    entered: r.c.entry_date, exited: r.c.exit_date ?? "", held: r.held, espot: r.eSpot, xspot: r.xSpot,
+    move: r.move, net: r.net, pnl: r.pnl, legs: r.legs, result: r.result,
+  }[sortKey]);
+  const sorted = [...rows].sort((a, b) => {
+    const va = val(a), vb = val(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === "string" || typeof vb === "string") return String(va).localeCompare(String(vb)) * dir;
+    return (va - vb) * dir;
+  });
+  const onSort = (k: SumKey) => { if (k === sortKey) setDir((d) => (d === 1 ? -1 : 1)); else { setSortKey(k); setDir(-1); } };
+
+  const closed = cycles.filter((c) => !c.open);
+  const wins = closed.filter((c) => c.realized_pnl > 0).length;
+  const total = closed.reduce((s, c) => s + c.realized_pnl, 0);
+  const pnls = closed.map((c) => c.realized_pnl);
+  const avg = closed.length ? total / closed.length : 0;
+  const winRate = closed.length ? (wins / closed.length) * 100 : 0;
+
+  const Th = ({ k, label, right }: { k: SumKey; label: string; right?: boolean }) => (
+    <th onClick={() => onSort(k)}
+      className={`py-1.5 pr-3 cursor-pointer select-none hover:text-slate-200 ${right ? "text-right" : "text-left"} ${sortKey === k ? "text-slate-200" : ""}`}>
+      {label}{sortKey === k ? (dir === 1 ? " ↑" : " ↓") : ""}
+    </th>
+  );
+  const pos = (v: number) => (v >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400");
+
+  return (
+    <Card className="space-y-3">
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+        <span className="font-medium text-slate-200">Cycle P&L — {cycles.length} cycles</span>
+        <span className="text-xs text-slate-400">
+          {closed.length} closed · win rate <span className="text-slate-200">{winRate.toFixed(0)}%</span> ({wins}/{closed.length})
+        </span>
+        <span className="text-xs text-slate-400">total <span className={pos(total)}>{formatInr(total)}</span></span>
+        <span className="text-xs text-slate-400">avg/cycle <span className={pos(avg)}>{formatInr(avg)}</span></span>
+        {pnls.length > 0 && (
+          <span className="text-xs text-slate-400">
+            best <span className="text-emerald-600 dark:text-emerald-400">{formatInr(Math.max(...pnls))}</span> ·
+            worst <span className="text-rose-600 dark:text-rose-400">{formatInr(Math.min(...pnls))}</span>
+          </span>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm tabular-nums">
+          <thead className="text-slate-400 text-xs border-b border-slate-800">
+            <tr>
+              <Th k="entered" label="Entered" />
+              <Th k="exited" label="Exited" />
+              <Th k="held" label="Held" right />
+              <Th k="espot" label="Entry spot" right />
+              <Th k="xspot" label="Exit spot" right />
+              <Th k="move" label="Move %" right />
+              <Th k="net" label="Net" right />
+              <Th k="pnl" label="Realized P&L" right />
+              <Th k="legs" label="Legs" right />
+              <Th k="result" label="Result" />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r) => (
+              <tr key={`${r.c.expiry}-${r.c.entry_date}`} className="border-b border-slate-800/40">
+                <td className="py-1.5 pr-3">{r.c.entry_date}</td>
+                <td className="py-1.5 pr-3">{r.c.exit_date ?? <span className="text-slate-500">open</span>}</td>
+                <td className="py-1.5 pr-3 text-right">{r.held != null ? `${r.held}d` : "—"}</td>
+                <td className="py-1.5 pr-3 text-right">{r.eSpot != null ? Math.round(r.eSpot) : "—"}</td>
+                <td className="py-1.5 pr-3 text-right">{r.xSpot != null ? Math.round(r.xSpot) : "—"}</td>
+                <td className={`py-1.5 pr-3 text-right ${r.move != null ? pos(r.move) : ""}`}>
+                  {r.move != null ? `${r.move >= 0 ? "+" : ""}${r.move.toFixed(1)}%` : "—"}
+                </td>
+                <td className="py-1.5 pr-3 text-right">{r.net >= 0 ? "+" : "−"}{formatInr(Math.abs(r.net))}</td>
+                <td className={`py-1.5 pr-3 text-right ${pos(r.pnl)}`}>{r.c.open ? "—" : formatInr(r.pnl)}</td>
+                <td className="py-1.5 pr-3 text-right">{r.legs}</td>
+                <td className="py-1.5 pr-3">
+                  <span className={`rounded px-1.5 py-0.5 text-[11px] ${
+                    r.result === "open" ? "bg-sky-900/50 text-sky-300"
+                      : r.result === "win" ? "bg-emerald-900/40 text-emerald-300" : "bg-rose-900/40 text-rose-300"}`}>
+                    {r.result}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 export default function OptionsTradeAnalysis({ analysis }: { analysis: RunAnalysis }) {
   const cycles = useMemo(() => reconstructCycles(analysis.trades), [analysis.trades]);
 
@@ -260,6 +370,7 @@ export default function OptionsTradeAnalysis({ analysis }: { analysis: RunAnalys
         {closed ? ` · ${closed} closed` : ""} — each shows all legs and the payoff at entry
         {closed ? " and at exit" : ""}.
       </div>
+      <CycleSummary cycles={cycles} points={points} />
       {cycles.map((c) => (
         <CycleCard key={`${c.expiry}-${c.entry_date}`} cycle={c} points={points} live={c.open ? live : null} />
       ))}

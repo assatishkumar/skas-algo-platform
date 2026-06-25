@@ -355,11 +355,31 @@ class LiveRun:
         except Exception:  # pragma: no cover - never break the decision loop on a cache hiccup
             logger.exception("supertrend refresh failed for run %s", self.run_id)
 
+    def _tag_underlying_spot(self, events: list[dict]) -> None:
+        """Stamp each option trade event with the underlying's live spot at execution, so the
+        analysis page can mark the TRUE entry/exit spot per cycle even when the cached index
+        series lags (e.g. a fresh forward-test whose dates aren't in the bhavcopy cache yet)."""
+        market = getattr(self.session, "market", None)
+        spot_fn = getattr(market, "index_spot", None)
+        if spot_fn is None:
+            return
+        from skas_algo.engine.options.instrument import parse as parse_option
+        for ev in events:
+            if ev.get("underlying_spot") is not None:
+                continue
+            inst = parse_option(str(ev.get("ticker", "")))
+            if inst is None:
+                continue
+            spot = spot_fn(inst.underlying)
+            if spot is not None:
+                ev["underlying_spot"] = float(spot)
+
     def run_decision(self, ts: datetime | None = None) -> list[dict]:
         """Make today's entry/exit decision; persist trades + positions; broadcast."""
         ts = ts or datetime.now(IST)
         self._refresh_supertrend()
         events = self.session.run_decision(ts)
+        self._tag_underlying_spot(events)
         snap = self.snapshot()  # wrapper: real margin override + greeks + target/stop, etc.
         with session_scope() as db:
             if events:
@@ -391,6 +411,7 @@ class LiveRun:
 
     def _after_manual(self, events: list[dict]) -> None:
         """Persist + broadcast after a manual flatten/order (mirrors run_decision)."""
+        self._tag_underlying_spot(events)
         self._maybe_refresh_margin()
         snap = self.snapshot()
         with session_scope() as db:

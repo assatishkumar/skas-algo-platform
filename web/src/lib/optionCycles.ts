@@ -32,6 +32,8 @@ export interface ReconCycle {
   realized_pnl: number; // sum of legs' realized (gross)
   exit_reason?: string;
   holding_days?: number;
+  entry_spot?: number | null; // underlying spot at entry (captured at trade time)
+  exit_spot?: number | null; // underlying spot at exit
 }
 
 const ENTRY = new Set(["BUY", "SHORT"]);
@@ -81,7 +83,8 @@ export function reconstructCycles(trades: Trade[]): ReconCycle[] {
     let cyc = open.get(m.expiry);
     if (!cyc) {
       if (!isEntry) continue; // an exit with no open cycle — nothing to close
-      cyc = { underlying: m.underlying, expiry: m.expiry, entry_date: t.date, legs: [], open: true, realized_pnl: 0 };
+      cyc = { underlying: m.underlying, expiry: m.expiry, entry_date: t.date, legs: [], open: true,
+              realized_pnl: 0, entry_spot: t.underlying_spot ?? null };
       open.set(m.expiry, cyc);
     }
 
@@ -106,6 +109,7 @@ export function reconstructCycles(trades: Trade[]): ReconCycle[] {
       leg.exit_date = t.date;
       leg.exit_action = t.action;
       if (t.exit_reason) cyc.exit_reason = t.exit_reason;
+      if (t.underlying_spot != null) cyc.exit_spot = t.underlying_spot; // last exit's spot
     }
 
     if (cyc.legs.length && cyc.legs.every((l) => l.open_units <= 1e-9)) {

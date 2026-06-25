@@ -112,6 +112,7 @@ export interface Trade {
   exit_reason?: string;
   entry_premium?: number;
   holding_days?: number;
+  underlying_spot?: number | null; // index spot at execution (captured live; for accurate entry/exit markers)
 }
 
 // ---- Trade analysis ----
