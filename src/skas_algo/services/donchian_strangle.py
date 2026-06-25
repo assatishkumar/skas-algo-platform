@@ -222,11 +222,27 @@ def analyze_name(
 
 # ───────────────────────────────────────────────────────── date anchors (§5)
 
-def _next_trading_day(d: date) -> date:
+def _next_trading_day(d: date | None, trading_days: list[date] | None = None) -> date | None:
+    """The next actual trading day after ``d`` (from the index calendar when given; else the next
+    weekday)."""
+    if d is None:
+        return None
+    if trading_days:
+        nxt = [t for t in trading_days if t > d]
+        if nxt:
+            return nxt[0]
     nd = d + timedelta(days=1)
-    while nd.weekday() >= 5:  # Sat/Sun → next weekday (holidays not modelled for this +1 nicety)
+    while nd.weekday() >= 5:  # Sat/Sun
         nd += timedelta(days=1)
     return nd
+
+
+def _snap_back(d: date | None, trading_days: list[date] | None) -> date | None:
+    """Roll a calendar anchor back to the latest actual trading day on/before it (holiday-adjusted)."""
+    if d is None or not trading_days:
+        return d
+    prior = [t for t in trading_days if t <= d]
+    return prior[-1] if prior else d
 
 
 def resolve_cycle(
@@ -234,6 +250,7 @@ def resolve_cycle(
     listed_expiries: list[date],
     *,
     underlying: str = "NIFTY",
+    trading_days: list[date] | set[date] | None = None,
     range_start: date | None = None,
     range_end: date | None = None,
     entry_date: date | None = None,
@@ -241,8 +258,9 @@ def resolve_cycle(
 ) -> dict:
     """Resolve the monthly cycle anchors (spec §5). The sell expiry comes from the broker's
     actual listed (future) expiries — the primary, holiday-correct source; the range window
-    (prev/last monthly) uses the calendar ``expected_monthly_expiry`` fallback. Any anchor the
-    caller passes (the UI overrides) wins."""
+    (prev/last monthly) uses the calendar ``expected_monthly_expiry``, snapped back to the actual
+    index trading calendar (holiday-adjusted). Any anchor the caller passes (the UI override) wins."""
+    tds = sorted(trading_days) if trading_days else None
     future = sorted(e for e in listed_expiries if e >= today)
     sell = sell_expiry or (future[0] if future else None)
 
@@ -256,9 +274,9 @@ def resolve_cycle(
         if m == 0:
             m, y = 12, y - 1
     past = sorted({a for a in anchors if a <= today})
-    last = range_end or (past[-1] if past else None)
-    prev = range_start or (past[-2] if len(past) >= 2 else None)
-    entry = entry_date or (_next_trading_day(last) if last else None)
+    last = range_end or _snap_back(past[-1] if past else None, tds)
+    prev = range_start or _snap_back(past[-2] if len(past) >= 2 else None, tds)
+    entry = entry_date or _next_trading_day(last, tds)
     return {"prev_expiry": prev, "last_expiry": last, "sell_expiry": sell, "entry_date": entry,
             "range_start": prev, "range_end": last}
 

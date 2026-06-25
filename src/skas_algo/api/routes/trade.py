@@ -247,6 +247,15 @@ def donchian_analyze(
         skip_leg_min_premium_pct=body.skip_leg_min_premium_pct, round_out=body.round_out,
         lots_per_name=max(1, body.lots_per_name),
     )
+    # NIFTY daily series (once) → the index trading calendar (holiday-adjusted anchors) + per-name beta.
+    try:
+        nifty_df = cache.get_prices("NIFTY 50", start_date=today - timedelta(days=400), end_date=today)
+    except Exception:
+        nifty_df = None
+    trading_days = (
+        {(d.date() if hasattr(d, "date") else d) for d in nifty_df["date"].tolist()}
+        if nifty_df is not None and len(nifty_df) else None
+    )
     # Cycle anchor: listed monthly expiries from a representative name (stocks list monthlies only).
     listed: list[date] = []
     for n in body.names:
@@ -257,19 +266,14 @@ def donchian_analyze(
         if exps:
             listed = sorted({date.fromisoformat(str(e)[:10]) for e in exps})
             break
-    cyc = resolve_cycle(today, listed, range_start=_d(body.range_start), range_end=_d(body.range_end),
+    cyc = resolve_cycle(today, listed, trading_days=trading_days,
+                        range_start=_d(body.range_start), range_end=_d(body.range_end),
                         entry_date=_d(body.entry_date), sell_expiry=_d(body.sell_expiry))
     sell, rstart, rend = cyc["sell_expiry"], cyc["range_start"], cyc["range_end"]
     dates = {k: _iso(v) for k, v in cyc.items()}
     if not (sell and rstart and rend):
         return {"as_of": today.isoformat(), "dates": dates, "rows": [],
                 "error": "could not resolve cycle dates — set them manually"}
-
-    # NIFTY daily series (once) → per-name beta for the optional beta-weighted hedge.
-    try:
-        nifty_df = cache.get_prices("NIFTY 50", start_date=today - timedelta(days=400), end_date=today)
-    except Exception:
-        nifty_df = None
 
     rows: list[dict] = []
     for n in body.names:
@@ -350,6 +354,34 @@ def donchian_portfolio(
     return panel
 
 
+def _basket_required_margin(legs: list[dict], db: Session, broker_account_id: int | None, sell: date) -> float:
+    """Margin the basket needs: the broker's net basket margin (live session, hedge-benefited) when
+    available, else a SPAN+exposure model estimate on the short legs."""
+    sized: list[dict] = []
+    model = 0.0
+    p = MarginParams()
+    for leg in legs:
+        units = int((leg.get("lot_size") or 0) * (leg.get("lots") or 1))
+        if units <= 0:
+            continue
+        sym = make(str(leg["underlying"]).upper(), sell, float(leg["strike"]), str(leg["right"]).upper(),
+                   lot_size=1).symbol
+        short = str(leg.get("side", "sell")).lower() == "sell"
+        sized.append({"symbol": sym, "direction": -1 if short else 1, "units": units})
+        if short and leg.get("spot"):
+            model += short_option_margin(float(leg["spot"]), units, 1, p)
+    if broker_account_id is not None:
+        account = db.get(BrokerAccount, broker_account_id)
+        if account is not None and broker_svc.has_valid_session(account):
+            try:
+                m = broker_svc.make_adapter(account).basket_margin(sized)
+            except Exception:  # pragma: no cover - API hiccup → model estimate
+                m = None
+            if m is not None:
+                return float(m)
+    return model
+
+
 @router.post("/options/donchian/deploy")
 async def donchian_deploy(
     body: DonchianDeploy,
@@ -361,6 +393,18 @@ async def donchian_deploy(
     (strategy_id=donchian_strangle_monthly), reusing the standard live-start path."""
     if not body.legs:
         raise HTTPException(status_code=422, detail="at least one leg is required")
+    # Pre-flight: the deployment capital must fund the basket margin, or the broker rejects it live
+    # and the %-of-notional stop is meaningless.
+    required = _basket_required_margin(body.legs, db, body.broker_account_id, date.fromisoformat(body.sell_expiry[:10]))
+    if required and body.capital < required:
+        import math
+
+        suggested = int(math.ceil(required * 1.1 / 100_000) * 100_000)
+        raise HTTPException(
+            status_code=422,
+            detail=(f"Capital ₹{body.capital:,.0f} is below the ~₹{required:,.0f} basket margin. "
+                    f"Deploy with at least ₹{suggested:,.0f}, or reduce names / lots."),
+        )
     params = {
         "expiry": body.sell_expiry,
         "legs": body.legs,

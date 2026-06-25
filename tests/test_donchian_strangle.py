@@ -103,6 +103,15 @@ def test_resolve_cycle_anchors():
     assert cyc["entry_date"] > cyc["range_end"]
 
 
+def test_resolve_cycle_snaps_to_trading_days():
+    today = date(2026, 1, 20)
+    # Pretend the Dec-2025 monthly (calendar Dec 30) fell on a holiday → trading days exclude it.
+    tds = [date(2025, 12, 29), date(2025, 12, 31), date(2026, 1, 1), date(2026, 1, 2)]
+    cyc = resolve_cycle(today, [date(2026, 1, 27)], trading_days=tds)
+    assert cyc["range_end"] == date(2025, 12, 29)   # snapped back from the holiday
+    assert cyc["entry_date"] == date(2025, 12, 31)  # next actual trading day
+
+
 def test_portfolio_panel_hedge_and_stop():
     selected = [{"symbol": "AAA", "spot": 1000.0, "lot_size": 100, "lots": 20,
                  "ce": {"strike": 1100, "premium": 25.0}, "pe": {"strike": 900, "premium": 22.0}}]
