@@ -661,6 +661,7 @@ export interface DonchianDeploy {
   portfolio_target_enabled?: boolean;
   portfolio_target_pct?: number;
   breach_basis?: string;
+  flip_delta?: string; // "atm" | "30delta"
   max_flips?: number;
   mode: string;
   quote_source: string;

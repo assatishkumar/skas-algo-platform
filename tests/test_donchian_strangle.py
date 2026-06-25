@@ -286,6 +286,31 @@ def test_breach_rolls_to_atm_opposite():
     assert strat.flip_count["AAA"] == 1
 
 
+def test_flip_30delta_uses_live_chain():
+    from skas_algo.engine.options import black_scholes as bs
+
+    strat = _strat(portfolio_sl_pct=2.0, breach_basis="touch", flip_delta="30delta")
+    sess, mv = _session(strat)
+    spot, r, sig = 1100.0, 0.065, 0.30
+    t = (EXP_D - date(2026, 1, 5)).days / 365.0
+    strikes = [900.0 + 10 * i for i in range(0, 41)]  # 900..1300
+
+    def chain_fn(_u, _e):  # BS-priced chain at σ=0.30 so deltas are well-defined
+        rows = [{"strike": k, "ce": {"ltp": bs.price(spot, k, t, r, sig, "CE")},
+                 "pe": {"ltp": bs.price(spot, k, t, r, sig, "PE")}} for k in strikes]
+        return {"spot": spot, "rows": rows}
+
+    mv.set_chain_fn(chain_fn)
+    sess.update_quotes(ENTRY_Q)
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))  # enter
+    sess.update_quotes(ENTRY_Q)
+    mv.set_index_spot("AAA", spot)                   # CE 1050 breached → roll to a 30Δ PE
+    out = sess.run_decision(datetime(2026, 1, 5, 10, 0))
+    expk = int(min(strikes, key=lambda k: abs(abs(bs.delta(spot, k, t, r, sig, "PE")) - 0.30)))
+    assert expk != 1100  # a 30Δ PE is OTM, not the ATM strike
+    assert any(e["action"] == "SHORT" and e["ticker"] == f"AAA|2026-01-13|{expk}|PE" for e in out)
+
+
 def test_max_flips_closes_the_name():
     strat = _strat(portfolio_sl_pct=2.0, breach_basis="touch", max_flips=1)
     sess, mv = _session(strat)

@@ -34,9 +34,25 @@ class LiveOptionsMarketView:
         # a freshly-selected contract's LIVE price at fill time, so an entry doesn't fill at
         # a days-stale cached close (which would book fake instant P&L).
         self._quote_fn = None
+        # Optional live full-chain callback (underlying, expiry_iso) -> chain dict. Lets a
+        # multi-underlying strategy (donchian) pick a delta-based strike off the LIVE chain of
+        # ANY name at flip time — the per-symbol quote_fn can't enumerate strikes.
+        self._chain_fn = None
 
     def set_quote_fn(self, quote_fn) -> None:
         self._quote_fn = quote_fn
+
+    def set_chain_fn(self, chain_fn) -> None:
+        self._chain_fn = chain_fn
+
+    def live_chain(self, underlying: str, expiry: str) -> dict | None:
+        """LIVE option chain for any underlying/expiry (strikes + CE/PE LTP/bid/ask + spot), or None."""
+        if self._chain_fn is None:
+            return None
+        try:
+            return self._chain_fn(underlying, expiry)
+        except Exception:  # pragma: no cover - network hiccup → caller falls back
+            return None
 
     def set_chain_adapter(self, adapter, underlying: str, lot_overrides: dict | None = None) -> None:
         """Source TODAY's expiries/strikes/premiums from the broker (live) for strike selection;

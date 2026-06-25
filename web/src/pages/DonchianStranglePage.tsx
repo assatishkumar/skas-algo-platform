@@ -120,6 +120,7 @@ export default function DonchianStranglePage() {
   const [slPct, setSlPct] = useState(saved.slPct ?? 2);
   const [targetEnabled, setTargetEnabled] = useState(saved.targetEnabled ?? false);
   const [targetPct, setTargetPct] = useState(saved.targetPct ?? 50);
+  const [flipDelta, setFlipDelta] = useState<"atm" | "30delta">(saved.flipDelta ?? "atm");
   // Cycle overrides (prefilled from the analyze response; blank = auto).
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
@@ -140,10 +141,10 @@ export default function DonchianStranglePage() {
   useEffect(() => {
     localStorage.setItem(PKEY, JSON.stringify({
       accountId, csvRows, csvName, symbolsText, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
-      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, result,
+      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, result,
     }));
   }, [accountId, csvRows, csvName, symbolsText, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
-      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, result]);
+      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, result]);
 
   const effectiveAccount = accountId ?? sessioned[0]?.id ?? null;
   const ivpMap = useMemo(() => new Map(csvRows.map((r) => [r.symbol, r])), [csvRows]);
@@ -225,6 +226,7 @@ export default function DonchianStranglePage() {
         name: deployName || `Donchian Strangle ${sell}`,
         sell_expiry: sell, legs, capital,
         portfolio_sl_pct: slPct, portfolio_target_enabled: targetEnabled, portfolio_target_pct: targetPct,
+        flip_delta: flipDelta,
         mode, quote_source: "zerodha", broker_account_id: effectiveAccount,
         ignore_market_hours: false, auto: true,
       });
@@ -394,6 +396,13 @@ export default function DonchianStranglePage() {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h3 className="font-bold font-['Space_Grotesk'] text-lg">Portfolio ({selectedRows.length} names)</h3>
             <div className="flex items-center gap-4 flex-wrap">
+              <label className="flex items-center gap-2 text-sm" title="Strike used when a breach rolls a name">
+                Flip strike
+                <select className={`${inputCls} text-sm`} value={flipDelta} onChange={(e) => setFlipDelta(e.target.value as "atm" | "30delta")}>
+                  <option value="atm">ATM</option>
+                  <option value="30delta">30Δ (live)</option>
+                </select>
+              </label>
               <label className="flex items-center gap-2 text-sm" title="Weight hedge lots by each name's beta vs NIFTY">
                 <input type="checkbox" checked={betaWeight} onChange={(e) => setBetaWeight(e.target.checked)} /> Beta-weight hedge
               </label>

@@ -236,6 +236,12 @@ class LiveRun:
             return
         if hasattr(market, "set_quote_fn"):
             market.set_quote_fn(lambda syms: self.quote_source.get_quotes(syms))
+        if hasattr(market, "set_chain_fn"):
+            # Live full-chain lookup for ANY underlying (donchian's 30Δ flip strike selection).
+            adapter = getattr(self.quote_source, "adapter", None)
+            market.set_chain_fn(
+                (lambda u, e: adapter.live_option_chain(u, e)) if adapter is not None else None
+            )
         if hasattr(market, "set_chain_adapter"):
             adapter = getattr(self.quote_source, "adapter", None)
             market.set_chain_adapter(

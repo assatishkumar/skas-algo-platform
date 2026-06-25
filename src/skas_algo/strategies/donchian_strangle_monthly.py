@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from datetime import date, time
 
+from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
@@ -30,6 +31,7 @@ from skas_algo.engine.types import Signal, SignalAction
 from ._options_common import bad_close
 
 _EOD_CUTOFF = time(15, 15)  # breach_basis="close" → only flip a breach at/after this IST time
+_R_FREE = 0.065             # risk-free for the 30Δ flip's implied-vol / delta calc
 
 
 class DonchianStrangleMonthlyStrategy:
@@ -46,6 +48,7 @@ class DonchianStrangleMonthlyStrategy:
         portfolio_target_enabled: bool = False,
         portfolio_target_pct: float = 50.0,          # unit = % of premium collected
         breach_basis: str = "close",                 # "close" (EOD) | "touch" (intraday)
+        flip_delta: str = "atm",                     # flip strike: "atm" | "30delta" (LIVE chain)
         max_flips: int = 2,                          # per name, then close it
         lot_overrides: dict | None = None,
         **_ignored,
@@ -56,6 +59,7 @@ class DonchianStrangleMonthlyStrategy:
         self.portfolio_target_enabled = portfolio_target_enabled
         self.portfolio_target_pct = portfolio_target_pct
         self.breach_basis = breach_basis
+        self.flip_delta = flip_delta
         self.max_flips = max_flips
         self.initial_capital = initial_capital
         self.lot_overrides = lot_overrides
@@ -255,16 +259,24 @@ class DonchianStrangleMonthlyStrategy:
         return None
 
     def _build_flip_leg(self, ctx, name: str, side: str, spot: float):
-        """A fresh ATM short for ``name`` on ``side``: (symbol, atm_strike, units, entry_close) or None."""
-        step = self.name_step.get(name)
+        """A fresh short for ``name`` on ``side``: (symbol, strike, units, entry_close) or None.
+        Strike = ~0.30-delta off the LIVE chain when flip_delta=='30delta' (with live premium), else
+        the ATM strike from the listed step."""
         per_lot = self.name_lot.get(name)
         expiry = self._expiry_date()
-        if not step or not per_lot or expiry is None:
+        if not per_lot or expiry is None:
             return None
-        atm = round(spot / step) * step
-        sym = make(name, expiry, float(atm), side, lot_size=per_lot, lot_overrides=self.lot_overrides).symbol
+        strike = None
+        if self.flip_delta == "30delta":
+            strike = self._thirty_delta_strike(ctx, name, side, expiry)
+        if strike is None:  # ATM fallback (also the flip_delta=='atm' path)
+            step = self.name_step.get(name)
+            if not step:
+                return None
+            strike = round(spot / step) * step
+        sym = make(name, expiry, float(strike), side, lot_size=per_lot, lot_overrides=self.lot_overrides).symbol
         try:
-            close = ctx.close(sym)
+            close = ctx.close(sym)  # live LTP (via the quote source) for the entry premium
         except KeyError:
             return None
         if bad_close(close):
@@ -272,7 +284,36 @@ class DonchianStrangleMonthlyStrategy:
         units = per_lot * self.name_lots.get(name, 1)
         if units <= 0:
             return None
-        return sym, float(atm), float(units), float(close)
+        return sym, float(strike), float(units), float(close)
+
+    def _thirty_delta_strike(self, ctx, name: str, side: str, expiry: date) -> float | None:
+        """The listed strike whose LIVE Black-Scholes delta is closest to 0.30 on ``side``, using
+        the name's live chain (premium → implied vol → delta). None if no live chain is available."""
+        chain_fn = getattr(ctx.market, "live_chain", None)
+        chain = chain_fn(name, expiry.isoformat()) if chain_fn else None
+        if not chain:
+            return None
+        spot = chain.get("spot")
+        rows = chain.get("rows") or []
+        today = ctx.today()
+        dte = max((expiry - today).days, 0) if today else 0
+        t = dte / 365.0
+        if not spot or not rows or t <= 0:
+            return None
+        best, best_gap = None, 1e9
+        for r in rows:
+            leg = (r.get("ce") if side == "CE" else r.get("pe")) or {}
+            prem = leg.get("ltp") or leg.get("close")
+            if not prem or prem <= 0:
+                continue
+            k = float(r["strike"])
+            iv = bs.implied_vol(prem, spot, k, t, _R_FREE, side)
+            if not iv:
+                continue
+            gap = abs(abs(bs.delta(spot, k, t, _R_FREE, iv, side)) - 0.30)
+            if gap < best_gap:
+                best, best_gap = k, gap
+        return best
 
     def _is_eod(self, ctx) -> bool:
         now = ctx.now()

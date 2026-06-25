@@ -203,6 +203,7 @@ class DonchianDeploy(BaseModel):
     portfolio_target_enabled: bool = False
     portfolio_target_pct: float = 50.0
     breach_basis: str = "close"
+    flip_delta: str = "atm"  # "atm" | "30delta"
     max_flips: int = 2
     mode: str = "PAPER"
     quote_source: str = "cache"
