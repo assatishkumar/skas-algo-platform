@@ -13,6 +13,11 @@ import type {
   Deployment,
   DerivCoverage,
   EquityTradeDeploy,
+  DonchianAnalyzeRequest,
+  DonchianDeploy,
+  DonchianPanel,
+  DonchianPortfolioRequest,
+  DonchianResult,
   FibRetRequest,
   FibRetResult,
   FuturesSeries,
@@ -159,6 +164,12 @@ export const api = {
     request<LiveRunSnapshot>("/trade/options/deploy", { method: "POST", body: JSON.stringify(body) }),
   fibretAnalyze: (body: FibRetRequest) =>
     request<FibRetResult>("/trade/options/fibret/analyze", { method: "POST", body: JSON.stringify(body) }),
+  donchianAnalyze: (body: DonchianAnalyzeRequest) =>
+    request<DonchianResult>("/trade/options/donchian/analyze", { method: "POST", body: JSON.stringify(body) }),
+  donchianPortfolio: (body: DonchianPortfolioRequest) =>
+    request<DonchianPanel>("/trade/options/donchian/portfolio", { method: "POST", body: JSON.stringify(body) }),
+  donchianDeploy: (body: DonchianDeploy) =>
+    request<LiveRunSnapshot>("/trade/options/donchian/deploy", { method: "POST", body: JSON.stringify(body) }),
   deployEquityTrade: (body: EquityTradeDeploy) =>
     request<LiveRunSnapshot>("/trade/equity/deploy", { method: "POST", body: JSON.stringify(body) }),
   optionTradeMargin: (body: {

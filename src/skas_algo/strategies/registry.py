@@ -15,6 +15,7 @@ from .call_ratio_monthly import (
 )
 from .custom_equity import CustomEquityStrategy
 from .custom_options import CustomOptionsStrategy
+from .donchian_strangle_monthly import DonchianStrangleMonthlyStrategy
 from .hni_weekly import HniWeeklyStrategy
 from .nifty_shop import NiftyShopStrategy
 from .short_premium import ShortPremiumStrategy
@@ -40,6 +41,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     StaggeredCoveredCallStrategy.strategy_id: StaggeredCoveredCallStrategy,
     CustomOptionsStrategy.strategy_id: CustomOptionsStrategy,
     CustomEquityStrategy.strategy_id: CustomEquityStrategy,
+    DonchianStrangleMonthlyStrategy.strategy_id: DonchianStrangleMonthlyStrategy,
 }
 
 

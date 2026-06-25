@@ -46,9 +46,15 @@ _TRADE_COLUMNS = [
 ]
 
 
+# Strategies that are only ever deployed live/paper from the Trade UI (a user-built or
+# screener-resolved position) — they have no backtest config form, so keep them out of the
+# New-backtest dropdown. ``donchian_strangle_monthly`` additionally has no backtest path at all.
+_DEPLOY_ONLY = {"custom_options", "custom_equity", "donchian_strangle_monthly"}
+
+
 @router.get("/strategies")
 def list_strategies() -> dict:
-    return {"strategies": available()}
+    return {"strategies": [s for s in available() if s not in _DEPLOY_ONLY]}
 
 
 @router.get("/benchmarks")

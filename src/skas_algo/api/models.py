@@ -147,6 +147,70 @@ class OptionsTradeDeploy(BaseModel):
     notes: str | None = None
 
 
+class DonchianNameInput(BaseModel):
+    """One universe name + its Sensibull screener fields (ATMIV / IVP / Event date)."""
+
+    symbol: str
+    atm_iv: float | None = None
+    ivp: float | None = None
+    event: str | None = None  # ISO date, or "-"/empty when none
+
+
+class DonchianAnalyzeRequest(BaseModel):
+    """Screen the basket for the Donchian-strangle setup using LIVE chains (needs a session).
+    Cycle anchors are resolved from the listed monthly expiries unless the user overrides them."""
+
+    broker_account_id: int
+    names: list[DonchianNameInput] = Field(default_factory=list)
+    range_start: str | None = None    # ISO overrides (else resolved from the monthly calendar)
+    range_end: str | None = None
+    entry_date: str | None = None
+    sell_expiry: str | None = None
+    ivp_min: float = 50.0
+    require_iv_gt_hv: bool = True
+    hv_window: int = 20
+    skip_leg_min_premium_pct: float = 0.5  # % of spot
+    round_out: bool = False
+    lots_per_name: int = 1
+    min_dte: int = 7
+
+
+class DonchianPortfolioRequest(BaseModel):
+    """Recompute the portfolio panel (notional, notional-matched NIFTY hedge, SL/target, combined
+    basket margin) for the selected screener rows."""
+
+    broker_account_id: int
+    sell_expiry: str
+    selected: list[dict] = Field(default_factory=list)  # selected analyze() rows
+    hedge_otm_pct: float = 4.5
+    hedge_beta_weight: bool = False
+    hedge_cost_cap_pct: float = 25.0
+    portfolio_sl_pct: float = 2.0
+    portfolio_target_enabled: bool = False
+    portfolio_target_pct: float = 50.0  # unit = % of premium collected
+
+
+class DonchianDeploy(BaseModel):
+    """Deploy the resolved basket + NIFTY hedge in one action (strategy_id=donchian_strangle_monthly).
+    ``legs`` is the fully-resolved leg list (stock shorts + hedge longs) built by the screener."""
+
+    name: str
+    notes: str | None = None
+    sell_expiry: str                              # ISO monthly expiry for all legs
+    legs: list[dict] = Field(default_factory=list)  # [{underlying, right, strike, side, lots, spot, lot_size}]
+    capital: float = 5_000_000
+    portfolio_sl_pct: float = 2.0
+    portfolio_target_enabled: bool = False
+    portfolio_target_pct: float = 50.0
+    breach_basis: str = "close"
+    max_flips: int = 2
+    mode: str = "PAPER"
+    quote_source: str = "cache"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class EquityTradeDeploy(BaseModel):
     """Deploy a single managed equity position (strategy_id=custom_equity)."""
 

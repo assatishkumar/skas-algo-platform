@@ -254,13 +254,24 @@ class LiveRun:
     def refresh(self) -> dict:
         """Pull quotes, mark-to-market, persist positions, broadcast snapshot."""
         symbols = self._quote_symbols()
-        idx = None
-        if self.config.instrument_class.upper() == "DERIV" and self.config.underlying:
+        # Underlyings whose live spot we feed → set_index_spot(name, price). Usually just the
+        # deployment's own underlying; a basket strategy (e.g. donchian_strangle_monthly) exposes
+        # spot_symbols() so every name's spot drives its breach checks + sizing. Each maps to its
+        # index series (NIFTY → "NIFTY 50") or, for a stock F&O underlying, the stock itself.
+        spot_keys: dict[str, str] = {}
+        if self.config.instrument_class.upper() == "DERIV":
             from skas_algo.data.options_provider import INDEX_SYMBOL
-            # Index → its index symbol; a stock F&O underlying → the stock itself, so spot bands
-            # and strike selection follow the live underlying price for either.
-            idx = INDEX_SYMBOL.get(self.config.underlying.upper()) or self.config.underlying.upper()
-            symbols = symbols + [idx]
+            names: set[str] = set()
+            if self.config.underlying:
+                names.add(self.config.underlying.upper())
+            spot_fn = getattr(getattr(self.session, "strategy", None), "spot_symbols", None)
+            if spot_fn is not None:
+                try:
+                    names.update(str(n).upper() for n in spot_fn())
+                except Exception:  # pragma: no cover - never break the loop on a strategy quirk
+                    pass
+            spot_keys = {n: (INDEX_SYMBOL.get(n) or n) for n in names}
+            symbols = symbols + list(spot_keys.values())
         try:
             quotes = self.quote_source.get_quotes(symbols) if symbols else {}
             self.quote_error = None
@@ -268,8 +279,10 @@ class LiveRun:
             self.quote_error = _quote_error_message(exc)
             logger.warning("quote fetch failed for run %s: %s", self.run_id, exc)
             quotes = {}
-        if idx and idx in quotes and hasattr(self.session.market, "set_index_spot"):
-            self.session.market.set_index_spot(self.config.underlying, quotes.pop(idx))
+        if spot_keys and hasattr(self.session.market, "set_index_spot"):
+            for name, key in spot_keys.items():
+                if key in quotes:
+                    self.session.market.set_index_spot(name, quotes.pop(key))
         self.session.update_quotes(quotes)
         self._maybe_refresh_margin()
         snap = self.snapshot()

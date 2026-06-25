@@ -1,0 +1,411 @@
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Link, useNavigate } from "react-router-dom";
+import { api, brokers } from "../api/client";
+import { Panel } from "../components/redesign";
+import { formatInr } from "../lib/format";
+import type { DonchianDeployLeg, DonchianPanel, DonchianResult, DonchianRow } from "../types";
+
+const n1 = (v?: number | null) => (v == null ? "—" : v.toFixed(1));
+const n2 = (v?: number | null) => (v == null ? "—" : v.toFixed(2));
+const money = (v?: number | null) => (v == null ? "—" : formatInr(v));
+const pct = (v?: number | null) => (v == null ? "—" : `${v.toFixed(1)}%`);
+
+const inputCls =
+  "rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-2 py-1 text-[var(--strong)] focus:outline-none focus:border-[var(--accent)]";
+
+// Default universe (spec §3 = all Nifty 50). Editable; the CSV upload usually supplies the names.
+const NIFTY_50 = [
+  "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO", "BAJFINANCE",
+  "BAJAJFINSV", "BEL", "BHARTIARTL", "CIPLA", "COALINDIA", "DRREDDY", "EICHERMOT", "GRASIM",
+  "HCLTECH", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK",
+  "INDUSINDBK", "INFY", "ITC", "JSWSTEEL", "KOTAKBANK", "LT", "LTIM", "M&M", "MARUTI", "NESTLEIND",
+  "NTPC", "ONGC", "POWERGRID", "RELIANCE", "SBILIFE", "SBIN", "SHRIRAMFIN", "SUNPHARMA", "TCS",
+  "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "TRENT", "ULTRACEMCO", "WIPRO", "ZOMATO",
+];
+
+interface CsvRow { symbol: string; ivp?: number; atmIv?: number; event?: string }
+
+/** Sensibull screener CSV → {symbol, IVP, ATMIV, Event}. Event is a date or "-"/empty. */
+function parseDonchianCsv(text: string): CsvRow[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return [];
+  const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
+  const col = (name: string) => header.indexOf(name);
+  const iSym = col("instrument");
+  if (iSym < 0) return [];
+  const iIvp = col("ivpercentile");
+  const iIv = col("atmiv");
+  const iEvent = col("event");
+  const out: CsvRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const c = lines[i].split(",");
+    const symbol = (c[iSym] ?? "").trim().toUpperCase();
+    if (!symbol) continue;
+    const num = (idx: number) => {
+      if (idx < 0) return undefined;
+      const v = Number((c[idx] ?? "").trim());
+      return Number.isFinite(v) ? v : undefined;
+    };
+    const ev = iEvent >= 0 ? (c[iEvent] ?? "").trim() : "";
+    out.push({ symbol, ivp: num(iIvp), atmIv: num(iIv), event: ev && ev !== "-" ? ev : undefined });
+  }
+  return out;
+}
+
+const SELECTABLE = new Set(["strangle", "CE-only", "PE-only"]);
+
+function StatusPill({ status }: { status: string }) {
+  const map: Record<string, [string, string]> = {
+    strangle: ["var(--ok-bg)", "var(--ok-text)"],
+    "CE-only": ["var(--chip)", "var(--chip-text)"],
+    "PE-only": ["var(--chip)", "var(--chip-text)"],
+    "excluded:event": ["var(--warn-bg)", "var(--warn-text)"],
+    "excluded:filter": ["var(--chip)", "var(--faint)"],
+    error: ["var(--danger-bg, var(--chip))", "var(--danger)"],
+  };
+  const [bg, color] = map[status] ?? ["var(--chip)", "var(--chip-text)"];
+  return (
+    <span className="rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: bg, color }}>
+      {status}
+    </span>
+  );
+}
+
+/** One option leg cell: "strike · ₹collected" (premium × lot size × lots) with skip / illiquid flags.
+ *  The per-share premium + bid/ask sit in the tooltip. */
+function LegCell({ leg, units }: { leg?: DonchianRow["ce"]; units: number }) {
+  if (!leg) return <span className="text-[var(--faint)]">—</span>;
+  const collected = leg.premium != null ? leg.premium * units : null;
+  const tip = leg.premium != null
+    ? `premium ₹${n2(leg.premium)}/sh × ${units} = ${money(collected)}${leg.bid != null ? ` · bid/ask ${n2(leg.bid)}/${n2(leg.ask)}` : ""}`
+    : undefined;
+  if (leg.skip)
+    return <span className="text-[var(--faint)]" title="premium below floor — skipped">{leg.strike} · skip {money(collected)}</span>;
+  return (
+    <span className={leg.liquid === false ? "text-[var(--warn-text)]" : ""} title={leg.liquid === false ? "wide spread — illiquid" : tip}>
+      {leg.strike} · {money(collected)}{leg.liquid === false ? " ⚑" : ""}
+    </span>
+  );
+}
+
+export default function DonchianStranglePage() {
+  const navigate = useNavigate();
+  const { data: accounts = [] } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
+  const sessioned = accounts.filter((a) => a.has_session);
+
+  const [accountId, setAccountId] = useState<number | null>(null);
+  const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
+  const [csvName, setCsvName] = useState("");
+  const [symbolsText, setSymbolsText] = useState("");
+  // Screener params (spec §3).
+  const [ivpMin, setIvpMin] = useState(50);
+  const [hvWindow, setHvWindow] = useState(20);
+  const [skipLegPct, setSkipLegPct] = useState(0.5);
+  const [roundOut, setRoundOut] = useState(false);
+  const [lots, setLots] = useState(1);
+  // Portfolio params.
+  const [hedgeOtm, setHedgeOtm] = useState(4.5);
+  const [betaWeight, setBetaWeight] = useState(false);
+  const [slPct, setSlPct] = useState(2);
+  const [targetEnabled, setTargetEnabled] = useState(false);
+  const [targetPct, setTargetPct] = useState(50);
+  // Cycle overrides (prefilled from the analyze response; blank = auto).
+  const [rangeStart, setRangeStart] = useState("");
+  const [rangeEnd, setRangeEnd] = useState("");
+  const [entryDate, setEntryDate] = useState("");
+  const [sellExpiry, setSellExpiry] = useState("");
+  // Deploy.
+  const [mode, setMode] = useState<"PAPER" | "LIVE">("PAPER");
+  const [deployName, setDeployName] = useState("");
+  const [capital, setCapital] = useState(5_000_000);
+
+  const [result, setResult] = useState<DonchianResult | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [panel, setPanel] = useState<DonchianPanel | null>(null);
+
+  const effectiveAccount = accountId ?? sessioned[0]?.id ?? null;
+  const ivpMap = useMemo(() => new Map(csvRows.map((r) => [r.symbol, r])), [csvRows]);
+
+  const { data: activeDeps = [] } = useQuery({
+    queryKey: ["deployments", "active"], queryFn: () => api.liveDeployments("active"), refetchInterval: 30000,
+  });
+  const deployedUnderlyings = useMemo(
+    () => new Set(activeDeps.map((d) => (d.underlying ?? "").toUpperCase()).filter(Boolean)),
+    [activeDeps],
+  );
+
+  // Names to screen: the CSV (with Sensibull fields) if present, else the pasted/preset symbols.
+  const names = useMemo(() => {
+    if (csvRows.length) return csvRows.map((r) => ({ symbol: r.symbol, atm_iv: r.atmIv ?? null, ivp: r.ivp ?? null, event: r.event ?? null }));
+    return symbolsText.split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean).map((symbol) => ({ symbol }));
+  }, [csvRows, symbolsText]);
+
+  const analyze = useMutation({
+    mutationFn: () =>
+      api.donchianAnalyze({
+        broker_account_id: effectiveAccount as number,
+        names,
+        range_start: rangeStart || null, range_end: rangeEnd || null,
+        entry_date: entryDate || null, sell_expiry: sellExpiry || null,
+        ivp_min: ivpMin, hv_window: hvWindow, skip_leg_min_premium_pct: skipLegPct,
+        round_out: roundOut, lots_per_name: lots,
+      }),
+    onSuccess: (res) => {
+      setResult(res);
+      setSelected(new Set(res.rows.filter((r) => SELECTABLE.has(r.status)).map((r) => r.symbol)));
+      // Adopt the resolved cycle dates so the user can see/override them.
+      setRangeStart((v) => v || res.dates.range_start || "");
+      setRangeEnd((v) => v || res.dates.range_end || "");
+      setEntryDate((v) => v || res.dates.entry_date || "");
+      setSellExpiry((v) => v || res.dates.sell_expiry || "");
+    },
+  });
+
+  const rows = result?.rows ?? [];
+  const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.symbol) && SELECTABLE.has(r.status)), [rows, selected]);
+  const selectedKey = useMemo(() => [...selected].sort().join(","), [selected]);
+
+  // Recompute the portfolio panel whenever the selection (or cycle) changes.
+  useEffect(() => {
+    const sell = result?.dates.sell_expiry;
+    if (!sell || !effectiveAccount || selectedRows.length === 0) { setPanel(null); return; }
+    let cancelled = false;
+    api.donchianPortfolio({
+      broker_account_id: effectiveAccount, sell_expiry: sell, selected: selectedRows,
+      hedge_otm_pct: hedgeOtm, hedge_beta_weight: betaWeight, portfolio_sl_pct: slPct,
+      portfolio_target_enabled: targetEnabled, portfolio_target_pct: targetPct,
+    }).then((p) => { if (!cancelled) { setPanel(p); if (p.basket_margin) setCapital((c) => Math.max(c, Math.ceil(p.basket_margin! * 1.1 / 100000) * 100000)); } })
+      .catch(() => { if (!cancelled) setPanel(null); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey, result?.dates.sell_expiry, effectiveAccount, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct]);
+
+  const deploy = useMutation({
+    mutationFn: () => {
+      const sell = result!.dates.sell_expiry!;
+      const legs: DonchianDeployLeg[] = [];
+      for (const r of selectedRows) {
+        const lps = r.lots ?? 1;
+        if (r.ce && r.ce.premium != null && !r.ce.skip)
+          legs.push({ underlying: r.symbol, right: "CE", strike: r.ce.strike, side: "sell", lots: lps, spot: r.spot ?? undefined, lot_size: r.lot_size, strike_step: r.strike_step ?? undefined });
+        if (r.pe && r.pe.premium != null && !r.pe.skip)
+          legs.push({ underlying: r.symbol, right: "PE", strike: r.pe.strike, side: "sell", lots: lps, spot: r.spot ?? undefined, lot_size: r.lot_size, strike_step: r.strike_step ?? undefined });
+      }
+      const h = panel?.hedge;
+      if (h && h.nifty_lots > 0) {
+        if (h.ce_strike) legs.push({ underlying: "NIFTY", right: "CE", strike: h.ce_strike, side: "buy", lots: h.nifty_lots, lot_size: h.nifty_lot_size });
+        if (h.pe_strike) legs.push({ underlying: "NIFTY", right: "PE", strike: h.pe_strike, side: "buy", lots: h.nifty_lots, lot_size: h.nifty_lot_size });
+      }
+      return api.donchianDeploy({
+        name: deployName || `Donchian Strangle ${sell}`,
+        sell_expiry: sell, legs, capital,
+        portfolio_sl_pct: slPct, portfolio_target_enabled: targetEnabled, portfolio_target_pct: targetPct,
+        mode, quote_source: "zerodha", broker_account_id: effectiveAccount,
+        ignore_market_hours: false, auto: true,
+      });
+    },
+    onSuccess: () => navigate("/live"),
+  });
+
+  const toggle = (sym: string) => setSelected((s) => { const n = new Set(s); n.has(sym) ? n.delete(sym) : n.add(sym); return n; });
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-[var(--muted)]">
+        Monthly basket short-strangle: per name SELL CE at last month's Donchian high and SELL PE at the low
+        (cheap/far legs skipped), tail-hedged with notional-matched OTM NIFTY options and a −2% portfolio stop.
+        Upload a Sensibull screener CSV (ATMIV / IVP / Event) and pick names. Needs a logged-in broker session.
+      </p>
+
+      <Panel className="p-5 space-y-4">
+        <div className="flex items-center gap-3 flex-wrap">
+          <label className="rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] px-3 py-1.5 text-sm cursor-pointer">
+            📄 Upload screener CSV
+            <input type="file" accept=".csv" className="hidden" onChange={(e) => {
+              const f = e.target.files?.[0]; if (!f) return;
+              f.text().then((t) => { setCsvRows(parseDonchianCsv(t)); setCsvName(f.name); });
+            }} />
+          </label>
+          {csvName && (
+            <span className="text-sm text-[var(--muted)]">
+              {csvName} — {csvRows.length} names
+              <button onClick={() => { setCsvRows([]); setCsvName(""); }} className="ml-2 underline text-[var(--accent-deep)]">clear</button>
+            </span>
+          )}
+          {!csvRows.length && (
+            <button onClick={() => setSymbolsText(NIFTY_50.join(", "))} className="text-sm underline text-[var(--accent-deep)]">Load Nifty 50</button>
+          )}
+        </div>
+
+        {!csvRows.length && (
+          <textarea className={`${inputCls} w-full h-16 text-sm`} placeholder="Paste symbols (comma/space separated) — or upload a CSV"
+            value={symbolsText} onChange={(e) => setSymbolsText(e.target.value)} />
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <label className="flex flex-col gap-1">Broker session
+            <select className={inputCls} value={effectiveAccount ?? ""} onChange={(e) => setAccountId(Number(e.target.value))}>
+              {sessioned.length === 0 && <option value="">No logged-in session</option>}
+              {sessioned.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">IVP ≥
+            <input type="number" className={inputCls} value={ivpMin} onChange={(e) => setIvpMin(Number(e.target.value))} />
+          </label>
+          <label className="flex flex-col gap-1">HV window (days)
+            <input type="number" className={inputCls} value={hvWindow} onChange={(e) => setHvWindow(Number(e.target.value))} />
+          </label>
+          <label className="flex flex-col gap-1">Skip leg &lt; (% spot)
+            <input type="number" step="0.1" className={inputCls} value={skipLegPct} onChange={(e) => setSkipLegPct(Number(e.target.value))} />
+          </label>
+          <label className="flex flex-col gap-1">Hedge OTM (%)
+            <input type="number" step="0.5" className={inputCls} value={hedgeOtm} onChange={(e) => setHedgeOtm(Number(e.target.value))} />
+          </label>
+          <label className="flex flex-col gap-1">Portfolio stop (% notional)
+            <input type="number" step="0.5" className={inputCls} value={slPct} onChange={(e) => setSlPct(Number(e.target.value))} />
+          </label>
+          <label className="flex flex-col gap-1">Lots / name
+            <input type="number" className={inputCls} value={lots} onChange={(e) => setLots(Number(e.target.value))} />
+          </label>
+          <label className="flex items-center gap-2 mt-5">
+            <input type="checkbox" checked={roundOut} onChange={(e) => setRoundOut(e.target.checked)} /> Round-out strikes
+          </label>
+        </div>
+
+        {/* Cycle anchors (auto-resolved; override + re-run if needed). */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <label className="flex flex-col gap-1">Range start
+            <input type="date" className={inputCls} value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">Range end
+            <input type="date" className={inputCls} value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">Entry date
+            <input type="date" className={inputCls} value={entryDate} onChange={(e) => setEntryDate(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">Sell expiry
+            <input type="date" className={inputCls} value={sellExpiry} onChange={(e) => setSellExpiry(e.target.value)} />
+          </label>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button onClick={() => analyze.mutate()} disabled={analyze.isPending || !effectiveAccount || names.length === 0}
+            className="rounded bg-[var(--ft)] px-4 py-1.5 text-sm text-white disabled:opacity-50">
+            {analyze.isPending ? "Analyzing…" : `Refresh (${names.length})`}
+          </button>
+          {analyze.isError && <span className="text-sm text-[var(--danger)]">{(analyze.error as Error).message}</span>}
+          {result?.error && <span className="text-sm text-[var(--warn-text)]">{result.error}</span>}
+          {result && !result.error && (
+            <span className="text-xs text-[var(--faint)]">
+              as of {result.as_of} · range {result.dates.range_start}→{result.dates.range_end} · sell {result.dates.sell_expiry}
+            </span>
+          )}
+        </div>
+      </Panel>
+
+      {result && rows.length > 0 && (
+        <Panel className="p-4">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm tabular-nums whitespace-nowrap">
+              <thead>
+                <tr className="text-[var(--muted)] text-xs border-b border-[var(--divider)] text-left">
+                  <th className="py-1.5 px-2"></th>
+                  <th className="py-1.5 px-2">Stock</th>
+                  <th className="py-1.5 px-2 text-right">IVP</th>
+                  <th className="py-1.5 px-2 text-right">Spot</th>
+                  <th className="py-1.5 px-2 text-right">Range L–H</th>
+                  <th className="py-1.5 px-2">SELL CE</th>
+                  <th className="py-1.5 px-2">SELL PE</th>
+                  <th className="py-1.5 px-2 text-right">Margin</th>
+                  <th className="py-1.5 px-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const sel = SELECTABLE.has(r.status);
+                  return (
+                    <tr key={r.symbol} className={`border-b border-[var(--divider)]/40 ${sel ? "" : "opacity-55"}`}>
+                      <td className="py-1.5 px-2">
+                        <input type="checkbox" disabled={!sel} checked={selected.has(r.symbol)} onChange={() => toggle(r.symbol)} />
+                      </td>
+                      <td className="py-1.5 px-2 font-medium">
+                        {r.symbol}
+                        {deployedUnderlyings.has(r.symbol) && (
+                          <Link to="/live" className="ml-2 align-middle rounded-full bg-[var(--chip)] text-[var(--chip-text)] px-1.5 py-0.5 text-[10px] font-semibold">● deployed</Link>
+                        )}
+                      </td>
+                      <td className="py-1.5 px-2 text-right">{ivpMap.get(r.symbol)?.ivp ?? r.ivp ?? "—"}</td>
+                      <td className="py-1.5 px-2 text-right">{n1(r.spot)}</td>
+                      <td className="py-1.5 px-2 text-right text-xs text-[var(--muted)]">{r.range_low != null ? `${n1(r.range_low)}–${n1(r.range_high)}` : "—"}</td>
+                      <td className="py-1.5 px-2 text-[var(--danger)]"><LegCell leg={r.ce} units={(r.lot_size ?? 0) * (r.lots ?? 1)} /></td>
+                      <td className="py-1.5 px-2 text-[var(--pos)]"><LegCell leg={r.pe} units={(r.lot_size ?? 0) * (r.lots ?? 1)} /></td>
+                      <td className="py-1.5 px-2 text-right">{money(r.margin)}</td>
+                      <td className="py-1.5 px-2" title={r.reason ?? r.error ?? undefined}><StatusPill status={r.status} /></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-[11px] text-[var(--faint)] mt-2">
+            Greyed rows are excluded (event / filter) or unsupported and not selectable. A "skip" leg is below the
+            premium floor → that name runs single-leg. ⚑ = wide bid-ask spread (illiquid).
+          </div>
+        </Panel>
+      )}
+
+      {/* Portfolio panel + deploy (spec §8/§10). */}
+      {selectedRows.length > 0 && (
+        <Panel className="p-5 space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h3 className="font-bold font-['Space_Grotesk'] text-lg">Portfolio ({selectedRows.length} names)</h3>
+            <div className="flex items-center gap-4 flex-wrap">
+              <label className="flex items-center gap-2 text-sm" title="Weight hedge lots by each name's beta vs NIFTY">
+                <input type="checkbox" checked={betaWeight} onChange={(e) => setBetaWeight(e.target.checked)} /> Beta-weight hedge
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={targetEnabled} onChange={(e) => setTargetEnabled(e.target.checked)} />
+                Target at <input type="number" className={`${inputCls} w-16`} value={targetPct} onChange={(e) => setTargetPct(Number(e.target.value))} /> % of premium
+              </label>
+            </div>
+          </div>
+          {panel ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div><div className="text-[var(--faint)] text-xs">Aggregate notional</div><div className="font-semibold tabular-nums">{money(panel.agg_notional)}</div></div>
+              <div><div className="text-[var(--faint)] text-xs">Premium collected</div><div className="font-semibold tabular-nums">{money(panel.premium_collected)} <span className="text-[var(--muted)]">({pct(panel.premium_pct_of_notional)})</span></div></div>
+              <div><div className="text-[var(--faint)] text-xs">Basket margin</div><div className="font-semibold tabular-nums">{money(panel.basket_margin)}</div></div>
+              <div><div className="text-[var(--faint)] text-xs">Portfolio stop (−{slPct}%)</div><div className="font-semibold tabular-nums text-[var(--danger)]">−{money(panel.portfolio_sl_amount)}</div></div>
+              <div className="col-span-2 md:col-span-4">
+                <div className="text-[var(--faint)] text-xs">Index hedge (notional-matched)</div>
+                <div className="font-semibold tabular-nums">
+                  {panel.hedge.nifty_lots > 0
+                    ? <>BUY {panel.hedge.nifty_lots} × NIFTY {panel.hedge.ce_strike} CE + {panel.hedge.pe_strike} PE (~{hedgeOtm}% OTM) · cost {money(panel.hedge.cost)}{" "}
+                        <span className={panel.hedge.cap_flag ? "text-[var(--warn-text)]" : "text-[var(--muted)]"}>({pct(panel.hedge.cost_pct_of_premium)} of premium{panel.hedge.cap_flag ? " ⚑ over cap" : ""})</span></>
+                    : "notional too small for a whole NIFTY hedge lot"}
+                </div>
+              </div>
+            </div>
+          ) : <div className="text-sm text-[var(--muted)]">Computing portfolio…</div>}
+
+          <div className="flex items-center gap-3 flex-wrap border-t border-[var(--divider)] pt-4">
+            <input className={`${inputCls} text-sm w-64`} placeholder="Deployment name" value={deployName} onChange={(e) => setDeployName(e.target.value)} />
+            <label className="flex flex-col gap-1 text-xs text-[var(--faint)]">Capital
+              <input type="number" className={`${inputCls} text-sm w-40`} value={capital} onChange={(e) => setCapital(Number(e.target.value))} />
+            </label>
+            <div className="flex rounded-[10px] overflow-hidden border border-[var(--field-border)]">
+              {(["PAPER", "LIVE"] as const).map((m) => (
+                <button key={m} onClick={() => setMode(m)} className={`px-3 py-1.5 text-sm ${mode === m ? "bg-[var(--accent)] text-white" : "bg-[var(--field)] text-[var(--muted)]"}`}>{m}</button>
+              ))}
+            </div>
+            <button onClick={() => deploy.mutate()} disabled={deploy.isPending || !panel}
+              className="rounded bg-[var(--ft)] px-4 py-1.5 text-sm text-white disabled:opacity-50 ml-auto">
+              {deploy.isPending ? "Deploying…" : "Deploy basket + hedge"}
+            </button>
+            {deploy.isError && <span className="text-sm text-[var(--danger)] w-full">{(deploy.error as Error).message}</span>}
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}

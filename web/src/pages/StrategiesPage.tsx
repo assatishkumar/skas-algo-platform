@@ -41,6 +41,31 @@ const STRATEGIES: Rule[] = [
       "Single short option → max profit = premium, with open risk beyond the stop (a naked short). Most far-OTM setups have poor R:R or thin liquidity — the screener flags out-of-range strikes and low OI so you pick selectively.",
   },
   {
+    id: "donchian_strangle_monthly",
+    name: "Donchian Strangle (Monthly)",
+    kind: "Options",
+    bias: "Neutral · short single-stock vol, long index vol (reverse-dispersion)",
+    summary:
+      "Monthly basket short-strangle on the top Nifty 50 names, strikes pinned to last month's Donchian high/low. Cheap/far legs are skipped (some names run single-leg). The whole book is tail-hedged with notional-matched OTM NIFTY options and governed by a portfolio-level combined stop. Deploy-only (no backtest) — runs as one multi-underlying deployment.",
+    structure: [
+      "Per name: SELL CE at the strike nearest last month's Donchian high, SELL PE near the low (current monthly expiry).",
+      "Skip-leg: a leg whose premium is below a floor (% of spot) isn't opened — that name runs single-leg.",
+      "Hedge: BUY OTM NIFTY CE + PE (~4.5% OTM), lots = aggregate short notional ÷ NIFTY notional (notional-matched).",
+    ],
+    entry: [
+      "Trade → Screener → Donchian Strangle: upload the Sensibull CSV (ATMIV / IVP / Event), pick names, deploy the basket + hedge in one action.",
+      "Filters first: drop names with an event in the holding window, then require ATMIV > HV and IVP ≥ threshold.",
+      "One trading day after the previous monthly expiry, selling into the new cycle (dates are editable).",
+    ],
+    exit: [
+      "Portfolio stop: combined MTM (stock legs + hedge) ≤ −2% of aggregate notional → flatten everything.",
+      "Per-name breach (Phase 1): a name's spot crossing a short strike closes that name. (Phase 2: capped ATM roll/flip.)",
+      "Optional portfolio target (default off; unit = % of premium collected). Otherwise settle to intrinsic at expiry.",
+    ],
+    risk:
+      "Profit zone is each name staying inside last month's range. Primary risk is a single-name gap (earnings/news) while the index is flat — the index hedge does NOT cover this, which is why the event filter is mandatory. The hedge covers correlated market crashes only.",
+  },
+  {
     id: "hni_weekly",
     name: "HNI Weekly",
     kind: "Options",

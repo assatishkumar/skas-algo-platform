@@ -3,11 +3,12 @@ import { useSearchParams } from "react-router-dom";
 import OptionTradeBuilder from "../components/trade/OptionTradeBuilder";
 import EquityTradeBuilder from "../components/trade/EquityTradeBuilder";
 import FibRetPage from "./FibRetPage";
+import DonchianStranglePage from "./DonchianStranglePage";
 import { Segmented } from "../components/redesign";
 
 const SCREENERS = [
   { id: "fibret", label: "FibRet" },
-  { id: "short_strangle", label: "Short Strangle" },
+  { id: "donchian", label: "Donchian Strangle (monthly)" },
   { id: "iv_crush", label: "IV Crush" },
   { id: "momentum", label: "Momentum Breakout" },
 ];
@@ -60,6 +61,8 @@ export default function TradePage() {
             </div>
             {screener === "fibret" ? (
               <FibRetPage />
+            ) : screener === "donchian" ? (
+              <DonchianStranglePage />
             ) : (
               <div className="rounded-[18px] border border-dashed border-[var(--border)] bg-[var(--card)] p-10 text-center text-[var(--muted)]">
                 {SCREENERS.find((s) => s.id === screener)?.label} screener — coming soon.

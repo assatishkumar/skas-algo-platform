@@ -529,6 +529,146 @@ export interface LiveControlsInput {
   lots?: number;
 }
 
+// ---- Donchian Strangle Monthly (basket short-strangle screener) ----
+export type DonchianStatus =
+  | "strangle" | "CE-only" | "PE-only" | "excluded:event" | "excluded:filter" | "error";
+
+export interface DonchianLeg {
+  strike: number;
+  premium?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  oi?: number;
+  spread_pct?: number | null;
+  liquid?: boolean;
+  skip?: boolean;
+}
+
+export interface DonchianRow {
+  symbol: string;
+  status: DonchianStatus;
+  error?: string | null;
+  reason?: string | null;
+  spot?: number | null;
+  ivp?: number | null;
+  atm_iv?: number | null;
+  hv?: number | null;
+  event?: string | null;
+  range_high?: number;
+  range_low?: number;
+  ce?: DonchianLeg | null;
+  pe?: DonchianLeg | null;
+  lot_size?: number;
+  lots?: number;
+  margin?: number | null;
+  strike_step?: number | null; // listed strike step (ATM flip sizing)
+  beta?: number | null;        // vs NIFTY (optional beta-weighted hedge)
+  expiry?: string;
+}
+
+export interface DonchianCycle {
+  prev_expiry: string | null;
+  last_expiry: string | null;
+  sell_expiry: string | null;
+  entry_date: string | null;
+  range_start: string | null;
+  range_end: string | null;
+}
+
+export interface DonchianResult {
+  as_of: string;
+  dates: DonchianCycle;
+  rows: DonchianRow[];
+  error?: string;
+}
+
+export interface DonchianNameInput {
+  symbol: string;
+  atm_iv?: number | null;
+  ivp?: number | null;
+  event?: string | null;
+}
+
+export interface DonchianAnalyzeRequest {
+  broker_account_id: number;
+  names: DonchianNameInput[];
+  range_start?: string | null;
+  range_end?: string | null;
+  entry_date?: string | null;
+  sell_expiry?: string | null;
+  ivp_min?: number;
+  require_iv_gt_hv?: boolean;
+  hv_window?: number;
+  skip_leg_min_premium_pct?: number;
+  round_out?: boolean;
+  lots_per_name?: number;
+  min_dte?: number;
+}
+
+export interface DonchianHedge {
+  nifty_lots: number;
+  nifty_lot_size?: number;
+  ce_strike?: number | null;
+  pe_strike?: number | null;
+  ce_premium?: number | null;
+  pe_premium?: number | null;
+  cost?: number;
+  cost_pct_of_premium?: number | null;
+  cap_flag?: boolean;
+}
+
+export interface DonchianPanel {
+  selected_count: number;
+  agg_notional: number;
+  premium_collected: number;
+  premium_pct_of_notional?: number | null;
+  hedge: DonchianHedge;
+  portfolio_sl_amount: number;
+  portfolio_target_amount?: number | null;
+  basket_margin?: number | null;
+}
+
+export interface DonchianPortfolioRequest {
+  broker_account_id: number;
+  sell_expiry: string;
+  selected: DonchianRow[];
+  hedge_otm_pct?: number;
+  hedge_beta_weight?: boolean;
+  hedge_cost_cap_pct?: number;
+  portfolio_sl_pct?: number;
+  portfolio_target_enabled?: boolean;
+  portfolio_target_pct?: number;
+}
+
+export interface DonchianDeployLeg {
+  underlying: string;
+  right: "CE" | "PE";
+  strike: number;
+  side: "buy" | "sell";
+  lots: number;
+  spot?: number;
+  lot_size?: number;
+  strike_step?: number | null; // for the ATM roll flip
+}
+
+export interface DonchianDeploy {
+  name: string;
+  notes?: string;
+  sell_expiry: string;
+  legs: DonchianDeployLeg[];
+  capital: number;
+  portfolio_sl_pct?: number;
+  portfolio_target_enabled?: boolean;
+  portfolio_target_pct?: number;
+  breach_basis?: string;
+  max_flips?: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id?: number | null;
+  ignore_market_hours?: boolean;
+  auto?: boolean;
+}
+
 export interface StartLiveRequest {
   strategy_id: string;
   name?: string;
