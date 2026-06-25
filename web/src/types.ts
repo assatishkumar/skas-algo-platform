@@ -460,6 +460,39 @@ export interface LiveRunSnapshot {
   decision_time: string;
   universe: string[];
   excluded_symbols: string[];
+  basket?: DonchianBasket | null; // donchian_strangle_monthly: per-name breakdown + aggregate payoff
+}
+
+export interface DonchianBasketLeg {
+  right: "CE" | "PE";
+  strike: number;
+  units: number;
+  entry?: number | null;
+  mark?: number | null;
+  open: boolean;
+  breached: boolean;
+}
+export interface DonchianBasketName {
+  symbol: string;
+  spot?: number | null;
+  flip_count: number;
+  status: string; // open | flipped | closed | settled
+  legs: DonchianBasketLeg[];
+  mtm: number;
+}
+export interface DonchianHedgeLeg {
+  underlying: string;
+  right: "CE" | "PE";
+  strike: number;
+  units: number;
+  entry?: number | null;
+  mark?: number | null;
+}
+export interface DonchianBasket {
+  names: DonchianBasketName[];
+  hedge: { legs: DonchianHedgeLeg[]; mtm: number; entry_notional: number; current_notional: number };
+  realized_pnl: number;
+  payoff: { move_pct: number; expiry_pnl: number }[];
 }
 
 // ---- FibRet screener (Fibonacci-retracement option selling) ----

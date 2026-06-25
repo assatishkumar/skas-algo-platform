@@ -469,6 +469,13 @@ class LiveRun:
         if self._margin is not None:
             snap["margin_used"] = self._margin
             snap["margin_source"] = "zerodha"
+        # Multi-underlying basket strategies (donchian) expose a per-name breakdown + aggregate payoff.
+        basket_fn = getattr(getattr(self.session, "strategy", None), "basket_status", None)
+        if basket_fn is not None:
+            try:
+                snap["basket"] = basket_fn(self.session.market, self.session.portfolio)
+            except Exception:  # pragma: no cover - never break the snapshot on a monitoring quirk
+                logger.exception("basket_status failed for run %s", self.run_id)
         return to_native(snap)
 
     def _underlying_spot(self):

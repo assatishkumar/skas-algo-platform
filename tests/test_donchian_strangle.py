@@ -351,6 +351,33 @@ def test_flip_loss_books_realized_pnl():
     assert strat.realized_pnl < 0  # the flip booked the loss so the portfolio stop stays honest
 
 
+def test_basket_status_reports_per_name_and_payoff():
+    strat = _strat(portfolio_sl_pct=2.0, breach_basis="touch")
+    sess, mv = _session(strat)
+    sess.update_quotes(ENTRY_Q)
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))
+    mv.set_index_spot("AAA", 1010.0)   # inside the strikes → no breach
+    mv.set_index_spot("NIFTY", 25000.0)
+    sess.update_quotes(ENTRY_Q)
+    st = strat.basket_status(mv, sess.portfolio)
+    aaa = next(n for n in st["names"] if n["symbol"] == "AAA")
+    assert aaa["status"] == "open" and len([leg for leg in aaa["legs"] if leg["open"]]) == 2
+    assert st["hedge"]["entry_notional"] == 100000.0 and st["hedge"]["legs"]  # NIFTY hedge present
+    assert len(st["payoff"]) == 31 and any(p["move_pct"] == 0 for p in st["payoff"])
+
+
+def test_basket_status_marks_flipped_name():
+    strat = _strat(portfolio_sl_pct=2.0, breach_basis="touch")
+    sess, mv = _session(strat)
+    sess.update_quotes(ENTRY_Q)
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))
+    sess.update_quotes(ENTRY_Q)
+    mv.set_index_spot("AAA", 1100.0)
+    sess.run_decision(datetime(2026, 1, 5, 10, 0))  # roll
+    aaa = next(n for n in strat.basket_status(mv, sess.portfolio)["names"] if n["symbol"] == "AAA")
+    assert aaa["status"] == "flipped" and aaa["flip_count"] == 1
+
+
 def test_settles_at_expiry():
     strat = _strat()
     sess, _mv = _session(strat)

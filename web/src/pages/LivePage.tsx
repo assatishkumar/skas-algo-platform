@@ -5,6 +5,7 @@ import { api, brokers, liveWsUrl } from "../api/client";
 import { Badge, timeAgo } from "../components/ui";
 import GreeksPanel from "../components/GreeksPanel";
 import LivePayoffChart from "../components/LivePayoffChart";
+import DonchianBasketPanel from "../components/DonchianBasketPanel";
 import LiveTradesPanel from "../components/LiveTradesPanel";
 import LiveEquityTrades from "../components/LiveEquityTrades";
 import OptionMetricsPanel from "../components/OptionMetricsPanel";
@@ -719,7 +720,11 @@ function RunCard({
         <div className="text-slate-500 text-sm mt-3">No open positions.</div>
       )}
 
-      {isOptions && run.positions?.length ? (
+      {/* A basket spans many underlyings → the single-spot payoff is meaningless; show the
+          per-name breakdown + aggregate (correlated-move) payoff instead. */}
+      {run.strategy_id === "donchian_strangle_monthly" && run.basket ? (
+        <DonchianBasketPanel basket={run.basket} />
+      ) : isOptions && run.positions?.length ? (
         <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
       ) : null}
       {/* Greeks/P&L history + the trade log stay visible after a cycle closes, so a booked

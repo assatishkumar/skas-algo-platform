@@ -98,6 +98,89 @@ class DonchianStrangleMonthlyStrategy:
         out.add("NIFTY")  # the hedge underlying
         return sorted(out)
 
+    # ------------------------------------------------------------ live monitoring
+    def basket_status(self, market, portfolio) -> dict:
+        """Per-name breakdown for the Live page: each name's status / spot-vs-strikes / open legs /
+        flip count / unrealized MTM, the hedge legs + entry-vs-current notional drift, and an
+        aggregate at-expiry payoff vs a common % move across all underlyings (incl. the NIFTY hedge —
+        the correlated-move scenario the hedge protects)."""
+        spot_fn = getattr(market, "index_spot", None)
+
+        def mark(s: str):
+            try:
+                return float(market.close(s))
+            except Exception:  # pragma: no cover - no mark yet
+                return None
+
+        def is_open(s: str) -> bool:
+            return bool(portfolio.lots(s))
+
+        names: dict[str, dict] = {}
+        for s in self.legs:
+            if self.leg_side.get(s) != "sell":
+                continue
+            u = self.leg_underlying[s]
+            d = names.setdefault(u, {"symbol": u, "spot": (spot_fn(u) if spot_fn else None),
+                                     "flip_count": self.flip_count.get(u, 0), "legs": [], "mtm": 0.0})
+            m, entry, sp = mark(s), self.entry_close.get(s), d["spot"]
+            breached = sp is not None and (
+                (self.leg_right[s] == "CE" and sp >= self.leg_strike[s])
+                or (self.leg_right[s] == "PE" and sp <= self.leg_strike[s]))
+            opened = is_open(s)
+            d["legs"].append({"right": self.leg_right[s], "strike": self.leg_strike[s], "units": self.units[s],
+                              "entry": entry, "mark": m, "open": opened, "breached": breached and opened})
+            if opened and m is not None and entry is not None:
+                d["mtm"] += (entry - m) * self.units[s]  # short: profit as the premium decays
+        for u, d in names.items():
+            has_open = any(leg["open"] for leg in d["legs"])
+            d["status"] = ("closed" if u in self.closed_names else
+                           "flipped" if (d["flip_count"] > 0 and has_open) else
+                           "open" if has_open else "settled")
+
+        hedge_legs, hedge_mtm = [], 0.0
+        for s in self.legs:
+            if self.leg_side.get(s) != "buy" or not is_open(s):
+                continue
+            m, entry = mark(s), self.entry_close.get(s)
+            if m is not None and entry is not None:
+                hedge_mtm += (m - entry) * self.units[s]  # long: profit as the option richens
+            hedge_legs.append({"underlying": self.leg_underlying[s], "right": self.leg_right[s],
+                               "strike": self.leg_strike[s], "units": self.units[s], "entry": entry, "mark": m})
+        current_notional = 0.0
+        for u, d in names.items():
+            units = next((leg["units"] for leg in d["legs"] if leg["open"]), 0)
+            if d["spot"] and units:
+                current_notional += d["spot"] * units
+
+        return {
+            "names": sorted(names.values(), key=lambda x: -(x["mtm"] or 0)),
+            "hedge": {"legs": hedge_legs, "mtm": hedge_mtm,
+                      "entry_notional": self.agg_notional, "current_notional": current_notional},
+            "realized_pnl": self.realized_pnl,
+            "payoff": self._aggregate_payoff(market, portfolio),
+        }
+
+    def _aggregate_payoff(self, market, portfolio) -> list[dict]:
+        """At-expiry P&L of the whole open book as every underlying (incl. the NIFTY hedge) moves by
+        a common percentage — the correlated-move view the index hedge is bought for."""
+        spot_fn = getattr(market, "index_spot", None)
+        open_legs = [(s, spot_fn(self.leg_underlying[s]) if spot_fn else None) for s in self.legs
+                     if portfolio.lots(s)]
+        out: list[dict] = []
+        for step in range(-15, 16):
+            x = step / 100.0
+            total = 0.0
+            for s, sp in open_legs:
+                entry = self.entry_close.get(s)
+                if sp is None or entry is None:
+                    continue
+                shocked = sp * (1 + x)
+                k = self.leg_strike[s]
+                intrinsic = max(0.0, shocked - k) if self.leg_right[s] == "CE" else max(0.0, k - shocked)
+                total += self._sign(s) * (entry - intrinsic) * self.units[s]
+            out.append({"move_pct": step, "expiry_pnl": total})
+        return out
+
     # ------------------------------------------------------------------ enter
     def _expiry_date(self) -> date | None:
         e = self._expiry_param
