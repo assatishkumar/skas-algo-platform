@@ -591,6 +591,9 @@ function RunCard({
   // instrument class (covers custom_options, which has no `lots` attr), matching the tile.
   const isOptions =
     run.instrument_class === "DERIV" || isOptionsStrategy(run.strategy_id) || run.lots != null;
+  // A donchian basket shows ONE combined per-name table (DonchianBasketPanel) instead of the raw
+  // per-leg positions table — the basket view clubs CE+PE and carries the same leg economics.
+  const isDonchian = run.strategy_id === "donchian_strangle_monthly";
   // Sortable positions table — click a header to sort by that column.
   type PosKey = "symbol" | "entry_date" | "units" | "avg_price" | "ltp" | "pos_delta" | "iv" | "unrealized_pnl";
   const [sortKey, setSortKey] = useState<PosKey>("unrealized_pnl");
@@ -659,7 +662,7 @@ function RunCard({
         </div>
       )}
 
-      {run.positions?.length ? (
+      {isDonchian ? null : run.positions?.length ? (
         <div className="overflow-x-auto mt-3">
           <table className="w-full text-sm">
             <thead className="text-slate-400 text-left">

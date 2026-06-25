@@ -478,6 +478,9 @@ export interface DonchianBasketName {
   flip_count: number;
   status: string; // open | flipped | closed | settled
   legs: DonchianBasketLeg[];
+  units?: number;   // per-leg contract units
+  credit?: number;  // entry credit collected for the name (Σ entry·units, open legs)
+  value?: number;   // current value of the name's open legs (Σ ltp·units)
   mtm: number;
 }
 export interface DonchianHedgeLeg {
@@ -490,7 +493,8 @@ export interface DonchianHedgeLeg {
 }
 export interface DonchianBasket {
   names: DonchianBasketName[];
-  hedge: { legs: DonchianHedgeLeg[]; mtm: number; entry_notional: number; current_notional: number };
+  hedge: { legs: DonchianHedgeLeg[]; mtm: number; spot?: number | null; entry_notional: number; current_notional: number };
+  net_credit?: number;
   realized_pnl: number;
   payoff: { move_pct: number; expiry_pnl: number }[];
 }

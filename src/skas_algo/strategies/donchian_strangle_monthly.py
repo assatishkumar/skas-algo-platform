@@ -132,10 +132,15 @@ class DonchianStrangleMonthlyStrategy:
             if opened and m is not None and entry is not None:
                 d["mtm"] += (entry - m) * self.units[s]  # short: profit as the premium decays
         for u, d in names.items():
-            has_open = any(leg["open"] for leg in d["legs"])
+            open_legs = [leg for leg in d["legs"] if leg["open"]]
+            has_open = bool(open_legs)
             d["status"] = ("closed" if u in self.closed_names else
                            "flipped" if (d["flip_count"] > 0 and has_open) else
                            "open" if has_open else "settled")
+            # Name-level economics (clubbing CE+PE): credit collected, current value, contract units.
+            d["units"] = max((leg["units"] for leg in open_legs), default=0)
+            d["credit"] = sum((leg["entry"] or 0) * leg["units"] for leg in open_legs)
+            d["value"] = sum((leg["mark"] or 0) * leg["units"] for leg in open_legs)
 
         hedge_legs, hedge_mtm = [], 0.0
         for s in self.legs:
@@ -154,8 +159,9 @@ class DonchianStrangleMonthlyStrategy:
 
         return {
             "names": sorted(names.values(), key=lambda x: -(x["mtm"] or 0)),
-            "hedge": {"legs": hedge_legs, "mtm": hedge_mtm,
+            "hedge": {"legs": hedge_legs, "mtm": hedge_mtm, "spot": (spot_fn("NIFTY") if spot_fn else None),
                       "entry_notional": self.agg_notional, "current_notional": current_notional},
+            "net_credit": sum(d.get("credit", 0.0) for d in names.values()),
             "realized_pnl": self.realized_pnl,
             "payoff": self._aggregate_payoff(market, portfolio),
         }

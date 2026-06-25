@@ -362,7 +362,9 @@ def test_basket_status_reports_per_name_and_payoff():
     st = strat.basket_status(mv, sess.portfolio)
     aaa = next(n for n in st["names"] if n["symbol"] == "AAA")
     assert aaa["status"] == "open" and len([leg for leg in aaa["legs"] if leg["open"]]) == 2
-    assert st["hedge"]["entry_notional"] == 100000.0 and st["hedge"]["legs"]  # NIFTY hedge present
+    # Name-level aggregate (CE+PE clubbed): units, entry credit collected.
+    assert aaa["units"] == 100 and aaa["credit"] == (20 + 18) * 100
+    assert st["net_credit"] == aaa["credit"] and st["hedge"]["entry_notional"] == 100000.0 and st["hedge"]["legs"]
     assert len(st["payoff"]) == 31 and any(p["move_pct"] == 0 for p in st["payoff"])
 
 
