@@ -126,7 +126,7 @@ function Gauge({ combined, stop, maxGain }: { combined: number; stop: number; ma
   );
 }
 
-function NameCard({ n, onClick }: { n: DonchianBasketName; onClick: () => void }) {
+function NameCard({ n, realized, onClick }: { n: DonchianBasketName; realized: number; onClick: () => void }) {
   const closed = isClosed(n);
   const [sb, sc] = structChip(n.struct);
   const sp = nameSpark(n.symbol, n.mtm || 0, closed);
@@ -157,7 +157,7 @@ function NameCard({ n, onClick }: { n: DonchianBasketName; onClick: () => void }
       </div>
       <div className="flex items-center justify-between pt-[11px] border-t border-[var(--divider)] text-[11.5px]">
         <span className="text-[var(--muted)] font-semibold">{n.lots ?? 1} lot{(n.lots ?? 1) === 1 ? "" : "s"}</span>
-        <span className="text-[var(--muted)] font-semibold">realized <strong className="font-['Space_Grotesk'] font-bold" style={{ color: (n.realized || 0) > 0 ? "var(--pos)" : (n.realized || 0) < 0 ? "var(--danger)" : "var(--muted)" }}>{(n.realized || 0) === 0 ? "₹0" : signed(n.realized)}</strong></span>
+        <span className="text-[var(--muted)] font-semibold">realized <strong className="font-['Space_Grotesk'] font-bold" style={{ color: realized > 0 ? "var(--pos)" : realized < 0 ? "var(--danger)" : "var(--muted)" }}>{realized === 0 ? "₹0" : signed(realized)}</strong></span>
         <span className="font-bold" style={{ color: n.flip_count > 0 ? "var(--warn-text)" : "var(--faint)" }}>{n.flip_count} flip{n.flip_count === 1 ? "" : "s"}</span>
       </div>
     </div>
@@ -195,6 +195,7 @@ function NameDrawer({ n, basket, trades, onClose }: { n: DonchianBasketName; bas
     return { m, flips };
   }, [trades, n.symbol]);
 
+  const realized = meta.flips.reduce((s, f) => s + (f.pnl || 0), 0); // = Σ the timeline's COVER P&L
   const po = namePayoff(n);
   const tile = (label: string, value: React.ReactNode, color?: string) => (
     <div className="rounded-[12px] bg-[var(--stat)] px-[13px] py-3">
@@ -228,7 +229,7 @@ function NameDrawer({ n, basket, trades, onClose }: { n: DonchianBasketName; bas
           {/* KPI tiles */}
           <div className="grid grid-cols-4 gap-[10px] mb-5">
             {tile("Unrealized", closed ? "—" : signed(n.mtm), closed ? "var(--faint)" : (n.mtm || 0) >= 0 ? "var(--pos)" : "var(--danger)")}
-            {tile("Realized", (n.realized || 0) === 0 ? "₹0" : signed(n.realized), (n.realized || 0) > 0 ? "var(--pos)" : (n.realized || 0) < 0 ? "var(--danger)" : "var(--muted)")}
+            {tile("Realized", realized === 0 ? "₹0" : signed(realized), realized > 0 ? "var(--pos)" : realized < 0 ? "var(--danger)" : "var(--muted)")}
             {tile("Credit", rupee(n.credit))}
             {tile("Captured", closed ? "settled" : `${cap}%`)}
           </div>
@@ -329,6 +330,19 @@ export default function DonchianLivePage() {
   const dep = deps.find((d) => d.run_id === runId);
   const trades = tradesData?.trades ?? [];
 
+  // Per-name realized = Σ profit of the name's closing trades — the authoritative record (matches the
+  // flip timeline). Preferred over the strategy's realized_by_name, which is 0 for flips booked before
+  // that per-name accounting was added (it only fills going forward).
+  const realizedByName = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const t of trades) {
+      const p = (t.ticker || "").split("|");
+      if (p.length === 4 && EXIT_ACTIONS.has(t.action)) m[p[0]] = (m[p[0]] || 0) + (t.profit || 0);
+    }
+    return m;
+  }, [trades]);
+  const realizedTotal = Object.values(realizedByName).reduce((s, v) => s + v, 0);
+
   const act = useMutation({
     mutationFn: (fn: () => Promise<unknown>) => fn(),
     onSettled: () => qc.invalidateQueries({ queryKey: ["liveSnapshot", runId] }),
@@ -413,7 +427,7 @@ export default function DonchianLivePage() {
               </Kpi>
               <Kpi label="Net credit collected" sub={`premium in · ${names.length} names`}><span className="text-[var(--strong)]">{rupee(netCredit)}</span></Kpi>
               <Kpi label="Realized (flips)" sub={`${basket.total_flips ?? 0} flips · ${basket.closed_count ?? 0} names closed`}>
-                <span className={posCls(basket.realized_pnl ?? 0)}>{signed(basket.realized_pnl)}</span>
+                <span className={posCls(realizedTotal)}>{signed(realizedTotal)}</span>
               </Kpi>
               <Kpi label={<><span>Buffer to portfolio stop</span><span className="text-[11px] font-semibold text-[var(--faint)]">stop −{rupee(stopAmt)} · 2% notional</span></>}>
                 <span className="text-[var(--strong)]">{compact(buffer)} <span className="text-[13px] font-semibold text-[var(--faint)] font-['Manrope']">to stop</span></span>
@@ -474,7 +488,7 @@ export default function DonchianLivePage() {
 
             {/* card grid */}
             <div className="grid grid-cols-4 gap-[14px]">
-              {filtered.map((n) => <NameCard key={n.symbol} n={n} onClick={() => setSelName(n.symbol)} />)}
+              {filtered.map((n) => <NameCard key={n.symbol} n={n} realized={realizedByName[n.symbol] ?? n.realized ?? 0} onClick={() => setSelName(n.symbol)} />)}
             </div>
           </>
         )}
