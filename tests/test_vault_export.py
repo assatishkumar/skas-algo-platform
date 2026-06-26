@@ -15,7 +15,9 @@ METRICS = {"Total Return %": 25.0, "CAGR %": 11.0, "Max Drawdown %": -8.0,
 
 def _run(**kw):
     base = dict(id=7, mode="BACKTEST", metrics=METRICS,
-                params_snapshot={"start_date": "2024-01-01", "end_date": "2024-12-31"},
+                params_snapshot={"start_date": "2024-01-01", "end_date": "2024-12-31", "profit_target": 0.1},
+                trade_log=[{"ticker": "RELIANCE", "action": "SELL", "profit": 5000.0},
+                           {"ticker": "INFY", "action": "SELL", "profit": -1200.0}],
                 started_at=None, stopped_at=datetime(2024, 12, 31))
     base.update(kw)
     return SimpleNamespace(**base)
@@ -33,6 +35,15 @@ def test_build_run_card_frontmatter_and_body():
     assert fm["return_pct"] == 25.0 and fm["win_rate"] == 60.0 and fm["trades"] == 120
     assert fm["outcome"] == "win" and fm["mode"] == "backtest" and fm["tags"] == ["equity", "sst_lifo"]
     assert "[[sst_lifo]]" in body and "+25.0%" in body
+    assert "## Parameters" in body and "profit_target" in body  # params surfaced
+    assert "## Trades" in body and "RELIANCE" in body            # trade summary surfaced
+
+
+def test_strategy_card_has_description_and_params():
+    rel, fm, body = ve.build_strategy_card("donchian_strangle_monthly")
+    assert rel == "Strategies/donchian_strangle_monthly.md"
+    assert "Donchian Strangle Monthly" in body          # description from the strategy docstring
+    assert "## Default parameters" in body and "max_flips" in body  # constructor defaults
 
 
 def test_outcome_open_for_running_live():

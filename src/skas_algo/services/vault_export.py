@@ -115,6 +115,44 @@ def _outcome(run, ret) -> str:
     return "win" if ret > 0 else "loss" if ret < 0 else "settled"
 
 
+_BOOKKEEPING = {
+    "universe", "symbols", "instrument_class", "underlying", "start_date", "end_date", "lookback",
+    "tax_rate", "withdrawal_rate", "warm_from_date", "quote_source", "broker_account_id", "name",
+    "notes", "batch_id", "decision_time", "refresh_seconds", "auto", "ignore_market_hours",
+    "excluded_symbols", "contract_specs", "legs",
+}
+
+
+def _params_md(p: dict) -> str:
+    """The strategy's effective scalar params (skips bookkeeping + big list/dict values like legs)."""
+    items = [(k, v) for k, v in (p or {}).items()
+             if k not in _BOOKKEEPING and not isinstance(v, (list, dict)) and v is not None]
+    if not items:
+        return ""
+    rows = "\n".join(f"| {k} | {v} |" for k, v in sorted(items))
+    return f"## Parameters\n\n| param | value |\n|---|---|\n{rows}\n"
+
+
+def _trades_md(trade_log: list) -> str:
+    """A compact realized-P&L summary from the trade log (counts + biggest winners/losers)."""
+    if not trade_log:
+        return ""
+    closes = [t for t in trade_log if isinstance(t, dict) and t.get("profit") is not None]
+    realized = sum((t.get("profit") or 0) for t in closes)
+    wins = sum(1 for t in closes if (t.get("profit") or 0) > 0)
+    losses = sum(1 for t in closes if (t.get("profit") or 0) < 0)
+    out = [f"## Trades\n\n{len(trade_log)} events · {len(closes)} closes · realized ₹{realized:,.0f} "
+           f"· {wins}W / {losses}L"]
+    ranked = sorted(closes, key=lambda t: t.get("profit") or 0, reverse=True)
+    top = [f"{t.get('ticker', '?')} ₹{(t.get('profit') or 0):,.0f}" for t in ranked[:3] if (t.get('profit') or 0) > 0]
+    bot = [f"{t.get('ticker', '?')} ₹{(t.get('profit') or 0):,.0f}" for t in reversed(ranked[-3:]) if (t.get('profit') or 0) < 0]
+    if top:
+        out.append("\n**Top winners:** " + ", ".join(top))
+    if bot:
+        out.append("\n**Top losers:** " + ", ".join(bot))
+    return "\n".join(out) + "\n"
+
+
 def build_run_card(run, algo, sd=None) -> tuple[str, dict, str]:
     """(relpath, frontmatter, body) for a run-card from an AlgoRun + its Algo."""
     m = run.metrics or {}
@@ -157,22 +195,58 @@ def build_run_card(run, algo, sd=None) -> tuple[str, dict, str]:
         f"| Capital | ₹{algo.capital:,.0f} |\n"
         f"| Regime | {regime or '—'} |\n"
     )
+    extra = "\n".join(filter(None, [_params_md(p), _trades_md(getattr(run, "trade_log", None) or [])]))
+    if extra:
+        body = body + "\n" + extra
     relpath = f"Runs/{start or 'NA'} {algo.strategy_id} #{run.id}.md"
     return relpath, fm, body
 
 
+def _strategy_doc(strategy_id: str) -> tuple[str, dict]:
+    """The strategy's description (class/module docstring) + default params, from its registered class."""
+    import inspect
+    import sys
+
+    try:
+        from skas_algo.strategies.registry import get_strategy
+        cls = get_strategy(strategy_id)
+    except Exception:  # pragma: no cover - unknown strategy
+        return "", {}
+    doc = inspect.getdoc(cls)
+    if not doc:
+        mod = sys.modules.get(cls.__module__)
+        doc = (mod.__doc__ or "").strip() if mod else ""
+    params = {}
+    try:
+        for p in inspect.signature(cls.__init__).parameters.values():
+            if p.name in ("self", "universe", "initial_capital") or p.default is inspect.Parameter.empty:
+                continue
+            if not isinstance(p.default, (list, dict)) and p.default is not None:
+                params[p.name] = p.default
+    except (TypeError, ValueError):  # pragma: no cover
+        pass
+    return doc, params
+
+
 def build_strategy_card(strategy_id: str) -> tuple[str, dict, str]:
-    """A stub strategy note whose Dataview lists every run of that strategy (backlink target)."""
+    """A strategy note: description (from the strategy's docstring) + default params + a Dataview of
+    every run (backlink target)."""
     fm = {"type": "strategy", "strategy": strategy_id, "tags": [strategy_id]}
-    body = (
-        f"# {strategy_id}\n\n"
-        "Runs of this strategy (newest first):\n\n"
+    doc, params = _strategy_doc(strategy_id)
+    parts = [f"# {strategy_id}\n"]
+    if doc:
+        parts.append(doc + "\n")
+    if params:
+        rows = "\n".join(f"| {k} | {v} |" for k, v in sorted(params.items()))
+        parts.append(f"## Default parameters\n\n| param | default |\n|---|---|\n{rows}\n")
+    parts.append(
+        "## Runs (newest first)\n\n"
         "```dataview\n"
         "table mode, window_start, return_pct, max_dd_pct, win_rate, outcome\n"
         f'from "Runs" where strategy = "{strategy_id}" sort window_start desc\n'
         "```\n"
     )
-    return f"Strategies/{strategy_id}.md", fm, body
+    return f"Strategies/{strategy_id}.md", fm, "\n".join(parts)
 
 
 # ───────────────────────────────────────────────────────── public API
