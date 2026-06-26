@@ -45,6 +45,7 @@ class DonchianParams:
     portfolio_target_pct: float = 50.0     # unit = % of PREMIUM COLLECTED (the capturable lever)
     lots_per_name: int = 1
     breach_basis: str = "close"            # "close" (EOD) | "touch" (intraday)
+    breach_buffer_pct: float = 0.5         # spot must clear the strike by this % to count as a breach
     max_flips: int = 2                     # per name (Phase 2)
 
 

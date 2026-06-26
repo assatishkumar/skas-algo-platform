@@ -718,6 +718,7 @@ export interface DonchianDeploy {
   portfolio_target_enabled?: boolean;
   portfolio_target_pct?: number;
   breach_basis?: string;
+  breach_buffer_pct?: number; // spot must clear a short strike by this % to flip
   flip_delta?: string; // "atm" | "30delta"
   max_flips?: number;
   mode: string;

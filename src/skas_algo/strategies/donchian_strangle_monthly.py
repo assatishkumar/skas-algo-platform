@@ -48,6 +48,7 @@ class DonchianStrangleMonthlyStrategy:
         portfolio_target_enabled: bool = False,
         portfolio_target_pct: float = 50.0,          # unit = % of premium collected
         breach_basis: str = "close",                 # "close" (EOD) | "touch" (intraday)
+        breach_buffer_pct: float = 0.5,              # spot must clear the strike by this % to count as a breach
         flip_delta: str = "atm",                     # flip strike: "atm" | "30delta" (LIVE chain)
         max_flips: int = 2,                          # per name, then close it
         lot_overrides: dict | None = None,
@@ -59,6 +60,7 @@ class DonchianStrangleMonthlyStrategy:
         self.portfolio_target_enabled = portfolio_target_enabled
         self.portfolio_target_pct = portfolio_target_pct
         self.breach_basis = breach_basis
+        self.breach_buffer_pct = breach_buffer_pct
         self.flip_delta = flip_delta
         self.max_flips = max_flips
         self.initial_capital = initial_capital
@@ -85,6 +87,7 @@ class DonchianStrangleMonthlyStrategy:
         self.closed_names: list[str] = []            # names closed for the cycle (no re-entry)
         self.realized_by_name: dict[str, float] = {}  # underlying -> realized P&L booked on its flips
         self.leg_origin: dict[str, str] = {}          # symbol -> "entry" | "flip" (for the live state tag)
+        self.last_flip_day: dict[str, str] = {}       # underlying -> ISO date of its last flip (one flip/day cap)
 
     # ------------------------------------------------------------------ slice
     def on_slice(self, ctx) -> list[Signal]:
@@ -342,11 +345,15 @@ class DonchianStrangleMonthlyStrategy:
             return []
         if self.breach_basis == "close" and not self._is_eod(ctx):
             return []  # close-basis: only act on a breach at/after EOD
+        today = ctx.today()
+        today_iso = today.isoformat() if today is not None else ""
         signals: list[Signal] = []
         names = sorted({self.leg_underlying[s] for s in open_legs if self.leg_side[s] == "sell"})
         for name in names:
             if name in self.closed_names:
                 continue
+            if self.last_flip_day.get(name) == today_iso:
+                continue  # one flip per name per trading day — no same-session thrash
             spot = spot_fn(name)
             if spot is None:
                 continue
@@ -366,6 +373,7 @@ class DonchianStrangleMonthlyStrategy:
                 self.realized_pnl += contrib
                 self.realized_by_name[name] = self.realized_by_name.get(name, 0.0) + contrib
             self.flip_count[name] = self.flip_count.get(name, 0) + 1
+            self.last_flip_day[name] = today_iso  # cap: at most one flip for this name today
             if will_close:
                 self.closed_names.append(name)
                 continue
@@ -377,13 +385,16 @@ class DonchianStrangleMonthlyStrategy:
         return signals
 
     def _breach_side(self, name: str, open_legs, spot: float) -> str | None:
-        """Which of the name's open SHORT legs is breached: 'CE' (spot ≥ a short call) / 'PE' / None."""
+        """Which of the name's open SHORT legs is breached — spot must clear the strike by
+        ``breach_buffer_pct`` (not a marginal touch): 'CE' / 'PE' / None."""
+        buf = self.breach_buffer_pct / 100.0
         for s in open_legs:
             if self.leg_side[s] != "sell" or self.leg_underlying[s] != name:
                 continue
-            if self.leg_right[s] == "CE" and spot >= self.leg_strike[s]:
+            k = self.leg_strike[s]
+            if self.leg_right[s] == "CE" and spot >= k * (1 + buf):
                 return "CE"
-            if self.leg_right[s] == "PE" and spot <= self.leg_strike[s]:
+            if self.leg_right[s] == "PE" and spot <= k * (1 - buf):
                 return "PE"
         return None
 
@@ -484,6 +495,7 @@ class DonchianStrangleMonthlyStrategy:
             "closed_names": list(self.closed_names),
             "realized_by_name": dict(self.realized_by_name),
             "leg_origin": dict(self.leg_origin),
+            "last_flip_day": dict(self.last_flip_day),
         }
 
     def load_state(self, state: dict) -> None:
@@ -506,3 +518,4 @@ class DonchianStrangleMonthlyStrategy:
         self.closed_names = list(state.get("closed_names", []))
         self.realized_by_name = {k: float(v) for k, v in state.get("realized_by_name", {}).items()}
         self.leg_origin = dict(state.get("leg_origin", {}))
+        self.last_flip_day = dict(state.get("last_flip_day", {}))

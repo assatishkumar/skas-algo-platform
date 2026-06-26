@@ -412,6 +412,7 @@ async def donchian_deploy(
         "portfolio_target_enabled": body.portfolio_target_enabled,
         "portfolio_target_pct": body.portfolio_target_pct,
         "breach_basis": body.breach_basis,
+        "breach_buffer_pct": body.breach_buffer_pct,
         "flip_delta": body.flip_delta,
         "max_flips": body.max_flips,
     }

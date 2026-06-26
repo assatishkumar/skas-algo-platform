@@ -311,6 +311,42 @@ def test_flip_30delta_uses_live_chain():
     assert any(e["action"] == "SHORT" and e["ticker"] == f"AAA|2026-01-13|{expk}|PE" for e in out)
 
 
+def test_flip_capped_once_per_day():
+    strat = _strat(portfolio_sl_pct=2.0, breach_basis="touch", max_flips=5)  # high cap so it doesn't close
+    sess, mv = _session(strat)
+    sess.update_quotes(ENTRY_Q)
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))      # enter
+    sess.update_quotes(ENTRY_Q)
+    mv.set_index_spot("AAA", 1100.0)                      # CE 1050 breached → roll to ATM PE 1100
+    sess.run_decision(datetime(2026, 1, 5, 10, 0))
+    assert strat.flip_count["AAA"] == 1
+    # Same day, the rolled ATM PE 1100 is now breached (spot well below it) — but the daily cap blocks it.
+    sess.update_quotes(ENTRY_Q)
+    mv.set_index_spot("AAA", 1050.0)
+    sess.run_decision(datetime(2026, 1, 5, 14, 0))
+    assert strat.flip_count["AAA"] == 1                   # no second flip the same day
+    # Next trading day, the breach flips again.
+    sess.update_quotes(ENTRY_Q)
+    mv.set_index_spot("AAA", 1050.0)
+    sess.run_decision(datetime(2026, 1, 6, 10, 0))
+    assert strat.flip_count["AAA"] == 2
+
+
+def test_breach_buffer_skips_marginal_touch():
+    strat = _strat(portfolio_sl_pct=2.0, breach_basis="touch", breach_buffer_pct=1.0)
+    sess, mv = _session(strat)
+    sess.update_quotes(ENTRY_Q)
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))
+    sess.update_quotes(ENTRY_Q)
+    mv.set_index_spot("AAA", 1055.0)                      # CE 1050: 1055 < 1050×1.01 (=1060.5) → within buffer
+    sess.run_decision(datetime(2026, 1, 5, 10, 0))
+    assert strat.flip_count.get("AAA", 0) == 0           # marginal touch → no flip
+    sess.update_quotes(ENTRY_Q)
+    mv.set_index_spot("AAA", 1065.0)                      # clears 1050×1.01 → real breach → flip
+    sess.run_decision(datetime(2026, 1, 5, 11, 0))
+    assert strat.flip_count["AAA"] == 1
+
+
 def test_max_flips_closes_the_name():
     strat = _strat(portfolio_sl_pct=2.0, breach_basis="touch", max_flips=1)
     sess, mv = _session(strat)

@@ -121,6 +121,7 @@ export default function DonchianStranglePage() {
   const [targetEnabled, setTargetEnabled] = useState(saved.targetEnabled ?? false);
   const [targetPct, setTargetPct] = useState(saved.targetPct ?? 50);
   const [flipDelta, setFlipDelta] = useState<"atm" | "30delta">(saved.flipDelta ?? "atm");
+  const [breachBuffer, setBreachBuffer] = useState(saved.breachBuffer ?? 0.5);
   // Cycle overrides (prefilled from the analyze response; blank = auto).
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
@@ -141,10 +142,10 @@ export default function DonchianStranglePage() {
   useEffect(() => {
     localStorage.setItem(PKEY, JSON.stringify({
       accountId, csvRows, csvName, symbolsText, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
-      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, result,
+      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, breachBuffer, result,
     }));
   }, [accountId, csvRows, csvName, symbolsText, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
-      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, result]);
+      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, breachBuffer, result]);
 
   const effectiveAccount = accountId ?? sessioned[0]?.id ?? null;
   const ivpMap = useMemo(() => new Map(csvRows.map((r) => [r.symbol, r])), [csvRows]);
@@ -226,7 +227,7 @@ export default function DonchianStranglePage() {
         name: deployName || `Donchian Strangle ${sell}`,
         sell_expiry: sell, legs, capital,
         portfolio_sl_pct: slPct, portfolio_target_enabled: targetEnabled, portfolio_target_pct: targetPct,
-        flip_delta: flipDelta,
+        flip_delta: flipDelta, breach_buffer_pct: breachBuffer,
         mode, quote_source: "zerodha", broker_account_id: effectiveAccount,
         ignore_market_hours: false, auto: true,
       });
@@ -402,6 +403,9 @@ export default function DonchianStranglePage() {
                   <option value="atm">ATM</option>
                   <option value="30delta">30Δ (live)</option>
                 </select>
+              </label>
+              <label className="flex items-center gap-2 text-sm" title="Spot must clear a short strike by this % to flip; flips are capped to once per name per day">
+                Breach buffer <input type="number" step="0.1" className={`${inputCls} w-16`} value={breachBuffer} onChange={(e) => setBreachBuffer(Number(e.target.value))} /> %
               </label>
               <label className="flex items-center gap-2 text-sm" title="Weight hedge lots by each name's beta vs NIFTY">
                 <input type="checkbox" checked={betaWeight} onChange={(e) => setBetaWeight(e.target.checked)} /> Beta-weight hedge

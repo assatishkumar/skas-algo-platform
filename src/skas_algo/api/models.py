@@ -203,6 +203,7 @@ class DonchianDeploy(BaseModel):
     portfolio_target_enabled: bool = False
     portfolio_target_pct: float = 50.0
     breach_basis: str = "close"
+    breach_buffer_pct: float = 0.5  # spot must clear a short strike by this % to flip
     flip_delta: str = "atm"  # "atm" | "30delta"
     max_flips: int = 2
     mode: str = "PAPER"
