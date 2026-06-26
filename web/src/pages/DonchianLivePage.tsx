@@ -128,6 +128,8 @@ function Gauge({ combined, stop, maxGain }: { combined: number; stop: number; ma
 
 function NameCard({ n, realized, onClick }: { n: DonchianBasketName; realized: number; onClick: () => void }) {
   const closed = isClosed(n);
+  // Open name whose legs have no live mark yet (e.g. on cache fallback) — unrealized is UNKNOWN, not ₹0.
+  const noMark = !closed && !n.legs.some((l) => l.open && l.mark != null);
   const [sb, sc] = structChip(n.struct);
   const sp = nameSpark(n.symbol, n.mtm || 0, closed);
   const spk = closed ? "var(--faint)" : posCls(n.mtm || 0) === "text-[var(--pos)]" ? "var(--pos)" : "var(--danger)";
@@ -142,7 +144,7 @@ function NameCard({ n, realized, onClick }: { n: DonchianBasketName; realized: n
       <div className="flex items-end justify-between mb-3">
         <div>
           <div className="text-[11px] font-semibold text-[var(--muted)] mb-[3px]">Unrealized</div>
-          <div className={`font-['Space_Grotesk'] font-bold text-[19px] tabular-nums ${closed ? "text-[var(--faint)]" : posCls(n.mtm || 0)}`}>{closed ? "—" : signed(n.mtm)}</div>
+          <div className={`font-['Space_Grotesk'] font-bold text-[19px] tabular-nums ${closed || noMark ? "text-[var(--faint)]" : posCls(n.mtm || 0)}`} title={noMark ? "No live quote — reconnect to refresh" : undefined}>{closed || noMark ? "—" : signed(n.mtm)}</div>
         </div>
         <svg viewBox="0 0 70 28" preserveAspectRatio="none" className="w-[70px] h-7">
           <path d={sp.area} style={{ fill: spk, fillOpacity: 0.13 }} />
@@ -151,9 +153,9 @@ function NameCard({ n, realized, onClick }: { n: DonchianBasketName; realized: n
       </div>
       <div className="flex items-center gap-[9px] mb-[11px]">
         <span className="flex-1 h-[6px] rounded-[4px] bg-[var(--track)] overflow-hidden">
-          <span className="block h-full" style={{ width: `${cap}%`, background: capBar(n) }} />
+          <span className="block h-full" style={{ width: noMark ? "0%" : `${cap}%`, background: capBar(n) }} />
         </span>
-        <span className="text-[11px] font-bold text-[var(--muted)] tabular-nums">{closed ? "settled" : `${cap}%`}</span>
+        <span className="text-[11px] font-bold text-[var(--muted)] tabular-nums">{closed ? "settled" : noMark ? "—" : `${cap}%`}</span>
       </div>
       <div className="flex items-center justify-between pt-[11px] border-t border-[var(--divider)] text-[11.5px]">
         <span className="text-[var(--muted)] font-semibold">{n.lots ?? 1} lot{(n.lots ?? 1) === 1 ? "" : "s"}</span>
@@ -196,6 +198,7 @@ function NameDrawer({ n, basket, trades, onClose }: { n: DonchianBasketName; bas
   }, [trades, n.symbol]);
 
   const realized = meta.flips.reduce((s, f) => s + (f.pnl || 0), 0); // = Σ the timeline's COVER P&L
+  const noMark = !closed && !n.legs.some((l) => l.open && l.mark != null);
   const po = namePayoff(n);
   const tile = (label: string, value: React.ReactNode, color?: string) => (
     <div className="rounded-[12px] bg-[var(--stat)] px-[13px] py-3">
@@ -228,7 +231,7 @@ function NameDrawer({ n, basket, trades, onClose }: { n: DonchianBasketName; bas
 
           {/* KPI tiles */}
           <div className="grid grid-cols-4 gap-[10px] mb-5">
-            {tile("Unrealized", closed ? "—" : signed(n.mtm), closed ? "var(--faint)" : (n.mtm || 0) >= 0 ? "var(--pos)" : "var(--danger)")}
+            {tile("Unrealized", closed || noMark ? "—" : signed(n.mtm), closed || noMark ? "var(--faint)" : (n.mtm || 0) >= 0 ? "var(--pos)" : "var(--danger)")}
             {tile("Realized", realized === 0 ? "₹0" : signed(realized), realized > 0 ? "var(--pos)" : realized < 0 ? "var(--danger)" : "var(--muted)")}
             {tile("Credit", rupee(n.credit))}
             {tile("Captured", closed ? "settled" : `${cap}%`)}
@@ -414,6 +417,14 @@ export default function DonchianLivePage() {
             <KebabMenu items={[{ label: "Open report", onClick: () => { window.location.href = `/runs/${runId}`; } }, { label: "All deployments", onClick: () => { window.location.href = "/live"; } }]} />
           </div>
         </div>
+
+        {dep && dep.quote_source === "zerodha" && (dep.on_cache_fallback || dep.quote_error || dep.broker_connected === false) && (
+          <div className="mb-[18px] rounded-[12px] bg-[var(--warn-bg)] px-4 py-3 text-[13px] text-[var(--warn-text)] flex items-center gap-3 flex-wrap">
+            <span className="font-bold">⚠ Live quotes disconnected</span>
+            <span className="text-[var(--warn-text)]/90">— single-stock option premiums aren't cached, so each open name's Unrealized shows "—" until quotes return. The NIFTY hedge and realized P&L are unaffected.{dep.quote_error ? ` (${dep.quote_error})` : ""}</span>
+            <button onClick={() => act.mutate(() => api.liveReconnectQuotes(runId))} className="ml-auto rounded-[9px] bg-[var(--ft)] text-white px-3 py-[6px] text-xs font-semibold">Reconnect to live quotes</button>
+          </div>
+        )}
 
         {!basket ? (
           <div className="text-[var(--muted)] py-10">Loading basket…</div>
