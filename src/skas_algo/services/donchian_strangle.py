@@ -124,9 +124,13 @@ def _leg(rows: list[dict], strike: float | None, right: str) -> dict | None:
     side = (row.get("ce") if right == "CE" else row.get("pe")) if row else None
     if not side:
         return None
-    premium = side.get("ltp") or side.get("close")
     bid, ask = side.get("bid"), side.get("ask")
     spr = spread_pct(bid, ask)
+    mid = (bid + ask) / 2 if (bid and ask and ask >= bid) else None
+    # Premium you'd actually COLLECT selling this leg = the bid — NOT the last-traded price, which on
+    # an illiquid strike can be a stale/erroneous print (e.g. a 4%-OTM call showing ₹900). Fall back
+    # to the mid, then ltp/close, when the book is one-sided.
+    premium = bid or mid or side.get("ltp") or side.get("close")
     return {
         "strike": float(strike), "premium": premium, "bid": bid, "ask": ask,
         "oi": int(side.get("oi") or 0), "spread_pct": spr,

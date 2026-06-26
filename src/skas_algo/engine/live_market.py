@@ -56,6 +56,9 @@ class LiveMarketView:
     def close(self, symbol: str) -> float:
         return self._quotes[symbol]
 
+    def fill_price(self, symbol: str, side) -> float:
+        return self._quotes[symbol]  # equities here have no live bid/ask → fill at the last quote
+
     def rolling_high(self, symbol: str) -> float:
         return self._rolling(symbol)[0]  # type: ignore[index]
 

@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from skas_algo.engine.options.instrument import is_option_symbol
+from skas_algo.db.enums import OrderSide
+from skas_algo.engine.options.instrument import is_option_symbol, parse
 
 
 class LiveOptionsMarketView:
@@ -120,6 +121,38 @@ class LiveOptionsMarketView:
         if symbol in self._last_close:
             return self._last_close[symbol]
         raise KeyError(f"{symbol} has no live quote or cached mark at {self._now}")
+
+    def fill_price(self, symbol: str, side: OrderSide) -> float:
+        """Realistic option fill: a SELL fills at the BID (you sell into the bid), a BUY at the ASK
+        (you lift the offer). This avoids booking an entry off a stale/illiquid last-traded print.
+        Falls back to ``close()`` (LTP / cached mark) when no live two-sided book is available
+        (cache quote source, one-sided book, or a network hiccup)."""
+        if is_option_symbol(symbol):
+            ba = self._bid_ask(symbol)
+            if ba is not None:
+                bid, ask = ba
+                if side is OrderSide.SELL and bid and bid > 0:
+                    return float(bid)
+                if side is OrderSide.BUY and ask and ask > 0:
+                    return float(ask)
+        return self.close(symbol)
+
+    def _bid_ask(self, symbol: str) -> tuple | None:
+        """(bid, ask) for one option contract from the LIVE chain, or None when unavailable."""
+        inst = parse(symbol)
+        if inst is None:
+            return None
+        chain = self.live_chain(inst.underlying, inst.expiry.isoformat())
+        if not chain:
+            return None
+        for row in chain.get("rows", []):
+            try:
+                if float(row.get("strike")) == float(inst.strike):
+                    leg = row.get("ce") if inst.right == "CE" else row.get("pe")
+                    return (leg.get("bid"), leg.get("ask")) if leg else None
+            except (TypeError, ValueError):
+                continue
+        return None
 
     def has_print(self, symbol: str) -> bool:
         """True only when a fresh live tick exists (the strategy's stale-mark guard)."""

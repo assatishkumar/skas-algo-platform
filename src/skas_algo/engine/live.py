@@ -69,8 +69,10 @@ class LiveSession:
         self.settler = settler
         self.margin_model = margin_model
         # PAPER: simulated fills on live prices. LIVE (later): a ZerodhaAdapter passed in.
+        # Fill SELLs at the bid / BUYs at the ask for options (fill_price); equity views fill at close.
+        price_fn = getattr(self.market, "fill_price", None) or (lambda s, _side: self.market.close(s))
         self.broker = broker or PaperBroker(
-            price_fn=self.market.close, fill_model=fill_model or FillModel()
+            price_fn=price_fn, fill_model=fill_model or FillModel()
         )
         self.resolver = OverrideResolver(overrides, excluded=set(excluded_symbols or []))
         # Real broker basket margin (set by the LiveRun ~1/min); falls back to the model estimate.

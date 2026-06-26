@@ -24,14 +24,15 @@ class SimBroker(ABC):
         self._ids = count(1)
 
     @abstractmethod
-    def reference_price(self, symbol: str) -> float:
-        """The current price to fill against (bar close, or live LTP)."""
+    def reference_price(self, symbol: str, side: OrderSide) -> float:
+        """The current price to fill against (bar close, or live LTP/bid/ask). ``side`` lets a live
+        view fill a SELL at the bid and a BUY at the ask; the backtest view ignores it."""
 
     def login(self) -> Session:  # no auth needed for simulation
         return Session(access_token="sim")
 
     def execute(self, order: BrokerOrder) -> Fill:
-        ref = self.reference_price(order.symbol)
+        ref = self.reference_price(order.symbol, order.side)
         price = self.fill_model.fill_price(ref, order.side)
         commission = self.fill_model.commission(price, order.quantity)
         return Fill(
@@ -51,8 +52,8 @@ class BacktestBroker(SimBroker):
         super().__init__(fill_model)
         self._price_fn = price_fn
 
-    def reference_price(self, symbol: str) -> float:
-        return self._price_fn(symbol)
+    def reference_price(self, symbol: str, side: OrderSide) -> float:
+        return self._price_fn(symbol)  # backtest bars have no bid/ask → side ignored (byte-identical)
 
     def funds(self) -> Funds:  # cash is tracked by the Portfolio in sim
         return Funds(available=0.0)
@@ -65,12 +66,12 @@ class PaperBroker(SimBroker):
     with BacktestBroker above.
     """
 
-    def __init__(self, price_fn: Callable[[str], float], fill_model: FillModel | None = None):
+    def __init__(self, price_fn: Callable[[str, OrderSide], float], fill_model: FillModel | None = None):
         super().__init__(fill_model)
         self._price_fn = price_fn
 
-    def reference_price(self, symbol: str) -> float:
-        return self._price_fn(symbol)
+    def reference_price(self, symbol: str, side: OrderSide) -> float:
+        return self._price_fn(symbol, side)  # live view fills SELL@bid / BUY@ask for options
 
     def funds(self) -> Funds:
         return Funds(available=0.0)

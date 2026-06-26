@@ -75,7 +75,7 @@ def test_analyze_name_strangle():
     row = _analyze()
     assert row["status"] == "strangle"
     assert row["ce"]["strike"] == 1100 and row["pe"]["strike"] == 900
-    assert row["ce"]["premium"] == 25 and row["margin"] > 0
+    assert row["ce"]["premium"] == 24.8 and row["margin"] > 0  # bid (ltp 25 − 0.2), not last-traded
 
 
 def test_analyze_name_skip_thin_leg_single_sided():
