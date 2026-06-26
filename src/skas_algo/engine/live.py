@@ -216,6 +216,12 @@ class LiveSession:
         strat = self.strategy
         if not hasattr(strat, "legs"):
             return
+        # Strategies with their own leg model (e.g. donchian's string-keyed basket) reconcile
+        # themselves — the generic {symbol,...} dict rebuild below is the custom_options model.
+        hook = getattr(strat, "sync_to_book", None)
+        if callable(hook):
+            hook(self.portfolio, ts)
+            return
         legs: list[dict] = []
         for symbol in self.portfolio.lot_symbols():
             lots = self.portfolio.lots(symbol)

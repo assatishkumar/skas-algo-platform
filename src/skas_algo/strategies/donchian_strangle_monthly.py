@@ -474,6 +474,12 @@ class DonchianStrangleMonthlyStrategy:
         return [Signal(s, SignalAction.EXIT_ALL, reason=reason) for s in legs]
 
     # ------------------------------------------------------- (de)serialize
+    def sync_to_book(self, portfolio, ts=None) -> None:
+        """Reconcile tracked legs with the live book after a manual change (e.g. a name exited):
+        drop any leg whose lots are gone so the strategy manages exactly what's held. Keeps
+        ``self.legs`` as symbol strings (the basket model) — NOT the custom_options dict model."""
+        self.legs = [s for s in self.legs if portfolio.lots(s)]
+
     def export_state(self) -> dict:
         return {
             "entered": self.entered,
@@ -501,7 +507,9 @@ class DonchianStrangleMonthlyStrategy:
     def load_state(self, state: dict) -> None:
         self.entered = bool(state.get("entered", False))
         self.done = bool(state.get("done", False))
-        self.legs = list(state.get("legs", []))
+        # self.legs is a list of symbol STRINGS. Guard against legacy state where a generic
+        # book-sync wrote {symbol,...} dicts (the custom_options leg model) — coerce to symbols.
+        self.legs = [l["symbol"] if isinstance(l, dict) else l for l in state.get("legs", [])]
         self.entry_close = {k: float(v) for k, v in state.get("entry_close", {}).items()}
         self.units = {k: float(v) for k, v in state.get("units", {}).items()}
         self.leg_side = dict(state.get("leg_side", {}))
