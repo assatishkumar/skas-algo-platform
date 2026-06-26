@@ -353,8 +353,8 @@ export default function DonchianStranglePage() {
                   <th className="py-1.5 px-2 text-right">IVP</th>
                   <th className="py-1.5 px-2 text-right">Spot</th>
                   <th className="py-1.5 px-2 text-right">Range L–H</th>
-                  <th className="py-1.5 px-2">SELL CE</th>
                   <th className="py-1.5 px-2">SELL PE</th>
+                  <th className="py-1.5 px-2">SELL CE</th>
                   <th className="py-1.5 px-2 text-right">Margin</th>
                   <th className="py-1.5 px-2">Status</th>
                 </tr>
@@ -383,8 +383,8 @@ export default function DonchianStranglePage() {
                       </td>
                       <td className="py-1.5 px-2 text-right">{n1(r.spot)}</td>
                       <td className="py-1.5 px-2 text-right text-xs text-[var(--muted)]">{r.range_low != null ? `${n1(r.range_low)}–${n1(r.range_high)}` : "—"}</td>
-                      <td className="py-1.5 px-2 text-[var(--danger)]"><LegCell leg={r.ce} units={(r.lot_size ?? 0) * (r.lots ?? 1)} /></td>
                       <td className="py-1.5 px-2 text-[var(--pos)]"><LegCell leg={r.pe} units={(r.lot_size ?? 0) * (r.lots ?? 1)} /></td>
+                      <td className="py-1.5 px-2 text-[var(--danger)]"><LegCell leg={r.ce} units={(r.lot_size ?? 0) * (r.lots ?? 1)} /></td>
                       <td className="py-1.5 px-2 text-right">{money(r.margin)}</td>
                       <td className="py-1.5 px-2" title={r.reason ?? r.error ?? undefined}><StatusPill status={r.status} /></td>
                     </tr>
