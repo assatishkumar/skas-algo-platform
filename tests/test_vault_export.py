@@ -79,5 +79,23 @@ def test_export_run_writes_card_and_strategy_note(tmp_path, monkeypatch):
 
 def test_scaffold_writes_dashboards(tmp_path, monkeypatch):
     monkeypatch.setattr(ve, "vault_root", lambda: tmp_path)
-    assert ve.scaffold() == 3
+    assert ve.scaffold() == 6
     assert (tmp_path / "Dashboards" / "Consistency.md").exists()
+    assert (tmp_path / "Recipes.md").exists() and (tmp_path / "Trading Brain.md").exists()
+
+
+def test_journal_appends_to_daily_note(tmp_path, monkeypatch):
+    monkeypatch.setattr(ve, "vault_root", lambda: tmp_path)
+    ve.journal("deploy", "Donchian #175 (paper)", strategy="donchian_strangle_monthly", run_id=175)
+    ve.journal("intervene", "Flattened Donchian #175", run_id=175, detail="closed 4 legs")
+    notes = list((tmp_path / "Journal").glob("*.md"))
+    assert len(notes) == 1
+    txt = notes[0].read_text()
+    assert "`deploy` Donchian #175 (paper)" in txt and "[[donchian_strangle_monthly]]" in txt
+    assert "`intervene` Flattened Donchian #175" in txt and "closed 4 legs" in txt  # both appended
+
+
+def test_journal_no_op_without_vault(monkeypatch):
+    monkeypatch.setattr(ve, "vault_root", lambda: None)
+    assert ve.journal("deploy", "x") is None
+    ve.journal_safe("deploy", "x")  # must not raise

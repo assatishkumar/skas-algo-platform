@@ -211,6 +211,9 @@ def fibret_analyze(
             rows.append({"symbol": sym, "error": f"no listed options for {exp.isoformat()}"})
             continue
         rows.append(analyze_symbol(symbol=sym, df=df, chain=chain, expiry=exp, on_date=on_date, params=params))
+    from skas_algo.services.vault_export import journal_safe
+    setups = sum(1 for r in rows if not r.get("error") and r.get("premium"))
+    journal_safe("screen", f"FibRet screen: {len(rows)} symbols, {setups} setups", strategy="fibret")
     return {
         "as_of": on_date.isoformat(),
         "target_pct": body.target_pct,
@@ -301,6 +304,10 @@ def donchian_analyze(
         )
         row["beta"] = beta_from_frames(df, nifty_df)
         rows.append(row)
+    from skas_algo.services.vault_export import journal_safe
+    tradeable = sum(1 for r in rows if r.get("status") in ("strangle", "CE-only", "PE-only"))
+    journal_safe("screen", f"Donchian screen: {len(rows)} names, {tradeable} tradeable",
+                 strategy="donchian_strangle_monthly", detail=f"sell expiry {sell.isoformat()}")
     return {"as_of": today.isoformat(), "dates": dates, "rows": rows}
 
 

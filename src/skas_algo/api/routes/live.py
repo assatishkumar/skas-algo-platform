@@ -107,6 +107,15 @@ def start_deployment(req: LiveStartRequest, db: Session, loader: PriceLoader, av
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if req.auto:
         manager.start_loop(live.run_id)
+    # Trading-brain capture: a run-card + a "deploy" journal entry (no-op without a vault).
+    from skas_algo.db.models import Algo, AlgoRun
+    from skas_algo.services.vault_export import export_run_safe, journal_safe
+    run = db.get(AlgoRun, live.run_id)
+    algo = db.get(Algo, run.algo_id) if run else None
+    if run and algo:
+        export_run_safe(run, algo)
+        journal_safe("deploy", f"{algo.name} ({algo.strategy_id}, {req.mode})",
+                     strategy=algo.strategy_id, run_id=run.id, detail=f"capital ₹{algo.capital:,.0f}")
     return live
 
 
@@ -306,6 +315,10 @@ async def set_controls(run_id: int, body: LiveControlsInput) -> dict:
         excluded_symbols=body.excluded_symbols,
         lots=body.lots,
     )
+    if body.auto is not None:  # journal the meaningful pause/resume toggle
+        from skas_algo.services.vault_export import journal_safe
+        journal_safe("intervene", f"{'Resumed' if body.auto else 'Paused'} {live.config.name}",
+                     strategy=live.config.strategy_id, run_id=run_id)
     return live.snapshot()
 
 
@@ -401,6 +414,9 @@ async def flatten(run_id: int) -> dict:
     now-flat book (it won't try to manage legs that no longer exist)."""
     live = _get(run_id)
     events = live.flatten()
+    from skas_algo.services.vault_export import journal_safe
+    journal_safe("intervene", f"Flattened {live.config.name}", strategy=live.config.strategy_id,
+                 run_id=run_id, detail=f"closed {len(events)} legs at live prices")
     return {"run_id": run_id, "closed": len(events), "snapshot": live.snapshot()}
 
 
@@ -418,6 +434,9 @@ async def manual_order(run_id: int, body: ManualOrderInput) -> dict:
         )
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from skas_algo.services.vault_export import journal_safe
+    journal_safe("intervene", f"Manual order on {live.config.name}", strategy=live.config.strategy_id,
+                 run_id=run_id, detail=f"closed {len(body.closes)} / opened {len(body.opens)}")
     return {"run_id": run_id, "executed": len(events), "snapshot": live.snapshot()}
 
 
@@ -445,6 +464,8 @@ async def stop_live(run_id: int) -> dict:
             status_code=409,
             detail=f"Exit the {len(open_syms)} open position(s) before stopping — use Exit.",
         )
+    from skas_algo.services.vault_export import journal_safe
+    journal_safe("lifecycle", f"Stopped {live.config.name}", strategy=live.config.strategy_id, run_id=run_id)
     manager.stop(run_id)
     return {"stopped": run_id}
 

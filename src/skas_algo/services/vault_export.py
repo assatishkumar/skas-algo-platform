@@ -204,6 +204,37 @@ def export_run_safe(run, algo, sd=None) -> None:
         logger.exception("vault export failed for run %s", getattr(run, "id", "?"))
 
 
+def journal(kind: str, title: str, *, strategy: str | None = None, run_id: int | None = None,
+            detail: str | None = None) -> Path | None:
+    """Append an activity event to the daily journal note (``Journal/<date>.md``) — the "why" behind
+    the runs: deploys, interventions, screens, lifecycle. Append-only; no-op without a vault."""
+    root = vault_root()
+    if root is None:
+        return None
+    from datetime import datetime
+
+    now = datetime.now()
+    path = root / "Journal" / f"{now.date().isoformat()}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(f"---\ntype: journal\ndate: {now.date().isoformat()}\n---\n"
+                        f"# Journal {now.date().isoformat()}\n\n", encoding="utf-8")
+    rid = f" (#{run_id})" if run_id else ""
+    link = f" [[{strategy}]]" if strategy else ""
+    extra = f" — {detail}" if detail else ""
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(f"- **{now:%H:%M}** `{kind}` {title}{rid}{link}{extra}\n")
+    return path
+
+
+def journal_safe(kind: str, title: str, **kw) -> None:
+    """Fire-and-forget journal write for route/manager hooks — never breaks the caller."""
+    try:
+        journal(kind, title, **kw)
+    except Exception:  # pragma: no cover - journalling must never break an action
+        logger.exception("vault journal failed: %s", title)
+
+
 def export_all(session, *, sd=None) -> int:
     """Backfill: write a run-card for every existing run. Returns the count written."""
     if vault_root() is None:
@@ -220,25 +251,63 @@ def export_all(session, *, sd=None) -> int:
     return n
 
 
+_RECIPES = """# Claude Desktop recipes
+
+Point Claude Desktop's Obsidian (or filesystem) MCP at this vault, then paste a recipe.
+
+## Weekly digest → Insights note
+> Read the run-cards in `Runs/` and the events in `Journal/`. Write `Insights/<today> weekly digest.md`:
+> what happened this week, what's working, anomalies (drift / churn / breaches), and 2-3 things to try.
+> Cite run-cards by name. Keep it under 300 words.
+
+## Backtest → forward → live consistency
+> For each strategy with both a backtest and a paper/live run, compare return / win-rate / max-DD.
+> Flag overfit (live far below backtest), slippage, and behavioural churn (flip counts). Be specific.
+
+## Failure post-mortem
+> Take run #<id> (or a named run-card). Reconstruct what happened from its card + the matching `Journal/`
+> entries, explain why it under/over-performed, and write `Insights/<name> post-mortem.md`.
+
+## Recommendations
+> Across all run-cards, propose param tweaks or new variants worth backtesting, grounded in the numbers.
+> For each: the change, the evidence (cite cards), and the expected effect.
+
+## Ad-hoc Q&A
+> "Which SST variant held up best live?"  ·  "Best neutral-regime options strategy?"
+> "Why did the donchian basket underperform its backtest?"
+"""
+
+
 def scaffold() -> int:
-    """Write the vault dashboards/templates (Dataview leaderboards + consistency). Returns files written."""
+    """Write the vault home, Dataview dashboards, journal index and Claude-Desktop recipes.
+    Returns the number of notes written. Idempotent (preserves anything below the machine region)."""
     root = vault_root()
     if root is None:
         return 0
     notes = {
+        "Trading Brain.md": (
+            {"type": "home"},
+            "# Trading Brain\n\nA memory of every SKAS Algo run + decision, for Claude Desktop to reason over.\n\n"
+            "**Dashboards:** [[Leaderboard]] · [[Consistency]] · [[Regime]] · [[Journal Index]]\n\n"
+            "**Use it:** [[Recipes]] — paste a recipe into Claude Desktop (Obsidian MCP) over this vault.\n\n"
+            "Notes are exported by `skas-algo export-vault`; your edits below the marker are preserved.\n",
+        ),
         "Dashboards/Leaderboard.md": (
             {"type": "dashboard"},
             "# Leaderboard\n\n```dataview\n"
-            "table mode, return_pct, max_dd_pct, win_rate, trades, regime, outcome\n"
+            "table mode, return_pct as return, max_dd_pct as maxDD, win_rate as win, trades, regime, outcome\n"
             'from "Runs" sort return_pct desc\n```\n',
         ),
         "Dashboards/Consistency.md": (
             {"type": "dashboard"},
             "# Backtest → forward → live consistency\n\n"
-            "Compare each strategy across modes — does the backtest hold up live?\n\n"
+            "Each strategy's return by mode, side by side — does the backtest hold up live?\n\n"
             "```dataview\n"
-            "table rows.mode as modes, rows.return_pct as returns, rows.win_rate as win_rates\n"
-            'from "Runs" group by strategy\n```\n',
+            "table\n"
+            '  filter(rows, (r) => r.mode = "backtest").return_pct as backtest,\n'
+            '  filter(rows, (r) => r.mode = "paper").return_pct as paper,\n'
+            '  filter(rows, (r) => r.mode = "live").return_pct as live\n'
+            'from "Runs"\ngroup by strategy\n```\n',
         ),
         "Dashboards/Regime.md": (
             {"type": "dashboard"},
@@ -246,6 +315,12 @@ def scaffold() -> int:
             "table rows.strategy as strategies, rows.return_pct as returns\n"
             'from "Runs" where regime group by regime\n```\n',
         ),
+        "Dashboards/Journal Index.md": (
+            {"type": "dashboard"},
+            "# Journal\n\nDeploys, interventions, screens and lifecycle events (newest first).\n\n"
+            "```dataview\nlist\nfrom \"Journal\" sort file.name desc\n```\n",
+        ),
+        "Recipes.md": ({"type": "recipes"}, _RECIPES),
     }
     n = 0
     for relpath, (fm, body) in notes.items():
