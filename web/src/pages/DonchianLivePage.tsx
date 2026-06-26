@@ -66,7 +66,8 @@ const capBar = (n: DonchianBasketName) => {
   return c >= 60 ? "var(--pos)" : c >= 25 ? "var(--accent)" : "var(--warn-text)";
 };
 
-/** Per-name short-strangle payoff at expiry (credit − ITM intrinsic), −15%…+15%; + breakevens. */
+/** Per-name short-strangle payoff at expiry (credit − ITM intrinsic), −25%…+25% so the loss tails
+ *  beyond the breakevens are visible; returns the sold-strike + breakeven x-positions to annotate. */
 function namePayoff(n: DonchianBasketName) {
   const openLegs = n.legs.filter((l) => l.open);
   const ce = openLegs.find((l) => l.right === "CE");
@@ -74,7 +75,8 @@ function namePayoff(n: DonchianBasketName) {
   const units = n.units || (openLegs[0]?.units ?? 1);
   const credPerUnit = (n.credit || 0) / (units || 1);
   const spot = n.spot || 0;
-  const N = 49, lo = -0.15, hi = 0.15, xs: number[] = [], vs: number[] = [];
+  const W = 460, pad = 4;
+  const N = 81, lo = -0.25, hi = 0.25, xs: number[] = [], vs: number[] = [];
   for (let i = 0; i < N; i++) {
     const x = lo + ((hi - lo) * i) / (N - 1);
     const S = spot * (1 + x);
@@ -83,7 +85,7 @@ function namePayoff(n: DonchianBasketName) {
     if (pe) v -= Math.max(0, pe.strike - S);
     xs.push(x); vs.push(v);
   }
-  const c = curve(460, 150, vs);
+  const c = curve(W, 150, vs);
   let beLow: number | null = null, beHigh: number | null = null;
   for (let i = 1; i < N; i++) {
     if (vs[i - 1] < 0 && vs[i] >= 0) beLow = xs[i];
@@ -92,7 +94,16 @@ function namePayoff(n: DonchianBasketName) {
   const fmt = (x: number) => (x >= 0 ? "+" : "") + (x * 100).toFixed(1) + "%";
   const be = beLow != null && beHigh != null ? `BE ${fmt(beLow)} / ${fmt(beHigh)}`
     : beLow != null ? `BE ${fmt(beLow)}` : beHigh != null ? `BE ${fmt(beHigh)}` : "in profit across range";
-  return { line: c.line, area: c.area, zeroY: c.py(0).toFixed(1), curX: (4 + (24 * (460 - 8)) / 48).toFixed(1), be };
+  // move% → x-pixel in the 0..460 viewBox (null when outside the window).
+  const xpx = (m: number | null) =>
+    m == null || m < lo || m > hi ? null : pad + ((m - lo) / (hi - lo)) * (W - 2 * pad);
+  return {
+    line: c.line, area: c.area, zeroY: c.py(0).toFixed(1), curX: (xpx(0) ?? 230).toFixed(1), be,
+    ceX: xpx(ce && spot ? ce.strike / spot - 1 : null), peX: xpx(pe && spot ? pe.strike / spot - 1 : null),
+    ceStrike: ce?.strike, peStrike: pe?.strike,
+    beLowX: xpx(beLow), beHighX: xpx(beHigh),
+    maxProfit: Math.round(credPerUnit * (units || 1)),
+  };
 }
 
 const legMoneyness = (l: DonchianBasketLeg, spot: number) =>
@@ -303,15 +314,31 @@ function NameDrawer({ n, basket, trades, onClose }: { n: DonchianBasketName; bas
           <div className="border border-[var(--border)] rounded-[13px] p-4">
             <div className="flex items-center justify-between mb-[10px]">
               <span className="font-['Space_Grotesk'] font-bold text-[13px] text-[var(--strong)]">Payoff at expiry</span>
-              <span className="text-[11.5px] font-semibold text-[var(--faint)]">{po.be}</span>
+              <span className="text-[11.5px] font-semibold text-[var(--faint)]">{po.be} · max +₹{inr(po.maxProfit)}</span>
             </div>
-            <svg viewBox="0 0 460 150" preserveAspectRatio="none" className="w-full h-[150px] block">
-              <line x1="0" y1={po.zeroY} x2="460" y2={po.zeroY} stroke="var(--divider)" strokeWidth="1" strokeDasharray="3 3" />
-              <line x1={po.curX} y1="0" x2={po.curX} y2="150" stroke="var(--faint)" strokeWidth="1" strokeDasharray="2 3" />
-              <path d={po.area} style={{ fill: "var(--accent)", fillOpacity: 0.1 }} />
-              <path d={po.line} style={{ fill: "none", stroke: "var(--accent-deep)", strokeWidth: 2.2 }} />
-            </svg>
-            <div className="flex justify-between text-[11px] font-bold text-[var(--faint)] mt-[6px]"><span>−15%</span><span>spot {spot.toLocaleString("en-IN")}</span><span>+15%</span></div>
+            <div className="relative">
+              <svg viewBox="0 0 460 150" preserveAspectRatio="none" className="w-full h-[150px] block">
+                <path d={po.area} style={{ fill: "var(--accent)", fillOpacity: 0.1 }} />
+                <line x1="0" y1={po.zeroY} x2="460" y2={po.zeroY} stroke="var(--divider)" strokeWidth="1" strokeDasharray="3 3" />
+                {/* breakevens — where profit turns to loss */}
+                {po.beLowX != null && <line x1={po.beLowX} y1="0" x2={po.beLowX} y2="150" stroke="var(--danger)" strokeWidth="1" strokeDasharray="1 3" opacity="0.5" />}
+                {po.beHighX != null && <line x1={po.beHighX} y1="0" x2={po.beHighX} y2="150" stroke="var(--danger)" strokeWidth="1" strokeDasharray="1 3" opacity="0.5" />}
+                {/* sold strikes (the payoff kinks) */}
+                {po.peX != null && <line x1={po.peX} y1="0" x2={po.peX} y2="150" stroke="var(--pos)" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.7" />}
+                {po.ceX != null && <line x1={po.ceX} y1="0" x2={po.ceX} y2="150" stroke="var(--danger)" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.7" />}
+                <line x1={po.curX} y1="0" x2={po.curX} y2="150" stroke="var(--faint)" strokeWidth="1" strokeDasharray="2 3" />
+                <path d={po.line} style={{ fill: "none", stroke: "var(--accent-deep)", strokeWidth: 2.2 }} />
+              </svg>
+              {/* strike labels — HTML overlay (undistorted by the stretched viewBox) */}
+              {po.peX != null && <span className="absolute top-0 -translate-x-1/2 text-[9.5px] font-bold text-[var(--pos)] bg-[var(--card)] px-[3px] rounded whitespace-nowrap" style={{ left: `${(po.peX / 460) * 100}%` }}>PE {po.peStrike}</span>}
+              {po.ceX != null && <span className="absolute top-0 -translate-x-1/2 text-[9.5px] font-bold text-[var(--danger)] bg-[var(--card)] px-[3px] rounded whitespace-nowrap" style={{ left: `${(po.ceX / 460) * 100}%` }}>CE {po.ceStrike}</span>}
+            </div>
+            <div className="flex justify-between text-[11px] font-bold text-[var(--faint)] mt-[6px]"><span>−25%</span><span>spot {spot.toLocaleString("en-IN")}</span><span>+25%</span></div>
+            <div className="flex items-center gap-3 text-[10px] font-semibold text-[var(--faint)] mt-[5px]">
+              <span><span className="text-[var(--pos)]">━</span> PE sell</span>
+              <span><span className="text-[var(--danger)]">━</span> CE sell</span>
+              <span><span className="text-[var(--danger)]">┈</span> breakeven (loss beyond)</span>
+            </div>
           </div>
         </div>
       </div>

@@ -103,7 +103,12 @@ class LiveConfig:
 def _serialize_event(ev: dict) -> dict:
     out = to_native(dict(ev))
     dt = ev["date"]
-    out["date"] = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)
+    # Keep the time for live (datetime) fills so the UI shows WHEN a leg was entered/exited; a
+    # backtest stamps a plain date (no intraday time) → date-only, unchanged.
+    if isinstance(dt, datetime):
+        out["date"] = dt.strftime("%Y-%m-%d %H:%M")
+    else:
+        out["date"] = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)
     return out
 
 
