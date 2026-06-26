@@ -274,13 +274,17 @@ class LiveSession:
     def export_state(self) -> dict:
         """Full session state so a running run can be rebuilt after a restart.
 
-        Market history is NOT persisted — it's re-warmed from the cache on recovery. Executed
-        trades ARE persisted (capped) so a CLOSED cycle keeps its realized P&L + trade log across
-        restarts (otherwise the live card goes blank after the position exits).
+        Equity market history is re-warmed from the cache on recovery. Options runs additionally
+        persist the last-known per-contract marks (``marks``) — single-stock option premiums aren't
+        in the cache, so without this a run recovering while disconnected would have no mark for its
+        stock legs (P&L would read "—"). Executed trades ARE persisted (capped) so a CLOSED cycle
+        keeps its realized P&L + trade log across restarts.
         """
+        marks = self.market.mark_prices() if hasattr(self.market, "load_marks") else {}
         return {
             "portfolio": self.portfolio.export_state(),
             "stops": self.stops.export(),
+            "marks": marks,
             "strategy": (
                 self.strategy.export_state() if hasattr(self.strategy, "export_state") else {}
             ),
@@ -305,6 +309,8 @@ class LiveSession:
 
         self.portfolio.load_state(state["portfolio"])
         self.stops.load(state.get("stops", []))
+        if state.get("marks") and hasattr(self.market, "load_marks"):
+            self.market.load_marks(state["marks"])  # last live quotes → price legs while disconnected
         if hasattr(self.strategy, "load_state"):
             self.strategy.load_state(state.get("strategy", {}))
         self.resolver.overrides = [

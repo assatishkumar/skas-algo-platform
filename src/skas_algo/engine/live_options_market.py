@@ -134,6 +134,18 @@ class LiveOptionsMarketView:
     def mark_prices(self) -> dict[str, float]:
         return dict(self._last_close)
 
+    def load_marks(self, marks: dict) -> None:
+        """Restore the last-known marks (persisted across restarts) so an options run that recovers
+        while DISCONNECTED still prices its legs off the last live quote — single-stock option
+        premiums aren't in the bhavcopy cache, so without this they'd have no mark at all. Restores
+        only the forward-filled mark (``_last_close``), NOT today's live-tick set (``_quotes``), so
+        ``has_print`` stays honest about whether a fresh tick has arrived."""
+        for symbol, price in (marks or {}).items():
+            try:
+                self._last_close[symbol] = float(price)
+            except (TypeError, ValueError):  # pragma: no cover - skip junk
+                continue
+
     # Donchian levels are undefined for option contracts (present for protocol parity).
     def rolling_high(self, symbol: str) -> float:  # pragma: no cover - unused
         raise NotImplementedError("rolling levels are not defined for option contracts")

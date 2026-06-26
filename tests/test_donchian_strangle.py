@@ -421,6 +421,23 @@ def test_basket_status_marks_flipped_name():
     assert aaa["status"] == "flipped" and aaa["flip_count"] == 1
 
 
+def test_marks_persist_across_restart():
+    strat = _strat()
+    sess, _mv = _session(strat)
+    sess.update_quotes(ENTRY_Q)
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))   # enter
+    sess.update_quotes({SYMS["aaa_ce"]: 30.0})        # a fresh live quote moves a leg's mark
+    state = sess.export_state()
+    assert state["marks"].get(SYMS["aaa_ce"]) == 30.0  # last live quote is persisted
+
+    # Rebuild a fresh session (simulates a restart) with NO quotes + NO live chain, restore state.
+    strat2 = _strat()
+    sess2, mv2 = _session(strat2)
+    sess2.load_state(state)
+    assert mv2.close(SYMS["aaa_ce"]) == 30.0           # priced off the restored last live quote
+    assert mv2.has_print(SYMS["aaa_ce"]) is False      # restored as a forward-filled mark, not a fresh tick
+
+
 def test_settles_at_expiry():
     strat = _strat()
     sess, _mv = _session(strat)
