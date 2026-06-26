@@ -228,9 +228,26 @@ def _strategy_doc(strategy_id: str) -> tuple[str, dict]:
     return doc, params
 
 
-def build_strategy_card(strategy_id: str) -> tuple[str, dict, str]:
-    """A strategy note: description (from the strategy's docstring) + default params + a Dataview of
-    every run (backlink target)."""
+def _pct(v) -> str:
+    return f"{v:+.1f}%" if isinstance(v, (int, float)) else "—"
+
+
+def _win(v) -> str:
+    return f"{v:.0f}%" if isinstance(v, (int, float)) else "—"
+
+
+def _dd(v) -> str:
+    return f"{abs(v):.1f}%" if isinstance(v, (int, float)) else "—"  # drawdown as a magnitude
+
+
+def _avg(xs):
+    vals = [x for x in xs if isinstance(x, (int, float))]
+    return sum(vals) / len(vals) if vals else None
+
+
+def build_strategy_card(strategy_id: str, runs: list[dict] | None = None) -> tuple[str, dict, str]:
+    """A strategy note: description (from the strategy's docstring) + default params + a static table
+    of its runs (rendered without any plugin). ``runs`` = the run-card frontmatter dicts."""
     fm = {"type": "strategy", "strategy": strategy_id, "tags": [strategy_id]}
     doc, params = _strategy_doc(strategy_id)
     parts = [f"# {strategy_id}\n"]
@@ -239,14 +256,60 @@ def build_strategy_card(strategy_id: str) -> tuple[str, dict, str]:
     if params:
         rows = "\n".join(f"| {k} | {v} |" for k, v in sorted(params.items()))
         parts.append(f"## Default parameters\n\n| param | default |\n|---|---|\n{rows}\n")
-    parts.append(
-        "## Runs (newest first)\n\n"
-        "```dataview\n"
-        "table mode, window_start, return_pct, max_dd_pct, win_rate, outcome\n"
-        f'from "Runs" where strategy = "{strategy_id}" sort window_start desc\n'
-        "```\n"
-    )
+    if runs:
+        ranked = sorted(runs, key=lambda r: r.get("window_start") or "", reverse=True)
+        t = "| run | mode | return | maxDD | win | trades | outcome |\n|---|---|--:|--:|--:|--:|---|\n"
+        for r in ranked:
+            t += (f"| [[{r.get('window_start') or 'NA'} {strategy_id} #{r['run_id']}\\|#{r['run_id']}]] "
+                  f"| {r.get('mode')} | {_pct(r.get('return_pct'))} | {_dd(r.get('max_dd_pct'))} "
+                  f"| {_win(r.get('win_rate'))} | {r.get('trades') or '—'} | {r.get('outcome') or '—'} |\n")
+        parts.append(f"## Runs ({len(ranked)})\n\n{t}")
+    else:
+        parts.append("## Runs\n\n_Run `skas-algo export-vault --backfill` to list this strategy's runs, "
+                     "or see [[Leaderboard]]._\n")
     return f"Strategies/{strategy_id}.md", fm, "\n".join(parts)
+
+
+def _dashboard_notes(rows: list[dict]) -> dict:
+    """Static, plugin-free dashboard tables computed from the run-card frontmatter."""
+    ranked = sorted((r for r in rows if isinstance(r.get("return_pct"), (int, float))),
+                    key=lambda r: r["return_pct"], reverse=True)[:50]
+    lb = "| # | strategy | mode | return | maxDD | win | trades | regime | outcome |\n|--:|---|---|--:|--:|--:|--:|---|---|\n"
+    for i, r in enumerate(ranked, 1):
+        lb += (f"| {i} | {r['strategy']} | {r.get('mode')} | {_pct(r.get('return_pct'))} "
+               f"| {_dd(r.get('max_dd_pct'))} | {_win(r.get('win_rate'))} | {r.get('trades') or '—'} "
+               f"| {r.get('regime') or '—'} | {r.get('outcome') or '—'} |\n")
+    leaderboard = f"# Leaderboard\n\nTop {len(ranked)} runs by return (every run is in `Runs/`).\n\n{lb}"
+
+    by: dict = {}
+    for r in rows:
+        by.setdefault(r["strategy"], {}).setdefault(r.get("mode", "?"), []).append(r.get("return_pct"))
+    cons = "| strategy | backtest | paper | live |\n|---|--:|--:|--:|\n"
+    for sid in sorted(by):
+        def cell(mode: str) -> str:
+            xs = by[sid].get(mode, [])
+            n = len([x for x in xs if isinstance(x, (int, float))])
+            return f"{_pct(_avg(xs))} ({n})" if n else "—"
+        cons += f"| {sid} | {cell('backtest')} | {cell('paper')} | {cell('live')} |\n"
+    consistency = ("# Backtest → forward → live consistency\n\n"
+                   "Avg return by mode (run count). Does the backtest hold up live?\n\n" + cons)
+
+    rb: dict = {}
+    for r in rows:
+        if r.get("regime"):
+            rb.setdefault(r["regime"], []).append(r)
+    reg = "| regime | runs | avg return | strategies |\n|---|--:|--:|---|\n"
+    for rg in sorted(rb):
+        rs = rb[rg]
+        reg += (f"| {rg} | {len(rs)} | {_pct(_avg([x.get('return_pct') for x in rs]))} "
+                f"| {', '.join(sorted({x['strategy'] for x in rs}))} |\n")
+    regime = "# Performance by regime\n\n" + (reg if rb else "_No regime-tagged runs yet._\n")
+
+    return {
+        "Dashboards/Leaderboard.md": ({"type": "dashboard"}, leaderboard),
+        "Dashboards/Consistency.md": ({"type": "dashboard"}, consistency),
+        "Dashboards/Regime.md": ({"type": "dashboard"}, regime),
+    }
 
 
 # ───────────────────────────────────────────────────────── public API
@@ -309,20 +372,34 @@ def journal_safe(kind: str, title: str, **kw) -> None:
         logger.exception("vault journal failed: %s", title)
 
 
+def _journal_index() -> str:
+    root = vault_root()
+    jdir = root / "Journal" if root else None
+    files = sorted(jdir.glob("*.md"), reverse=True) if (jdir and jdir.exists()) else []
+    listing = "".join(f"- [[{f.stem}]]\n" for f in files) if files else "_No events yet._\n"
+    return "# Journal\n\nDeploys, interventions, screens and lifecycle events (newest first).\n\n" + listing
+
+
 def export_all(session, *, sd=None) -> int:
-    """Backfill: write a run-card for every existing run. Returns the count written."""
+    """Backfill: run-card per run + per-strategy notes (with a static run table) + the static
+    dashboards (Leaderboard / Consistency / Regime / Journal index). Returns the run count."""
     if vault_root() is None:
         return 0
     from skas_algo.db.models import Algo, AlgoRun
     sd = sd if sd is not None else _safe_cache()
-    n = 0
+    rows: list[dict] = []
+    by_strat: dict[str, list[dict]] = {}
     for run, algo in session.query(AlgoRun, Algo).join(Algo, AlgoRun.algo_id == Algo.id).all():
         relpath, fm, body = build_run_card(run, algo, sd)
         _write_note(relpath, fm, body)
-        srel, sfm, sbody = build_strategy_card(algo.strategy_id)
-        _write_note(srel, sfm, sbody)
-        n += 1
-    return n
+        rows.append(fm)
+        by_strat.setdefault(algo.strategy_id, []).append(fm)
+    for sid, sruns in by_strat.items():
+        _write_note(*build_strategy_card(sid, runs=sruns))
+    for relpath, (fm, body) in _dashboard_notes(rows).items():
+        _write_note(relpath, fm, body)
+    _write_note("Dashboards/Journal Index.md", {"type": "dashboard"}, _journal_index())
+    return len(rows)
 
 
 _RECIPES = """# Claude Desktop recipes
@@ -362,37 +439,10 @@ def scaffold() -> int:
         "Trading Brain.md": (
             {"type": "home"},
             "# Trading Brain\n\nA memory of every SKAS Algo run + decision, for Claude Desktop to reason over.\n\n"
-            "**Dashboards:** [[Leaderboard]] · [[Consistency]] · [[Regime]] · [[Journal Index]]\n\n"
+            "**Dashboards:** [[Leaderboard]] · [[Consistency]] · [[Regime]] · [[Journal Index]] "
+            "_(rendered tables — refreshed by `skas-algo export-vault --backfill`)_\n\n"
             "**Use it:** [[Recipes]] — paste a recipe into Claude Desktop (Obsidian MCP) over this vault.\n\n"
-            "Notes are exported by `skas-algo export-vault`; your edits below the marker are preserved.\n",
-        ),
-        "Dashboards/Leaderboard.md": (
-            {"type": "dashboard"},
-            "# Leaderboard\n\n```dataview\n"
-            "table mode, return_pct as return, max_dd_pct as maxDD, win_rate as win, trades, regime, outcome\n"
-            'from "Runs" sort return_pct desc\n```\n',
-        ),
-        "Dashboards/Consistency.md": (
-            {"type": "dashboard"},
-            "# Backtest → forward → live consistency\n\n"
-            "Each strategy's return by mode, side by side — does the backtest hold up live?\n\n"
-            "```dataview\n"
-            "table\n"
-            '  filter(rows, (r) => r.mode = "backtest").return_pct as backtest,\n'
-            '  filter(rows, (r) => r.mode = "paper").return_pct as paper,\n'
-            '  filter(rows, (r) => r.mode = "live").return_pct as live\n'
-            'from "Runs"\ngroup by strategy\n```\n',
-        ),
-        "Dashboards/Regime.md": (
-            {"type": "dashboard"},
-            "# Performance by regime\n\n```dataview\n"
-            "table rows.strategy as strategies, rows.return_pct as returns\n"
-            'from "Runs" where regime group by regime\n```\n',
-        ),
-        "Dashboards/Journal Index.md": (
-            {"type": "dashboard"},
-            "# Journal\n\nDeploys, interventions, screens and lifecycle events (newest first).\n\n"
-            "```dataview\nlist\nfrom \"Journal\" sort file.name desc\n```\n",
+            "Your edits below the marker in any note are preserved across re-exports.\n",
         ),
         "Recipes.md": ({"type": "recipes"}, _RECIPES),
     }

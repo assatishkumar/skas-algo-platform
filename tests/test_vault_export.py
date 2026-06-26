@@ -88,11 +88,33 @@ def test_export_run_writes_card_and_strategy_note(tmp_path, monkeypatch):
     assert "strategy: sst_lifo" in txt and "return_pct: 25.0" in txt and "outcome: win" in txt
 
 
-def test_scaffold_writes_dashboards(tmp_path, monkeypatch):
+def test_scaffold_writes_home_and_recipes(tmp_path, monkeypatch):
     monkeypatch.setattr(ve, "vault_root", lambda: tmp_path)
-    assert ve.scaffold() == 6
-    assert (tmp_path / "Dashboards" / "Consistency.md").exists()
+    assert ve.scaffold() == 2
     assert (tmp_path / "Recipes.md").exists() and (tmp_path / "Trading Brain.md").exists()
+
+
+def test_dashboard_notes_render_static_tables():
+    rows = [
+        {"strategy": "sst_lifo", "mode": "backtest", "return_pct": 40.0, "max_dd_pct": -8.0,
+         "win_rate": 60.0, "trades": 120, "regime": "calm-up", "outcome": "win"},
+        {"strategy": "sst_lifo", "mode": "live", "return_pct": 12.0, "max_dd_pct": -5.0,
+         "win_rate": 55.0, "trades": 20, "regime": "normal-up", "outcome": "open"},
+        {"strategy": "hni_weekly", "mode": "backtest", "return_pct": -3.0, "max_dd_pct": -12.0,
+         "win_rate": 48.0, "trades": 50, "regime": "stressed-down", "outcome": "loss"},
+    ]
+    notes = ve._dashboard_notes(rows)
+    lb = notes["Dashboards/Leaderboard.md"][1]
+    assert "| 1 | sst_lifo | backtest | +40.0%" in lb and "```dataview" not in lb  # rendered, ranked
+    cons = notes["Dashboards/Consistency.md"][1]
+    assert "+40.0% (1)" in cons and "+12.0% (1)" in cons  # backtest vs live side by side
+
+
+def test_strategy_card_static_run_table():
+    runs = [{"run_id": 7, "window_start": "2024-01-01", "mode": "backtest", "return_pct": 25.0,
+             "max_dd_pct": -8.0, "win_rate": 60.0, "trades": 120, "outcome": "win"}]
+    _, _, body = ve.build_strategy_card("sst_lifo", runs=runs)
+    assert "## Runs (1)" in body and "#7" in body and "+25.0%" in body and "```dataview" not in body
 
 
 def test_journal_appends_to_daily_note(tmp_path, monkeypatch):
