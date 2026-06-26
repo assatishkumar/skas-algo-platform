@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
 
+    # --- Trading Brain (Obsidian vault export) ---
+    # When set, app activity (run-cards, journal) is exported as Markdown into this Obsidian
+    # vault folder for the Claude-Desktop "trading brain". Unset → all vault export is a no-op.
+    vault_path: str | None = None
+
     # --- Live trading safety ---
     # Master switch. Even with an account armed, no real order is placed unless this
     # is True. Defaults False so paper/dev never fires real orders by accident.

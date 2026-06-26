@@ -196,6 +196,9 @@ def persist_backtest(session: Session, req: BacktestRequest, report: dict, trade
     session.add(run)
     session.flush()
 
+    from skas_algo.services.vault_export import export_run_safe
+    export_run_safe(run, algo)  # write a run-card into the Obsidian vault (no-op if not configured)
+
     return {
         "run_id": run.id,
         "algo_id": algo.id,

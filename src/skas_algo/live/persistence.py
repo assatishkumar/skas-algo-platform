@@ -149,6 +149,9 @@ def finalize_live_run(session: Session, run: AlgoRun, *, metrics: dict, trade_lo
     run.stopped_at = datetime.now(UTC)
     run.metrics = metrics
     run.trade_log = trade_log
+    from skas_algo.db.models import Algo
+    from skas_algo.services.vault_export import export_run_safe
+    export_run_safe(run, session.get(Algo, run.algo_id))  # run-card → Obsidian vault (no-op if unset)
     # Keep run.state (the last session snapshot) so Activate can resume the deployment with its
     # realized P&L / trade history / strategy state intact. Recovery on boot still ignores it
     # (it only rebuilds runs with stopped_at IS NULL); only an explicit Activate restores it.
