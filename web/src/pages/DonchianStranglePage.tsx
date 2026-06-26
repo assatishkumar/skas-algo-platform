@@ -14,18 +14,23 @@ const pct = (v?: number | null) => (v == null ? "—" : `${v.toFixed(1)}%`);
 const inputCls =
   "rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-2 py-1 text-[var(--strong)] focus:outline-none focus:border-[var(--accent)]";
 
-// Default universe (spec §3 = all Nifty 50). Editable; the CSV upload usually supplies the names.
-const NIFTY_50 = [
-  "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO", "BAJFINANCE",
-  "BAJAJFINSV", "BEL", "BHARTIARTL", "CIPLA", "COALINDIA", "DRREDDY", "EICHERMOT", "GRASIM",
-  "HCLTECH", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK",
-  "INDUSINDBK", "INFY", "ITC", "JSWSTEEL", "KOTAKBANK", "LT", "LTIM", "M&M", "MARUTI", "NESTLEIND",
-  "NTPC", "ONGC", "POWERGRID", "RELIANCE", "SBILIFE", "SBIN", "SHRIRAMFIN", "SUNPHARMA", "TCS",
-  "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "TRENT", "ULTRACEMCO", "WIPRO", "ZOMATO",
+// Donchian universe = the Nifty 50, ranked by FREE-FLOAT weight (24 Jun 2026 snapshot). Free-float
+// weight tracks tradeable shares → liquidity / options depth, the right sort for selling premium.
+// Nestlé (NESTLEIND) is added back at ~0.95% (the source had dropped it). [symbol, free-float weight %]
+const NIFTY50_FF: [string, number][] = [
+  ["RELIANCE", 9.31], ["HDFCBANK", 6.40], ["BHARTIARTL", 5.99], ["ICICIBANK", 5.16], ["SBIN", 5.00],
+  ["TCS", 4.00], ["BAJFINANCE", 3.23], ["LT", 3.01], ["HINDUNILVR", 2.66], ["SUNPHARMA", 2.36],
+  ["AXISBANK", 2.26], ["INFY", 2.25], ["ADANIPORTS", 2.19], ["MARUTI", 2.18], ["KOTAKBANK", 2.12],
+  ["ADANIENT", 2.09], ["TITAN", 2.01], ["M&M", 2.00], ["ITC", 1.90], ["NTPC", 1.81],
+  ["ULTRACEMCO", 1.77], ["BEL", 1.58], ["HCLTECH", 1.58], ["ONGC", 1.58], ["JSWSTEEL", 1.58],
+  ["BAJAJFINSV", 1.49], ["BAJAJ-AUTO", 1.43], ["COALINDIA", 1.43], ["POWERGRID", 1.42], ["ASIANPAINT", 1.34],
+  ["ETERNAL", 1.30], ["SHRIRAMFIN", 1.26], ["TATASTEEL", 1.24], ["HINDALCO", 1.15], ["GRASIM", 1.12],
+  ["EICHERMOT", 1.09], ["INDIGO", 1.05], ["WIPRO", 0.96], ["NESTLEIND", 0.95], ["SBILIFE", 0.93],
+  ["TRENT", 0.91], ["JIOFIN", 0.83], ["TECHM", 0.75], ["TMPV", 0.67], ["HDFCLIFE", 0.67],
+  ["APOLLOHOSP", 0.65], ["CIPLA", 0.61], ["DRREDDY", 0.58], ["TATACONSUM", 0.57], ["MAXHEALTH", 0.55],
 ];
-
-// Index underlyings are the hedge instrument, not basket constituents — never strangle them.
-const INDEX_SYMS = new Set(["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"]);
+const FF_WEIGHT: Record<string, number> = Object.fromEntries(NIFTY50_FF);
+const FF_ORDER: Record<string, number> = Object.fromEntries(NIFTY50_FF.map(([s], i) => [s, i]));
 
 const PKEY = "donchian.state.v1";
 function loadPersisted(): Record<string, unknown> {
@@ -106,7 +111,6 @@ export default function DonchianStranglePage() {
   const [accountId, setAccountId] = useState<number | null>(saved.accountId ?? null);
   const [csvRows, setCsvRows] = useState<CsvRow[]>(saved.csvRows ?? []);
   const [csvName, setCsvName] = useState(saved.csvName ?? "");
-  const [symbolsText, setSymbolsText] = useState<string>(saved.symbolsText ?? "");
   // Screener params (spec §3).
   const [ivpMin, setIvpMin] = useState(saved.ivpMin ?? 50);
   const [hvWindow, setHvWindow] = useState(saved.hvWindow ?? 20);
@@ -141,10 +145,10 @@ export default function DonchianStranglePage() {
   // Persist screener inputs + last result so the table survives a reload.
   useEffect(() => {
     localStorage.setItem(PKEY, JSON.stringify({
-      accountId, csvRows, csvName, symbolsText, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
+      accountId, csvRows, csvName, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
       lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, breachBuffer, result,
     }));
-  }, [accountId, csvRows, csvName, symbolsText, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
+  }, [accountId, csvRows, csvName, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
       lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, breachBuffer, result]);
 
   const effectiveAccount = accountId ?? sessioned[0]?.id ?? null;
@@ -158,14 +162,15 @@ export default function DonchianStranglePage() {
     [activeDeps],
   );
 
-  // Names to screen: the CSV (with Sensibull fields) if present, else the pasted/preset symbols.
-  // Index underlyings are dropped — they're the hedge instrument, not basket constituents.
+  // Always screen the 50 free-float-ranked Nifty names (in that order). A Sensibull CSV, if
+  // uploaded, supplies each name's IVP / ATMIV / Event (matched by symbol).
   const names = useMemo(() => {
-    const src = csvRows.length
-      ? csvRows.map((r) => ({ symbol: r.symbol, atm_iv: r.atmIv ?? null, ivp: r.ivp ?? null, event: r.event ?? null }))
-      : symbolsText.split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean).map((symbol) => ({ symbol }));
-    return src.filter((n) => !INDEX_SYMS.has(n.symbol));
-  }, [csvRows, symbolsText]);
+    const csv = new Map(csvRows.map((r) => [r.symbol, r]));
+    return NIFTY50_FF.map(([symbol]) => {
+      const c = csv.get(symbol);
+      return { symbol, atm_iv: c?.atmIv ?? null, ivp: c?.ivp ?? null, event: c?.event ?? null };
+    });
+  }, [csvRows]);
 
   const analyze = useMutation({
     mutationFn: () =>
@@ -189,6 +194,11 @@ export default function DonchianStranglePage() {
   });
 
   const rows = result?.rows ?? [];
+  // Always arrange by free-float weight (highest float / deepest options first).
+  const sortedRows = useMemo(
+    () => [...rows].sort((a, b) => (FF_ORDER[a.symbol] ?? 999) - (FF_ORDER[b.symbol] ?? 999)),
+    [rows],
+  );
   const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.symbol) && SELECTABLE.has(r.status)), [rows, selected]);
   const selectedKey = useMemo(() => [...selected].sort().join(","), [selected]);
 
@@ -260,15 +270,12 @@ export default function DonchianStranglePage() {
               <button onClick={() => { setCsvRows([]); setCsvName(""); }} className="ml-2 underline text-[var(--accent-deep)]">clear</button>
             </span>
           )}
-          {!csvRows.length && (
-            <button onClick={() => setSymbolsText(NIFTY_50.join(", "))} className="text-sm underline text-[var(--accent-deep)]">Load Nifty 50</button>
-          )}
         </div>
 
-        {!csvRows.length && (
-          <textarea className={`${inputCls} w-full h-16 text-sm`} placeholder="Paste symbols (comma/space separated) — or upload a CSV"
-            value={symbolsText} onChange={(e) => setSymbolsText(e.target.value)} />
-        )}
+        <div className="text-xs text-[var(--muted)]">
+          Universe: the <span className="font-semibold text-[var(--strong)]">top 50 Nifty names ranked by free-float weight</span>
+          {" "}(liquidity / options depth). Upload a Sensibull CSV to supply each name's IVP / ATMIV / Event.
+        </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
           <label className="flex flex-col gap-1">Broker session
@@ -342,6 +349,7 @@ export default function DonchianStranglePage() {
                 <tr className="text-[var(--muted)] text-xs border-b border-[var(--divider)] text-left">
                   <th className="py-1.5 px-2"></th>
                   <th className="py-1.5 px-2">Stock</th>
+                  <th className="py-1.5 px-2 text-right" title="Free-float index weight (24 Jun 2026)">FF wt</th>
                   <th className="py-1.5 px-2 text-right">IVP</th>
                   <th className="py-1.5 px-2 text-right">Spot</th>
                   <th className="py-1.5 px-2 text-right">Range L–H</th>
@@ -352,7 +360,7 @@ export default function DonchianStranglePage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
+                {sortedRows.map((r) => {
                   const sel = SELECTABLE.has(r.status);
                   return (
                     <tr key={r.symbol} className={`border-b border-[var(--divider)]/40 ${sel ? "" : "opacity-55"}`}>
@@ -365,6 +373,7 @@ export default function DonchianStranglePage() {
                           <Link to="/live" className="ml-2 align-middle rounded-full bg-[var(--chip)] text-[var(--chip-text)] px-1.5 py-0.5 text-[10px] font-semibold">● deployed</Link>
                         )}
                       </td>
+                      <td className="py-1.5 px-2 text-right tabular-nums text-[var(--muted)]">{FF_WEIGHT[r.symbol] != null ? `${FF_WEIGHT[r.symbol].toFixed(2)}%` : "—"}</td>
                       <td className="py-1.5 px-2 text-right"
                         title={`ATM IV ${n1(r.atm_iv)}% · HV ${n1(r.hv)}%${r.beta != null ? ` · β ${r.beta.toFixed(2)}` : ""}`}>
                         {ivpMap.get(r.symbol)?.ivp ?? r.ivp ?? "—"}
