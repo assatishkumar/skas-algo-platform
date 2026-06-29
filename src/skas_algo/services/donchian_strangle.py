@@ -175,7 +175,9 @@ def analyze_name(
     rows = chain.get("rows") or []
     hv = annualized_hv(df["close"].tolist(), params.hv_window) if df is not None and len(df) else None
     base = {"symbol": symbol, "spot": spot, "ivp": ivp, "atm_iv": atm_iv, "hv": hv,
-            "event": (event or None), "lot_size": lot_size, "lots": params.lots_per_name}
+            "event": (event or None), "lot_size": lot_size, "lots": params.lots_per_name,
+            # The listed strikes (for manual CE/PE strike override on any row, incl. excluded ones).
+            "strikes": sorted({float(r["strike"]) for r in rows})}
 
     # Filters first (spec §6): event window, then IV>HV and IVP floor.
     if _event_in_window(event, entry_date, sell_expiry):

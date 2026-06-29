@@ -142,6 +142,9 @@ export default function DonchianStranglePage() {
     new Set((saved.result?.rows ?? []).filter((r: DonchianRow) => SELECTABLE.has(r.status)).map((r: DonchianRow) => r.symbol)),
   );
   const [panel, setPanel] = useState<DonchianPanel | null>(null);
+  // Manual CE/PE strike overrides per name (incl. for excluded rows). undefined = use the resolved
+  // strike; null = don't sell that leg; a number = sell that strike (priced live at entry).
+  const [strikeOv, setStrikeOv] = useState<Record<string, { ce?: number | null; pe?: number | null }>>({});
 
   // Persist screener inputs + last result so the table survives a reload.
   useEffect(() => {
@@ -203,7 +206,22 @@ export default function DonchianStranglePage() {
     () => [...rows].sort((a, b) => (FF_ORDER[a.symbol] ?? 999) - (FF_ORDER[b.symbol] ?? 999)),
     [rows],
   );
-  const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.symbol) && SELECTABLE.has(r.status)), [rows, selected]);
+  // Any selected row is deployable (incl. excluded ones). Apply manual strike overrides and un-skip
+  // a selected row's resolved legs (selection = intent to sell). Overridden legs price live at entry.
+  const selectedRows = useMemo(() => {
+    const mk = (cur: DonchianRow["ce"], ov: number | null | undefined): DonchianRow["ce"] => {
+      if (ov === null) return null;                       // explicitly skipped
+      const strike = ov ?? (cur ? cur.strike : null);     // override, else the resolved strike
+      if (strike == null) return null;
+      const known = !!cur && cur.strike === strike && cur.premium != null;
+      return { strike, premium: known ? cur!.premium : null, bid: known ? cur!.bid ?? null : null,
+               ask: known ? cur!.ask ?? null : null, oi: known ? cur!.oi : undefined, skip: false };
+    };
+    return rows.filter((r) => selected.has(r.symbol)).map((r) => {
+      const ov = strikeOv[r.symbol];
+      return { ...r, ce: mk(r.ce, ov?.ce), pe: mk(r.pe, ov?.pe) };
+    });
+  }, [rows, selected, strikeOv]);
   // ISO date strings compare chronologically — range start must be strictly before range end.
   const rangeInvalid = !!(rangeStart && rangeEnd && rangeStart >= rangeEnd);
   const selectedKey = useMemo(() => [...selected].sort().join(","), [selected]);
@@ -229,9 +247,9 @@ export default function DonchianStranglePage() {
       const legs: DonchianDeployLeg[] = [];
       for (const r of selectedRows) {
         const lps = r.lots ?? 1;
-        if (r.ce && r.ce.premium != null && !r.ce.skip)
+        if (r.ce && !r.ce.skip)  // premium not required — a short fills at the live bid at entry
           legs.push({ underlying: r.symbol, right: "CE", strike: r.ce.strike, side: "sell", lots: lps, spot: r.spot ?? undefined, lot_size: r.lot_size, strike_step: r.strike_step ?? undefined });
-        if (r.pe && r.pe.premium != null && !r.pe.skip)
+        if (r.pe && !r.pe.skip)
           legs.push({ underlying: r.symbol, right: "PE", strike: r.pe.strike, side: "sell", lots: lps, spot: r.spot ?? undefined, lot_size: r.lot_size, strike_step: r.strike_step ?? undefined });
       }
       const h = panel?.hedge;
@@ -252,6 +270,32 @@ export default function DonchianStranglePage() {
   });
 
   const toggle = (sym: string) => setSelected((s) => { const n = new Set(s); n.has(sym) ? n.delete(sym) : n.add(sym); return n; });
+
+  // A selected row's CE/PE cell becomes an editable strike picker (any listed strike, or "skip");
+  // an overridden strike prices live at entry. Unselected rows keep the read-only LegCell.
+  const renderLeg = (r: DonchianRow, side: "ce" | "pe") => {
+    const leg = side === "ce" ? r.ce : r.pe;
+    const units = (r.lot_size ?? 0) * (r.lots ?? 1);
+    if (!selected.has(r.symbol)) return <LegCell leg={leg} units={units} />;
+    const ov = strikeOv[r.symbol]?.[side];
+    const eff = ov !== undefined ? ov : (leg ? leg.strike : null);
+    const known = !!leg && eff === leg.strike && leg.premium != null;
+    const color = side === "ce" ? "var(--danger)" : "var(--pos)";
+    return (
+      <div className="flex flex-col gap-0.5">
+        <select className="bg-[var(--field)] border border-[var(--field-border)] rounded px-1.5 py-1 text-xs tabular-nums max-w-[120px]"
+          style={{ color: eff == null ? "var(--faint)" : color }} value={eff ?? ""}
+          onChange={(e) => { const v = e.target.value === "" ? null : Number(e.target.value);
+            setStrikeOv((m) => ({ ...m, [r.symbol]: { ...m[r.symbol], [side]: v } })); }}>
+          <option value="">— skip</option>
+          {(r.strikes ?? []).map((k) => <option key={k} value={k}>{k}</option>)}
+        </select>
+        <span className="text-[10px] text-[var(--muted)] tabular-nums">
+          {eff == null ? "—" : known ? `₹${(leg!.premium ?? 0).toFixed(2)}` : "live @ entry"}
+        </span>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -371,11 +415,11 @@ export default function DonchianStranglePage() {
               </thead>
               <tbody>
                 {sortedRows.map((r) => {
-                  const sel = SELECTABLE.has(r.status);
+                  const sel = SELECTABLE.has(r.status) || selected.has(r.symbol);
                   return (
                     <tr key={r.symbol} className={`border-b border-[var(--divider)]/40 ${sel ? "" : "opacity-55"}`}>
                       <td className="py-1.5 px-2">
-                        <input type="checkbox" disabled={!sel} checked={selected.has(r.symbol)} onChange={() => toggle(r.symbol)} />
+                        <input type="checkbox" checked={selected.has(r.symbol)} onChange={() => toggle(r.symbol)} />
                       </td>
                       <td className="py-1.5 px-2 font-medium">
                         {r.symbol}
@@ -393,8 +437,8 @@ export default function DonchianStranglePage() {
                       </td>
                       <td className="py-1.5 px-2 text-right">{n1(r.spot)}</td>
                       <td className="py-1.5 px-2 text-right text-xs text-[var(--muted)]">{r.range_low != null ? `${n1(r.range_low)}–${n1(r.range_high)}` : "—"}</td>
-                      <td className="py-1.5 px-2 text-[var(--pos)]"><LegCell leg={r.pe} units={(r.lot_size ?? 0) * (r.lots ?? 1)} /></td>
-                      <td className="py-1.5 px-2 text-[var(--danger)]"><LegCell leg={r.ce} units={(r.lot_size ?? 0) * (r.lots ?? 1)} /></td>
+                      <td className="py-1.5 px-2 text-[var(--pos)]">{renderLeg(r, "pe")}</td>
+                      <td className="py-1.5 px-2 text-[var(--danger)]">{renderLeg(r, "ce")}</td>
                       <td className="py-1.5 px-2 text-right">{money(r.margin)}</td>
                       <td className="py-1.5 px-2">
                         <StatusPill status={r.status} />

@@ -621,6 +621,7 @@ export interface DonchianRow {
   strike_step?: number | null; // listed strike step (ATM flip sizing)
   beta?: number | null;        // vs NIFTY (optional beta-weighted hedge)
   breakout?: "up" | "down" | null; // spot beyond range → ATM opposite leg only
+  strikes?: number[];          // listed strikes (manual CE/PE strike override)
   expiry?: string;
 }
 
