@@ -193,6 +193,7 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             snap = live.snapshot()
             tile["on_cache_fallback"] = snap.get("on_cache_fallback", False)
             tile["quote_error"] = snap.get("quote_error")
+            tile["underlying_spot"] = snap.get("underlying_spot")  # live spot for the tile subline
             upnl = sum(p["unrealized_pnl"] for p in snap.get("positions", []))
             tile["metrics"] = {
                 "equity": snap.get("equity"),

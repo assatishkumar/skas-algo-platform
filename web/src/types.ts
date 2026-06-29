@@ -872,6 +872,7 @@ export interface Deployment {
   broker_connected?: boolean | null; // session valid right now
   on_cache_fallback?: boolean; // zerodha run currently falling back to cache quotes
   quote_error?: string | null; // last live-quote fetch failure (rejected token, etc.)
+  underlying_spot?: number | null; // live underlying spot (tile subline)
 }
 
 export interface DataSummary {

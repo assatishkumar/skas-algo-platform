@@ -1079,8 +1079,13 @@ function DeploymentTile({
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
-      ) : dep.notes ? (
-        <div className="mt-1.5 text-xs text-[var(--muted)] line-clamp-2">{dep.notes}</div>
+      ) : (dep.notes || dep.underlying_spot != null) ? (
+        <div className="mt-1.5 text-xs text-[var(--muted)] line-clamp-2">
+          {dep.notes}
+          {dep.underlying_spot != null && (
+            <span className="text-[var(--strong)] font-semibold">{dep.notes ? " · " : ""}spot {dep.underlying_spot.toLocaleString("en-IN")}</span>
+          )}
+        </div>
       ) : null}
 
       {/* Stat tiles */}
