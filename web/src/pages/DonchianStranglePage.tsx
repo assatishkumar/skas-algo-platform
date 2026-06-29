@@ -117,6 +117,7 @@ export default function DonchianStranglePage() {
   const [skipLegPct, setSkipLegPct] = useState(saved.skipLegPct ?? 0.5);
   const [roundOut, setRoundOut] = useState(saved.roundOut ?? false);
   const [requireIvGtHv, setRequireIvGtHv] = useState(saved.requireIvGtHv ?? true);
+  const [breakoutAtm, setBreakoutAtm] = useState(saved.breakoutAtm ?? true);
   const [lots, setLots] = useState(saved.lots ?? 1);
   // Portfolio params.
   const [hedgeOtm, setHedgeOtm] = useState(saved.hedgeOtm ?? 4.5);
@@ -145,10 +146,10 @@ export default function DonchianStranglePage() {
   // Persist screener inputs + last result so the table survives a reload.
   useEffect(() => {
     localStorage.setItem(PKEY, JSON.stringify({
-      accountId, csvRows, csvName, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
+      accountId, csvRows, csvName, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv, breakoutAtm,
       lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, breachBuffer, result,
     }));
-  }, [accountId, csvRows, csvName, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv,
+  }, [accountId, csvRows, csvName, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv, breakoutAtm,
       lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, breachBuffer, result]);
 
   const effectiveAccount = accountId ?? sessioned[0]?.id ?? null;
@@ -180,7 +181,8 @@ export default function DonchianStranglePage() {
         range_start: rangeStart || null, range_end: rangeEnd || null,
         entry_date: entryDate || null, sell_expiry: sellExpiry || null,
         ivp_min: ivpMin, require_iv_gt_hv: requireIvGtHv, hv_window: hvWindow,
-        skip_leg_min_premium_pct: skipLegPct, round_out: roundOut, lots_per_name: lots,
+        skip_leg_min_premium_pct: skipLegPct, round_out: roundOut, breakout_atm: breakoutAtm,
+        lots_per_name: lots,
       }),
     onSuccess: (res) => {
       setResult(res);
@@ -202,6 +204,8 @@ export default function DonchianStranglePage() {
     [rows],
   );
   const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.symbol) && SELECTABLE.has(r.status)), [rows, selected]);
+  // ISO date strings compare chronologically — range start must be strictly before range end.
+  const rangeInvalid = !!(rangeStart && rangeEnd && rangeStart >= rangeEnd);
   const selectedKey = useMemo(() => [...selected].sort().join(","), [selected]);
 
   // Recompute the portfolio panel whenever the selection (or cycle) changes.
@@ -310,6 +314,9 @@ export default function DonchianStranglePage() {
           <label className="flex items-center gap-2 mt-5" title="Keep only names whose ATM IV exceeds their annualised HV">
             <input type="checkbox" checked={requireIvGtHv} onChange={(e) => setRequireIvGtHv(e.target.checked)} /> Require IV &gt; HV
           </label>
+          <label className="flex items-center gap-2 mt-5" title="If spot has broken beyond the Donchian range the would-be ITM leg is skipped and the ATM opposite leg is sold instead (CE breakout → ATM PE)">
+            <input type="checkbox" checked={breakoutAtm} onChange={(e) => setBreakoutAtm(e.target.checked)} /> Breakout → ATM leg
+          </label>
         </div>
 
         {/* Cycle anchors (auto-resolved; override + re-run if needed). */}
@@ -329,10 +336,11 @@ export default function DonchianStranglePage() {
         </div>
 
         <div className="flex items-center gap-3">
-          <button onClick={() => analyze.mutate()} disabled={analyze.isPending || !effectiveAccount || names.length === 0}
+          <button onClick={() => analyze.mutate()} disabled={analyze.isPending || !effectiveAccount || names.length === 0 || rangeInvalid}
             className="rounded bg-[var(--ft)] px-4 py-1.5 text-sm text-white disabled:opacity-50">
             {analyze.isPending ? "Analyzing…" : `Refresh (${names.length})`}
           </button>
+          {rangeInvalid && <span className="text-sm text-[var(--danger)]">Range start must be before range end.</span>}
           {analyze.isError && <span className="text-sm text-[var(--danger)]">{(analyze.error as Error).message}</span>}
           {result?.error && <span className="text-sm text-[var(--warn-text)]">{result.error}</span>}
           {result && !result.error && (
@@ -388,7 +396,13 @@ export default function DonchianStranglePage() {
                       <td className="py-1.5 px-2 text-[var(--pos)]"><LegCell leg={r.pe} units={(r.lot_size ?? 0) * (r.lots ?? 1)} /></td>
                       <td className="py-1.5 px-2 text-[var(--danger)]"><LegCell leg={r.ce} units={(r.lot_size ?? 0) * (r.lots ?? 1)} /></td>
                       <td className="py-1.5 px-2 text-right">{money(r.margin)}</td>
-                      <td className="py-1.5 px-2" title={r.reason ?? r.error ?? undefined}><StatusPill status={r.status} /></td>
+                      <td className="py-1.5 px-2">
+                        <StatusPill status={r.status} />
+                        {(() => {
+                          const why = r.reason || r.error || (r.status === "excluded:event" && r.event ? `event ${r.event}` : "");
+                          return why ? <div className="text-[10px] text-[var(--faint)] mt-0.5 max-w-[200px] whitespace-normal leading-tight">{why}</div> : null;
+                        })()}
+                      </td>
                     </tr>
                   );
                 })}

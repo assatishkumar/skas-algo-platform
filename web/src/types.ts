@@ -620,6 +620,7 @@ export interface DonchianRow {
   margin?: number | null;
   strike_step?: number | null; // listed strike step (ATM flip sizing)
   beta?: number | null;        // vs NIFTY (optional beta-weighted hedge)
+  breakout?: "up" | "down" | null; // spot beyond range → ATM opposite leg only
   expiry?: string;
 }
 
@@ -658,6 +659,7 @@ export interface DonchianAnalyzeRequest {
   hv_window?: number;
   skip_leg_min_premium_pct?: number;
   round_out?: boolean;
+  breakout_atm?: boolean;
   lots_per_name?: number;
   min_dte?: number;
 }

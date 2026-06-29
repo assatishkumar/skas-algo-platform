@@ -78,6 +78,21 @@ def test_analyze_name_strangle():
     assert row["ce"]["premium"] == 24.8 and row["margin"] > 0  # bid (ltp 25 − 0.2), not last-traded
 
 
+def test_breakout_up_skips_itm_ce_sells_atm_pe():
+    # Spot (1200) above the Donchian high (1100) → the CE would be ITM. Breakout rule: skip the CE
+    # and sell the ATM PE instead.
+    row = _analyze(chain=_chain(spot=1200.0))
+    assert row["breakout"] == "up" and row["status"] == "PE-only"
+    assert row["ce"] is None and row["pe"] is not None
+    assert "breakout" in (row.get("reason") or "")
+
+
+def test_breakout_rule_off_keeps_donchian_ce():
+    row = _analyze(chain=_chain(spot=1200.0),
+                   params=DonchianParams(ivp_min=0, require_iv_gt_hv=False, breakout_atm=False))
+    assert row.get("breakout") is None and row["ce"] is not None  # rule off → ITM CE kept
+
+
 def test_analyze_name_skip_thin_leg_single_sided():
     chain = _chain(ce_ltp=2.0)  # CE premium 2 < 0.5% of 1000 (=5) → skipped → PE-only
     row = _analyze(chain=chain)

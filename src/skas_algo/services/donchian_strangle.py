@@ -47,6 +47,8 @@ class DonchianParams:
     breach_basis: str = "close"            # "close" (EOD) | "touch" (intraday)
     breach_buffer_pct: float = 0.5         # spot must clear the strike by this % to count as a breach
     max_flips: int = 2                     # per name (Phase 2)
+    breakout_atm: bool = True              # spot beyond the Donchian range → skip the would-be ITM
+    #                                        leg and sell the ATM opposite leg (CE breakout → ATM PE)
 
 
 # ───────────────────────────────────────────────────────────── per-name math
@@ -188,9 +190,20 @@ def analyze_name(
         return {**base, "status": "error", "error": "no Donchian range / live chain / lot size"}
     range_high, range_low = rng
     strikes = [float(r["strike"]) for r in rows]
+    ce_strike = pick_strike(strikes, range_high, "CE", params.round_out)
+    pe_strike = pick_strike(strikes, range_low, "PE", params.round_out)
+    # A short CE must sit ABOVE spot (OTM). If spot has broken above the Donchian high the CE would
+    # be ITM — skip it and sell the ATM PE instead (ride the breakout, collect put premium). Mirror
+    # on the downside: spot below the Donchian low → skip the ITM PE, sell the ATM CE.
+    breakout: str | None = None
+    if params.breakout_atm and spot:
+        if ce_strike is not None and spot >= ce_strike:
+            ce_strike, pe_strike, breakout = None, pick_strike(strikes, spot, "PE", False), "up"
+        elif pe_strike is not None and spot <= pe_strike:
+            ce_strike, pe_strike, breakout = pick_strike(strikes, spot, "CE", False), None, "down"
 
-    ce = _leg(rows, pick_strike(strikes, range_high, "CE", params.round_out), "CE")
-    pe = _leg(rows, pick_strike(strikes, range_low, "PE", params.round_out), "PE")
+    ce = _leg(rows, ce_strike, "CE")
+    pe = _leg(rows, pe_strike, "PE")
 
     def keep(leg: dict | None) -> bool:
         if not leg or leg["premium"] is None or spot <= 0:
@@ -220,9 +233,11 @@ def analyze_name(
     if pe_ok:
         margin += short_option_margin(spot, units, 1, MarginParams())
 
+    reason = (f"breakout {'↑' if breakout == 'up' else '↓'} — spot beyond range, ATM "
+              f"{'PE' if breakout == 'up' else 'CE'} only") if breakout else None
     return {**base, "expiry": sell_expiry.isoformat(), "range_high": range_high, "range_low": range_low,
             "ce": ce, "pe": pe, "margin": margin, "strike_step": strike_step(strikes),
-            "status": status, "error": None}
+            "breakout": breakout, "reason": reason, "status": status, "error": None}
 
 
 # ───────────────────────────────────────────────────────── date anchors (§5)

@@ -171,6 +171,7 @@ class DonchianAnalyzeRequest(BaseModel):
     hv_window: int = 20
     skip_leg_min_premium_pct: float = 0.5  # % of spot
     round_out: bool = False
+    breakout_atm: bool = True              # spot beyond range → sell the ATM opposite leg (skip ITM)
     lots_per_name: int = 1
     min_dte: int = 7
 

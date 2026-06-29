@@ -248,7 +248,7 @@ def donchian_analyze(
     params = DonchianParams(
         ivp_min=body.ivp_min, require_iv_gt_hv=body.require_iv_gt_hv, hv_window=body.hv_window,
         skip_leg_min_premium_pct=body.skip_leg_min_premium_pct, round_out=body.round_out,
-        lots_per_name=max(1, body.lots_per_name),
+        breakout_atm=body.breakout_atm, lots_per_name=max(1, body.lots_per_name),
     )
     # NIFTY daily series (once) → the index trading calendar (holiday-adjusted anchors) + per-name beta.
     try:
