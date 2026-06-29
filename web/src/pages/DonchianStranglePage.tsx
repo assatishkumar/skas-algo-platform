@@ -127,11 +127,13 @@ export default function DonchianStranglePage() {
   const [targetPct, setTargetPct] = useState(saved.targetPct ?? 50);
   const [flipDelta, setFlipDelta] = useState<"atm" | "30delta">(saved.flipDelta ?? "atm");
   const [breachBuffer, setBreachBuffer] = useState(saved.breachBuffer ?? 0.5);
-  // Cycle overrides (prefilled from the analyze response; blank = auto).
-  const [rangeStart, setRangeStart] = useState("");
-  const [rangeEnd, setRangeEnd] = useState("");
-  const [entryDate, setEntryDate] = useState("");
-  const [sellExpiry, setSellExpiry] = useState("");
+  // Cycle overrides (blank = auto). Seed from the last persisted result so they show the resolved
+  // cycle on reload (not an empty input that the browser renders as a faint "today" placeholder);
+  // each Refresh re-syncs them to the cycle the backend actually used.
+  const [rangeStart, setRangeStart] = useState<string>(saved.result?.dates?.range_start ?? "");
+  const [rangeEnd, setRangeEnd] = useState<string>(saved.result?.dates?.range_end ?? "");
+  const [entryDate, setEntryDate] = useState<string>(saved.result?.dates?.entry_date ?? "");
+  const [sellExpiry, setSellExpiry] = useState<string>(saved.result?.dates?.sell_expiry ?? "");
   // Deploy.
   const [mode, setMode] = useState<"PAPER" | "LIVE">("PAPER");
   const [deployName, setDeployName] = useState("");
