@@ -185,11 +185,13 @@ export default function DonchianStranglePage() {
     onSuccess: (res) => {
       setResult(res);
       setSelected(new Set(res.rows.filter((r) => SELECTABLE.has(r.status)).map((r) => r.symbol)));
-      // Adopt the resolved cycle dates so the user can see/override them.
-      setRangeStart((v) => v || res.dates.range_start || "");
-      setRangeEnd((v) => v || res.dates.range_end || "");
-      setEntryDate((v) => v || res.dates.entry_date || "");
-      setSellExpiry((v) => v || res.dates.sell_expiry || "");
+      // Sync the date fields to the cycle the backend actually resolved/used. (Not `v || …` —
+      // that let a stale/invalid override stick and silently invert the window → all rows "error".
+      // A deliberate override the backend accepts is echoed back unchanged, so it's preserved.)
+      setRangeStart(res.dates.range_start || "");
+      setRangeEnd(res.dates.range_end || "");
+      setEntryDate(res.dates.entry_date || "");
+      setSellExpiry(res.dates.sell_expiry || "");
     },
   });
 

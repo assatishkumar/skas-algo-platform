@@ -112,6 +112,15 @@ def test_resolve_cycle_snaps_to_trading_days():
     assert cyc["entry_date"] == date(2025, 12, 31)  # next actual trading day
 
 
+def test_resolve_cycle_rejects_inverted_override():
+    # A stale UI override with range_start AFTER range_end must not invert the window (→ all rows
+    # would error). resolve_cycle falls back to the auto-resolved anchors.
+    today = date(2026, 6, 29)
+    cyc = resolve_cycle(today, [date(2026, 7, 28)],
+                        range_start=date(2026, 5, 27), range_end=date(2026, 5, 26))
+    assert cyc["range_start"] < cyc["range_end"]   # never inverted
+
+
 def test_portfolio_panel_hedge_and_stop():
     selected = [{"symbol": "AAA", "spot": 1000.0, "lot_size": 100, "lots": 20,
                  "ce": {"strike": 1100, "premium": 25.0}, "pe": {"strike": 900, "premium": 22.0}}]

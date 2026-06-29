@@ -279,8 +279,15 @@ def resolve_cycle(
         if m == 0:
             m, y = 12, y - 1
     past = sorted({a for a in anchors if a <= today})
-    last = range_end or _snap_back(past[-1] if past else None, tds)
-    prev = range_start or _snap_back(past[-2] if len(past) >= 2 else None, tds)
+    auto_last = _snap_back(past[-1] if past else None, tds)
+    auto_prev = _snap_back(past[-2] if len(past) >= 2 else None, tds)
+    last = range_end or auto_last
+    prev = range_start or auto_prev
+    # A stale/invalid override (or a clamp to a short trading calendar) must NOT invert the window:
+    # an inverted range start≥end yields an empty Donchian lookup → every screener row "error".
+    # Fall back to the auto-resolved anchors.
+    if prev and last and prev >= last:
+        prev, last = auto_prev, auto_last
     entry = entry_date or _next_trading_day(last, tds)
     return {"prev_expiry": prev, "last_expiry": last, "sell_expiry": sell, "entry_date": entry,
             "range_start": prev, "range_end": last}
