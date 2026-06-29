@@ -270,6 +270,13 @@ export default function DonchianStranglePage() {
   });
 
   const toggle = (sym: string) => setSelected((s) => { const n = new Set(s); n.has(sym) ? n.delete(sym) : n.add(sym); return n; });
+  // Select-all / deselect-all (header checkbox) over the deployable rows.
+  const deployable = useMemo(() => rows.filter((r) => SELECTABLE.has(r.status)), [rows]);
+  const allChecked = deployable.length > 0 && deployable.every((r) => selected.has(r.symbol));
+  const toggleAll = () => setSelected((s) => {
+    if (allChecked) return new Set();
+    const n = new Set(s); deployable.forEach((r) => n.add(r.symbol)); return n;
+  });
 
   // A selected row's CE/PE cell becomes an editable strike picker (any listed strike, or "skip");
   // an overridden strike prices live at entry. Unselected rows keep the read-only LegCell.
@@ -291,7 +298,7 @@ export default function DonchianStranglePage() {
           {(r.strikes ?? []).map((k) => <option key={k} value={k}>{k}</option>)}
         </select>
         <span className="text-[10px] text-[var(--muted)] tabular-nums">
-          {eff == null ? "—" : known ? `₹${(leg!.premium ?? 0).toFixed(2)}` : "live @ entry"}
+          {eff == null ? "—" : known ? `${money((leg!.premium ?? 0) * units)} recd` : "live @ entry"}
         </span>
       </div>
     );
@@ -401,7 +408,7 @@ export default function DonchianStranglePage() {
             <table className="w-full text-sm tabular-nums whitespace-nowrap">
               <thead>
                 <tr className="text-[var(--muted)] text-xs border-b border-[var(--divider)] text-left">
-                  <th className="py-1.5 px-2"></th>
+                  <th className="py-1.5 px-2"><input type="checkbox" checked={allChecked} onChange={toggleAll} title="Select / deselect all deployable" /></th>
                   <th className="py-1.5 px-2">Stock</th>
                   <th className="py-1.5 px-2 text-right" title="Free-float index weight (24 Jun 2026)">FF wt</th>
                   <th className="py-1.5 px-2 text-right">IVP</th>
@@ -409,6 +416,7 @@ export default function DonchianStranglePage() {
                   <th className="py-1.5 px-2 text-right">Range L–H</th>
                   <th className="py-1.5 px-2">SELL PE</th>
                   <th className="py-1.5 px-2">SELL CE</th>
+                  <th className="py-1.5 px-2 text-right" title="Premium collected (CE + PE) at current marks">Premium</th>
                   <th className="py-1.5 px-2 text-right">Margin</th>
                   <th className="py-1.5 px-2">Status</th>
                 </tr>
@@ -439,6 +447,11 @@ export default function DonchianStranglePage() {
                       <td className="py-1.5 px-2 text-right text-xs text-[var(--muted)]">{r.range_low != null ? `${n1(r.range_low)}–${n1(r.range_high)}` : "—"}</td>
                       <td className="py-1.5 px-2 text-[var(--pos)]">{renderLeg(r, "pe")}</td>
                       <td className="py-1.5 px-2 text-[var(--danger)]">{renderLeg(r, "ce")}</td>
+                      <td className="py-1.5 px-2 text-right text-[var(--pos)] font-medium">{(() => {
+                        const u = (r.lot_size ?? 0) * (r.lots ?? 1);
+                        const c = (r.ce && !r.ce.skip && r.ce.premium != null ? r.ce.premium : 0) + (r.pe && !r.pe.skip && r.pe.premium != null ? r.pe.premium : 0);
+                        return c > 0 ? money(c * u) : <span className="text-[var(--faint)]">—</span>;
+                      })()}</td>
                       <td className="py-1.5 px-2 text-right">{money(r.margin)}</td>
                       <td className="py-1.5 px-2">
                         <StatusPill status={r.status} />

@@ -78,6 +78,14 @@ def test_analyze_name_strangle():
     assert row["ce"]["premium"] == 24.8 and row["margin"] > 0  # bid (ltp 25 − 0.2), not last-traded
 
 
+def test_excluded_event_still_carries_rule_strikes():
+    # An event-excluded name keeps its rule-based CE/PE legs so the UI can default a manual override.
+    row = _analyze(event="2025-12-15")  # inside the cycle window → excluded:event
+    assert row["status"] == "excluded:event"
+    assert row["ce"] is not None and row["pe"] is not None
+    assert row["ce"]["strike"] == 1100 and row["pe"]["strike"] == 900
+
+
 def test_breakout_up_skips_itm_ce_sells_atm_pe():
     # Spot (1200) above the Donchian high (1100) → the CE would be ITM. Breakout rule: skip the CE
     # and sell the ATM PE instead.
@@ -113,9 +121,9 @@ def test_resolve_cycle_anchors():
     today = date(2026, 1, 20)
     cyc = resolve_cycle(today, [date(2026, 1, 27), date(2026, 2, 24)])
     assert cyc["sell_expiry"] == date(2026, 1, 27)           # nearest listed monthly ≥ today
-    assert cyc["range_end"] <= today                          # last monthly on/before today
-    assert cyc["range_start"] < cyc["range_end"]              # the prior monthly
-    assert cyc["entry_date"] > cyc["range_end"]
+    assert cyc["range_end"] == today                          # cycle-to-date → ends today
+    assert cyc["entry_date"] == today                         # enter today
+    assert cyc["range_start"] < cyc["range_end"]              # starts after last month's expiry
 
 
 def test_resolve_cycle_snaps_to_trading_days():
@@ -123,8 +131,9 @@ def test_resolve_cycle_snaps_to_trading_days():
     # Pretend the Dec-2025 monthly (calendar Dec 30) fell on a holiday → trading days exclude it.
     tds = [date(2025, 12, 29), date(2025, 12, 31), date(2026, 1, 1), date(2026, 1, 2)]
     cyc = resolve_cycle(today, [date(2026, 1, 27)], trading_days=tds)
-    assert cyc["range_end"] == date(2025, 12, 29)   # snapped back from the holiday
-    assert cyc["entry_date"] == date(2025, 12, 31)  # next actual trading day
+    assert cyc["range_start"] == date(2025, 12, 31)  # day after the holiday-snapped Dec 29 expiry
+    assert cyc["range_end"] == today                  # cycle-to-date ends today
+    assert cyc["entry_date"] == today
 
 
 def test_resolve_cycle_rejects_inverted_override():

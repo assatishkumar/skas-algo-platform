@@ -179,14 +179,9 @@ def analyze_name(
             # The listed strikes (for manual CE/PE strike override on any row, incl. excluded ones).
             "strikes": sorted({float(r["strike"]) for r in rows})}
 
-    # Filters first (spec §6): event window, then IV>HV and IVP floor.
-    if _event_in_window(event, entry_date, sell_expiry):
-        return {**base, "status": "excluded:event", "error": None}
-    if ivp is not None and ivp < params.ivp_min:
-        return {**base, "status": "excluded:filter", "reason": f"IVP {ivp:.0f} < {params.ivp_min:.0f}", "error": None}
-    if params.require_iv_gt_hv and atm_iv is not None and hv is not None and not (atm_iv > hv):
-        return {**base, "status": "excluded:filter", "reason": f"ATMIV {atm_iv:.1f} ≤ HV {hv:.1f}", "error": None}
-
+    # Resolve the range + legs for EVERY name (incl. excluded ones) so an excluded row still carries
+    # its rule-based CE/PE strikes — the UI defaults a manual override to them. Exclusions (event
+    # window, IVP / IV>HV filters) are applied as a status flag AFTER the legs are built.
     rng = donchian_range(df, range_start, range_end)
     if rng is None or not spot or lot_size <= 0 or not rows:
         return {**base, "status": "error", "error": "no Donchian range / live chain / lot size"}
@@ -219,14 +214,25 @@ def analyze_name(
         pe["skip"] = True
 
     if ce_ok and pe_ok:
-        status = "strangle"
+        status, reason = "strangle", None
     elif ce_ok:
-        status = "CE-only"
+        status, reason = "CE-only", None
     elif pe_ok:
-        status = "PE-only"
+        status, reason = "PE-only", None
     else:
-        return {**base, "range_high": range_high, "range_low": range_low, "ce": ce, "pe": pe,
-                "status": "excluded:filter", "reason": "both legs below premium floor", "error": None}
+        status, reason = "excluded:filter", "both legs below premium floor"
+    if breakout and not status.startswith("excluded"):
+        reason = (f"breakout {'↑' if breakout == 'up' else '↓'} — spot beyond range, ATM "
+                  f"{'PE' if breakout == 'up' else 'CE'} only")
+
+    # Exclusion filters (spec §6) override the status but KEEP the legs, so an excluded name can
+    # still be selected for deploy with its rule-based strikes as the default.
+    if _event_in_window(event, entry_date, sell_expiry):
+        status, reason = "excluded:event", None  # the event date is shown from row.event
+    elif ivp is not None and ivp < params.ivp_min:
+        status, reason = "excluded:filter", f"IVP {ivp:.0f} < {params.ivp_min:.0f}"
+    elif params.require_iv_gt_hv and atm_iv is not None and hv is not None and not (atm_iv > hv):
+        status, reason = "excluded:filter", f"ATMIV {atm_iv:.1f} ≤ HV {hv:.1f}"
 
     units = lot_size * params.lots_per_name
     margin = 0.0
@@ -234,9 +240,6 @@ def analyze_name(
         margin += short_option_margin(spot, units, 1, MarginParams())
     if pe_ok:
         margin += short_option_margin(spot, units, 1, MarginParams())
-
-    reason = (f"breakout {'↑' if breakout == 'up' else '↓'} — spot beyond range, ATM "
-              f"{'PE' if breakout == 'up' else 'CE'} only") if breakout else None
     return {**base, "expiry": sell_expiry.isoformat(), "range_high": range_high, "range_low": range_low,
             "ce": ce, "pe": pe, "margin": margin, "strike_step": strike_step(strikes),
             "breakout": breakout, "reason": reason, "status": status, "error": None}
@@ -296,18 +299,19 @@ def resolve_cycle(
         if m == 0:
             m, y = 12, y - 1
     past = sorted({a for a in anchors if a <= today})
-    auto_last = _snap_back(past[-1] if past else None, tds)
-    auto_prev = _snap_back(past[-2] if len(past) >= 2 else None, tds)
-    last = range_end or auto_last
-    prev = range_start or auto_prev
-    # A stale/invalid override (or a clamp to a short trading calendar) must NOT invert the window:
-    # an inverted range start≥end yields an empty Donchian lookup → every screener row "error".
-    # Fall back to the auto-resolved anchors.
-    if prev and last and prev >= last:
-        prev, last = auto_prev, auto_last
-    entry = entry_date or _next_trading_day(last, tds)
-    return {"prev_expiry": prev, "last_expiry": last, "sell_expiry": sell, "entry_date": entry,
-            "range_start": prev, "range_end": last}
+    last_expiry = _snap_back(past[-1] if past else None, tds)   # last completed monthly expiry
+    # The cycle-to-date window: range START = the day after that expiry (last month's last Tuesday
+    # + 1), range END = today, and we enter today.
+    auto_start = _next_trading_day(last_expiry, tds) or last_expiry
+    start = range_start or auto_start
+    end = range_end or today
+    # A stale/invalid override must not invert the window (start after end → empty Donchian lookup
+    # → every row "error"). Fall back to the auto cycle-to-date window.
+    if start and end and start > end:
+        start, end = auto_start, today
+    entry = entry_date or today
+    return {"prev_expiry": auto_start, "last_expiry": last_expiry, "sell_expiry": sell,
+            "entry_date": entry, "range_start": start, "range_end": end}
 
 
 # ───────────────────────────────────────────────────────── portfolio layer (§8)
