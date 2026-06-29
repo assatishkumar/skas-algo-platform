@@ -117,6 +117,28 @@ def test_analyze_name_excluded_ivp_filter():
     assert row["status"] == "excluded:filter"
 
 
+def test_enter_skips_unpriceable_leg_not_whole_basket():
+    from types import SimpleNamespace
+
+    from skas_algo.strategies.donchian_strangle_monthly import DonchianStrangleMonthlyStrategy
+
+    strat = DonchianStrangleMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=1_000_000, expiry="2026-07-28",
+        legs=[
+            {"underlying": "RELIANCE", "right": "CE", "strike": 1370, "side": "sell", "lots": 1, "lot_size": 500, "spot": 1300},
+            {"underlying": "RELIANCE", "right": "PE", "strike": 1250, "side": "sell", "lots": 1, "lot_size": 500, "spot": 1300},
+            {"underlying": "JSWSTEEL", "right": "CE", "strike": 1330, "side": "sell", "lots": 1, "lot_size": 875, "spot": 1280},
+        ],
+    )
+    market = SimpleNamespace(index_spot=lambda u: {"RELIANCE": 1300.0, "JSWSTEEL": 1280.0}.get(u))
+    ctx = SimpleNamespace(market=market, close=lambda sym: 0.0 if "JSWSTEEL" in sym else 50.0)  # JSWSTEEL leg dead
+    syms = [s.symbol for s in strat._enter(ctx)]
+    assert any("RELIANCE" in s and s.endswith("CE") for s in syms)   # priceable legs entered
+    assert any("RELIANCE" in s and s.endswith("PE") for s in syms)
+    assert not any("JSWSTEEL" in s for s in syms)                    # one dead leg skipped, basket NOT blocked
+    assert strat.entered is True
+
+
 def test_resolve_cycle_anchors():
     today = date(2026, 1, 20)
     cyc = resolve_cycle(today, [date(2026, 1, 27), date(2026, 2, 24)])

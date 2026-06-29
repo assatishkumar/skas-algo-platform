@@ -256,20 +256,23 @@ class DonchianStrangleMonthlyStrategy:
             lots = int(leg.get("lots", 1) or 1)
             per_lot = self._per_lot(underlying, expiry, leg)
             if per_lot <= 0:
-                return []
+                continue  # can't size this leg — skip it (don't block the rest of the basket)
             symbol = make(underlying, expiry, float(leg["strike"]), right,
                           lot_size=per_lot, lot_overrides=self.lot_overrides).symbol
             try:
                 close = ctx.close(symbol)
             except KeyError:
-                return []  # no live/cached price for a leg yet — retry whole basket next tick
-            if bad_close(close):
-                return []
+                close = None  # no quote for this contract (e.g. an illiquid / unlisted strike)
+            # Skip a dead/unpriceable leg (price 0 or missing) rather than deferring the WHOLE basket —
+            # one illiquid strike must not block the other names. The hedge longs always price, so a
+            # genuine pre-open / total-outage tick leaves ``resolved`` empty → we retry next tick.
             units = lots * per_lot
-            if units <= 0:
-                return []
+            if bad_close(close) or units <= 0:
+                continue
             resolved.append((symbol, underlying, right, float(leg["strike"]), side,
                              float(units), float(close), leg.get("spot"), per_lot, lots, leg.get("strike_step")))
+        if not resolved:
+            return []  # nothing priceable yet (warmup / outage) — retry the whole basket next tick
 
         signals: list[Signal] = []
         agg_notional = 0.0
