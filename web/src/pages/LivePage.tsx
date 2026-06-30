@@ -1211,33 +1211,55 @@ function DeploymentTile({
 }
 
 function PortfolioBar({ deployments }: { deployments: Deployment[] }) {
-  const t = deployments.reduce(
-    (acc, d) => {
-      acc.equity += d.metrics?.equity ?? 0;
-      acc.invested += d.metrics?.invested ?? 0;
-      acc.realized += d.metrics?.realized_pnl ?? 0;
-      acc.upnl += d.metrics?.unrealized_pnl ?? 0;
-      acc.positions += d.metrics?.open_positions ?? 0;
-      return acc;
-    },
-    { equity: 0, invested: 0, realized: 0, upnl: 0, positions: 0 },
-  );
+  // Split the summary by instrument class — equity and options book/risk differently (options use
+  // margin + net credit, not deployed capital), so a combined total mixes apples and oranges.
+  const isOpt = (d: Deployment) =>
+    d.instrument_class === "DERIV" || isOptionsStrategy(d.strategy_id);
+  const agg = (ds: Deployment[]) =>
+    ds.reduce(
+      (acc, d) => {
+        acc.n += 1;
+        acc.equity += d.metrics?.equity ?? 0;
+        acc.invested += d.metrics?.invested ?? 0;
+        acc.margin += d.metrics?.margin_used ?? 0;
+        acc.realized += d.metrics?.realized_pnl ?? 0;
+        acc.upnl += d.metrics?.unrealized_pnl ?? 0;
+        acc.positions += d.metrics?.open_positions ?? 0;
+        return acc;
+      },
+      { n: 0, equity: 0, invested: 0, margin: 0, realized: 0, upnl: 0, positions: 0 },
+    );
+  const eq = agg(deployments.filter((d) => !isOpt(d)));
+  const opt = agg(deployments.filter(isOpt));
+
   const Kpi = ({ label, value, tone }: { label: string; value: string; tone?: number }) => (
     <div>
       <div className="text-[var(--muted)] text-xs">{label}</div>
       <div className={`text-[22px] font-bold font-['Space_Grotesk'] tabular-nums ${tone == null ? "text-[var(--strong)]" : tone >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{value}</div>
     </div>
   );
-  return (
-    <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-5">
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
-        <Kpi label="Active deployments" value={String(deployments.length)} />
-        <Kpi label="Total equity" value={formatInr(t.equity)} />
-        <Kpi label="Deployed" value={formatInr(t.invested)} />
-        <Kpi label="Realized P&L" value={formatInr(t.realized)} tone={t.realized} />
-        <Kpi label="Unrealized P&L" value={formatInr(t.upnl)} tone={t.upnl} />
-        <Kpi label="Open positions" value={String(t.positions)} />
+  const Row = ({ title, a, deployedLabel, deployedValue }: {
+    title: string; a: ReturnType<typeof agg>; deployedLabel: string; deployedValue: string;
+  }) => (
+    <div>
+      <div className="mb-2.5 text-[13px] font-semibold text-[var(--strong)]">
+        {title}{" "}
+        <span className="font-normal text-[var(--muted)]">· {a.n} {a.n === 1 ? "deployment" : "deployments"}</span>
       </div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+        <Kpi label="Total equity" value={formatInr(a.equity)} />
+        <Kpi label={deployedLabel} value={deployedValue} />
+        <Kpi label="Realized P&L" value={formatInr(a.realized)} tone={a.realized} />
+        <Kpi label="Unrealized P&L" value={formatInr(a.upnl)} tone={a.upnl} />
+        <Kpi label="Open positions" value={String(a.positions)} />
+      </div>
+    </div>
+  );
+  return (
+    <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-5 space-y-5">
+      {eq.n > 0 && <Row title="Equity" a={eq} deployedLabel="Deployed" deployedValue={formatInr(eq.invested)} />}
+      {eq.n > 0 && opt.n > 0 && <div className="border-t border-[var(--border)]" />}
+      {opt.n > 0 && <Row title="Options" a={opt} deployedLabel="Margin used" deployedValue={formatInr(opt.margin)} />}
     </div>
   );
 }
