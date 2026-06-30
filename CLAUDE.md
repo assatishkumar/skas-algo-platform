@@ -63,7 +63,16 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 - Active frontier: the **Donchian basket strangle** (`donchian_strangle_monthly`) — note it has **no
   backtest path**; it's only deployed live/paper from the screener.
 
-## 9. Running locally
+## 9. Frontend (`web/`) gotchas
+- **Router state vs legacy redirects:** several old paths are `<Navigate to=... replace />` redirects in
+  `App.tsx` (e.g. `/new` → `/backtest?tab=new`). `<Navigate>` **drops `location.state`**, so navigating
+  to a redirect path with state (e.g. `clonePrefill`) silently loses it — land on the real route
+  directly. The Backtest "tabs" (Runs / New backtest) are the same page selected by `?tab=`.
+- Pages prefill forms from `location.state` via one-shot effects (`useRef` guards) and let the
+  template/clone values land **after** the per-strategy default-reset effects — order matters; read the
+  comments before reordering effects.
+
+## 10. Running locally
 ```bash
 # Backend (FastAPI + uvicorn on :8080)
 venv/bin/skas-algo

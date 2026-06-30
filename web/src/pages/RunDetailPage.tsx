@@ -102,7 +102,9 @@ export default function RunDetailPage() {
 
   function clone() {
     // Open the New-Backtest form prefilled with this run's config to tweak + re-run.
-    navigate("/new", {
+    // Navigate straight to the embedded New-Backtest tab — NOT the legacy "/new" redirect,
+    // whose <Navigate> drops router state, so the clonePrefill would be lost.
+    navigate("/backtest?tab=new", {
       state: {
         clonePrefill: {
           strategy_id: data!.strategy_id,
