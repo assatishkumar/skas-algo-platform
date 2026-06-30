@@ -212,3 +212,28 @@ def test_live_expiry_settles_legs():
     settle_events = sess.run_decision(datetime(2026, 1, 13, 15, 20))
     assert any(e["action"] == "SETTLE" for e in settle_events)
     assert not any(strat.legs)
+
+
+def test_prefetch_batches_quotes_and_caches_chain():
+    """The basket-entry latency fix: prefetch_quotes pulls many contracts in ONE quote-source call
+    (then close() serves them from cache), and live_chain is cached per (underlying, expiry)."""
+    from skas_algo.engine.live_options_market import LiveOptionsMarketView
+
+    mv = LiveOptionsMarketView(chain=None, current_datetime=datetime(2026, 1, 5, 9, 50))
+    calls = {"quotes": [], "chains": 0}
+    mv.set_quote_fn(lambda syms: (calls["quotes"].append(list(syms)) or {s: 10.0 for s in syms}))
+
+    def _chain(_u, _e):
+        calls["chains"] += 1
+        return {"spot": 1000.0, "rows": [{"strike": 1000, "ce": {"bid": 9.0, "ask": 11.0}, "pe": {}}]}
+
+    mv.set_chain_fn(_chain)
+
+    legs = ["AAA|2026-01-13|1000|CE", "AAA|2026-01-13|990|PE", "BBB|2026-01-13|500|CE"]
+    mv.prefetch_quotes(legs)
+    assert len(calls["quotes"]) == 1 and set(calls["quotes"][0]) == set(legs)  # ONE batched call
+    assert mv.close(legs[0]) == 10.0 and len(calls["quotes"]) == 1             # served from cache
+
+    mv.live_chain("AAA", "2026-01-13")
+    mv.live_chain("AAA", "2026-01-13")
+    assert calls["chains"] == 1                                                # chain cached, not refetched

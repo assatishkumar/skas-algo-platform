@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { api, brokers } from "../api/client";
-import { Panel } from "../components/redesign";
+import { Panel, SessionBanner } from "../components/redesign";
 import { formatInr } from "../lib/format";
 import type { DonchianDeployLeg, DonchianPanel, DonchianResult, DonchianRow } from "../types";
 
@@ -32,9 +32,23 @@ const NIFTY50_FF: [string, number][] = [
 const FF_WEIGHT: Record<string, number> = Object.fromEntries(NIFTY50_FF);
 const FF_ORDER: Record<string, number> = Object.fromEntries(NIFTY50_FF.map(([s], i) => [s, i]));
 
-const PKEY = "donchian.state.v1";
+// v2: portfolio stop/target moved to a % -of-basket-margin basis (+ a leg-level premium target) —
+// bump the key so stale v1 values (slPct=2 meant % of notional) don't load as margin %.
+const PKEY = "donchian.state.v2";
 function loadPersisted(): Record<string, unknown> {
-  try { return JSON.parse(localStorage.getItem(PKEY) || "{}"); } catch { return {}; }
+  try {
+    const cur = JSON.parse(localStorage.getItem(PKEY) || "{}") as Record<string, unknown>;
+    // Migrate from v1 so bumping the key doesn't blank the screener: recover the last result
+    // (it seeds the cycle-date fields), the uploaded CSV, and the chosen account — but NOT the
+    // stop/target %s (their basis changed → let the new margin defaults apply).
+    if (!cur.result || cur.csvRows === undefined) {
+      const v1 = JSON.parse(localStorage.getItem("donchian.state.v1") || "{}") as Record<string, unknown>;
+      if (!cur.result && v1.result) cur.result = v1.result;
+      if (cur.csvRows === undefined && v1.csvRows) { cur.csvRows = v1.csvRows; cur.csvName = v1.csvName; }
+      if (cur.accountId == null && v1.accountId != null) cur.accountId = v1.accountId;
+    }
+    return cur;
+  } catch { return {}; }
 }
 
 interface CsvRow { symbol: string; ivp?: number; atmIv?: number; event?: string }
@@ -104,7 +118,7 @@ function LegCell({ leg, units }: { leg?: DonchianRow["ce"]; units: number }) {
 
 export default function DonchianStranglePage() {
   const navigate = useNavigate();
-  const { data: accounts = [] } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
+  const { data: accounts = [], isError: brokersError } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
   const sessioned = accounts.filter((a) => a.has_session);
 
   const saved = useRef(loadPersisted()).current as any;
@@ -122,9 +136,13 @@ export default function DonchianStranglePage() {
   // Portfolio params.
   const [hedgeOtm, setHedgeOtm] = useState(saved.hedgeOtm ?? 4.5);
   const [betaWeight, setBetaWeight] = useState(saved.betaWeight ?? false);
-  const [slPct, setSlPct] = useState(saved.slPct ?? 2);
-  const [targetEnabled, setTargetEnabled] = useState(saved.targetEnabled ?? false);
-  const [targetPct, setTargetPct] = useState(saved.targetPct ?? 50);
+  // Portfolio stop + profit target are now % of basket margin (see PKEY v2 note).
+  const [slPct, setSlPct] = useState(saved.slPct ?? 4);
+  const [targetEnabled, setTargetEnabled] = useState(saved.targetEnabled ?? true);
+  const [targetPct, setTargetPct] = useState(saved.targetPct ?? 6);
+  // Leg-level profit take: close a single short leg once it captures this % of its OWN premium.
+  const [legTargetEnabled, setLegTargetEnabled] = useState(saved.legTargetEnabled ?? true);
+  const [legTargetPct, setLegTargetPct] = useState(saved.legTargetPct ?? 80);
   const [flipDelta, setFlipDelta] = useState<"atm" | "30delta">(saved.flipDelta ?? "atm");
   const [breachBuffer, setBreachBuffer] = useState(saved.breachBuffer ?? 0.5);
   // Cycle overrides (blank = auto). Seed from the last persisted result so they show the resolved
@@ -144,6 +162,10 @@ export default function DonchianStranglePage() {
     new Set((saved.result?.rows ?? []).filter((r: DonchianRow) => SELECTABLE.has(r.status)).map((r: DonchianRow) => r.symbol)),
   );
   const [panel, setPanel] = useState<DonchianPanel | null>(null);
+  // Why the panel is null, so we never show "Computing…" for a not-ready (no-session /
+  // no-selection / errored) state — the bug that made a blocked screener look hung.
+  const [portfolioLoading, setPortfolioLoading] = useState(false);
+  const [portfolioError, setPortfolioError] = useState<string | null>(null);
   // Manual CE/PE strike overrides per name (incl. for excluded rows). undefined = use the resolved
   // strike; null = don't sell that leg; a number = sell that strike (priced live at entry).
   const [strikeOv, setStrikeOv] = useState<Record<string, { ce?: number | null; pe?: number | null }>>({});
@@ -152,10 +174,12 @@ export default function DonchianStranglePage() {
   useEffect(() => {
     localStorage.setItem(PKEY, JSON.stringify({
       accountId, csvRows, csvName, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv, breakoutAtm,
-      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, breachBuffer, result,
+      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, legTargetEnabled, legTargetPct,
+      flipDelta, breachBuffer, result,
     }));
   }, [accountId, csvRows, csvName, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv, breakoutAtm,
-      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, flipDelta, breachBuffer, result]);
+      lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, legTargetEnabled, legTargetPct,
+      flipDelta, breachBuffer, result]);
 
   const effectiveAccount = accountId ?? sessioned[0]?.id ?? null;
   const ivpMap = useMemo(() => new Map(csvRows.map((r) => [r.symbol, r])), [csvRows]);
@@ -231,14 +255,16 @@ export default function DonchianStranglePage() {
   // Recompute the portfolio panel whenever the selection (or cycle) changes.
   useEffect(() => {
     const sell = result?.dates.sell_expiry;
-    if (!sell || !effectiveAccount || selectedRows.length === 0) { setPanel(null); return; }
+    if (!sell || !effectiveAccount || selectedRows.length === 0) { setPanel(null); setPortfolioError(null); setPortfolioLoading(false); return; }
     let cancelled = false;
+    setPortfolioLoading(true); setPortfolioError(null);
     api.donchianPortfolio({
       broker_account_id: effectiveAccount, sell_expiry: sell, selected: selectedRows,
       hedge_otm_pct: hedgeOtm, hedge_beta_weight: betaWeight, portfolio_sl_pct: slPct,
       portfolio_target_enabled: targetEnabled, portfolio_target_pct: targetPct,
-    }).then((p) => { if (!cancelled) { setPanel(p); if (p.basket_margin) setCapital((c) => Math.max(c, Math.ceil(p.basket_margin! * 1.1 / 100000) * 100000)); } })
-      .catch(() => { if (!cancelled) setPanel(null); });
+      portfolio_basis: "margin",
+    }).then((p) => { if (!cancelled) { setPanel(p); setPortfolioLoading(false); if (p.basket_margin) setCapital((c) => Math.max(c, Math.ceil(p.basket_margin! * 1.1 / 100000) * 100000)); } })
+      .catch((e) => { if (!cancelled) { setPanel(null); setPortfolioLoading(false); setPortfolioError((e as Error).message); } });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKey, result?.dates.sell_expiry, effectiveAccount, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct]);
@@ -263,12 +289,15 @@ export default function DonchianStranglePage() {
         name: deployName || `Donchian Strangle ${sell}`,
         sell_expiry: sell, legs, capital,
         portfolio_sl_pct: slPct, portfolio_target_enabled: targetEnabled, portfolio_target_pct: targetPct,
+        portfolio_basis: "margin", leg_target_enabled: legTargetEnabled, leg_target_pct: legTargetPct,
         flip_delta: flipDelta, breach_buffer_pct: breachBuffer,
         mode, quote_source: "zerodha", broker_account_id: effectiveAccount,
         ignore_market_hours: false, auto: true,
       });
     },
-    onSuccess: () => navigate("/live"),
+    // Jump straight to the new deployment's Live detail so it shows up immediately (with the
+    // "entering N/M legs" progress banner) instead of landing on the list.
+    onSuccess: (res) => navigate(res?.run_id ? `/live/${res.run_id}` : "/live"),
   });
 
   const toggle = (sym: string) => setSelected((s) => { const n = new Set(s); n.has(sym) ? n.delete(sym) : n.add(sym); return n; });
@@ -314,6 +343,8 @@ export default function DonchianStranglePage() {
         Upload a Sensibull screener CSV (ATMIV / IVP / Event) and pick names. Needs a logged-in broker session.
       </p>
 
+      <SessionBanner backendDown={brokersError} hasSession={sessioned.length > 0} />
+
       <Panel className="p-5 space-y-4">
         <div className="flex items-center gap-3 flex-wrap">
           <label className="rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] px-3 py-1.5 text-sm cursor-pointer">
@@ -337,31 +368,31 @@ export default function DonchianStranglePage() {
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-          <label className="flex flex-col gap-1">Broker session
+          <label className="flex flex-col gap-1" title="The logged-in Zerodha account used for live option chains, pricing and basket margin">Broker session
             <select className={inputCls} value={effectiveAccount ?? ""} onChange={(e) => setAccountId(Number(e.target.value))}>
               {sessioned.length === 0 && <option value="">No logged-in session</option>}
               {sessioned.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
             </select>
           </label>
-          <label className="flex flex-col gap-1">IVP ≥
+          <label className="flex flex-col gap-1" title="Implied Volatility Percentile floor — only sell names whose IVP (from the Sensibull CSV) is at least this. Higher = richer IV vs the name's own 1-year history">IVP ≥
             <input type="number" className={inputCls} value={ivpMin} onChange={(e) => setIvpMin(Number(e.target.value))} />
           </label>
-          <label className="flex flex-col gap-1">HV window (days)
+          <label className="flex flex-col gap-1" title="Look-back (trading days) for each name's historical (realised) volatility, used by the 'Require IV > HV' filter">HV window (days)
             <input type="number" className={inputCls} value={hvWindow} onChange={(e) => setHvWindow(Number(e.target.value))} />
           </label>
-          <label className="flex flex-col gap-1">Skip leg &lt; (% spot)
+          <label className="flex flex-col gap-1" title="Premium floor: if a leg's credit is below this % of spot it's too cheap to sell — that name runs single-leg (the thin leg is skipped)">Skip leg &lt; (% spot)
             <input type="number" step="0.1" className={inputCls} value={skipLegPct} onChange={(e) => setSkipLegPct(Number(e.target.value))} />
           </label>
-          <label className="flex flex-col gap-1">Hedge OTM (%)
+          <label className="flex flex-col gap-1" title="How far out-of-the-money the long NIFTY hedge legs are bought (% from NIFTY spot). The hedge is notional-matched to the basket">Hedge OTM (%)
             <input type="number" step="0.5" className={inputCls} value={hedgeOtm} onChange={(e) => setHedgeOtm(Number(e.target.value))} />
           </label>
-          <label className="flex flex-col gap-1">Portfolio stop (% notional)
+          <label className="flex flex-col gap-1" title="Flatten the whole basket if its combined loss reaches this % of the basket margin">Portfolio stop (% margin)
             <input type="number" step="0.5" className={inputCls} value={slPct} onChange={(e) => setSlPct(Number(e.target.value))} />
           </label>
-          <label className="flex flex-col gap-1">Lots / name
+          <label className="flex flex-col gap-1" title="Lot-sets sold per name (the contracts entered = each name's F&O lot size × this)">Lots / name
             <input type="number" className={inputCls} value={lots} onChange={(e) => setLots(Number(e.target.value))} />
           </label>
-          <label className="flex items-center gap-2 mt-5">
+          <label className="flex items-center gap-2 mt-5" title="Round the Donchian high/low to the nearest listed strike step instead of selling the exact level">
             <input type="checkbox" checked={roundOut} onChange={(e) => setRoundOut(e.target.checked)} /> Round-out strikes
           </label>
           <label className="flex items-center gap-2 mt-5" title="Keep only names whose ATM IV exceeds their annualised HV">
@@ -374,22 +405,23 @@ export default function DonchianStranglePage() {
 
         {/* Cycle anchors (auto-resolved; override + re-run if needed). */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-          <label className="flex flex-col gap-1">Range start
+          <label className="flex flex-col gap-1" title="Start of the Donchian look-back window — the prior month's high/low set each name's short strikes. Auto-resolved from the monthly calendar; override to re-run a specific cycle">Range start
             <input type="date" className={inputCls} value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} />
           </label>
-          <label className="flex flex-col gap-1">Range end
+          <label className="flex flex-col gap-1" title="End of the Donchian look-back window. Auto-resolved; must be after Range start">Range end
             <input type="date" className={inputCls} value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} />
           </label>
-          <label className="flex flex-col gap-1">Entry date
+          <label className="flex flex-col gap-1" title="The date the basket is entered / priced as of. Auto-resolved; override to re-run a specific cycle">Entry date
             <input type="date" className={inputCls} value={entryDate} onChange={(e) => setEntryDate(e.target.value)} />
           </label>
-          <label className="flex flex-col gap-1">Sell expiry
+          <label className="flex flex-col gap-1" title="The monthly expiry all short legs (and the NIFTY hedge) are sold for. Auto-resolved from the listed expiries">Sell expiry
             <input type="date" className={inputCls} value={sellExpiry} onChange={(e) => setSellExpiry(e.target.value)} />
           </label>
         </div>
 
         <div className="flex items-center gap-3">
           <button onClick={() => analyze.mutate()} disabled={analyze.isPending || !effectiveAccount || names.length === 0 || rangeInvalid}
+            title={!effectiveAccount ? "Log in a broker session on Brokers first" : rangeInvalid ? "Range start must be before range end" : names.length === 0 ? "No names to screen" : "Re-run the screen"}
             className="rounded bg-[var(--ft)] px-4 py-1.5 text-sm text-white disabled:opacity-50">
             {analyze.isPending ? "Analyzing…" : `Refresh (${names.length})`}
           </button>
@@ -494,9 +526,13 @@ export default function DonchianStranglePage() {
               <label className="flex items-center gap-2 text-sm" title="Weight hedge lots by each name's beta vs NIFTY">
                 <input type="checkbox" checked={betaWeight} onChange={(e) => setBetaWeight(e.target.checked)} /> Beta-weight hedge
               </label>
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 text-sm" title="Flatten the whole basket when its combined P&L (all legs + hedge) reaches this % of the basket margin">
                 <input type="checkbox" checked={targetEnabled} onChange={(e) => setTargetEnabled(e.target.checked)} />
-                Target at <input type="number" className={`${inputCls} w-16`} value={targetPct} onChange={(e) => setTargetPct(Number(e.target.value))} /> % of premium
+                Portfolio target <input type="number" step="0.5" className={`${inputCls} w-16`} value={targetPct} onChange={(e) => setTargetPct(Number(e.target.value))} /> % of margin
+              </label>
+              <label className="flex items-center gap-2 text-sm" title="Close an individual short leg once it has captured this % of its OWN premium (premium decay); the opposite leg of a strangle stays open">
+                <input type="checkbox" checked={legTargetEnabled} onChange={(e) => setLegTargetEnabled(e.target.checked)} />
+                Leg target <input type="number" className={`${inputCls} w-16`} value={legTargetPct} onChange={(e) => setLegTargetPct(Number(e.target.value))} /> % of premium
               </label>
             </div>
           </div>
@@ -505,7 +541,10 @@ export default function DonchianStranglePage() {
               <div><div className="text-[var(--faint)] text-xs">Aggregate notional</div><div className="font-semibold tabular-nums">{money(panel.agg_notional)}</div></div>
               <div><div className="text-[var(--faint)] text-xs">Premium collected</div><div className="font-semibold tabular-nums">{money(panel.premium_collected)} <span className="text-[var(--muted)]">({pct(panel.premium_pct_of_notional)})</span></div></div>
               <div><div className="text-[var(--faint)] text-xs">Basket margin</div><div className="font-semibold tabular-nums">{money(panel.basket_margin)}</div></div>
-              <div><div className="text-[var(--faint)] text-xs">Portfolio stop (−{slPct}%)</div><div className="font-semibold tabular-nums text-[var(--danger)]">−{money(panel.portfolio_sl_amount)}</div></div>
+              <div><div className="text-[var(--faint)] text-xs">Portfolio stop (−{slPct}% margin)</div><div className="font-semibold tabular-nums text-[var(--danger)]">−{money(panel.portfolio_sl_amount)}</div></div>
+              {panel.portfolio_target_amount != null && (
+                <div><div className="text-[var(--faint)] text-xs">Portfolio target (+{targetPct}% margin)</div><div className="font-semibold tabular-nums text-[var(--pos)]">+{money(panel.portfolio_target_amount)}</div></div>
+              )}
               <div className="col-span-2 md:col-span-4">
                 <div className="text-[var(--faint)] text-xs">Index hedge (notional-matched)</div>
                 <div className="font-semibold tabular-nums">
@@ -516,7 +555,15 @@ export default function DonchianStranglePage() {
                 </div>
               </div>
             </div>
-          ) : <div className="text-sm text-[var(--muted)]">Computing portfolio…</div>}
+          ) : (
+            <div className="text-sm text-[var(--muted)]">
+              {portfolioLoading ? "Computing portfolio…"
+                : portfolioError ? <span className="text-[var(--danger)]">Couldn't price the basket: {portfolioError}</span>
+                : !effectiveAccount ? "Log in a broker session (Brokers) to price the basket."
+                : selectedRows.length === 0 ? "Select one or more names above to build the portfolio."
+                : "Computing portfolio…"}
+            </div>
+          )}
 
           <div className="flex items-center gap-3 flex-wrap border-t border-[var(--divider)] pt-4">
             <input className={`${inputCls} text-sm w-64`} placeholder="Deployment name" value={deployName} onChange={(e) => setDeployName(e.target.value)} />
@@ -529,6 +576,7 @@ export default function DonchianStranglePage() {
               ))}
             </div>
             <button onClick={() => deploy.mutate()} disabled={deploy.isPending || !panel}
+              title={!panel ? "Build the portfolio first — needs a broker session and at least one selected name" : "Deploy this basket + hedge"}
               className="rounded bg-[var(--ft)] px-4 py-1.5 text-sm text-white disabled:opacity-50 ml-auto">
               {deploy.isPending ? "Deploying…" : "Deploy basket + hedge"}
             </button>

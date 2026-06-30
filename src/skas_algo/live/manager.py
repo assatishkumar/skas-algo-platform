@@ -499,7 +499,11 @@ class LiveRun:
         basket_fn = getattr(getattr(self.session, "strategy", None), "basket_status", None)
         if basket_fn is not None:
             try:
-                snap["basket"] = basket_fn(self.session.market, self.session.portfolio)
+                # Pass the best-known basket margin so the basket's stop/target amounts use the same
+                # margin base the decision does (real broker margin when known, else the model estimate).
+                snap["basket"] = basket_fn(
+                    self.session.market, self.session.portfolio, margin=snap.get("margin_used")
+                )
             except Exception:  # pragma: no cover - never break the snapshot on a monitoring quirk
                 logger.exception("basket_status failed for run %s", self.run_id)
         return to_native(snap)

@@ -280,14 +280,19 @@ def resolve_cycle(
     range_end: date | None = None,
     entry_date: date | None = None,
     sell_expiry: date | None = None,
+    min_dte: int = 7,
 ) -> dict:
     """Resolve the monthly cycle anchors (spec §5). The sell expiry comes from the broker's
     actual listed (future) expiries — the primary, holiday-correct source; the range window
     (prev/last monthly) uses the calendar ``expected_monthly_expiry``, snapped back to the actual
     index trading calendar (holiday-adjusted). Any anchor the caller passes (the UI override) wins."""
     tds = sorted(trading_days) if trading_days else None
+    # Sell expiry = the next listed (monthly) expiry at least `min_dte` days out, so on/near an
+    # expiry day we roll into next month instead of selling a ~0-DTE contract. Fall back to the very
+    # next listed expiry only if none clears the floor.
     future = sorted(e for e in listed_expiries if e >= today)
-    sell = sell_expiry or (future[0] if future else None)
+    future_ok = [e for e in future if (e - today).days >= min_dte]
+    sell = sell_expiry or (future_ok[0] if future_ok else (future[0] if future else None))
 
     anchors: list[date] = []
     y, m = today.year, today.month
@@ -298,7 +303,11 @@ def resolve_cycle(
         m -= 1
         if m == 0:
             m, y = 12, y - 1
-    past = sorted({a for a in anchors if a <= today})
+    # Strictly BEFORE today: on an expiry day itself, the just-completing expiry is NOT the window
+    # anchor — the prior month's expiry is (else range_start = tomorrow > range_end = today → an
+    # inverted, empty window → every row "error"). e.g. on the June expiry day, anchor = the May
+    # expiry → range_start = May-expiry + 1.
+    past = sorted({a for a in anchors if a < today})
     last_expiry = _snap_back(past[-1] if past else None, tds)   # last completed monthly expiry
     # The cycle-to-date window: range START = the day after that expiry (last month's last Tuesday
     # + 1), range END = today, and we enter today.

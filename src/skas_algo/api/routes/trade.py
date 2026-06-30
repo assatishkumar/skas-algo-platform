@@ -271,7 +271,8 @@ def donchian_analyze(
             break
     cyc = resolve_cycle(today, listed, trading_days=trading_days,
                         range_start=_d(body.range_start), range_end=_d(body.range_end),
-                        entry_date=_d(body.entry_date), sell_expiry=_d(body.sell_expiry))
+                        entry_date=_d(body.entry_date), sell_expiry=_d(body.sell_expiry),
+                        min_dte=body.min_dte)
     sell, rstart, rend = cyc["sell_expiry"], cyc["range_start"], cyc["range_end"]
     dates = {k: _iso(v) for k, v in cyc.items()}
     if not (sell and rstart and rend):
@@ -358,6 +359,14 @@ def donchian_portfolio(
             panel["basket_margin"] = adapter.basket_margin(legs)
         except Exception:  # pragma: no cover - API hiccup → leave None
             panel["basket_margin"] = None
+    # Margin basis: recompute the stop/target amounts as % of the live basket margin (portfolio_panel
+    # computed the notional/premium fallback before the margin was known).
+    if body.portfolio_basis == "margin" and panel.get("basket_margin"):
+        bm = panel["basket_margin"]
+        panel["portfolio_sl_amount"] = body.portfolio_sl_pct / 100.0 * bm
+        panel["portfolio_target_amount"] = (
+            body.portfolio_target_pct / 100.0 * bm if body.portfolio_target_enabled else None
+        )
     return panel
 
 
@@ -418,6 +427,9 @@ async def donchian_deploy(
         "portfolio_sl_pct": body.portfolio_sl_pct,
         "portfolio_target_enabled": body.portfolio_target_enabled,
         "portfolio_target_pct": body.portfolio_target_pct,
+        "portfolio_basis": body.portfolio_basis,
+        "leg_target_enabled": body.leg_target_enabled,
+        "leg_target_pct": body.leg_target_pct,
         "breach_basis": body.breach_basis,
         "breach_buffer_pct": body.breach_buffer_pct,
         "flip_delta": body.flip_delta,

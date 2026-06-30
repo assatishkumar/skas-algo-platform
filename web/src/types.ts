@@ -512,8 +512,14 @@ export interface DonchianBasket {
   realized_pnl: number;
   total_flips?: number;
   closed_count?: number;
-  portfolio_stop_amount?: number;
-  buffer_to_stop?: number;
+  portfolio_stop_amount?: number | null;
+  portfolio_target_amount?: number | null;
+  buffer_to_stop?: number | null;
+  portfolio_sl_pct?: number;
+  portfolio_target_pct?: number;
+  portfolio_target_enabled?: boolean;
+  portfolio_basis?: string; // "notional" | "margin"
+  entry_progress?: { entered: number; expected: number; done: boolean };
   expiry?: string | null;
   dte?: number | null;
   payoff: { move_pct: number; expiry_pnl: number }[];
@@ -698,6 +704,7 @@ export interface DonchianPortfolioRequest {
   portfolio_sl_pct?: number;
   portfolio_target_enabled?: boolean;
   portfolio_target_pct?: number;
+  portfolio_basis?: string; // "notional" (legacy) | "margin"
 }
 
 export interface DonchianDeployLeg {
@@ -720,6 +727,9 @@ export interface DonchianDeploy {
   portfolio_sl_pct?: number;
   portfolio_target_enabled?: boolean;
   portfolio_target_pct?: number;
+  portfolio_basis?: string; // "notional" (legacy) | "margin"
+  leg_target_enabled?: boolean;
+  leg_target_pct?: number; // % of each leg's own premium → close that leg
   breach_basis?: string;
   breach_buffer_pct?: number; // spot must clear a short strike by this % to flip
   flip_delta?: string; // "atm" | "30delta"

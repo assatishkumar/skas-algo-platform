@@ -188,7 +188,8 @@ class DonchianPortfolioRequest(BaseModel):
     hedge_cost_cap_pct: float = 25.0
     portfolio_sl_pct: float = 2.0
     portfolio_target_enabled: bool = False
-    portfolio_target_pct: float = 50.0  # unit = % of premium collected
+    portfolio_target_pct: float = 50.0  # % of the basis (see portfolio_basis)
+    portfolio_basis: str = "notional"   # "notional" (legacy) | "margin" (stop+target as % of margin)
 
 
 class DonchianDeploy(BaseModel):
@@ -203,6 +204,9 @@ class DonchianDeploy(BaseModel):
     portfolio_sl_pct: float = 2.0
     portfolio_target_enabled: bool = False
     portfolio_target_pct: float = 50.0
+    portfolio_basis: str = "notional"   # "notional" (legacy) | "margin"
+    leg_target_enabled: bool = False
+    leg_target_pct: float = 80.0        # % of each leg's own premium → close that leg
     breach_basis: str = "close"
     breach_buffer_pct: float = 0.5  # spot must clear a short strike by this % to flip
     flip_delta: str = "atm"  # "atm" | "30delta"

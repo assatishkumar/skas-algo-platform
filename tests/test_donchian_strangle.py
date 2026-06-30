@@ -167,6 +167,14 @@ def test_resolve_cycle_rejects_inverted_override():
     assert cyc["range_start"] < cyc["range_end"]   # never inverted
 
 
+def test_resolve_cycle_rolls_past_imminent_expiry():
+    # On the expiry day itself the sell must roll to the next monthly (≥ min_dte out), not sell the
+    # ~0-DTE contract that's expiring today.
+    today = date(2026, 6, 30)  # the June 2026 monthly expiry (last Tuesday)
+    cyc = resolve_cycle(today, [date(2026, 6, 30), date(2026, 7, 28)])
+    assert cyc["sell_expiry"] == date(2026, 7, 28)   # rolled past today's 0-DTE expiry
+
+
 def test_portfolio_panel_hedge_and_stop():
     selected = [{"symbol": "AAA", "spot": 1000.0, "lot_size": 100, "lots": 20,
                  "ce": {"strike": 1100, "premium": 25.0}, "pe": {"strike": 900, "premium": 22.0}}]
@@ -322,6 +330,81 @@ def test_portfolio_stop_flattens_book():
     assert out and all(e.get("exit_reason") == "portfolio_stop"
                        for e in out if e["action"] in ("COVER", "SELL"))
     assert not sess.portfolio.lot_symbols()
+
+
+def test_portfolio_stop_margin_basis_flattens():
+    # basis="margin": SL is % of basket margin. Force a known margin so the threshold is exact.
+    strat = _strat(portfolio_basis="margin", portfolio_sl_pct=4.0)
+    sess, _mv = _session(strat)
+    sess.set_margin_override(100_000.0)             # 4% → a ₹4,000 stop
+    sess.update_quotes(ENTRY_Q)
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))  # enter
+    # Shorts richen → combined loss ~₹12,200, well past −₹4,000 → flatten everything.
+    sess.update_quotes({SYMS["aaa_ce"]: 80.0, SYMS["aaa_pe"]: 80.0,
+                        SYMS["nf_ce"]: 50.0, SYMS["nf_pe"]: 50.0})
+    out = sess.run_decision(datetime(2026, 1, 5, 10, 0))
+    assert out and all(e.get("exit_reason") == "portfolio_stop"
+                       for e in out if e["action"] in ("COVER", "SELL"))
+    assert not sess.portfolio.lot_symbols()
+
+
+def test_portfolio_target_margin_basis_flattens():
+    # basis="margin": the profit target is % of basket margin too.
+    strat = _strat(portfolio_basis="margin", portfolio_target_enabled=True, portfolio_target_pct=6.0)
+    sess, _mv = _session(strat)
+    sess.set_margin_override(50_000.0)              # 6% → a ₹3,000 target
+    sess.update_quotes(ENTRY_Q)
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))  # enter
+    # Shorts decay toward zero → combined profit ~₹3,600 ≥ ₹3,000 → flatten.
+    sess.update_quotes({SYMS["aaa_ce"]: 1.0, SYMS["aaa_pe"]: 1.0,
+                        SYMS["nf_ce"]: 50.0, SYMS["nf_pe"]: 50.0})
+    out = sess.run_decision(datetime(2026, 1, 5, 10, 0))
+    assert out and all(e.get("exit_reason") == "portfolio_target"
+                       for e in out if e["action"] in ("COVER", "SELL"))
+    assert not sess.portfolio.lot_symbols()
+
+
+def test_leg_target_closes_single_leg_on_premium_capture():
+    # Leg target = 80% of each leg's OWN premium. One leg decays past it, the other doesn't.
+    strat = _strat(leg_target_enabled=True, leg_target_pct=80.0)  # notional basis (default); pf target off
+    sess, _mv = _session(strat)
+    sess.update_quotes(ENTRY_Q)
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))  # enter
+    # aaa_ce 20 → 3 = captured 85% (≥80) → close; aaa_pe 18 → 18 = 0% → stays open.
+    sess.update_quotes({SYMS["aaa_ce"]: 3.0, SYMS["aaa_pe"]: 18.0,
+                        SYMS["nf_ce"]: 50.0, SYMS["nf_pe"]: 50.0})
+    out = sess.run_decision(datetime(2026, 1, 5, 10, 0))
+    book = set(sess.portfolio.lot_symbols())
+    assert SYMS["aaa_ce"] not in book                       # leg taken off for profit
+    assert SYMS["aaa_pe"] in book                            # opposite leg untouched
+    assert SYMS["nf_ce"] in book and SYMS["nf_pe"] in book   # hedge untouched
+    assert any(e.get("exit_reason") == "leg_target" for e in out if e["action"] in ("COVER", "SELL"))
+    assert strat.realized_pnl > 0                            # booked the captured premium
+
+
+def test_entry_books_at_bid_not_ltp():
+    """With a two-sided book, the strategy records each short's entry at the BID (the price the broker
+    actually fills) — not the LTP — so the basket MTM/premium match the portfolio's unrealized."""
+    strat = _strat()
+    sess, mv = _session(strat)
+
+    def chain_fn(u, _e):
+        if u == "AAA":  # shorts: LTP is 20/18 (ENTRY_Q) but the bid is lower
+            return {"spot": 1000.0, "rows": [
+                {"strike": 1050, "ce": {"bid": 18.0, "ask": 22.0}, "pe": {}},
+                {"strike": 950, "ce": {}, "pe": {"bid": 16.0, "ask": 20.0}},
+            ]}
+        return {"spot": 25000.0, "rows": [  # NIFTY hedge longs fill at the ask
+            {"strike": 26000, "ce": {"bid": 48.0, "ask": 52.0}, "pe": {}},
+            {"strike": 24000, "ce": {}, "pe": {"bid": 48.0, "ask": 52.0}},
+        ]}
+
+    mv.set_chain_fn(chain_fn)
+    sess.update_quotes(ENTRY_Q)  # LTP feed
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))
+    assert strat.entry_close[SYMS["aaa_ce"]] == 18.0          # bid, not the LTP 20
+    assert strat.entry_close[SYMS["aaa_pe"]] == 16.0          # bid, not the LTP 18
+    assert strat.premium_collected == (18 + 16) * 100         # real credit received
 
 
 def test_breach_rolls_to_atm_opposite():

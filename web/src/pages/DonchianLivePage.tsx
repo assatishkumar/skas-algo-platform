@@ -405,6 +405,11 @@ export default function DonchianLivePage() {
   const buffer = basket?.buffer_to_stop ?? 0;
   const netCredit = basket?.net_credit ?? 0;
   const hedge = basket?.hedge;
+  // Label the stop with its real basis (e.g. "4% margin") instead of a hardcoded "2% notional".
+  const stopBasis = basket?.portfolio_basis === "margin" ? "margin" : "notional";
+  const stopLabel = basket?.portfolio_sl_pct != null ? `${basket.portfolio_sl_pct}% ${stopBasis}` : stopBasis;
+  const entry = basket?.entry_progress;
+  const entering = !!entry && !entry.done;
 
   return (
     <div className="font-['Manrope'] bg-[var(--page)] min-h-[calc(100vh-3.5rem)] text-[var(--strong)]">
@@ -457,6 +462,17 @@ export default function DonchianLivePage() {
           <div className="text-[var(--muted)] py-10">Loading basket…</div>
         ) : (
           <>
+            {/* deployment progress — shown while the basket's legs are still being entered */}
+            {entering && (
+              <div className="mb-[18px] rounded-[12px] px-4 py-3 text-sm font-semibold flex items-center gap-3"
+                   style={{ background: "var(--warn-bg)", color: "var(--warn-text)" }}>
+                <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                Deploying basket — entering {entry!.entered}/{entry!.expected} legs…
+                <span className="ml-1 inline-block h-1.5 w-40 rounded-full bg-current/20 overflow-hidden align-middle">
+                  <span className="block h-full bg-current" style={{ width: `${Math.round((entry!.entered / Math.max(1, entry!.expected)) * 100)}%` }} />
+                </span>
+              </div>
+            )}
             {/* hero KPIs */}
             <div className="grid gap-[14px] mb-[22px]" style={{ gridTemplateColumns: "1.25fr 1fr 1fr 1.35fr 1.1fr" }}>
               <Kpi wide label={<>Combined MTM <span className="text-[11px] font-semibold text-[var(--faint)]">· basket + hedge</span></>}
@@ -467,7 +483,7 @@ export default function DonchianLivePage() {
               <Kpi label="Realized (flips)" sub={`${basket.total_flips ?? 0} flips · ${basket.closed_count ?? 0} names closed`}>
                 <span className={posCls(realizedTotal)}>{signed(realizedTotal)}</span>
               </Kpi>
-              <Kpi label={<><span>Buffer to portfolio stop</span><span className="text-[11px] font-semibold text-[var(--faint)]">stop −{rupee(stopAmt)} · 2% notional</span></>}>
+              <Kpi label={<><span>Buffer to portfolio stop</span><span className="text-[11px] font-semibold text-[var(--faint)]">stop −{rupee(stopAmt)} · {stopLabel}</span></>}>
                 <span className="text-[var(--strong)]">{compact(buffer)} <span className="text-[13px] font-semibold text-[var(--faint)] font-['Manrope']">to stop</span></span>
                 <div className="mt-3"><Gauge combined={combined} stop={stopAmt} maxGain={netCredit} /></div>
                 <div className="flex justify-between text-[10.5px] font-bold text-[var(--faint)] mt-[6px]"><span>STOP</span><span>0</span><span>MAX +{compact(netCredit)}</span></div>

@@ -11,8 +11,11 @@ combined stop/target spans the whole book (stock legs + hedge). It has **no back
 ever deployed live/paper from the screener.
 
 Governance (every tick — DERIV runs are tick-driven):
-  • Portfolio stop: combined MTM (realized flips + open legs, stock + hedge) ≤ −portfolio_sl_pct·agg_notional
-    → flatten all. Optional target (default off) ≥ portfolio_target_pct·premium_collected → flatten.
+  • Portfolio stop/target: combined MTM (realized flips + open legs, stock + hedge) vs a threshold that is
+    % of the live basket margin (portfolio_basis="margin", new screener deploys) or, for legacy runs,
+    % of notional (stop) / % of premium (target). Breach → flatten the whole book.
+  • Leg target (optional): an individual short leg that has captured leg_target_pct of its OWN premium is
+    closed (the opposite leg stays open); booked to realized P&L.
   • Per-name breach → **ROLL flip** (spec §9, option B): a name's live spot crossing a short strike closes
     that name's open legs and sells ONE fresh ATM short on the OPPOSITE side; ``flip_count`` increments and,
     after ``max_flips``, the name is closed for the cycle (no re-entry). ``breach_basis`` = touch (react
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 from datetime import date, time
 
+from skas_algo.db.enums import OrderSide
 from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.options.instrument import make
@@ -44,9 +48,19 @@ class DonchianStrangleMonthlyStrategy:
         initial_capital: float = 2_500_000,
         expiry: str | date | None = None,            # the monthly sell expiry (all legs)
         legs: list[dict] | None = None,              # [{underlying, right, strike, side, lots, spot, lot_size, strike_step}]
-        portfolio_sl_pct: float = 2.0,               # of aggregate notional (combined incl. hedge)
+        portfolio_sl_pct: float = 2.0,               # % of the basis (combined incl. hedge)
         portfolio_target_enabled: bool = False,
-        portfolio_target_pct: float = 50.0,          # unit = % of premium collected
+        portfolio_target_pct: float = 50.0,          # % of the basis (see portfolio_basis)
+        # Base for the portfolio stop/target. "notional" (legacy): stop = % of aggregate notional,
+        # target = % of premium collected — the original behavior, kept so already-running deploys are
+        # untouched on recovery. "margin": BOTH stop and target are % of the live basket margin
+        # (ctx.position_margin()) — the basis new screener deploys use.
+        portfolio_basis: str = "notional",
+        # Leg-level profit take: close an individual SHORT leg once it has captured this % of its OWN
+        # entry premium (premium decay). The opposite leg of a strangle stays open. Independent of the
+        # portfolio target; booked into realized P&L so the portfolio stop/target stay honest.
+        leg_target_enabled: bool = False,
+        leg_target_pct: float = 80.0,
         breach_basis: str = "close",                 # "close" (EOD) | "touch" (intraday)
         breach_buffer_pct: float = 0.5,              # spot must clear the strike by this % to count as a breach
         flip_delta: str = "atm",                     # flip strike: "atm" | "30delta" (LIVE chain)
@@ -59,6 +73,9 @@ class DonchianStrangleMonthlyStrategy:
         self.portfolio_sl_pct = portfolio_sl_pct
         self.portfolio_target_enabled = portfolio_target_enabled
         self.portfolio_target_pct = portfolio_target_pct
+        self.portfolio_basis = portfolio_basis
+        self.leg_target_enabled = leg_target_enabled
+        self.leg_target_pct = leg_target_pct
         self.breach_basis = breach_basis
         self.breach_buffer_pct = breach_buffer_pct
         self.flip_delta = flip_delta
@@ -104,7 +121,7 @@ class DonchianStrangleMonthlyStrategy:
         return sorted(out)
 
     # ------------------------------------------------------------ live monitoring
-    def basket_status(self, market, portfolio) -> dict:
+    def basket_status(self, market, portfolio, margin: float | None = None) -> dict:
         """Per-name breakdown for the Live page: each name's status / spot-vs-strikes / open legs /
         flip count / unrealized MTM, the hedge legs + entry-vs-current notional drift, and an
         aggregate at-expiry payoff vs a common % move across all underlyings (incl. the NIFTY hedge —
@@ -180,7 +197,17 @@ class DonchianStrangleMonthlyStrategy:
         net_credit = sum(d.get("credit", 0.0) for d in names.values())
         basket_mtm = sum(d.get("mtm", 0.0) for d in names.values())
         combined_mtm = basket_mtm + hedge_mtm
-        stop_amount = self.portfolio_sl_pct / 100.0 * self.agg_notional
+        # Stop/target amounts on the same base the decision uses: % of live basket margin
+        # (portfolio_basis="margin"; margin passed in by the LiveRun) or legacy % of notional / premium.
+        if self.portfolio_basis == "margin":
+            base = float(margin) if (margin and margin > 0) else None
+            stop_amount = (self.portfolio_sl_pct / 100.0 * base) if base else None
+            target_amount = (self.portfolio_target_pct / 100.0 * base
+                             if (self.portfolio_target_enabled and base) else None)
+        else:
+            stop_amount = self.portfolio_sl_pct / 100.0 * self.agg_notional
+            target_amount = (self.portfolio_target_pct / 100.0 * self.premium_collected
+                             if self.portfolio_target_enabled else None)
         expiry = self._expiry_date()
         today = getattr(market, "current_date", None) or date.today()
         return {
@@ -199,7 +226,20 @@ class DonchianStrangleMonthlyStrategy:
             "total_flips": sum(self.flip_count.values()),
             "closed_count": len(self.closed_names),
             "portfolio_stop_amount": stop_amount,
-            "buffer_to_stop": combined_mtm + stop_amount,
+            "portfolio_target_amount": target_amount,
+            "buffer_to_stop": (combined_mtm + stop_amount) if stop_amount is not None else None,
+            # So the UI labels the stop with its real basis (e.g. "4% margin"), not a hardcoded string.
+            "portfolio_sl_pct": self.portfolio_sl_pct,
+            "portfolio_target_pct": self.portfolio_target_pct,
+            "portfolio_target_enabled": self.portfolio_target_enabled,
+            "portfolio_basis": self.portfolio_basis,
+            # Entry progress so a fresh deploy shows up immediately with an "entering N/M" metric
+            # instead of looking empty while the legs price.
+            "entry_progress": {
+                "entered": len(self.legs),
+                "expected": len(self.leg_defs),
+                "done": bool(self.entered),
+            },
             "expiry": expiry.isoformat() if expiry else None,
             "dte": (max((expiry - today).days, 0) if expiry else None),
             "payoff": self._aggregate_payoff(market, portfolio),
@@ -248,6 +288,22 @@ class DonchianStrangleMonthlyStrategy:
         expiry = self._expiry_date()
         if expiry is None:
             return []
+        # Batch-fetch every leg's live quote in ONE call before pricing them one-by-one — a 78-leg
+        # basket otherwise makes 78 serial quote round-trips at entry. No-op off a cache source.
+        prefetch = getattr(ctx.market, "prefetch_quotes", None)
+        if prefetch is not None:
+            syms: list[str] = []
+            for leg in self.leg_defs:
+                pl = self._per_lot(str(leg["underlying"]).upper(), expiry, leg)
+                if pl > 0:
+                    syms.append(make(str(leg["underlying"]).upper(), expiry, float(leg["strike"]),
+                                     str(leg["right"]).upper(), lot_size=pl,
+                                     lot_overrides=self.lot_overrides).symbol)
+            prefetch(syms)
+        # Price entries at the ACTUAL fill (SELL@bid / BUY@ask) — the same price the broker books —
+        # so the basket MTM / stop / premium agree with the portfolio's unrealized instead of an
+        # optimistic last-traded that hides the entry spread. Falls back to LTP off a cache source.
+        fill_fn = getattr(ctx.market, "fill_price", None)
         resolved: list[tuple] = []  # (symbol, underlying, right, strike, side, units, close, spot, per_lot, lots, step)
         for leg in self.leg_defs:
             underlying = str(leg["underlying"]).upper()
@@ -259,8 +315,9 @@ class DonchianStrangleMonthlyStrategy:
                 continue  # can't size this leg — skip it (don't block the rest of the basket)
             symbol = make(underlying, expiry, float(leg["strike"]), right,
                           lot_size=per_lot, lot_overrides=self.lot_overrides).symbol
+            order_side = OrderSide.SELL if side == "sell" else OrderSide.BUY
             try:
-                close = ctx.close(symbol)
+                close = fill_fn(symbol, order_side) if fill_fn is not None else ctx.close(symbol)
             except KeyError:
                 close = None  # no quote for this contract (e.g. an illiquid / unlisted strike)
             # Skip a dead/unpriceable leg (price 0 or missing) rather than deferring the WHOLE basket —
@@ -320,25 +377,75 @@ class DonchianStrangleMonthlyStrategy:
         stop = self._portfolio_exit(ctx, open_legs)
         if stop:
             return stop
+        # Leg-level profit takes (close individual decayed legs) run before breach flips; the
+        # remaining open legs still flip on a breach this tick.
+        legs_closed = self._leg_targets(ctx, open_legs)
+        if legs_closed:
+            closed = {sig.symbol for sig in legs_closed}
+            return legs_closed + self._flips(ctx, [s for s in open_legs if s not in closed])
         return self._flips(ctx, open_legs)
+
+    def _margin_base(self, ctx) -> float | None:
+        """Live basket margin (real broker margin live, model estimate in paper) for %-of-margin
+        stop/target, or None when no reliable margin is available this tick."""
+        fn = getattr(ctx, "position_margin", None)
+        m = fn() if fn is not None else None
+        return float(m) if (m and m > 0) else None
 
     def _portfolio_exit(self, ctx, open_legs) -> list[Signal]:
         """Flatten the whole book if the combined MTM (realized flips + open legs) breaches the
-        portfolio stop, or the optional target."""
-        if self.agg_notional <= 0:
-            return []
+        portfolio stop, or the optional target. Thresholds are % of the live basket margin
+        (portfolio_basis="margin") or, for legacy runs, % of notional (stop) / % of premium (target)."""
+        if self.portfolio_basis == "margin":
+            base = self._margin_base(ctx)
+            if base is None:
+                return []  # no reliable margin this tick → don't act on a bad base
+            stop_threshold = self.portfolio_sl_pct / 100.0 * base
+            target_threshold = self.portfolio_target_pct / 100.0 * base
+        else:  # legacy notional/premium behavior — keeps already-running deploys unchanged
+            if self.agg_notional <= 0:
+                return []
+            stop_threshold = self.portfolio_sl_pct / 100.0 * self.agg_notional
+            target_threshold = self.portfolio_target_pct / 100.0 * self.premium_collected
         try:
             net_now = self._net_value(open_legs, lambda s: ctx.close(s))
         except KeyError:
             return []
         net_entry = self._net_value(open_legs, lambda s: self.entry_close[s])
         pnl = self.realized_pnl + (net_entry - net_now)  # realized flips + unrealized on open legs
-        if pnl <= -(self.portfolio_sl_pct / 100.0 * self.agg_notional):
+        if pnl <= -stop_threshold:
             return self._exit_all(open_legs, "portfolio_stop")
-        if self.portfolio_target_enabled and self.premium_collected > 0:
-            if pnl >= self.portfolio_target_pct / 100.0 * self.premium_collected:
-                return self._exit_all(open_legs, "portfolio_target")
+        if self.portfolio_target_enabled and target_threshold > 0 and pnl >= target_threshold:
+            return self._exit_all(open_legs, "portfolio_target")
         return []
+
+    def _leg_targets(self, ctx, open_legs) -> list[Signal]:
+        """Close any open SHORT leg that has captured ``leg_target_pct`` of its OWN entry premium
+        (premium decay). The opposite leg stays open; the realized P&L is booked so the portfolio
+        stop/target stay honest. No-op unless ``leg_target_enabled``."""
+        if not self.leg_target_enabled or self.leg_target_pct <= 0:
+            return []
+        frac = self.leg_target_pct / 100.0
+        signals: list[Signal] = []
+        for s in open_legs:
+            if self.leg_side.get(s) != "sell":
+                continue
+            entry = self.entry_close.get(s)
+            if not entry or entry <= 0:
+                continue
+            try:
+                mark = ctx.close(s)
+            except KeyError:
+                continue
+            if bad_close(mark):
+                continue
+            if (entry - mark) / entry >= frac:  # short: captured = premium decayed away
+                signals.append(Signal(s, SignalAction.EXIT_ALL, reason="leg_target"))
+                contrib = self._sign(s) * (entry - mark) * self.units[s]
+                self.realized_pnl += contrib
+                name = self.leg_underlying[s]
+                self.realized_by_name[name] = self.realized_by_name.get(name, 0.0) + contrib
+        return signals
 
     def _flips(self, ctx, open_legs) -> list[Signal]:
         """Per-name breach → roll: close the name's open legs and sell one fresh ATM short on the
@@ -418,8 +525,10 @@ class DonchianStrangleMonthlyStrategy:
                 return None
             strike = round(spot / step) * step
         sym = make(name, expiry, float(strike), side, lot_size=per_lot, lot_overrides=self.lot_overrides).symbol
+        fill_fn = getattr(ctx.market, "fill_price", None)
         try:
-            close = ctx.close(sym)  # live LTP (via the quote source) for the entry premium
+            # The rolled short fills at the bid (same as the broker books it), not the LTP.
+            close = fill_fn(sym, OrderSide.SELL) if fill_fn is not None else ctx.close(sym)
         except KeyError:
             return None
         if bad_close(close):

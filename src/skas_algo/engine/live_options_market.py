@@ -13,6 +13,7 @@ Satisfies the same surface the SliceExecutor + AlgoContext use for an options ru
 
 from __future__ import annotations
 
+import time
 from datetime import date, datetime, timedelta
 
 from skas_algo.db.enums import OrderSide
@@ -39,6 +40,12 @@ class LiveOptionsMarketView:
         # multi-underlying strategy (donchian) pick a delta-based strike off the LIVE chain of
         # ANY name at flip time — the per-symbol quote_fn can't enumerate strikes.
         self._chain_fn = None
+        # Short-TTL cache of fetched live chains, keyed (underlying, expiry). A basket entry prices
+        # every leg's bid/ask via live_chain() — without this it refetches the same name's chain once
+        # per leg (CE + PE), doubling the broker round-trips. Chains are ~static intraday.
+        self._chain_cache: dict[tuple[str, str], tuple[dict, float]] = {}
+
+    _CHAIN_TTL = 20.0  # seconds
 
     def set_quote_fn(self, quote_fn) -> None:
         self._quote_fn = quote_fn
@@ -47,13 +54,37 @@ class LiveOptionsMarketView:
         self._chain_fn = chain_fn
 
     def live_chain(self, underlying: str, expiry: str) -> dict | None:
-        """LIVE option chain for any underlying/expiry (strikes + CE/PE LTP/bid/ask + spot), or None."""
+        """LIVE option chain for any underlying/expiry (strikes + CE/PE LTP/bid/ask + spot), or None.
+        Cached per (underlying, expiry) for a few seconds so a basket entry doesn't refetch the same
+        chain once per leg."""
         if self._chain_fn is None:
             return None
+        key = (underlying.upper(), expiry)
+        hit = self._chain_cache.get(key)
+        if hit is not None and (time.monotonic() - hit[1]) < self._CHAIN_TTL:
+            return hit[0]
         try:
-            return self._chain_fn(underlying, expiry)
+            chain = self._chain_fn(underlying, expiry)
         except Exception:  # pragma: no cover - network hiccup → caller falls back
             return None
+        if chain is not None:
+            self._chain_cache[key] = (chain, time.monotonic())
+        return chain
+
+    def prefetch_quotes(self, symbols) -> None:
+        """Batch-fetch live quotes for many contracts in ONE quote-source call, so a basket entry
+        prices all its legs from cache instead of one round-trip per leg via close(). No-op without a
+        live quote fn (cache source) — close() then falls back per-leg as before."""
+        if self._quote_fn is None:
+            return
+        want = [s for s in dict.fromkeys(symbols) if s not in self._quotes and is_option_symbol(s)]
+        if not want:
+            return
+        try:
+            q = self._quote_fn(want)
+        except Exception:  # pragma: no cover - network hiccup → close() falls back per-leg
+            return
+        self.update_quotes({s: p for s, p in q.items() if p is not None})
 
     def set_chain_adapter(self, adapter, underlying: str, lot_overrides: dict | None = None) -> None:
         """Source TODAY's expiries/strikes/premiums from the broker (live) for strike selection;
