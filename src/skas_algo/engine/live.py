@@ -302,7 +302,24 @@ class LiveSession:
             ],
             "current_month": list(self._current_month) if self._current_month else None,
             "transactions": [self._ser_txn(t) for t in self.transactions[-5000:]],
+            # Daily equity-curve history + monthly flush log, so the report (equity curve, yearly,
+            # monthly, capital utilization) survives a restart and accumulates over the run's life.
+            # Collapsed to one row per calendar day (the EOD point) — small even for tick-driven runs.
+            "history": [self._ser_txn(r) for r in self._daily_history()],
+            "monthly_flush_log": {
+                f"{y}-{m}": self._ser_txn(v) for (y, m), v in self.monthly_flush_log.items()
+            },
         }
+
+    def _daily_history(self) -> list[dict]:
+        """History collapsed to the last (EOD) row per calendar day."""
+        by_day: dict[str, dict] = {}
+        for row in self.history:
+            d = row.get("date")
+            key = (d.date().isoformat() if hasattr(d, "date")
+                   else d.isoformat() if hasattr(d, "isoformat") else str(d))
+            by_day[key] = row
+        return [by_day[k] for k in sorted(by_day)]
 
     @staticmethod
     def _ser_txn(t: dict) -> dict:
@@ -332,6 +349,24 @@ class LiveSession:
         # Restore executed trades, reviving the date back to a date object (downstream
         # serialization/report code calls .strftime on it).
         self.transactions = [self._rev_txn(t) for t in state.get("transactions", [])]
+        # History + flush dates restore to datetime (matching the live-stop path) so build_report can
+        # compare them against each other and the equity curve — date-vs-datetime/Timestamp raises.
+        self.history = [self._rev_dt(r) for r in state.get("history", [])]
+        self.monthly_flush_log = {
+            tuple(int(p) for p in k.split("-")): self._rev_dt(v)
+            for k, v in state.get("monthly_flush_log", {}).items()
+        }
+
+    @staticmethod
+    def _rev_dt(v: dict) -> dict:
+        out = dict(v)
+        d = out.get("date")
+        if isinstance(d, str):
+            try:
+                out["date"] = datetime.fromisoformat(d)
+            except ValueError:
+                pass
+        return out
 
     @staticmethod
     def _rev_txn(t: dict) -> dict:

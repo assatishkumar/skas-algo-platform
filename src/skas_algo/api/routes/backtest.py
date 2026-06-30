@@ -296,8 +296,10 @@ def get_run(run_id: int, db: Session = Depends(get_db)) -> dict:
         "capital": algo.capital if algo else None,
         "params": algo.params if algo else {},  # symbols, lookback, tax, sizing, etc.
         "mode": run.mode.value,
-        "report": run.metrics,
-        "trades": run.trade_log or [],
+        # Live equity (paper) runs build the report on-demand; trades resolve to the running
+        # session's live transactions so the report view matches the deployment in real time.
+        "report": _run_report(run, algo),
+        "trades": _resolve_run_trades(run, db),
     }
 
 
@@ -313,6 +315,30 @@ def _instrument_class(algo: Algo | None, trades: list[dict] | None = None) -> st
     if trades and any((t.get("ticker") or "").count("|") == 3 for t in trades):
         return "DERIV"
     return "STOCK"
+
+
+def _run_report(run: AlgoRun, algo: Algo | None) -> dict | None:
+    """The run's full report. For a still-running EQUITY (paper) deployment it's built on-demand from
+    the live session's history/transactions so the report view (equity curve, yearly, monthly booked,
+    capital utilization) shows live at backtest parity — the stored ``metrics`` are only written on
+    stop. Backtests / stopped / options runs return the stored report unchanged."""
+    if _instrument_class(algo) != "STOCK":
+        return run.metrics
+    from skas_algo.engine.jsonutil import to_native
+    from skas_algo.engine.report import build_report
+    from skas_algo.engine.runner import RunResult
+    from skas_algo.live.manager import manager
+
+    live = manager.get(run.id)
+    if live is None or not live.session.history:
+        return run.metrics
+    rr = RunResult(
+        history=live.session.history,
+        transactions=live.session.transactions,
+        monthly_flush_log=live.session.monthly_flush_log,
+        portfolio=live.session.portfolio,
+    )
+    return to_native(build_report(rr, algo.capital if algo else 0.0))
 
 
 @router.get("/analysis/runs")
@@ -416,7 +442,7 @@ def get_run_benchmark(
         raise HTTPException(status_code=400, detail=f"unknown index {index!r}")
     run = _get_run(db, run_id)
     algo = db.get(Algo, run.algo_id)
-    curve = (run.metrics or {}).get("equity_curve", [])
+    curve = (_run_report(run, algo) or {}).get("equity_curve", [])  # live for a running equity run
     dates = [p["date"] for p in curve]
     try:
         points = benchmark_series(loader, index, dates, algo.capital if algo else 0.0)

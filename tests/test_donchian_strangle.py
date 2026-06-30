@@ -382,6 +382,35 @@ def test_leg_target_closes_single_leg_on_premium_capture():
     assert strat.realized_pnl > 0                            # booked the captured premium
 
 
+def test_history_persists_across_restart_and_builds_report():
+    """The live report (equity curve / yearly / monthly booked) needs the equity history to survive a
+    restart. export_state persists it (daily) + the flush log; load_state revives both as datetimes so
+    build_report runs."""
+    from skas_algo.engine.report import build_report
+    from skas_algo.engine.runner import RunResult
+
+    strat = _strat()
+    sess, _mv = _session(strat)
+    sess.history = [
+        {"date": datetime(2026, 1, 5, 15, 30), "cash": 1_000_000.0, "holdings_value": 0.0,
+         "invested_capital": 0.0, "total_equity": 1_000_000.0},
+        {"date": datetime(2026, 1, 6, 15, 30), "cash": 1_010_000.0, "holdings_value": 0.0,
+         "invested_capital": 0.0, "total_equity": 1_010_000.0},
+    ]
+    sess.transactions = [{"date": datetime(2026, 1, 6, 15, 30), "ticker": "X", "action": "SELL", "profit": 10_000.0}]
+    sess.monthly_flush_log = {(2026, 1): {"tax": 2_000.0, "withdrawal": 0.0, "date": datetime(2026, 1, 31)}}
+
+    sess2, _ = _session(_strat())
+    sess2.load_state(sess.export_state())
+    assert len(sess2.history) == 2 and isinstance(sess2.history[0]["date"], datetime)
+    assert sess2.monthly_flush_log[(2026, 1)]["tax"] == 2_000.0
+
+    rep = build_report(RunResult(history=sess2.history, transactions=sess2.transactions,
+                                 monthly_flush_log=sess2.monthly_flush_log, portfolio=sess2.portfolio),
+                       1_000_000.0)
+    assert rep["equity_curve"] and rep["monthly_profit"][2026][1] == 10_000.0  # booked from the trade
+
+
 def test_entry_books_at_bid_not_ltp():
     """With a two-sided book, the strategy records each short's entry at the BID (the price the broker
     actually fills) — not the LTP — so the basket MTM/premium match the portfolio's unrealized."""

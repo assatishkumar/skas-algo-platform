@@ -225,20 +225,27 @@ export default function RunDetailPage() {
         params={data.params}
         strategyId={data.strategy_id}
         fallbackDates={{
-          start: data.report.equity_curve?.[0]?.date,
-          end: data.report.equity_curve?.[(data.report.equity_curve?.length ?? 0) - 1]?.date,
+          start: data.report?.equity_curve?.[0]?.date,
+          end: data.report?.equity_curve?.[(data.report?.equity_curve?.length ?? 0) - 1]?.date,
         }}
       />
 
-      <ReportView
-        report={data.report}
-        trades={data.trades}
-        csvUrl={api.tradesCsvUrl(runId)}
-        runId={runId}
-        defaultBenchmark={
-          (data.params as Record<string, unknown>)?.universe === "nifty500" ? "NIFTY 500" : undefined
-        }
-      />
+      {data.report ? (
+        <ReportView
+          report={data.report}
+          trades={data.trades}
+          csvUrl={api.tradesCsvUrl(runId)}
+          runId={runId}
+          defaultBenchmark={
+            (data.params as Record<string, unknown>)?.universe === "nifty500" ? "NIFTY 500" : undefined
+          }
+        />
+      ) : (
+        <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400">
+          The report appears once the deployment runs its first decision (equity curve, yearly &
+          monthly breakdowns, capital utilization).
+        </div>
+      )}
     </div>
   );
 }
