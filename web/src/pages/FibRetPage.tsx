@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, brokers } from "../api/client";
-import { Panel } from "../components/redesign";
+import { Panel, SessionBanner } from "../components/redesign";
 import { formatInr } from "../lib/format";
 import type { FibRetResult, FibRetRow, OptionChain, OptionChainLeg, OptionsTradeDeploy } from "../types";
 
@@ -312,7 +312,7 @@ function loadPersisted(): Persisted {
 }
 
 export default function FibRetPage() {
-  const { data: accounts = [] } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
+  const { data: accounts = [], isError: brokersError } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
   const sessioned = accounts.filter((a) => a.has_session);
 
   const saved = useRef(loadPersisted()).current;
@@ -439,6 +439,8 @@ export default function FibRetPage() {
         </p>
       </div>
 
+      <SessionBanner backendDown={brokersError} hasSession={sessioned.length > 0} />
+
       <Panel className="space-y-3 p-5">
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <label className="inline-flex items-center gap-2 rounded bg-[var(--chip)] text-[var(--chip-text)] hover:opacity-80 px-3 py-1.5 cursor-pointer">
@@ -495,6 +497,7 @@ export default function FibRetPage() {
         )}
         <div className="flex items-center gap-3">
           <button onClick={() => analyze.mutate()} disabled={analyze.isPending || !effectiveAccount || symbols.length === 0}
+            title={!effectiveAccount ? "Log in a broker session on Brokers first" : symbols.length === 0 ? "Add symbols (paste or upload a CSV) first" : "Run the screen"}
             className="rounded bg-[var(--ft)] px-4 py-1.5 text-sm text-white disabled:opacity-50">
             {analyze.isPending ? "Analyzing…" : result ? `Refresh (${symbols.length})` : `Analyze ${symbols.length || ""}`.trim()}
           </button>

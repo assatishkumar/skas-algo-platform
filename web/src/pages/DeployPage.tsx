@@ -321,6 +321,11 @@ export default function DeployPage() {
                 <option value="">select…</option>
                 {sessioned.map((a) => (<option key={a.id} value={a.id}>{a.label}</option>))}
               </select>
+              {sessioned.length === 0 && (
+                <span className="mt-1 block text-xs text-amber-600 dark:text-amber-400">
+                  No logged-in session — <Link to="/brokers" className="underline">log in on Brokers</Link>, or switch Quotes to Cache.
+                </span>
+              )}
             </label>
           )}
           <div className="flex flex-col gap-1">
@@ -339,6 +344,13 @@ export default function DeployPage() {
           <button
             onClick={deploy}
             disabled={busy || (quoteSource === "zerodha" && !accountId)}
+            title={
+              quoteSource === "zerodha" && !accountId
+                ? sessioned.length === 0
+                  ? "Log in a broker session on Brokers, or switch Quotes to Cache"
+                  : "Select an account"
+                : "Deploy"
+            }
             className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50"
           >
             {busy ? "Deploying…" : "Deploy"}

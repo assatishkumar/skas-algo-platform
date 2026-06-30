@@ -1,6 +1,45 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 
 /** Calm-Hero shared UI primitives (token-driven). Used by the Backtest / Live / Trade redesign. */
+
+/** Consistent "you can't screen/deploy yet" notice for broker-session-gated pages.
+ * Distinguishes a dead backend (the brokers query errored) from simply having no
+ * logged-in Zerodha session, so a blocked screener/deploy shows a clear REASON
+ * instead of a silently-disabled button or a perpetual "Computing…". Renders
+ * nothing once a live session exists. */
+export function SessionBanner({
+  backendDown,
+  hasSession,
+  needs = "Live chains, pricing and margins",
+  className = "",
+}: {
+  backendDown: boolean;
+  hasSession: boolean;
+  needs?: string;
+  className?: string;
+}) {
+  if (!backendDown && hasSession) return null;
+  return (
+    <div
+      className={`rounded-[12px] px-3 py-2 text-sm ${className}`}
+      style={{ background: "var(--warn-bg)", color: "var(--warn-text)" }}
+    >
+      {backendDown ? (
+        <>
+          <span className="font-semibold">Backend unreachable.</span> The API server isn't responding
+          — start it (<code>skas-algo</code> on :8080), then retry. Cached tables may still show.
+        </>
+      ) : (
+        <>
+          <span className="font-semibold">No logged-in broker session.</span> {needs} need a live
+          Zerodha session.{" "}
+          <Link to="/brokers" className="underline">Log in on Brokers →</Link>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function Segmented<T extends string>({
   value,
