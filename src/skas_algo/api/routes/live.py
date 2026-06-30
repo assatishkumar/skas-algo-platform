@@ -222,6 +222,76 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
     return out
 
 
+@router.get("/summary")
+def live_summary() -> dict:
+    """Home dashboard aggregates across ACTIVE PAPER deployments: win rate (booked round-trips), a
+    daily equity series for the last ~30 days + its annualized Sharpe. The series/Sharpe build from
+    the runs' daily history, so they fill in as history accumulates (and are null until ≥ 2 days)."""
+    import math
+    import statistics
+    from datetime import date as _date
+    from datetime import timedelta
+
+    lives = [lr for lr in manager.list() if str(lr.config.mode).upper() == "PAPER"]
+    wins = total = 0
+    per_run_day: list[dict[_date, float]] = []  # each run's last total_equity per calendar day
+    for lr in lives:
+        for t in lr.session.transactions:
+            # Closed round-trips only (mirror compute_metrics): long sells, short covers, expiry
+            # settlement — NOT entries (which carry no realized P&L).
+            if t.get("action") not in ("SELL", "COVER", "SETTLE"):
+                continue
+            total += 1
+            if (t.get("profit") or 0) > 0:
+                wins += 1
+        day_eq: dict[_date, float] = {}
+        for row in lr.session.history:
+            d = row.get("date")
+            dd = d.date() if hasattr(d, "date") else d if isinstance(d, _date) else None
+            te = row.get("total_equity")
+            if dd is not None and te is not None:
+                day_eq[dd] = float(te)  # last point of the day wins
+        if day_eq:
+            per_run_day.append(day_eq)
+
+    win_rate = (wins / total * 100) if total else None
+
+    # Aggregate equity across runs per day (each run forward-filled from its first day), last 30 days.
+    all_days = sorted({d for r in per_run_day for d in r})
+    series: list[float] = []
+    if all_days:
+        last: list[float | None] = [None] * len(per_run_day)
+        agg: list[tuple[_date, float]] = []
+        for d in all_days:
+            tot = 0.0
+            for i, r in enumerate(per_run_day):
+                if d in r:
+                    last[i] = r[d]
+                if last[i] is not None:
+                    tot += last[i]  # type: ignore[arg-type]
+            agg.append((d, tot))
+        cutoff = all_days[-1] - timedelta(days=30)
+        series = [round(v, 2) for d, v in agg if d >= cutoff]
+
+    change = sharpe = None
+    if len(series) >= 2 and series[0] > 0:
+        change = (series[-1] - series[0]) / series[0] * 100
+        rets = [(series[i] - series[i - 1]) / series[i - 1]
+                for i in range(1, len(series)) if series[i - 1] > 0]
+        if len(rets) >= 2:
+            sd = statistics.pstdev(rets)
+            if sd > 0:
+                sharpe = statistics.mean(rets) / sd * math.sqrt(252)  # annualized (daily)
+
+    return {
+        "win_rate": win_rate,
+        "total_trades": total,
+        "equity_series": series,
+        "equity_change_pct_30d": change,
+        "sharpe_30d": sharpe,
+    }
+
+
 @router.get("/{run_id}")
 async def get_live(run_id: int) -> dict:
     return _get(run_id).snapshot()

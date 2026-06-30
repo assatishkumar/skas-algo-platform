@@ -57,10 +57,13 @@ function Glyph({ name, color }: { name: string; color: string }) {
 // ── ported from the mock's buildPath(): cubic-bezier-smoothed line + area under it ───────────
 function equityPath(W: number, H: number, vals: number[]) {
   const pad = 10;
-  const max = 100;
   const n = vals.length;
-  const x = (i: number) => pad + (i * (W - 2 * pad)) / (n - 1);
-  const y = (v: number) => H - pad - (v * (H - 2 * pad)) / max;
+  // Auto-scale to the data's own min/max so a real ₹-equity series (not just the 0..100 placeholder)
+  // fills the box.
+  const lo = Math.min(...vals);
+  const span = Math.max(...vals) - lo || 1;
+  const x = (i: number) => pad + (i * (W - 2 * pad)) / Math.max(1, n - 1);
+  const y = (v: number) => H - pad - ((v - lo) * (H - 2 * pad)) / span;
   let d = `M${x(0).toFixed(1)} ${y(vals[0]).toFixed(1)}`;
   for (let i = 1; i < n; i++) {
     const cx = (x(i - 1) + x(i)) / 2;
@@ -119,11 +122,15 @@ export default function HomePage() {
   const equity = sum((m) => m.equity);
   const realized = sum((m) => m.realized_pnl);
   const pnl = realized + sum((m) => m.unrealized_pnl);
-  const openPositions = sum((m) => m.open_positions);
   const costBasis = equity - pnl;
   const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
   const activeCount = paper.length;
-  const eq = equityPath(480, 160, EQ_SERIES);
+
+  // Win rate, Sharpe and a real 30d equity sparkline (fills in as daily history accumulates).
+  const { data: summary } = useQuery({ queryKey: ["live", "summary"], queryFn: api.liveSummary });
+  const series = (summary?.equity_series?.length ?? 0) >= 2 ? summary!.equity_series : EQ_SERIES;
+  const changePct = summary?.equity_change_pct_30d ?? pnlPct;
+  const eq = equityPath(480, 160, series);
 
   return (
     <div className={`font-['Manrope'] bg-[#f6f8f8] dark:bg-[#0c1a18] min-h-[calc(100vh-3.5rem)] transition-colors`}>
@@ -168,7 +175,7 @@ export default function HomePage() {
                 <div className={`text-[13px] font-semibold ${textMuted}`}>Paper equity</div>
                 <div className={`${sg} text-[30px] font-bold tabular-nums ${textStrong}`}>{formatInr(equity)}</div>
               </div>
-              <span className={`rounded-full px-[11px] py-[5px] text-[13px] font-bold ${pnl >= 0 ? "bg-[#e6f6ef] dark:bg-[rgba(30,185,128,0.16)] text-[#0f9d63] dark:text-[#5fd8c9]" : "bg-[#fdecea] dark:bg-[rgba(242,119,107,0.16)] text-[#d9544a] dark:text-[#f0766a]"}`}>{pnl >= 0 ? "▲" : "▼"} {Math.abs(pnlPct).toFixed(1)}%</span>
+              <span className={`rounded-full px-[11px] py-[5px] text-[13px] font-bold ${changePct >= 0 ? "bg-[#e6f6ef] dark:bg-[rgba(30,185,128,0.16)] text-[#0f9d63] dark:text-[#5fd8c9]" : "bg-[#fdecea] dark:bg-[rgba(242,119,107,0.16)] text-[#d9544a] dark:text-[#f0766a]"}`}>{changePct >= 0 ? "▲" : "▼"} {Math.abs(changePct).toFixed(1)}%</span>
             </div>
             <svg viewBox="0 0 480 160" className="w-full h-40 block">
               <defs>
@@ -186,9 +193,9 @@ export default function HomePage() {
         {/* ── Stats strip ── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pt-7 pb-2">
           <StatCard label="Active paper strategies" value={String(activeCount)} />
+          <StatCard label="Win rate" value={summary?.win_rate != null ? `${summary.win_rate.toFixed(0)}%` : "—"} />
+          <StatCard label="Sharpe (30d)" value={summary?.sharpe_30d != null ? summary.sharpe_30d.toFixed(2) : "—"} />
           <StatCard label="Paper P&L" value={formatInr(pnl)} tone={pnl} />
-          <StatCard label="Realized P&L" value={formatInr(realized)} tone={realized} />
-          <StatCard label="Open positions" value={String(openPositions)} />
         </div>
 
         {/* ── Workspace ── */}

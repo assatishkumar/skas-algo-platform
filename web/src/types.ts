@@ -862,6 +862,14 @@ export interface DeploymentMetrics {
   realized_pnl?: number | null;
 }
 
+export interface LiveSummary {
+  win_rate: number | null; // % of closed round-trips that booked a profit (paper)
+  total_trades: number;
+  equity_series: number[]; // ~30d aggregated daily paper equity (sparkline)
+  equity_change_pct_30d: number | null;
+  sharpe_30d: number | null; // annualized, from the daily series
+}
+
 export interface Deployment {
   run_id: number;
   algo_id: number;

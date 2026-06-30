@@ -11,6 +11,7 @@ import type {
   DataSymbolDetail,
   AnalysisRunItem,
   Deployment,
+  LiveSummary,
   DerivCoverage,
   EquityTradeDeploy,
   DonchianAnalyzeRequest,
@@ -226,6 +227,7 @@ export const api = {
   liveTrades: (id: number) => request<{ run_id: number; trades: Trade[] }>(`/live/${id}/trades`),
   liveDeployments: (status?: string) =>
     request<Deployment[]>(`/live/deployments${status ? `?status=${status}` : ""}`),
+  liveSummary: () => request<LiveSummary>("/live/summary"),
   liveArchive: (id: number) => request(`/live/${id}/archive`, { method: "POST" }),
   liveUnarchive: (id: number) => request(`/live/${id}/unarchive`, { method: "POST" }),
   liveDelete: (id: number) => request(`/live/${id}`, { method: "DELETE" }),
