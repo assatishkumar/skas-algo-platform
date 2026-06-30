@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { formatInr } from "../lib/format";
 
 const ACCENT = "#0aa999"; // brand teal — chart line/area, primary CTA (spec: interchangeable w/ #12b3a4)
 
@@ -95,21 +96,33 @@ const textStrong = "text-[#0f2723] dark:text-[#f1f6f5]";
 const textMuted = "text-[#5c6f6b] dark:text-[#92aaa4]";
 const sg = "font-['Space_Grotesk']";
 
-function StatCard({ label, value, delta }: { label: string; value: string; delta?: string }) {
+function StatCard({ label, value, tone }: { label: string; value: string; tone?: number }) {
+  const color = tone == null ? textStrong : tone >= 0 ? "text-[#0f9d63]" : "text-[#d9544a]";
   return (
     <div className={`${cardSurface} rounded-[15px] px-5 py-[18px]`}>
       <div className={`text-[13px] font-semibold mb-2 ${textMuted}`}>{label}</div>
-      <div className="flex items-baseline gap-[9px]">
-        <span className={`${sg} text-[26px] font-bold tabular-nums ${textStrong}`}>{value}</span>
-        {delta && <span className="text-[13px] font-bold text-[#0f9d63]">{delta}</span>}
-      </div>
+      <span className={`${sg} text-[26px] font-bold tabular-nums ${color}`}>{value}</span>
     </div>
   );
 }
 
 export default function HomePage() {
-  const { data: live } = useQuery({ queryKey: ["live"], queryFn: api.liveList });
-  const activeCount = (live ?? []).filter((r) => r.status === "active").length;
+  // Real aggregates across ACTIVE PAPER deployments (same source the Live page sums) — replaces the
+  // old hardcoded hero/stat numbers.
+  const { data: deps } = useQuery({
+    queryKey: ["deployments", "active"],
+    queryFn: () => api.liveDeployments("active"),
+  });
+  const paper = (deps ?? []).filter((d) => (d.mode || "").toUpperCase() === "PAPER");
+  const sum = (pick: (m: (typeof paper)[number]["metrics"]) => number | null | undefined) =>
+    paper.reduce((s, d) => s + (pick(d.metrics) ?? 0), 0);
+  const equity = sum((m) => m.equity);
+  const realized = sum((m) => m.realized_pnl);
+  const pnl = realized + sum((m) => m.unrealized_pnl);
+  const openPositions = sum((m) => m.open_positions);
+  const costBasis = equity - pnl;
+  const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
+  const activeCount = paper.length;
   const eq = equityPath(480, 160, EQ_SERIES);
 
   return (
@@ -123,7 +136,7 @@ export default function HomePage() {
                 <span className="absolute inline-flex h-full w-full rounded-full bg-[#1eb980] opacity-60 animate-ping" />
                 <span className="relative inline-flex h-[7px] w-[7px] rounded-full bg-[#1eb980]" />
               </span>
-              {activeCount} {activeCount === 1 ? "strategy" : "strategies"} running live
+              {activeCount} {activeCount === 1 ? "strategy" : "strategies"} running (paper)
             </div>
             <h1 className={`${sg} text-[48px] font-bold leading-[1.07] tracking-[-0.02em] mb-[18px] ${textStrong}`}>
               A calm workspace for systematic trading.
@@ -152,10 +165,10 @@ export default function HomePage() {
           <div className={`${cardSurface} rounded-[20px] p-6 shadow-[0_16px_40px_rgba(15,39,35,0.08)] dark:shadow-[0_16px_40px_rgba(0,0,0,0.4)]`}>
             <div className="flex items-start justify-between mb-2.5">
               <div>
-                <div className={`text-[13px] font-semibold ${textMuted}`}>Paper equity · 30d</div>
-                <div className={`${sg} text-[30px] font-bold tabular-nums ${textStrong}`}>₹124,300</div>
+                <div className={`text-[13px] font-semibold ${textMuted}`}>Paper equity</div>
+                <div className={`${sg} text-[30px] font-bold tabular-nums ${textStrong}`}>{formatInr(equity)}</div>
               </div>
-              <span className="rounded-full px-[11px] py-[5px] text-[13px] font-bold bg-[#e6f6ef] dark:bg-[rgba(30,185,128,0.16)] text-[#0f9d63] dark:text-[#5fd8c9]">▲ 8.7%</span>
+              <span className={`rounded-full px-[11px] py-[5px] text-[13px] font-bold ${pnl >= 0 ? "bg-[#e6f6ef] dark:bg-[rgba(30,185,128,0.16)] text-[#0f9d63] dark:text-[#5fd8c9]" : "bg-[#fdecea] dark:bg-[rgba(242,119,107,0.16)] text-[#d9544a] dark:text-[#f0766a]"}`}>{pnl >= 0 ? "▲" : "▼"} {Math.abs(pnlPct).toFixed(1)}%</span>
             </div>
             <svg viewBox="0 0 480 160" className="w-full h-40 block">
               <defs>
@@ -172,10 +185,10 @@ export default function HomePage() {
 
         {/* ── Stats strip ── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pt-7 pb-2">
-          <StatCard label="Strategies live" value={String(activeCount)} />
-          <StatCard label="Win rate" value="63%" delta="+4.1%" />
-          <StatCard label="Sharpe (30d)" value="1.84" delta="+0.2" />
-          <StatCard label="Paper P&L" value="+₹24.3k" delta="+8.7%" />
+          <StatCard label="Active paper strategies" value={String(activeCount)} />
+          <StatCard label="Paper P&L" value={formatInr(pnl)} tone={pnl} />
+          <StatCard label="Realized P&L" value={formatInr(realized)} tone={realized} />
+          <StatCard label="Open positions" value={String(openPositions)} />
         </div>
 
         {/* ── Workspace ── */}
