@@ -207,10 +207,14 @@ class DonchianDeploy(BaseModel):
     portfolio_basis: str = "notional"   # "notional" (legacy) | "margin"
     leg_target_enabled: bool = False
     leg_target_pct: float = 80.0        # % of each leg's own premium → close that leg
-    breach_basis: str = "close"
+    # New deploys flip INTRADAY the moment spot clears a strike (touch), capped at one flip per
+    # name per day (the strategy's last_flip_day guard). The strategy constructor still defaults to
+    # "close"/2 as the conservative backstop for any param-less recovery (see CLAUDE.md §1); the
+    # deploy layer explicitly opts into the intraday behavior here.
+    breach_basis: str = "touch"     # "touch" (intraday) | "close" (EOD)
     breach_buffer_pct: float = 0.5  # spot must clear a short strike by this % to flip
     flip_delta: str = "atm"  # "atm" | "30delta"
-    max_flips: int = 2
+    max_flips: int = 3       # up to two rolls (once/day), then close the name on the next breach
     mode: str = "PAPER"
     quote_source: str = "cache"
     broker_account_id: int | None = None
