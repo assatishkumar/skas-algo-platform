@@ -13,6 +13,7 @@ import {
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { formatInr, pct } from "../lib/format";
+import { formatOptionSymbol } from "../lib/symbol";
 import type { Report, Trade } from "../types";
 import { Badge, Card, MetricCard } from "./ui";
 import OptionsReport from "./OptionsReport";
@@ -225,7 +226,7 @@ function TradesTable({ trades, runId }: { trades: Trade[]; runId?: number }) {
             {filtered.map((t, i) => (
               <tr key={i} className="border-t border-slate-800">
                 <td className="py-1 pr-4 whitespace-nowrap">{t.date}</td>
-                <td className="py-1 pr-4">{t.ticker}</td>
+                <td className="py-1 pr-4 whitespace-nowrap">{formatOptionSymbol(t.ticker)}</td>
                 <td className="py-1 pr-4">{t.action}</td>
                 <td className="py-1 pr-4 text-right">{t.units}</td>
                 <td className="py-1 pr-4 text-right">{formatInr(t.price, 2)}</td>

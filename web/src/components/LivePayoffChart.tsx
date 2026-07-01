@@ -13,6 +13,31 @@ import { formatInr } from "../lib/format";
 import { buildLivePayoff, type LiveLeg } from "../lib/payoff";
 import type { LivePosition } from "../types";
 
+const CE_COLOR = "#8b5cf6"; // violet — CE strikes
+const PE_COLOR = "#f59e0b"; // amber — PE strikes
+
+/** Vertical strike label rendered along its reference line, reading bottom→top so several close
+ *  strikes stay legible without overlapping. A light halo keeps it readable over the P&L fill. */
+function StrikeLabel({ viewBox, text, color }: { viewBox?: { x: number; y: number; height: number }; text: string; color: string }) {
+  if (!viewBox) return null;
+  const px = viewBox.x + 3;
+  const py = viewBox.y + viewBox.height - 6;
+  return (
+    <text
+      x={px}
+      y={py}
+      fill={color}
+      fontSize={10}
+      fontWeight={700}
+      textAnchor="start"
+      transform={`rotate(-90 ${px} ${py})`}
+      style={{ paintOrder: "stroke", stroke: "rgba(255,255,255,0.7)", strokeWidth: 2.5 }}
+    >
+      {text}
+    </text>
+  );
+}
+
 /** Sensibull-style payoff for the OPEN option legs of a live deployment: the expiry tent
  *  (green/red split at zero) + a current-value (T+0) curve, with the live spot marked.
  *  Built client-side from the position legs + live LTPs. */
@@ -49,6 +74,21 @@ export default function LivePayoffChart({
     return buildLivePayoff(legs, spot, expiry, asOf);
   }, [positions, spot, asOf]);
 
+  // Unique CE/PE strikes to mark on the chart (a strangle → one CE + one PE line; dedup exact dupes).
+  const strikes = useMemo(() => {
+    const m = new Map<string, { strike: number; right: string; dir: number }>();
+    for (const p of positions) {
+      const parts = p.symbol.split("|"); // UNDERLYING|EXPIRY|STRIKE|RIGHT
+      if (parts.length !== 4) continue;
+      const strike = Number(parts[2]);
+      if (!Number.isFinite(strike)) continue;
+      const right = parts[3];
+      const key = `${strike}|${right}`;
+      if (!m.has(key)) m.set(key, { strike, right, dir: p.direction ?? 1 });
+    }
+    return [...m.values()].sort((a, b) => a.strike - b.strike);
+  }, [positions]);
+
   if (!pf) return null;
   // Split the fill green/red at P&L = 0. The gradient maps to the EXPIRY area's own bounding box,
   // so the offset must come from the expiry series alone (not the dashed "now" line) — otherwise an
@@ -64,7 +104,13 @@ export default function LivePayoffChart({
         {caption ?? (
           <>
             Payoff at expiry {pf.expiryDate}{" "}
-            <span className="text-slate-500">— green/red = P&L if held to expiry; dashed = current value; line = live spot</span>
+            <span className="text-slate-500">— green/red = P&L if held to expiry; dashed = current value;{" "}</span>
+            <span style={{ color: "#38bdf8" }}>┊ spot</span>
+            <span className="text-slate-500"> · </span>
+            <span style={{ color: CE_COLOR }}>▮ CE strike</span>
+            <span className="text-slate-500"> · </span>
+            <span style={{ color: PE_COLOR }}>▮ PE strike</span>
+            <span className="text-slate-500"> (solid = sell · dashed = buy)</span>
           </>
         )}
       </div>
@@ -97,9 +143,25 @@ export default function LivePayoffChart({
             }}
           />
           <ReferenceLine y={0} stroke="#475569" />
+          {/* Mark each CE/PE strike: colour = right (violet CE / amber PE), and the line style +
+              label word encode side — SELL = solid, BUY = dashed — so the book reads at a glance. */}
+          {strikes.map((s) => {
+            const color = s.right === "CE" ? CE_COLOR : PE_COLOR;
+            const buy = s.dir === 1;
+            return (
+              <ReferenceLine
+                key={`${s.strike}-${s.right}`}
+                x={s.strike}
+                stroke={color}
+                strokeWidth={buy ? 1.25 : 1.5}
+                strokeDasharray={buy ? "5 3" : undefined}
+                label={<StrikeLabel text={`${buy ? "BUY" : "SELL"} ${s.strike} ${s.right}`} color={color} />}
+              />
+            );
+          })}
           {spot != null && (
-            <ReferenceLine x={spot} stroke="#38bdf8" strokeDasharray="3 3"
-              label={{ value: spotLabel, fill: "#38bdf8", fontSize: 10, position: "top" }} />
+            <ReferenceLine x={spot} stroke="#38bdf8" strokeWidth={1.5} strokeDasharray="3 3"
+              label={{ value: `${spotLabel} ${Math.round(spot)}`, fill: "#38bdf8", fontSize: 10, fontWeight: 700, position: "top" }} />
           )}
           <Area type="monotone" dataKey="expiry" stroke="#94a3b8" strokeWidth={1.5}
             fill="url(#livePayoff)" name="expiry" />

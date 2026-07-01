@@ -10,6 +10,7 @@ import LiveEquityTrades from "../components/LiveEquityTrades";
 import OptionMetricsPanel from "../components/OptionMetricsPanel";
 import { formatInr } from "../lib/format";
 import { isOptionsStrategy } from "../lib/params";
+import { compareOptionSymbol, formatOptionSymbol } from "../lib/symbol";
 import { KebabMenu, Sparkline, Segmented, Tag, type MenuItem } from "../components/redesign";
 import type {
   Deployment,
@@ -326,11 +327,13 @@ function OptionIntervenePanel({ run, onDone }: { run: LiveRunSnapshot; onDone: (
         <div className="mb-3">
           <div className="text-xs text-slate-400 mb-1">Close legs / lots</div>
           <div className="space-y-1">
-            {positions.map((p) => (
+            {positions.map((p) => {
+              const clots = p.lot_size && p.lot_size > 0 ? Math.round(p.units / p.lot_size) : null;
+              return (
               <div key={p.symbol} className="flex items-center gap-2 text-xs">
-                <span className="font-mono">{p.symbol}</span>
+                <span className="font-medium">{formatOptionSymbol(p.symbol)}</span>
                 <span className="text-slate-500">
-                  ({p.lots} lot{p.lots > 1 ? "s" : ""}, {p.direction === -1 ? "short" : "long"})
+                  ({clots != null ? `${clots} lot${clots === 1 ? "" : "s"}` : `${p.units} units`}, {p.direction === -1 ? "short" : "long"})
                 </span>
                 <span className="ml-auto text-slate-400">close</span>
                 <input
@@ -346,9 +349,12 @@ function OptionIntervenePanel({ run, onDone }: { run: LiveRunSnapshot; onDone: (
                   }
                   className="w-14 rounded bg-slate-800 border border-slate-700 px-2 py-1"
                 />
-                <span className="text-slate-500">lots</span>
+                <span className="text-slate-500" title="a fill is one entry order; closing a fill closes all its lots. Most legs are a single fill.">
+                  fill{p.lots === 1 ? "" : "s"}
+                </span>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -573,6 +579,23 @@ function ControlsPanel({ run, onChanged }: { run: LiveRunSnapshot; onChanged: ()
   );
 }
 
+/** BUY/SELL pill for an option leg (dir: +1 long/buy, −1 short/sell). Pill shape keeps it distinct
+ *  from the green/red P&L numbers. */
+function SideTag({ dir }: { dir?: number }) {
+  const sell = dir === -1;
+  return (
+    <span
+      className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold align-middle mr-1.5 ${
+        sell
+          ? "bg-rose-500/15 text-rose-600 dark:text-rose-400"
+          : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+      }`}
+    >
+      {sell ? "SELL" : "BUY"}
+    </span>
+  );
+}
+
 function RunCard({
   run,
   version,
@@ -595,19 +618,25 @@ function RunCard({
   const isDonchian = run.strategy_id === "donchian_strangle_monthly";
   // Sortable positions table — click a header to sort by that column.
   type PosKey = "symbol" | "entry_date" | "units" | "avg_price" | "ltp" | "pos_delta" | "iv" | "unrealized_pnl";
-  const [sortKey, setSortKey] = useState<PosKey>("unrealized_pnl");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Options runs default to strike order (Symbol asc); equity to biggest P&L first.
+  const [sortKey, setSortKey] = useState<PosKey>(isOptions ? "symbol" : "unrealized_pnl");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">(isOptions ? "asc" : "desc");
   const sortPos = (k: PosKey) => {
     setSortDir(k === sortKey ? (sortDir === "asc" ? "desc" : "asc") : k === "symbol" || k === "entry_date" ? "asc" : "desc");
     setSortKey(k);
   };
   const sortedPositions = [...(run.positions ?? [])].sort((a, b) => {
-    const av = a[sortKey];
-    const bv = b[sortKey];
-    const c =
-      typeof av === "string" || typeof bv === "string"
-        ? String(av ?? "").localeCompare(String(bv ?? ""))
-        : Number(av ?? 0) - Number(bv ?? 0);
+    let c: number;
+    if (sortKey === "symbol") {
+      c = compareOptionSymbol(a.symbol, b.symbol); // underlying → expiry → strike → right
+    } else {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      c =
+        typeof av === "string" || typeof bv === "string"
+          ? String(av ?? "").localeCompare(String(bv ?? ""))
+          : Number(av ?? 0) - Number(bv ?? 0);
+    }
     return sortDir === "asc" ? c : -c;
   });
   const act = async (fn: () => Promise<unknown>) => {
@@ -693,9 +722,13 @@ function RunCard({
               </tr>
             </thead>
             <tbody>
-              {sortedPositions.map((p) => (
+              {sortedPositions.map((p) => {
+                // Tradable lots = units / contract lot size; fall back to the raw units when the lot
+                // size is unknown (or equity, where there's no lot concept — just show units).
+                const clots = p.lot_size && p.lot_size > 0 ? Math.round(p.units / p.lot_size) : null;
+                return (
                 <tr key={p.symbol} className="border-t border-slate-800">
-                  <td className="py-1 pr-4">{p.symbol} <span className="text-slate-500">({p.lots})</span></td>
+                  <td className="py-1 pr-4 whitespace-nowrap">{isOptions && <SideTag dir={p.direction} />}{formatOptionSymbol(p.symbol)}{clots != null && <span className="text-slate-500"> ({clots} lot{clots === 1 ? "" : "s"})</span>}</td>
                   <td className="py-1 pr-4">{p.entry_date ?? "—"}</td>
                   <td className="py-1 pr-4 text-right">{p.units}</td>
                   <td className="py-1 pr-4 text-right">{formatInr(p.avg_price, 2)}</td>
@@ -714,7 +747,8 @@ function RunCard({
                     {formatInr(p.unrealized_pnl)}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1337,6 +1371,7 @@ export default function LivePage() {
             {groups.map(([sid, deps]) => {
               const open = q ? true : (openGroups[sid] ?? false); // search force-expands
               const upnl = deps.reduce((s, d) => s + (d.metrics?.unrealized_pnl ?? 0), 0);
+              const realized = deps.reduce((s, d) => s + (d.metrics?.realized_pnl ?? 0), 0);
               const positions = deps.reduce((s, d) => s + (d.metrics?.open_positions ?? 0), 0);
               const isOpt = deps.some((d) => d.instrument_class === "DERIV" || isOptionsStrategy(d.strategy_id));
               return (
@@ -1352,6 +1387,10 @@ export default function LivePage() {
                       <Tag>{deps.length}</Tag>
                     </div>
                     <div className="flex items-center gap-4 text-xs shrink-0">
+                      <span className="text-[var(--muted)]">
+                        Realized{" "}
+                        <span className={`tabular-nums font-medium ${realized >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{formatInr(realized)}</span>
+                      </span>
                       <span className="text-[var(--muted)]">
                         Unrealized{" "}
                         <span className={`tabular-nums font-medium ${upnl >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{formatInr(upnl)}</span>
@@ -1387,7 +1426,7 @@ export default function LivePage() {
               {trades.map((t, i) => (
                 <div key={i} className="flex justify-between border-b border-[var(--divider)] py-0.5">
                   <span className="text-[var(--strong)]">
-                    <span className="text-[var(--muted)]">#{t.run_id}</span> {t.action} {t.units} {t.ticker} <Badge>{t.tag}</Badge>
+                    <span className="text-[var(--muted)]">#{t.run_id}</span> {t.action} {t.units} {formatOptionSymbol(t.ticker)} <Badge>{t.tag}</Badge>
                   </span>
                   <span className="text-[var(--muted)]">{formatInr(t.price, 2)}</span>
                 </div>

@@ -380,6 +380,21 @@ class LiveSession:
         return out
 
     # ----------------------------------------------------------- views
+    def _lot_size(self, symbol: str) -> int | None:
+        """Contract lot size for an option symbol, so the UI can show tradable lots
+        (= units / lot_size) instead of the count of lot-*records*. None for equity /
+        non-option symbols. Prefers a basket strategy's own per-name sizing, then the
+        static/override spec via ``parse_option``."""
+        inst = parse_option(symbol, lot_overrides=getattr(self.strategy, "lot_overrides", None))
+        if inst is None:
+            return None
+        name_lot = getattr(self.strategy, "name_lot", None)  # basket strategies know their sizing
+        if isinstance(name_lot, dict) and name_lot.get(inst.underlying):
+            return int(name_lot[inst.underlying])
+        # parse() returns lot_size=1 for an underlying it can't size (no static spec / override).
+        # Every real F&O lot is >1, so treat 1 as "unknown" rather than showing units-as-lots.
+        return inst.lot_size if (inst.lot_size and inst.lot_size > 1) else None
+
     def snapshot(self) -> dict:
         """Current positions + cash + mark-to-market equity (for broadcast/persist)."""
         closes = self.market.mark_prices()
@@ -396,7 +411,8 @@ class LiveSession:
                 {
                     "symbol": symbol,
                     "units": units,
-                    "lots": len(lots),
+                    "lots": len(lots),           # count of lot-RECORDS (fills) — the manual-close cap
+                    "lot_size": self._lot_size(symbol),  # contract lot size → tradable lots = units / lot_size
                     "direction": direction,  # +1 long / −1 short — for the payoff diagram
                     "avg_price": cost / units if units else 0.0,
                     "ltp": ltp,

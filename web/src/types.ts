@@ -398,7 +398,8 @@ export interface ManualOrderInput {
 export interface LivePosition {
   symbol: string;
   units: number;
-  lots: number;
+  lots: number; // count of lot-records (fills) — the manual-close cap, NOT tradable lots
+  lot_size?: number | null; // contract lot size (options); tradable lots = units / lot_size
   direction?: number; // +1 long / −1 short (for the payoff diagram)
   avg_price: number;
   ltp: number | null;

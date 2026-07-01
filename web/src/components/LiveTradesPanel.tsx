@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { formatInr } from "../lib/format";
+import { formatOptionSymbol } from "../lib/symbol";
 import type { Trade } from "../types";
 
 const EXITS = new Set(["SELL", "COVER", "SETTLE"]);
@@ -58,7 +59,7 @@ export default function LiveTradesPanel({ runId, version }: { runId: number; ver
               return (
                 <tr key={i} className="border-t border-slate-800">
                   <td className="py-1 pr-3">{t.date}</td>
-                  <td className="py-1 pr-3 font-mono">{t.ticker}</td>
+                  <td className="py-1 pr-3 whitespace-nowrap">{formatOptionSymbol(t.ticker)}</td>
                   <td className={`py-1 pr-3 ${isExit ? "text-rose-700 dark:text-rose-300" : "text-emerald-700 dark:text-emerald-300"}`}>{t.action}</td>
                   <td className="py-1 pr-3 text-right">{t.units}</td>
                   <td className="py-1 pr-3 text-right">{formatInr(t.price, 2)}</td>

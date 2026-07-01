@@ -67,6 +67,13 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 - ruff + black + mypy, line-length 100. `pytest` runs with coverage (see `pyproject.toml`).
 - Active frontier: the **Donchian basket strangle** (`donchian_strangle_monthly`) — note it has **no
   backtest path**; it's only deployed live/paper from the screener.
+- **Donchian flip default:** new deploys roll a breached name **intraday** (`breach_basis="touch"`),
+  **once per name per day** (`last_flip_day` guard), up to `max_flips=3` (two rolls, then close the
+  name on the next breach). Defaults live in the deploy layer (`api/models.py:DonchianDeploy`); the
+  strategy **constructor** stays `close`/2 as the conservative backstop for a param-less recovery
+  (CLAUDE.md §1). To change a **running** deploy's config, edit its `params_snapshot` in the DB and
+  restart — `live/recovery.py` rebuilds the strategy from it (persisted `flip_count`/`last_flip_day`
+  are preserved via `state`). There's no in-place param-edit endpoint.
 
 ## 9. Frontend (`web/`) gotchas
 - **Router state vs legacy redirects:** several old paths are `<Navigate to=... replace />` redirects in
@@ -84,6 +91,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   Tables persist via `localStorage`, so data can show even with the backend down. Use the shared
   `SessionBanner` (`components/redesign.tsx`) on any new broker-session-gated screener/deploy page —
   it distinguishes backend-down from no-session — and give disabled action buttons a `title` reason.
+- **Option tickers are `UNDERLYING|YYYY-MM-DD|STRIKE|RIGHT`** — never render the raw form: the `|`
+  reads as an `I` (`NIFTYI2026-07-07I24500ICE`). Display option symbols through
+  `formatOptionSymbol()` (`lib/symbol.ts`) → `NIFTY 24500 CE · 7 Jul '26`; it passes equity tickers
+  (no pipes) through unchanged, so it's safe to wrap any `.symbol` / `.ticker` you print.
 
 ## 10. Running locally
 ```bash
