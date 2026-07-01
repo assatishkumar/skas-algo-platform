@@ -945,13 +945,9 @@ function DeploymentTile({
   // "Pause" = the auto-loop toggle: decisions freeze, marking/P&L keep updating.
   const auto = snapshot?.auto ?? true;
   const paused = dep.status === "active" && snapshot != null && !auto;
-  // Options tiles surface margin + net credit/debit instead of equity value.
+  // Options tiles surface the blocked margin (in the header) instead of equity value.
   const marginUsed = snapshot?.margin_used ?? m.margin_used ?? null;
-  const netCredit = snapshot?.net_credit ?? m.net_credit ?? null;
   const realized = snapshot?.realized_pnl ?? m.realized_pnl ?? null;
-  // An options run that has flattened (no open legs) → show its booked Realized P&L in place of
-  // the now-meaningless live net credit.
-  const optFlat = isOptions && positions === 0;
 
   // When a deployment is opened, pull a fresh snapshot so the positions panel populates
   // immediately instead of waiting for the next WebSocket tick.
@@ -1091,17 +1087,11 @@ function DeploymentTile({
       {/* Stat tiles */}
       <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
         <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2">
-          <div className="text-[var(--muted)] text-[11px] mb-0.5">
-            {isOptions && !optFlat ? (netCredit != null && netCredit < 0 ? "Net debit" : "Net credit") : "Realized P&L"}
-          </div>
+          <div className="text-[var(--muted)] text-[11px] mb-0.5">Realized</div>
           <div className="font-semibold tabular-nums">
-            {isOptions && !optFlat
-              ? (netCredit != null
-                  ? <span className={netCredit >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}>{formatInr(Math.abs(netCredit))}</span>
-                  : <span className="text-[var(--strong)]">—</span>)
-              : realized != null
-                ? <span className={realized >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}>{formatInr(realized)}</span>
-                : <span className="text-[var(--strong)]">—</span>}
+            {realized != null
+              ? <span className={realized >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}>{formatInr(realized)}</span>
+              : <span className="text-[var(--strong)]">—</span>}
           </div>
         </div>
         <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2">
