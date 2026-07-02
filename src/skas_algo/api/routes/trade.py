@@ -249,7 +249,14 @@ def donchian_analyze(
         ivp_min=body.ivp_min, require_iv_gt_hv=body.require_iv_gt_hv, hv_window=body.hv_window,
         skip_leg_min_premium_pct=body.skip_leg_min_premium_pct, round_out=body.round_out,
         breakout_atm=body.breakout_atm, lots_per_name=max(1, body.lots_per_name),
+        min_hv_ratio=body.min_hv_ratio, min_channel_width_pct=body.min_channel_width_pct,
     )
+    # Live India VIX for the market-stress advisory (the backtest's VIX rule can't act
+    # mechanically live — lots are the owner's call — so the UI warns instead).
+    try:
+        live_vix = adapter.underlying_ltp("INDIA VIX")
+    except Exception:  # pragma: no cover - network hiccup
+        live_vix = None
     # NIFTY daily series (once) → the index trading calendar (holiday-adjusted anchors) + per-name beta.
     try:
         nifty_df = cache.get_prices("NIFTY 50", start_date=today - timedelta(days=400), end_date=today)
@@ -309,7 +316,7 @@ def donchian_analyze(
     tradeable = sum(1 for r in rows if r.get("status") in ("strangle", "CE-only", "PE-only"))
     journal_safe("screen", f"Donchian screen: {len(rows)} names, {tradeable} tradeable",
                  strategy="donchian_strangle_monthly", detail=f"sell expiry {sell.isoformat()}")
-    return {"as_of": today.isoformat(), "dates": dates, "rows": rows}
+    return {"as_of": today.isoformat(), "dates": dates, "rows": rows, "vix": live_vix}
 
 
 @router.post("/options/donchian/portfolio")

@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 import pandas as pd
+import pytest
 
 from skas_algo.data.options_provider import build_live_options_run
 from skas_algo.engine.live import LiveSession
@@ -614,3 +615,32 @@ def test_settles_at_expiry():
     settle = sess.run_decision(datetime(2026, 1, 13, 15, 20))  # expiry day
     assert any(e["action"] == "SETTLE" for e in settle)
     assert not sess.portfolio.lot_symbols() and strat.done
+
+
+# ────────────────────────────── entry gates ported from the backtest loss study
+
+def test_analyze_name_tight_channel_gate():
+    # Default _ohlc: range 900–1100 on spot 1000 → width 20%. A 25% floor excludes it;
+    # legs are KEPT (excluded rows stay deployable via manual override, like IVP).
+    row = _analyze(params=DonchianParams(min_channel_width_pct=25.0))
+    assert row["status"] == "excluded:filter" and "channel 20.0%" in row["reason"]
+    assert row["ce"] is not None and row["pe"] is not None
+    assert row["width_pct"] == pytest.approx(20.0)
+    # Below the floor it passes untouched.
+    assert _analyze(params=DonchianParams(min_channel_width_pct=8.0))["status"] == "strangle"
+
+
+def test_analyze_name_vol_compression_gate():
+    # Closes: 60 lively bars (±2%) then 20 flat bars → HV20 collapses vs HV60 (squeeze).
+    n = 80
+    days = [date(2025, 9, 1) + timedelta(days=i) for i in range(n)]
+    closes = [1000 * (1 + 0.02 * ((i % 2) * 2 - 1)) for i in range(60)] + [1000.0] * 20
+    df = pd.DataFrame({"date": days, "open": closes, "high": [c + 5 for c in closes],
+                       "low": [c - 5 for c in closes], "close": closes})
+    row = _analyze(df=df, range_start=date(2025, 9, 1), range_end=date(2025, 11, 19),
+                   params=DonchianParams(min_hv_ratio=0.85))
+    assert row["hv_ratio"] is not None and row["hv_ratio"] < 0.85
+    assert row["status"] == "excluded:filter" and "vol squeeze" in row["reason"]
+    # The same name passes with the gate off (and the ratio is still reported).
+    ungated = _analyze(df=df, range_start=date(2025, 9, 1), range_end=date(2025, 11, 19))
+    assert ungated["status"] == "strangle" and ungated["hv_ratio"] < 0.85

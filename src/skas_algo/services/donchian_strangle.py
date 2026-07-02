@@ -49,6 +49,10 @@ class DonchianParams:
     max_flips: int = 2                     # per name (Phase 2)
     breakout_atm: bool = True              # spot beyond the Donchian range → skip the would-be ITM
     #                                        leg and sell the ATM opposite leg (CE breakout → ATM PE)
+    # Entry gates ported from the donchian_strangle_bt loss study (run 186): the danger
+    # signature is vol COMPRESSION + a tight channel, not rising vol. 0 = off.
+    min_hv_ratio: float = 0.0              # exclude when HV(hv_window)/HV(60) < this (~0.85)
+    min_channel_width_pct: float = 0.0     # exclude when (high−low)/spot·100 < this (~8)
 
 
 # ───────────────────────────────────────────────────────────── per-name math
@@ -225,6 +229,12 @@ def analyze_name(
         reason = (f"breakout {'↑' if breakout == 'up' else '↓'} — spot beyond range, ATM "
                   f"{'PE' if breakout == 'up' else 'CE'} only")
 
+    # Entry-gate inputs (also returned on the row so the UI can show them): channel width
+    # = the strike cushion as % of spot; hv_ratio = short- vs medium-window realized vol.
+    width_pct = (range_high - range_low) / spot * 100.0 if spot else None
+    hv60 = annualized_hv(df["close"].tolist(), 60) if df is not None and len(df) else None
+    hv_ratio = (hv / hv60) if (hv is not None and hv60 and hv60 > 0) else None
+
     # Exclusion filters (spec §6) override the status but KEEP the legs, so an excluded name can
     # still be selected for deploy with its rule-based strikes as the default.
     if _event_in_window(event, entry_date, sell_expiry):
@@ -233,6 +243,16 @@ def analyze_name(
         status, reason = "excluded:filter", f"IVP {ivp:.0f} < {params.ivp_min:.0f}"
     elif params.require_iv_gt_hv and atm_iv is not None and hv is not None and not (atm_iv > hv):
         status, reason = "excluded:filter", f"ATMIV {atm_iv:.1f} ≤ HV {hv:.1f}"
+    elif (params.min_channel_width_pct > 0 and width_pct is not None
+          and width_pct < params.min_channel_width_pct):
+        status, reason = "excluded:filter", (
+            f"channel {width_pct:.1f}% < {params.min_channel_width_pct:.0f}% — strikes too close"
+        )
+    elif (params.min_hv_ratio > 0 and hv_ratio is not None
+          and hv_ratio < params.min_hv_ratio):
+        status, reason = "excluded:filter", (
+            f"HV{params.hv_window}/HV60 {hv_ratio:.2f} < {params.min_hv_ratio:.2f} (vol squeeze)"
+        )
 
     units = lot_size * params.lots_per_name
     margin = 0.0
@@ -241,6 +261,7 @@ def analyze_name(
     if pe_ok:
         margin += short_option_margin(spot, units, 1, MarginParams())
     return {**base, "expiry": sell_expiry.isoformat(), "range_high": range_high, "range_low": range_low,
+            "width_pct": width_pct, "hv_ratio": hv_ratio,
             "ce": ce, "pe": pe, "margin": margin, "strike_step": strike_step(strikes),
             "breakout": breakout, "reason": reason, "status": status, "error": None}
 

@@ -132,6 +132,10 @@ export default function DonchianStranglePage() {
   const [roundOut, setRoundOut] = useState(saved.roundOut ?? false);
   const [requireIvGtHv, setRequireIvGtHv] = useState(saved.requireIvGtHv ?? true);
   const [breakoutAtm, setBreakoutAtm] = useState(saved.breakoutAtm ?? true);
+  // Entry gates ported from the backtest loss study (0 = off) + VIX advisory threshold.
+  const [minHvRatio, setMinHvRatio] = useState(saved.minHvRatio ?? 0);
+  const [minWidth, setMinWidth] = useState(saved.minWidth ?? 0);
+  const [vixWarn, setVixWarn] = useState(saved.vixWarn ?? 20);
   const [lots, setLots] = useState(saved.lots ?? 1);
   // Portfolio params.
   const [hedgeOtm, setHedgeOtm] = useState(saved.hedgeOtm ?? 4.5);
@@ -174,10 +178,12 @@ export default function DonchianStranglePage() {
   useEffect(() => {
     localStorage.setItem(PKEY, JSON.stringify({
       accountId, csvRows, csvName, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv, breakoutAtm,
+      minHvRatio, minWidth, vixWarn,
       lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, legTargetEnabled, legTargetPct,
       flipDelta, breachBuffer, result,
     }));
   }, [accountId, csvRows, csvName, ivpMin, hvWindow, skipLegPct, roundOut, requireIvGtHv, breakoutAtm,
+      minHvRatio, minWidth, vixWarn,
       lots, hedgeOtm, betaWeight, slPct, targetEnabled, targetPct, legTargetEnabled, legTargetPct,
       flipDelta, breachBuffer, result]);
 
@@ -211,6 +217,7 @@ export default function DonchianStranglePage() {
         entry_date: entryDate || null, sell_expiry: sellExpiry || null,
         ivp_min: ivpMin, require_iv_gt_hv: requireIvGtHv, hv_window: hvWindow,
         skip_leg_min_premium_pct: skipLegPct, round_out: roundOut, breakout_atm: breakoutAtm,
+        min_hv_ratio: minHvRatio, min_channel_width_pct: minWidth,
         lots_per_name: lots,
       }),
     onSuccess: (res) => {
@@ -383,6 +390,15 @@ export default function DonchianStranglePage() {
           <label className="flex flex-col gap-1" title="Premium floor: if a leg's credit is below this % of spot it's too cheap to sell — that name runs single-leg (the thin leg is skipped)">Skip leg &lt; (% spot)
             <input type="number" step="0.1" className={inputCls} value={skipLegPct} onChange={(e) => setSkipLegPct(Number(e.target.value))} />
           </label>
+          <label className="flex flex-col gap-1" title="Vol-compression gate (backtest study): exclude names whose recent realized vol (HV over the window above) is below this fraction of their 3-month vol. Squeezed names breach the most — 0.85 was the tested setting. 0 = off">HV ratio ≥ (0=off)
+            <input type="number" step="0.05" className={inputCls} value={minHvRatio} onChange={(e) => setMinHvRatio(Number(e.target.value))} />
+          </label>
+          <label className="flex flex-col gap-1" title="Tight-channel gate (backtest study): exclude names whose Donchian range is narrower than this % of spot — the strikes would hug spot and flip on any normal move. 8 was the tested setting. 0 = off">Channel ≥ % (0=off)
+            <input type="number" step="0.5" className={inputCls} value={minWidth} onChange={(e) => setMinWidth(Number(e.target.value))} />
+          </label>
+          <label className="flex flex-col gap-1" title="Market-stress advisory: when live India VIX is above this at screen time, a warning suggests half lots or skipping the cycle (the backtest's VIX rule; live sizing stays your call)">VIX warn &gt;
+            <input type="number" step="1" className={inputCls} value={vixWarn} onChange={(e) => setVixWarn(Number(e.target.value))} />
+          </label>
           <label className="flex flex-col gap-1" title="How far out-of-the-money the long NIFTY hedge legs are bought (% from NIFTY spot). The hedge is notional-matched to the basket">Hedge OTM (%)
             <input type="number" step="0.5" className={inputCls} value={hedgeOtm} onChange={(e) => setHedgeOtm(Number(e.target.value))} />
           </label>
@@ -431,6 +447,14 @@ export default function DonchianStranglePage() {
           {result && !result.error && (
             <span className="text-xs text-[var(--faint)]">
               as of {result.as_of} · range {result.dates.range_start}→{result.dates.range_end} · sell {result.dates.sell_expiry}
+              {result.vix != null && <> · VIX {result.vix.toFixed(1)}</>}
+            </span>
+          )}
+          {result?.vix != null && vixWarn > 0 && result.vix > vixWarn && (
+            <span className="rounded-md px-2 py-1 text-xs font-medium"
+              style={{ background: "var(--warn-bg)", color: "var(--warn-text)" }}>
+              ⚠ VIX {result.vix.toFixed(1)} &gt; {vixWarn} — stressed month: consider half lots or
+              sitting this cycle out (the backtest's VIX rule cut drawdown ~50%)
             </span>
           )}
         </div>
@@ -478,7 +502,15 @@ export default function DonchianStranglePage() {
                         )}
                       </td>
                       <td className="py-1.5 px-2 text-right">{n1(r.spot)}</td>
-                      <td className="py-1.5 px-2 text-right text-xs text-[var(--muted)]">{r.range_low != null ? `${n1(r.range_low)}–${n1(r.range_high)}` : "—"}</td>
+                      <td className="py-1.5 px-2 text-right text-xs text-[var(--muted)]"
+                        title={r.hv_ratio != null ? `channel width ${r.width_pct?.toFixed(1)}% of spot · HV ratio ${r.hv_ratio.toFixed(2)}` : undefined}>
+                        {r.range_low != null ? `${n1(r.range_low)}–${n1(r.range_high)}` : "—"}
+                        {r.width_pct != null && (
+                          <span className={minWidth > 0 && r.width_pct < minWidth ? "text-[var(--warn-text)]" : ""}>
+                            {" "}({r.width_pct.toFixed(1)}%)
+                          </span>
+                        )}
+                      </td>
                       <td className="py-1.5 px-2 text-[var(--pos)]">{renderLeg(r, "pe")}</td>
                       <td className="py-1.5 px-2 text-[var(--danger)]">{renderLeg(r, "ce")}</td>
                       <td className="py-1.5 px-2 text-right text-[var(--pos)] font-medium">{(() => {
