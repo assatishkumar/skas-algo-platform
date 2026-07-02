@@ -16,6 +16,25 @@ import { Card, ErrorBox, Spinner } from "./ui";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
+// Backend caps a single refresh at 120 days/call (MAX_REFRESH_DAYS). Split a longer span into
+// ≤120-day windows so a big backfill (or a long incremental gap) auto-chunks with progress.
+const WINDOW_DAYS = 120;
+function addDaysISO(iso: string, days: number): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function dateWindows(startISO: string, endISO: string, maxDays = WINDOW_DAYS): [string, string][] {
+  const out: [string, string][] = [];
+  let cur = startISO;
+  while (cur <= endISO) {
+    const winEnd = addDaysISO(cur, maxDays - 1);
+    out.push([cur, winEnd < endISO ? winEnd : endISO]);
+    cur = addDaysISO(out[out.length - 1][1], 1);
+  }
+  return out;
+}
+
 type UnderlyingItem = { key: string; label: string; disabled: boolean; hint: string };
 
 // Options support real NIFTY/BANKNIFTY (bhavcopy) + synthetic GOLD (Black-76, GOLDM specs).
@@ -116,42 +135,73 @@ function RefreshControl({
   const [start, setStart] = useState("2024-07-08");
   const [end, setEnd] = useState(todayISO());
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
-  async function run(s: string, e: string) {
+  // Auto-chunk [s, e] into ≤120-day windows and fetch each in turn, so a long backfill or a wide
+  // incremental gap works in one click with a progress indicator instead of the backend rejecting it.
+  async function runRange(s: string, e: string) {
+    if (s > e) {
+      setMsg("nothing to refresh — start is after end");
+      return;
+    }
+    const windows = dateWindows(s, e);
     setBusy(true);
     setMsg(null);
+    setProgress({ done: 0, total: windows.length });
+    const fn = kind === "options" ? api.optionsRefresh : api.futuresRefresh;
+    let rows = 0;
+    let days = 0;
+    let errs = 0;
     try {
-      const fn = kind === "options" ? api.optionsRefresh : api.futuresRefresh;
-      const r = await fn({ underlyings: [underlying], start_date: s, end_date: e });
+      for (let i = 0; i < windows.length; i += 1) {
+        const [ws, we] = windows[i];
+        const r = await fn({ underlyings: [underlying], start_date: ws, end_date: we });
+        rows += r.rows_saved;
+        days += r.days_saved;
+        errs += r.errors.length;
+        setProgress({ done: i + 1, total: windows.length });
+      }
       setMsg(
-        `Saved ${r.rows_saved.toLocaleString("en-IN")} rows over ${r.days_saved} days` +
-          (r.errors.length ? ` · ${r.errors.length} day(s) failed` : ""),
+        `Saved ${rows.toLocaleString("en-IN")} rows over ${days} days` +
+          (errs ? ` · ${errs} day(s) failed` : ""),
       );
       onDone();
-    } catch (e) {
-      setMsg((e as Error).message);
+    } catch (err) {
+      setMsg((err as Error).message);
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
 
   const today = todayISO();
+  // Incremental default: pick up the day after the last cached date; first-ever run backfills from
+  // the date-range "From" field.
+  const incStart = coverageEnd ? addDaysISO(coverageEnd, 1) : start;
   const upToDate = !!coverageEnd && coverageEnd >= today;
 
   return (
     <Card>
       <div className="flex flex-wrap items-end gap-3">
-        {coverageEnd && (
-          <button
-            onClick={() => run(coverageEnd, today)}
-            disabled={busy || upToDate}
-            title={upToDate ? "Already up to date" : `Fetch ${coverageEnd} → ${today}`}
-            className="rounded-md bg-emerald-700 hover:bg-emerald-600 text-white px-3 py-1.5 text-sm font-medium disabled:opacity-50"
-          >
-            {busy ? "Refreshing…" : upToDate ? "Up to date" : "Refresh to latest"}
-          </button>
-        )}
+        <button
+          onClick={() => runRange(incStart, today)}
+          disabled={busy || upToDate}
+          title={
+            upToDate
+              ? "Already up to date"
+              : `Fetch ${incStart} → ${today}${coverageEnd ? "" : " (initial backfill)"}`
+          }
+          className="rounded-md bg-emerald-700 hover:bg-emerald-600 text-white px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+        >
+          {progress
+            ? `Refreshing ${progress.done}/${progress.total}…`
+            : upToDate
+              ? "Up to date"
+              : coverageEnd
+                ? "Refresh to latest"
+                : "Refresh to today"}
+        </button>
         <span className="text-xs text-slate-500">or a date range:</span>
         <label className="block">
           <span className="block text-xs text-slate-400 mb-1">From</span>
@@ -162,15 +212,23 @@ function RefreshControl({
           <input type="date" className={inputClass} value={end} onChange={(e) => setEnd(e.target.value)} />
         </label>
         <button
-          onClick={() => run(start, end)}
+          onClick={() => runRange(start, end)}
           disabled={busy}
           className="rounded-md bg-brand hover:bg-brand-light px-3 py-1.5 text-sm font-medium disabled:opacity-50"
         >
           {busy ? "Refreshing…" : `Refresh ${kind}`}
         </button>
-        <span className="text-xs text-slate-500">NSE bhavcopy (≤120 days/run; ~1 file per trading day)</span>
+        <span className="text-xs text-slate-500">NSE bhavcopy (auto-chunked ≤120 days/call; ~1 file per trading day)</span>
         {msg && <span className="text-xs text-slate-400">{msg}</span>}
       </div>
+      {progress && (
+        <div className="mt-2 h-1.5 w-full max-w-md rounded-full bg-slate-800 overflow-hidden">
+          <div
+            className="h-full bg-emerald-500 transition-[width] duration-200"
+            style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }}
+          />
+        </div>
+      )}
     </Card>
   );
 }
@@ -443,11 +501,16 @@ function FuturesChart({ underlying, refreshKey }: { underlying: string; refreshK
 export function FuturesDataSection() {
   const [underlying, setUnderlying] = useState("NIFTY");
   const [refreshKey, setRefreshKey] = useState(0);
+  const { data: cov } = useQuery<DerivCoverage>({
+    queryKey: ["futures-coverage", underlying, refreshKey],
+    queryFn: () => api.futuresCoverage(underlying),
+    retry: false,
+  });
   return (
     <div className="space-y-4">
       <UnderlyingSelector value={underlying} onChange={setUnderlying} items={FUT_UNDERLYINGS} />
       <CoverageCard underlying={underlying} kind="futures" refreshKey={refreshKey} />
-      <RefreshControl underlying={underlying} kind="futures" onDone={() => setRefreshKey((k) => k + 1)} />
+      <RefreshControl underlying={underlying} kind="futures" onDone={() => setRefreshKey((k) => k + 1)} coverageEnd={cov?.end_date} />
       <FuturesChart underlying={underlying} refreshKey={refreshKey} />
     </div>
   );

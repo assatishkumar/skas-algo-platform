@@ -76,6 +76,7 @@ function RefreshData({ id }: { id: number }) {
   const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
   const [universe, setUniverse] = useState("nifty50");
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -83,14 +84,31 @@ function RefreshData({ id }: { id: number }) {
     setBusy(true);
     setErr(null);
     setSummary(null);
+    setProgress(null);
     try {
-      const { refreshed } = await brokers.refreshCache(id, { universe });
-      const entries = Object.values(refreshed);
-      const errors = entries.filter((e) => e.error).length;
-      const dates = (entries.map((e) => e.last_date).filter(Boolean) as string[]).sort();
-      const latest = dates.length ? dates[dates.length - 1] : undefined;
+      // Resolve the universe to its cached symbols, then refresh in small chunks so the button
+      // shows real progress (e.g. "Refreshing 45/491…") instead of one long opaque call.
+      const { symbols } = await api.universeSymbols(universe);
+      if (!symbols.length) {
+        setErr("universe resolved to no cached symbols");
+        return;
+      }
+      const CHUNK = 15;
+      let ok = 0;
+      let errors = 0;
+      let latest: string | undefined;
+      setProgress({ done: 0, total: symbols.length });
+      for (let i = 0; i < symbols.length; i += CHUNK) {
+        const { refreshed } = await brokers.refreshCache(id, { symbols: symbols.slice(i, i + CHUNK) });
+        for (const e of Object.values(refreshed)) {
+          if (e.error) errors += 1;
+          else ok += 1;
+          if (e.last_date && (!latest || e.last_date > latest)) latest = e.last_date;
+        }
+        setProgress({ done: Math.min(i + CHUNK, symbols.length), total: symbols.length });
+      }
       setSummary(
-        `Refreshed ${entries.length} symbols on the shared session` +
+        `Refreshed ${ok} symbols on the shared session` +
           (latest ? ` · latest ${latest}` : "") +
           (errors ? ` · ${errors} errors` : ""),
       );
@@ -98,6 +116,7 @@ function RefreshData({ id }: { id: number }) {
       setErr((e as Error).message);
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
 
@@ -121,10 +140,18 @@ function RefreshData({ id }: { id: number }) {
           disabled={busy}
           className="rounded bg-slate-700 hover:bg-slate-600 px-3 py-1.5 text-xs disabled:opacity-50"
         >
-          {busy ? "Refreshing…" : "Refresh data"}
+          {progress ? `Refreshing ${progress.done}/${progress.total}…` : busy ? "Refreshing…" : "Refresh data"}
         </button>
         {summary && <span className="text-xs text-emerald-600 dark:text-emerald-400">{summary}</span>}
       </div>
+      {progress && (
+        <div className="h-1.5 w-full max-w-md rounded-full bg-slate-800 overflow-hidden">
+          <div
+            className="h-full bg-emerald-500 transition-[width] duration-200"
+            style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }}
+          />
+        </div>
+      )}
       {err && <ErrorBox message={err} />}
     </div>
   );
