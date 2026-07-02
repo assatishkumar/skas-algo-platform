@@ -66,7 +66,27 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 - Feature branches; `main` is default. Commit/push only when asked.
 - ruff + black + mypy, line-length 100. `pytest` runs with coverage (see `pyproject.toml`).
 - Active frontier: the **Donchian basket strangle** (`donchian_strangle_monthly`) — note it has **no
-  backtest path**; it's only deployed live/paper from the screener.
+  backtest path**; it's only deployed live/paper from the screener. Its **backtest-only sibling** is
+  `donchian_strangle_bt`: a subclass that re-enters expiry-anchored cycles from a schedule injected
+  by `services/donchian_bt.build_cycle_schedule` (the "backtest screener") — the live class stays
+  byte-identical (its live-market calls are `getattr`-guarded and fall back to `ctx.close`). Stock
+  option premiums are **synthetic Black-Scholes** (σ = HV20 × `vol_multiplier`; no stock-chain
+  history exists — `data/basket_options.py` routes NIFTY contracts to the real cached chain, stocks
+  to BS); calibrate the multiplier on the **/research** page (BS-vs-live panel, ~1.1 as of Jul 2026).
+  Stock lot sizes in `contract_specs._STOCK_LOT_SIZES` are a FLAT 2026-07 Kite snapshot.
+- The **/research** page: Donchian breakout study (cache-only daily bars; expiry-anchored cycles;
+  channel breakout/re-entry/whipsaw stats + live-rule flip simulation) and the BS-vs-live
+  calibration (session-gated, strictly read-only). Backend: `api/routes/research.py`,
+  `services/donchian_study.py`, `services/bs_calibration.py`.
+- **Donchian entry gates** (from the run-186 loss study; danger = vol COMPRESSION + tight channel,
+  NOT rising vol): `min_hv_ratio` (HV20/HV60, ~0.85) and `min_channel_width_pct` (~8) exist in BOTH
+  the backtest schedule builder and the live screener (`DonchianParams`; default 0 = off; excluded
+  rows keep their legs). The backtest additionally has VIX half/skip rules + notional-per-name
+  sizing (₹7.5L default — the flat lot table is split-unsafe, see KOTAKBANK); live, VIX is an
+  ADVISORY banner only (lots are the owner's call). Beware: the live screener's auto range window
+  is cycle-TO-DATE, so early in a cycle the width gate excludes ~everything (correctly — the
+  strikes really would hug spot); it reads like the backtest only late-cycle or with a range
+  override.
 - **Donchian flip default:** new deploys roll a breached name **intraday** (`breach_basis="touch"`),
   **once per name per day** (`last_flip_day` guard), up to `max_flips=3` (two rolls, then close the
   name on the next breach). Defaults live in the deploy layer (`api/models.py:DonchianDeploy`); the
@@ -117,4 +137,10 @@ Health check: `curl http://localhost:8080/api/v1/health`. The DB schema is creat
 - **Detached dev servers (agents):** the harness reaps `run_in_background` tasks and kills child
   processes at turn end. To keep servers up across turns, launch with `nohup … & disown`
   (macOS has **no** `setsid`). The durable option is the user running them in their own terminal.
+- **Parity tests vs a running backend (DuckDB lock).** `test_sst_parity` / `test_sst_fifo_parity`
+  read the REAL skas-data cache, and skas-data opens DuckDB read-write — **one process only**. If
+  the running backend has touched the cache since its last `--reload` restart, those tests fail
+  with `IOException: Could not set lock … held in <backend pid>`. That's environmental, not a code
+  failure: trigger a backend reload (touch any .py) or stop it, then rerun. Everything else in the
+  suite uses fakes and is immune.
 </content>
