@@ -20,13 +20,17 @@ from .instrument import is_option_symbol
 
 class OptionMarketView:
     def __init__(self, loader, chain: OptionChainView, calendar: list, lot_overrides: dict | None = None,
-                 equity_loader=None):
+                 equity_loader=None, day_range_provider=None):
         # loader(symbol, start, end) -> DataFrame with 'date' + 'close' for one contract.
         # equity_loader (optional, same shape): fallback for PLAIN symbols (e.g. an ETF
         # held inside a covered-call options run) — the options loader returns None for
         # anything that isn't a contract symbol. None → behaviour unchanged.
+        # day_range_provider (optional): (underlying, date) -> (high, low) | None — the
+        # underlying's daily bar range, wired only by basket runs so a touch-basis breach
+        # check can see intraday extremes on daily bars. None → day_range returns None.
         self._loader = loader
         self._equity_loader = equity_loader
+        self._day_range = day_range_provider
         self.chain = chain
         self.lot_overrides = lot_overrides
         self.unified_dates: list[pd.Timestamp] = [pd.Timestamp(d) for d in calendar]
@@ -97,6 +101,21 @@ class OptionMarketView:
 
     def mark_prices(self) -> dict[str, float]:
         return dict(self._last_close)
+
+    def index_spot(self, underlying: str) -> float | None:
+        """Underlying spot on the current bar (close basis, forward-filled) — parity with
+        the live view's ``index_spot`` so spot-driven strategies (donchian breach flips)
+        run in backtests too. Same value ``chain.spot`` would give for the bar date."""
+        if self._current is None:
+            return None
+        return self.chain.spot(underlying, self._current.date())
+
+    def day_range(self, underlying: str) -> tuple[float, float] | None:
+        """(high, low) of the underlying's daily bar on the current date, when the run
+        builder wired a provider (basket backtests). None = no provider / no bar."""
+        if self._day_range is None or self._current is None:
+            return None
+        return self._day_range(underlying, self._current.date())
 
     # Options strategies don't use Donchian levels; present for protocol completeness.
     def rolling_high(self, symbol: str) -> float:  # pragma: no cover - unused

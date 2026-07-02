@@ -35,6 +35,26 @@ _LOT_SIZES: dict[str, list[tuple[date, int]]] = {
     "GOLD": [(date(2000, 1, 1), 10)],
 }
 
+# Nifty-50 stock F&O lot sizes — snapshot of the Kite NFO instruments dump (2026-07-02),
+# used by the synthetic donchian_strangle_bt backtest. FLAT approximation: NSE revises
+# stock lots as prices move (contract-value band) and the historical revision schedule is
+# NOT modeled here, so an old backtest sizes with TODAY's lot. Overridable per run via
+# params["contract_specs"]. LTIM has no F&O listing (absent on purpose).
+_STOCK_LOT_SIZES: dict[str, int] = {
+    "ADANIENT": 309, "ADANIPORTS": 475, "APOLLOHOSP": 125, "ASIANPAINT": 250,
+    "AXISBANK": 625, "BAJAJ-AUTO": 75, "BAJAJFINSV": 300, "BAJFINANCE": 750,
+    "BHARTIARTL": 475, "BPCL": 1975, "BRITANNIA": 125, "CIPLA": 425, "COALINDIA": 1350,
+    "DIVISLAB": 100, "DRREDDY": 625, "EICHERMOT": 100, "GRASIM": 250, "HCLTECH": 400,
+    "HDFCBANK": 650, "HDFCLIFE": 1100, "HEROMOTOCO": 150, "HINDALCO": 700,
+    "HINDUNILVR": 300, "ICICIBANK": 700, "INDUSINDBK": 700, "INFY": 400, "ITC": 1725,
+    "JSWSTEEL": 675, "KOTAKBANK": 2000, "LT": 175, "M&M": 200, "MARUTI": 50,
+    "NESTLEIND": 500, "NTPC": 1500, "ONGC": 2250, "POWERGRID": 1900, "RELIANCE": 500,
+    "SBILIFE": 375, "SBIN": 750, "SHRIRAMFIN": 825, "SUNPHARMA": 350, "TATACONSUM": 550,
+    "TATASTEEL": 2750, "TCS": 225, "TECHM": 600, "TITAN": 175, "TMPV": 1600,
+    "ULTRACEMCO": 50, "WIPRO": 3000,
+}
+_LOT_SIZES.update({u: [(date(2000, 1, 1), s)] for u, s in _STOCK_LOT_SIZES.items()})
+
 
 def lot_size_for(underlying: str, on: date, overrides: dict | None = None) -> int:
     """Lot size in force for ``underlying`` on ``on``.

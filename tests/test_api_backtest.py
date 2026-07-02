@@ -46,7 +46,7 @@ def test_universes_listed_with_counts(api_client: TestClient):
     resp = api_client.get("/api/v1/universes")
     assert resp.status_code == 200
     by_name = {u["name"]: u for u in resp.json()}
-    assert set(by_name) == {"nifty50", "nifty100", "nifty200", "nifty500"}
+    assert set(by_name) == {"nifty25", "nifty50", "nifty100", "nifty200", "nifty500"}
     # Only RELIANCE/TCS/INFY are "available", so counts reflect the intersection.
     assert by_name["nifty50"]["count"] == 3
     assert by_name["nifty50"]["label"] == "Nifty 50"

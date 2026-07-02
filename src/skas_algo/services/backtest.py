@@ -73,7 +73,47 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
 
         sd = get_data_cache()
         synthetic = is_synthetic(underlying) or bool(req.params.get("synthetic"))
-        if synthetic:
+        if req.strategy_id == "donchian_strangle_bt":
+            # Basket run: ~50 stock underlyings priced via Black-Scholes (no stock-option
+            # history exists) + the REAL cached NIFTY chain for the hedge legs, and the
+            # per-cycle leg schedule (the "backtest screener") injected post-construction —
+            # deterministic from (universe, dates, params), so it is NOT persisted.
+            from skas_algo.data.basket_options import build_basket_options_run
+            from skas_algo.services.donchian_bt import (
+                build_cycle_schedule,
+                estimate_capital,
+                resolve_basket,
+            )
+
+            names = resolve_basket(
+                req.universe or "nifty50",
+                set(sd.list_cached_symbols(asset_type="stock")),
+                exclude=req.params.get("exclude_symbols"),
+                include=req.params.get("include_symbols"),
+            )
+            price_kwargs = {k: req.params[k] for k in ("r", "vol_window", "vol_multiplier")
+                            if k in req.params}
+            market_view, _chain, settler, margin_model = build_basket_options_run(
+                sd, names, req.start_date, req.end_date,
+                lot_overrides=req.params.get("contract_specs"),
+                margin_params=req.params.get("margin"), equity_loader=loader, **price_kwargs,
+            )
+            sched_kwargs = {k: req.params[k] for k in (
+                "r", "vol_window", "vol_multiplier", "skip_leg_min_premium_pct", "round_out",
+                "breakout_atm", "lots_per_name", "hedge_enabled", "hedge_otm_pct",
+                "notional_per_name", "min_hv_ratio", "min_channel_width_pct",
+                "vix_half_threshold", "vix_skip_threshold",
+            ) if k in req.params}
+            schedule = build_cycle_schedule(sd, names, req.start_date, req.end_date,
+                                            **sched_kwargs)
+            strategy.set_cycles(schedule)
+            # Auto-capital (capital <= 0 from the form): the basket's size is fixed by
+            # lots-per-name, so capital is a funding consequence — modelled peak entry
+            # margin × 1.10, rounded up to the lakh. Persisted on the run like any capital.
+            if req.capital <= 0:
+                req.capital = estimate_capital(
+                    schedule, req.params.get("margin")) or 10_000_000
+        elif synthetic:
             opt_kwargs = {k: req.params[k]
                           for k in ("r", "vol_window", "strike_step", "strike_count", "vol_premium")
                           if k in req.params}
@@ -141,6 +181,13 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
         attach_underlying_timeline(get_data_cache(), report["options"], underlying.upper(),
                                    req.start_date, req.end_date)
     trades = _serialize_trades(result.transactions)
+    if req.strategy_id == "donchian_strangle_bt" and report.get("options") is not None:
+        # Cycle-first basket view (cycle → names → legs) — the generic per-leg positions
+        # table is unreadable for a ~50-underlying basket. The UI renders this instead.
+        from skas_algo.services.donchian_bt import basket_cycles_report
+
+        report["options"]["basket_cycles"] = to_native(
+            basket_cycles_report(trades, result.history))
 
     # Preview: hand back the computed report/trades WITHOUT writing to the DB. The client can
     # later persist the same result via persist_backtest (/backtest/save) — no recompute.

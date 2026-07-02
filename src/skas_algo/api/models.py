@@ -174,6 +174,10 @@ class DonchianAnalyzeRequest(BaseModel):
     breakout_atm: bool = True              # spot beyond range → sell the ATM opposite leg (skip ITM)
     lots_per_name: int = 1
     min_dte: int = 7
+    # Entry gates ported from the backtest loss study (0 = off): vol compression + tight
+    # channel marked the worst entries. Excluded rows keep their legs (deployable override).
+    min_hv_ratio: float = 0.0              # exclude when HV(hv_window)/HV60 < this (~0.85)
+    min_channel_width_pct: float = 0.0     # exclude when (high−low)/spot·100 < this (~8)
 
 
 class DonchianPortfolioRequest(BaseModel):
@@ -315,6 +319,37 @@ class RefreshCacheInput(BaseModel):
     symbols: list[str] = Field(default_factory=list)
     universe: str | None = None
     start_date: date | None = None
+
+
+class DonchianStudyRequest(BaseModel):
+    """Pure-price Donchian breakout study over expiry-anchored monthly cycles (Research page).
+
+    Cache-only — no broker session. Range = the previous FULL expiry→expiry window; trade
+    window = first trading day after the last monthly expiry → the next monthly expiry.
+    """
+
+    universe: str = "nifty50"
+    symbols: list[str] = Field(default_factory=list)  # explicit list overrides the universe
+    start_date: date = date(2010, 1, 1)
+    end_date: date | None = None      # None → today
+    buffer_pct: float = 0.5           # breach must clear the edge by this % (live default)
+    basis: str = "touch"              # "touch" (day high/low) | "close" (day close)
+    max_flips: int = 3                # live deploy default: two rolls, then close the name
+    include_index: bool = True        # add the NIFTY 50 row alongside the stocks
+    detail: bool = True               # include per-name-per-cycle rows (~10k small rows)
+
+
+class BsCalibrationRequest(BaseModel):
+    """Compare TODAY's Black-Scholes prices (sigma = realized HV) against the LIVE option
+    chain for the basket — quantifies the HV-vs-IV gap and suggests the ``vol_multiplier``
+    for the synthetic donchian backtest. Read-only (quote fetch only, never orders)."""
+
+    broker_account_id: int
+    names: list[str] = Field(default_factory=list)  # empty → nifty50 resolved server-side
+    hv_window: int = 20
+    r: float = 0.065
+    sell_expiry: str | None = None    # ISO; None → resolved like the screener (min_dte=7)
+    round_out: bool = False
 
 
 class DeploymentUpdate(BaseModel):

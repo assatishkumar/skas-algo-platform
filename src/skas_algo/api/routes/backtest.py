@@ -75,6 +75,22 @@ def list_universes(
     ]
 
 
+@router.get("/universes/{name}/symbols")
+def universe_symbols(
+    name: str, avail: set[str] = Depends(get_available_symbols)
+) -> dict:
+    """The cached symbols a named universe resolves to — lets the client chunk a cache refresh
+    into small batches (with a progress indicator) instead of one long blocking call."""
+    try:
+        syms = universes.resolve(name, avail)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not syms:
+        raise HTTPException(status_code=404,
+                            detail=f"universe {name!r} resolved to no cached symbols")
+    return {"name": name, "symbols": syms}
+
+
 def _resolve_universe(req: BacktestRequest, avail: set[str]) -> None:
     """Expand a named equity universe to its cached symbols, validating the request in place."""
     # Options (DERIV) runs trade a dynamic option chain for an underlying, so they

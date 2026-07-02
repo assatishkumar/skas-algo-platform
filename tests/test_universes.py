@@ -8,6 +8,7 @@ from skas_algo.data import universes
 
 
 def test_lists_present_and_sized():
+    assert len(universes.NIFTY_25) == 25
     assert len(universes.NIFTY_50) == 50
     assert len(universes.NIFTY_100) == 109  # user-provided (2025/26 index revisions)
     assert len(universes.NIFTY_200) == 199  # user-provided list (1 short of 200)
@@ -16,7 +17,9 @@ def test_lists_present_and_sized():
     for name in universes.UNIVERSES:
         symbols = universes.UNIVERSES[name][1]
         assert len(symbols) == len(set(symbols)), f"{name} has duplicates"
-    assert set(universes.UNIVERSES) == {"nifty50", "nifty100", "nifty200", "nifty500"}
+    assert set(universes.UNIVERSES) == {"nifty25", "nifty50", "nifty100", "nifty200", "nifty500"}
+    # the top-25-by-weight basket is a strict subset of the Nifty 50
+    assert set(universes.NIFTY_25) <= set(universes.NIFTY_50)
 
 
 def test_resolve_without_cache_returns_full_list():

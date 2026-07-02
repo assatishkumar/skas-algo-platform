@@ -25,6 +25,17 @@ NIFTY_50: list[str] = [
     "TECHM", "TITAN", "TMPV", "ULTRACEMCO", "WIPRO",
 ]
 
+# "Nifty 25" — the 25 heaviest Nifty-50 constituents by index weight (static snapshot,
+# Jul 2026; owner-requested basket for the Donchian strangle backtest — roughly halves
+# the margin vs the full 50). Same survivorship caveat as the other lists.
+NIFTY_25: list[str] = [
+    "HDFCBANK", "RELIANCE", "ICICIBANK", "BHARTIARTL", "INFY",
+    "ITC", "TCS", "LT", "AXISBANK", "SBIN",
+    "M&M", "KOTAKBANK", "HINDUNILVR", "BAJFINANCE", "SUNPHARMA",
+    "NTPC", "HCLTECH", "MARUTI", "TITAN", "ULTRACEMCO",
+    "TMPV", "POWERGRID", "TATASTEEL", "BAJAJFINSV", "ASIANPAINT",
+]
+
 # Nifty 100 — user-provided constituent list (as of June 2026; size reflects 2025/26
 # index revisions). Names without cached data are dropped by resolve().
 NIFTY_100: list[str] = [
@@ -207,6 +218,7 @@ NIFTY_500: list[str] = [
 
 # name -> (display label, symbol list)
 UNIVERSES: dict[str, tuple[str, list[str]]] = {
+    "nifty25": ("Nifty 25 (top by weight)", NIFTY_25),
     "nifty50": ("Nifty 50", NIFTY_50),
     "nifty100": ("Nifty 100", NIFTY_100),
     "nifty200": ("Nifty 200", NIFTY_200),
