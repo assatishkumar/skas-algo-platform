@@ -4,6 +4,9 @@ import type {
   BenchmarkPoint,
   BrokerAccount,
   BrokerConnectRequest,
+  BsCalibrationResult,
+  DonchianStudyRequest,
+  DonchianStudyResult,
   CompareRun,
   DataCoverage,
   DataSummary,
@@ -66,6 +69,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   strategies: () => request<{ strategies: string[] }>("/strategies"),
   universes: () => request<Universe[]>("/universes"),
+  universeSymbols: (name: string) =>
+    request<{ name: string; symbols: string[] }>(`/universes/${encodeURIComponent(name)}/symbols`),
   runs: (status?: string) =>
     request<RunSummary[]>(`/runs${status ? `?status=${status}` : ""}`),
   runUpdate: (id: number, body: { name?: string; notes?: string }) =>
@@ -177,6 +182,16 @@ export const api = {
     underlying: string; expiry: string; lot_size: number; legs: OptionTradeLeg[]; broker_account_id?: number | null;
   }) =>
     request<{ margin: number | null; source: string | null }>("/trade/options/margin", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+
+  // --- research (Donchian breakout study + BS-vs-live calibration) ---
+  researchDonchianStudy: (body: DonchianStudyRequest) =>
+    request<DonchianStudyResult>("/research/donchian-study", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  researchBsCalibration: (body: { broker_account_id: number; names?: string[]; hv_window?: number; r?: number; sell_expiry?: string | null; round_out?: boolean }) =>
+    request<BsCalibrationResult>("/research/bs-calibration", {
       method: "POST", body: JSON.stringify(body),
     }),
 

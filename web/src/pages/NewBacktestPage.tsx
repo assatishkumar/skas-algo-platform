@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import ReportView from "../components/ReportView";
@@ -12,6 +12,7 @@ import type { BacktestRequest, OverrideInput, StrategyTemplate } from "../types"
 type SweepField = {
   key: string; label: string; unit: "pct" | "num";
   fifoOnly?: boolean; lifoOnly?: boolean; optionsOnly?: boolean; stockOnly?: boolean;
+  donchianOnly?: boolean;
 };
 const SWEEP_FIELDS: SweepField[] = [
   { key: "profit_target", label: "Profit target %", unit: "pct", lifoOnly: true },
@@ -27,6 +28,14 @@ const SWEEP_FIELDS: SweepField[] = [
   { key: "stop_loss_pct", label: "Stop loss %", unit: "pct", optionsOnly: true },
   { key: "profit_target_pct", label: "Profit target %", unit: "pct", optionsOnly: true },
   { key: "strike_step", label: "Strike step (pts)", unit: "num", optionsOnly: true },
+  // Donchian strangle backtest (percent params are raw percents — the strategy expects them)
+  { key: "vol_multiplier", label: "Vol multiplier (× HV)", unit: "num", donchianOnly: true },
+  { key: "min_hv_ratio", label: "Min HV20/HV60", unit: "num", donchianOnly: true },
+  { key: "min_channel_width_pct", label: "Min channel width %", unit: "num", donchianOnly: true },
+  { key: "vix_half_threshold", label: "VIX half-size above", unit: "num", donchianOnly: true },
+  { key: "portfolio_sl_pct", label: "Portfolio SL %", unit: "num", donchianOnly: true },
+  { key: "breach_buffer_pct", label: "Breach buffer %", unit: "num", donchianOnly: true },
+  { key: "max_flips", label: "Max flips", unit: "num", donchianOnly: true },
   { key: "tax_rate", label: "Tax rate %", unit: "pct" },
   { key: "withdrawal_rate", label: "Withdrawal %", unit: "pct" },
   { key: "capital", label: "Capital", unit: "num" },
@@ -135,6 +144,34 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
   const [tailSide, setTailSide] = useState("both"); // both | put | call (batman wings)
   const [minCreditPct, setMinCreditPct] = useState(0); // credit floor; negative allows a small debit
 
+  // Donchian strangle backtest (synthetic stock options + real NIFTY hedge)
+  const [dbUniverse, setDbUniverse] = useState("nifty50"); // nifty50 | nifty25 (top by weight)
+  const [dbExclude, setDbExclude] = useState(""); // comma-separated names dropped from the basket
+  const [dbInclude, setDbInclude] = useState(""); // comma-separated names added to the basket
+  const [dbVolMult, setDbVolMult] = useState(1.1); // × HV20 — calibrate on the Research page
+  const [dbBuffer, setDbBuffer] = useState(0.5);
+  const [dbBasis, setDbBasis] = useState("touch");
+  const [dbMaxFlips, setDbMaxFlips] = useState(3);
+  const [dbSl, setDbSl] = useState(2);
+  const [dbTargetEnabled, setDbTargetEnabled] = useState(false);
+  const [dbTarget, setDbTarget] = useState(50);
+  const [dbPortfolioBasis, setDbPortfolioBasis] = useState("notional");
+  const [dbLegTargetEnabled, setDbLegTargetEnabled] = useState(false);
+  const [dbLegTarget, setDbLegTarget] = useState(80);
+  const [dbSkipFloor, setDbSkipFloor] = useState(0.5);
+  const [dbRoundOut, setDbRoundOut] = useState(false);
+  const [dbBreakoutAtm, setDbBreakoutAtm] = useState(true);
+  const [dbHedge, setDbHedge] = useState(true);
+  const [dbHedgeOtm, setDbHedgeOtm] = useState(4.5);
+  const [dbLots, setDbLots] = useState(1);
+  const [dbNotional, setDbNotional] = useState(750000); // per-name target; 0 = fixed lots
+  // Entry filters (0 = off) from the run-186 loss study: compression + tight channel +
+  // market stress are the danger signature (NOT rising vol).
+  const [dbMinHvRatio, setDbMinHvRatio] = useState(0);
+  const [dbMinWidth, setDbMinWidth] = useState(0);
+  const [dbVixHalf, setDbVixHalf] = useState(0);
+  const [dbVixSkip, setDbVixSkip] = useState(0);
+
   // HNI Weekly params (1-3-2 net-zero weekly tent)
   const [hniLots, setHniLots] = useState(1);
   const [hniBuyLots, setHniBuyLots] = useState(1);
@@ -201,7 +238,8 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
     : "call";
   const isHni = strategyId === "hni_weekly";
   const isCoveredCall = strategyId === "staggered_covered_call";
-  const isOptions = strategyId === "short_premium" || isCallRatio || isHni || isCoveredCall;
+  const isDonchianBt = strategyId === "donchian_strangle_bt";
+  const isOptions = strategyId === "short_premium" || isCallRatio || isHni || isCoveredCall || isDonchianBt;
   const strikeUnit =
     strikeMode === "delta" ? "Δ"
     : strikeMode === "sd" ? "× exp.move (σ)"
@@ -220,7 +258,10 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
       setCapital(2000000); // ETF notional ≈ ₹15L + the short CE's margin
       setUnderlying("GOLD");
     }
-  }, [isCallRatio, ratioSide, isHni, isCoveredCall]);
+    if (isDonchianBt) {
+      setUnderlying("NIFTY"); // calendar + real hedge chain; capital is auto (peak margin +10%)
+    }
+  }, [isCallRatio, ratioSide, isHni, isCoveredCall, isDonchianBt]);
 
   // Covered call: keep the ETF proxy in sync with the underlying (still editable).
   useEffect(() => {
@@ -346,6 +387,33 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
       num("stop_loss_pct", setHniStopPct, 100);
       num("margin_per_lotset", setHniMargin);
     }
+    if (strategyId === "donchian_strangle_bt") {
+      if (typeof p.universe === "string" && p.universe) setDbUniverse(p.universe);
+      // absent → reset, so the prefill is faithful to what the template run traded
+      setDbExclude(Array.isArray(p.exclude_symbols) ? (p.exclude_symbols as string[]).join(", ") : "");
+      setDbInclude(Array.isArray(p.include_symbols) ? (p.include_symbols as string[]).join(", ") : "");
+      num("vol_multiplier", setDbVolMult);
+      num("breach_buffer_pct", setDbBuffer);
+      str("breach_basis", setDbBasis);
+      num("max_flips", setDbMaxFlips);
+      num("portfolio_sl_pct", setDbSl);
+      if (typeof p.portfolio_target_enabled === "boolean") setDbTargetEnabled(p.portfolio_target_enabled);
+      num("portfolio_target_pct", setDbTarget);
+      str("portfolio_basis", setDbPortfolioBasis);
+      if (typeof p.leg_target_enabled === "boolean") setDbLegTargetEnabled(p.leg_target_enabled);
+      num("leg_target_pct", setDbLegTarget);
+      num("skip_leg_min_premium_pct", setDbSkipFloor);
+      if (typeof p.round_out === "boolean") setDbRoundOut(p.round_out);
+      if (typeof p.breakout_atm === "boolean") setDbBreakoutAtm(p.breakout_atm);
+      if (typeof p.hedge_enabled === "boolean") setDbHedge(p.hedge_enabled);
+      num("hedge_otm_pct", setDbHedgeOtm);
+      num("lots_per_name", setDbLots);
+      num("notional_per_name", setDbNotional, 1, 750000);
+      num("min_hv_ratio", setDbMinHvRatio, 1, 0);
+      num("min_channel_width_pct", setDbMinWidth, 1, 0);
+      num("vix_half_threshold", setDbVixHalf, 1, 0);
+      num("vix_skip_threshold", setDbVixSkip, 1, 0);
+    }
     if (strategyId === "staggered_covered_call") {
       str("etf_symbol", setCcEtfSymbol);
       num("lots", setCcLots);
@@ -398,6 +466,30 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
     if (coverage?.end_date) setEndDate(coverage.end_date);
   }, [coverage, datesTouched]);
 
+  // Donchian basket: resolve the preset's cached members so the exclude/include inputs
+  // can show a live effective count (and flag excludes that aren't in the basket).
+  const parseNames = (s: string) =>
+    s.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean);
+  const { data: dbBasketSyms } = useQuery({
+    queryKey: ["universe-symbols", dbUniverse],
+    queryFn: () => api.universeSymbols(dbUniverse),
+    enabled: isDonchianBt,
+  });
+  const dbEffective = useMemo(() => {
+    if (!dbBasketSyms) return null;
+    const excl = parseNames(dbExclude);
+    const inBasket = new Set(dbBasketSyms.symbols);
+    const kept = dbBasketSyms.symbols.filter((s) => !excl.includes(s));
+    // Mirrors the server: an include lands if it isn't already in the post-exclusion set
+    // (so re-including an excluded name puts it back). Dedupe repeated entries.
+    const added = [...new Set(parseNames(dbInclude))].filter((s) => !kept.includes(s));
+    return {
+      count: kept.length + added.length,
+      unknownExcludes: excl.filter((s) => !inBasket.has(s)),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dbBasketSyms, dbExclude, dbInclude]);
+
   const mutation = useMutation({
     mutationFn: (body: BacktestRequest) => api.backtest(body),
   });
@@ -424,7 +516,37 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
       });
     }
     if (isOptions) {
-      const params: Record<string, unknown> = isHni
+      const params: Record<string, unknown> = isDonchianBt
+        ? {
+            underlying,
+            // Donchian percent params are RAW percents (the strategy divides by 100 itself).
+            vol_multiplier: dbVolMult,
+            breach_buffer_pct: dbBuffer,
+            breach_basis: dbBasis,
+            max_flips: dbMaxFlips,
+            flip_delta: "atm", // no live chain in a backtest — 30Δ would silently degrade anyway
+            portfolio_sl_pct: dbSl,
+            portfolio_target_enabled: dbTargetEnabled,
+            portfolio_target_pct: dbTarget,
+            portfolio_basis: dbPortfolioBasis,
+            leg_target_enabled: dbLegTargetEnabled,
+            leg_target_pct: dbLegTarget,
+            skip_leg_min_premium_pct: dbSkipFloor,
+            round_out: dbRoundOut,
+            breakout_atm: dbBreakoutAtm,
+            hedge_enabled: dbHedge,
+            hedge_otm_pct: dbHedgeOtm,
+            lots_per_name: dbLots,
+            notional_per_name: dbNotional,
+            min_hv_ratio: dbMinHvRatio,
+            min_channel_width_pct: dbMinWidth,
+            vix_half_threshold: dbVixHalf,
+            vix_skip_threshold: dbVixSkip,
+            // Per-run basket overrides (applied server-side to the universe preset).
+            ...(parseNames(dbExclude).length ? { exclude_symbols: parseNames(dbExclude) } : {}),
+            ...(parseNames(dbInclude).length ? { include_symbols: parseNames(dbInclude) } : {}),
+          }
+        : isHni
         ? {
             underlying,
             lots: hniLots,
@@ -490,11 +612,14 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
         notes: notes.trim() || undefined,
         instrument_class: "DERIV",
         underlying,
-        universe: null,
+        // The donchian backtest is a BASKET — the server resolves the universe to its
+        // cached stock names (other DERIV strategies trade one underlying's chain).
+        universe: isDonchianBt ? dbUniverse : null,
         symbols: [],
         start_date: startDate,
         end_date: endDate,
-        capital,
+        // Donchian bt: capital 0 → the server auto-derives it (peak modelled margin × 1.10).
+        capital: isDonchianBt ? 0 : capital,
         params,
         tax_rate: taxRate / 100,
         withdrawal_rate: withdrawalRate / 100,
@@ -598,16 +723,22 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
   const result = mutation.data;
   const sweepableFields = SWEEP_FIELDS.filter(
     (f) =>
-      (!f.optionsOnly || isOptions) &&
+      (!f.optionsOnly || (isOptions && !isDonchianBt)) &&
+      (!f.donchianOnly || isDonchianBt) &&
       (!f.stockOnly || !isOptions) &&
       (isOptions || ((!f.fifoOnly || isFifo) && (!f.lifoOnly || !isFifo))),
   );
   // Keep the swept field valid when the strategy (and thus its params) changes.
   useEffect(() => {
     if (!sweepableFields.some((f) => f.key === sweepField)) {
-      setSweepField(isOptions ? "profit_target_pct" : isFifo ? "profit_target_1" : "profit_target");
+      setSweepField(
+        isDonchianBt ? "vol_multiplier"
+        : isOptions ? "profit_target_pct"
+        : isFifo ? "profit_target_1"
+        : "profit_target",
+      );
     }
-  }, [isFifo, isOptions, sweepField, sweepableFields]);
+  }, [isFifo, isOptions, isDonchianBt, sweepField, sweepableFields]);
 
   return (
     <div className="space-y-6">
@@ -642,7 +773,14 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
                 ))}
               </select>
             </Field>
-            {isOptions ? (
+            {isDonchianBt ? (
+              <Field label="Basket">
+                <select className={inputClass} value={dbUniverse} onChange={(e) => setDbUniverse(e.target.value)}>
+                  <option value="nifty50">Nifty 50 (full basket)</option>
+                  <option value="nifty25">Nifty 25 (top by weight — ~half the margin)</option>
+                </select>
+              </Field>
+            ) : isOptions ? (
               <Field label="Underlying">
                 <select className={inputClass} value={underlying} onChange={(e) => setUnderlying(e.target.value)}>
                   {isHni ? (
@@ -690,7 +828,134 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
             </Field>
           </div>
 
-          {isHni ? (
+          {isDonchianBt ? (
+            <div key="db-params" className="grid md:grid-cols-3 gap-4">
+              <div className="md:col-span-3 text-[11px] text-amber-700 dark:text-amber-300/90">
+                Donchian strangle backtest: every monthly cycle SELL each name's CE at the previous
+                expiry-cycle's high and PE at its low (breach → roll to the ATM opposite side, once
+                per name/day, closed after max flips), plus a notional-matched long OTM NIFTY hedge.
+                Stock premiums are <b>synthetic Black-Scholes</b> (σ = HV20 × the multiplier — no
+                stock-option history exists); the NIFTY hedge uses the real cached chain (2020+).
+                Daily bars: flips fill at that day's close. Calibrate the multiplier on the{" "}
+                <Link to="/research" className="underline">Research page</Link>.
+              </div>
+              <Field label={`Exclude names (${dbEffective?.count ?? "…"} in basket)`}>
+                <input
+                  className={inputClass}
+                  placeholder="e.g. ADANIENT, INDUSINDBK"
+                  value={dbExclude}
+                  onChange={(e) => setDbExclude(e.target.value)}
+                />
+              </Field>
+              <Field label="Also include names">
+                <input
+                  className={inputClass}
+                  placeholder="e.g. names dropped from Nifty 25"
+                  value={dbInclude}
+                  onChange={(e) => setDbInclude(e.target.value)}
+                />
+              </Field>
+              <div className="self-end pb-2 text-[11px] text-[var(--faint)]">
+                {dbEffective?.unknownExcludes.length ? (
+                  <span className="text-amber-600 dark:text-amber-400">
+                    not in {dbUniverse}: {dbEffective.unknownExcludes.join(", ")}
+                  </span>
+                ) : (
+                  <>includes need cached data + a known F&O lot size (the Nifty-50 pool) — others are dropped silently</>
+                )}
+              </div>
+              <Field label="Capital">
+                <div className={`${inputClass} text-[var(--muted)]`}>
+                  auto — peak modelled margin + 10%
+                </div>
+              </Field>
+              <Field label="Vol multiplier (× HV20)">
+                <NumberInput step="0.05" className={inputClass} value={dbVolMult} onChange={setDbVolMult} />
+              </Field>
+              <Field label="Notional per name (₹, 0 = fixed lots)">
+                <NumberInput className={inputClass} value={dbNotional} onChange={setDbNotional} />
+              </Field>
+              {dbNotional <= 0 && (
+                <Field label="Lots per name (fixed)">
+                  <NumberInput className={inputClass} value={dbLots} onChange={setDbLots} />
+                </Field>
+              )}
+              <Field label="Min HV20/HV60 at entry (0 = off)">
+                <NumberInput step="0.05" className={inputClass} value={dbMinHvRatio} onChange={setDbMinHvRatio} />
+              </Field>
+              <Field label="Min channel width % (0 = off)">
+                <NumberInput step="0.5" className={inputClass} value={dbMinWidth} onChange={setDbMinWidth} />
+              </Field>
+              <Field label="VIX half-size above (0 = off)">
+                <NumberInput step="1" className={inputClass} value={dbVixHalf} onChange={setDbVixHalf} />
+              </Field>
+              <Field label="VIX skip cycle above (0 = off)">
+                <NumberInput step="1" className={inputClass} value={dbVixSkip} onChange={setDbVixSkip} />
+              </Field>
+              <Field label="Breach basis">
+                <select className={inputClass} value={dbBasis} onChange={(e) => setDbBasis(e.target.value)}>
+                  <option value="touch">Touch (day high/low)</option>
+                  <option value="close">Close (EOD)</option>
+                </select>
+              </Field>
+              <Field label="Breach buffer % (clear the strike by)">
+                <NumberInput step="0.1" className={inputClass} value={dbBuffer} onChange={setDbBuffer} />
+              </Field>
+              <Field label="Max flips (then close the name)">
+                <NumberInput className={inputClass} value={dbMaxFlips} onChange={setDbMaxFlips} />
+              </Field>
+              <Field label="Portfolio stop basis">
+                <select className={inputClass} value={dbPortfolioBasis} onChange={(e) => setDbPortfolioBasis(e.target.value)}>
+                  <option value="notional">% of notional (stop) / premium (target)</option>
+                  <option value="margin">% of modelled margin</option>
+                </select>
+              </Field>
+              <Field label="Portfolio SL %">
+                <NumberInput step="0.1" className={inputClass} value={dbSl} onChange={setDbSl} />
+              </Field>
+              <Field label="Skip-leg floor (% of spot)">
+                <NumberInput step="0.1" className={inputClass} value={dbSkipFloor} onChange={setDbSkipFloor} />
+              </Field>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={dbTargetEnabled} onChange={(e) => setDbTargetEnabled(e.target.checked)} />
+                <span>Portfolio target</span>
+              </label>
+              {dbTargetEnabled && (
+                <Field label="Portfolio target %">
+                  <NumberInput step="1" className={inputClass} value={dbTarget} onChange={setDbTarget} />
+                </Field>
+              )}
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={dbLegTargetEnabled} onChange={(e) => setDbLegTargetEnabled(e.target.checked)} />
+                <span>Per-leg target</span>
+              </label>
+              {dbLegTargetEnabled && (
+                <Field label="Leg target % (premium captured)">
+                  <NumberInput step="1" className={inputClass} value={dbLegTarget} onChange={setDbLegTarget} />
+                </Field>
+              )}
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={dbHedge} onChange={(e) => setDbHedge(e.target.checked)} />
+                <span>NIFTY tail hedge</span>
+              </label>
+              {dbHedge && (
+                <Field label="Hedge OTM % (each side)">
+                  <NumberInput step="0.5" className={inputClass} value={dbHedgeOtm} onChange={setDbHedgeOtm} />
+                </Field>
+              )}
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={dbBreakoutAtm} onChange={(e) => setDbBreakoutAtm(e.target.checked)} />
+                <span>Breakout → ATM opposite leg</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={dbRoundOut} onChange={(e) => setDbRoundOut(e.target.checked)} />
+                <span>Round strikes out (more cushion)</span>
+              </label>
+              <Field label="Withdrawal rate %">
+                <NumberInput step="1" className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} />
+              </Field>
+            </div>
+          ) : isHni ? (
             <div key="hni-params" className="grid md:grid-cols-3 gap-4">
               <div className="md:col-span-3 text-[11px] text-amber-700 dark:text-amber-300/90">
                 HNI Weekly: net-zero 1-3-2 call ratio "tent" — BUY 1× ~200 OTM, SELL 3× ~400 OTM,

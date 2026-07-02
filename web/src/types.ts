@@ -337,6 +337,7 @@ export interface OptionsReportData {
   equity_legs?: EquityLeg[]; // closed ETF round-trips (covered call)
   equity_held?: EquityLeg[]; // still-held ETF, marked to last close
   campaigns?: Campaign[]; // covered-call accumulation→called-away campaigns
+  basket_cycles?: BasketCycle[]; // donchian_strangle_bt: cycle → names → legs view
   timeline?: ReportTimeline; // underlying daily price series for campaign charts
   exit_reasons: Record<string, ExitReasonStat>;
   per_expiry_cycle: {
@@ -628,6 +629,8 @@ export interface DonchianRow {
   strike_step?: number | null; // listed strike step (ATM flip sizing)
   beta?: number | null;        // vs NIFTY (optional beta-weighted hedge)
   breakout?: "up" | "down" | null; // spot beyond range → ATM opposite leg only
+  width_pct?: number | null;   // (range high−low)/spot ·100 — the strike cushion
+  hv_ratio?: number | null;    // HV(hv_window)/HV60 — <1 = vol compression
   strikes?: number[];          // listed strikes (manual CE/PE strike override)
   expiry?: string;
 }
@@ -645,6 +648,7 @@ export interface DonchianResult {
   as_of: string;
   dates: DonchianCycle;
   rows: DonchianRow[];
+  vix?: number | null; // live India VIX at screen time (market-stress advisory)
   error?: string;
 }
 
@@ -670,6 +674,8 @@ export interface DonchianAnalyzeRequest {
   breakout_atm?: boolean;
   lots_per_name?: number;
   min_dte?: number;
+  min_hv_ratio?: number;          // 0 = off — exclude vol-compressed names
+  min_channel_width_pct?: number; // 0 = off — exclude tight channels
 }
 
 export interface DonchianHedge {
@@ -1054,4 +1060,182 @@ export interface BacktestRequest {
   batch_id?: string;
   overrides: OverrideInput[];
   persist?: boolean; // false = preview only (no DB write); save later via /backtest/save
+}
+
+// --- research: Donchian breakout study (cache-only) + BS-vs-live calibration ---
+
+export interface DonchianStudyRequest {
+  universe?: string;
+  symbols?: string[];
+  start_date: string;
+  end_date?: string | null;
+  buffer_pct?: number;
+  basis?: "touch" | "close";
+  max_flips?: number;
+  include_index?: boolean;
+  detail?: boolean;
+}
+
+export interface StudyCycleRow {
+  cycle_id: string;
+  range_start: string;
+  range_end: string;
+  entry_date: string;
+  expiry: string;
+  n_names: number;
+  inside: number;
+  breakout: number;
+  "re-entered": number;
+  whipsaw: number;
+  breakout_up: number;
+  breakout_down: number;
+  both_sides: number;
+  closed_by_flips: number;
+  gap_entries: number;
+  vix_entry: number | null;
+  index_status: string | null;
+}
+
+export interface StudyNameCycle {
+  cycle_id: string;
+  symbol: string;
+  status: string; // inside | breakout | re-entered | whipsaw
+  days: number;
+  breakout_at_entry: string | null;
+  first_breach_side: string | null;
+  first_breach_day: number | null;
+  re_entered: boolean;
+  re_entry_day: number | null;
+  whipsaw: boolean;
+  whipsaw_side: string | null;
+  both_sides_breached: boolean;
+  max_excursion_up_pct: number;
+  max_excursion_down_pct: number;
+  flips: { day: number; date: string; side: string; action: string }[];
+  flip_count: number;
+  closed_by_flips: boolean;
+  closed_day: number | null;
+  range_high: number;
+  range_low: number;
+}
+
+export interface StudyLeagueRow {
+  symbol: string;
+  is_index: boolean;
+  cycles: number;
+  inside: number;
+  breach_rate: number;
+  up: number;
+  down: number;
+  re_entries: number;
+  whipsaws: number;
+  both_sides: number;
+  closed_by_flips: number;
+  avg_flips: number;
+  median_breach_day: number | null;
+  avg_excursion_pct: number | null;
+}
+
+export interface DonchianStudyResult {
+  params: { buffer_pct: number; basis: string; max_flips: number };
+  cycles: StudyCycleRow[];
+  league: StudyLeagueRow[];
+  histograms: { days_to_first_breach: number[]; excursion_pct: number[] };
+  aggregates: Record<string, number | null>;
+  vix_split: {
+    bucket: string; cycles: number; name_cycles: number;
+    inside_pct?: number; whipsaw_pct?: number; both_sides_pct?: number; closed_pct?: number;
+  }[];
+  detail?: StudyNameCycle[];
+  caveats: string[];
+}
+
+export interface CalibRow {
+  symbol: string;
+  spot: number;
+  hv_pct: number;
+  strike: number;
+  right: string;
+  kind: "screener" | "atm";
+  moneyness_pct: number;
+  market_bid: number | null;
+  market_mid: number | null;
+  market: number;
+  bs_price: number;
+  ratio: number;
+  market_iv_pct: number | null;
+  iv_over_hv: number | null;
+}
+
+export interface CalibStats {
+  n: number;
+  median: number;
+  q1: number;
+  q3: number;
+}
+
+export interface BsCalibrationResult {
+  as_of: string;
+  sell_expiry: string;
+  range_start: string;
+  range_end: string;
+  r: number;
+  hv_window: number;
+  rows: CalibRow[];
+  aggregates: {
+    rows: number;
+    ratio: CalibStats | null;
+    iv_over_hv: CalibStats | null;
+    by_right: Record<string, CalibStats | null>;
+    by_moneyness: { bucket: string; ratio: CalibStats | null; iv_over_hv: CalibStats | null }[];
+    suggested_vol_multiplier: number | null;
+  };
+  errors: { symbol: string; error: string }[];
+}
+
+// --- donchian_strangle_bt basket run: cycle → names → legs drill-down ---
+
+export interface BasketLeg {
+  symbol: string;
+  right: string;
+  strike: number;
+  side: "sell" | "buy";
+  units: number;
+  entry_date: string | null;
+  entry_price: number | null;
+  exit_date: string | null;
+  exit_price: number | null;
+  exit_reason: string; // flip | leg_target | portfolio_stop | portfolio_target | expiry | open
+  pnl: number;
+}
+
+export interface BasketNameRow {
+  name: string;
+  side: "short" | "hedge";
+  lot_size: number;
+  lots: number | null;
+  units: number;
+  premium: number;
+  pnl: number;
+  charges: number;
+  pnl_net: number;
+  flips: number;
+  legs: BasketLeg[];
+}
+
+export interface BasketCycle {
+  cycle: string; // "2024-03" (labelled by expiry month)
+  expiry: string;
+  entry_date: string;
+  exit_date: string;
+  names: number;
+  premium_collected: number;
+  flips: number;
+  exit_reason: string; // expiry | portfolio_stop | portfolio_target
+  margin_peak: number | null;
+  pnl: number;
+  charges: number;
+  pnl_net: number;
+  return_on_margin_pct: number | null;
+  name_rows: BasketNameRow[];
 }

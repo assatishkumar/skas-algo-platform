@@ -16,6 +16,7 @@ import {
 } from "recharts";
 import { formatInr, pct } from "../lib/format";
 import type { OptionCycle, OptionPosition, OptionsReportData } from "../types";
+import BasketCyclesReport from "./BasketCyclesReport";
 import CoveredCallReport from "./CoveredCallReport";
 import PayoffChart from "./PayoffChart";
 import { Card, MetricCard } from "./ui";
@@ -385,10 +386,11 @@ function PositionsTable({ options }: { options: OptionsReportData }) {
 
 export default function OptionsReport({ options }: { options: OptionsReportData }) {
   const isCoveredCall = (options.campaigns?.length ?? 0) > 0;
+  const isBasket = (options.basket_cycles?.length ?? 0) > 0;
   return (
     <div className="space-y-4">
       <div className="text-sm font-semibold text-slate-200">
-        {isCoveredCall ? "Covered-call analytics" : "Options analytics"}
+        {isCoveredCall ? "Covered-call analytics" : isBasket ? "Basket analytics" : "Options analytics"}
       </div>
       <SummaryTiles s={options.summary} />
       <ChargesLine c={options.charges} />
@@ -396,6 +398,10 @@ export default function OptionsReport({ options }: { options: OptionsReportData 
         // Covered call: campaign cards (accumulation → calls → called away) + timelines,
         // in place of the straddle/ratio-oriented positions table & premium-decay charts.
         <CoveredCallReport options={options} />
+      ) : isBasket ? (
+        // Donchian basket: cycle → names → legs drill-down replaces the per-leg positions
+        // table (a ~50-underlying basket makes the generic view unreadable).
+        <BasketCyclesReport cycles={options.basket_cycles!} />
       ) : (
         <>
           <PositionsTable options={options} />

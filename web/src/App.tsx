@@ -10,6 +10,7 @@ import DeployPage from "./pages/DeployPage";
 import DonchianLivePage from "./pages/DonchianLivePage";
 import HomePage from "./pages/HomePage";
 import LivePage from "./pages/LivePage";
+import ResearchPage from "./pages/ResearchPage";
 import RunDetailPage from "./pages/RunDetailPage";
 import StrategiesPage from "./pages/StrategiesPage";
 import TradePage from "./pages/TradePage";
@@ -66,6 +67,7 @@ export default function App() {
           <NavItem to="/trade" label="Trade" />
           <NavItem to="/live" label="Live" />
           <NavItem to="/docs" label="Docs" />
+          <NavItem to="/research" label="Research" />
           <NavItem to="/data" label="Data" />
           <NavItem to="/brokers" label="Brokers" />
           <div className="ml-auto"><ThemeToggle /></div>
@@ -81,6 +83,7 @@ export default function App() {
           <Route path="/live/:id" element={<DonchianLivePage />} />
           <Route path="/docs" element={<StrategiesPage />} />
           <Route path="/analyze" element={<AnalysisPage />} />
+          <Route path="/research" element={<ResearchPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
           <Route path="/compare" element={<ComparePage />} />
