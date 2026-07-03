@@ -99,7 +99,7 @@ export default function DeployPage() {
       withdrawal_rate: pf ? (pfWd ?? 0) : withdrawalRate / 100,
       lookback: pf ? (pfLookback ?? 20) : lookback,
       quote_source: quoteSource,
-      broker_account_id: quoteSource === "zerodha" ? accountId : null,
+      broker_account_id: quoteSource !== "cache" ? accountId : null,
       ignore_market_hours: ignoreHours,
       auto,
       ...(warmFromDate ? { warm_from_date: warmFromDate } : {}),
@@ -312,14 +312,16 @@ export default function DeployPage() {
             <select className={inputClass} value={quoteSource} onChange={(e) => setQuoteSource(e.target.value)}>
               <option value="cache">Cache (last close, offline)</option>
               <option value="zerodha">Zerodha (live)</option>
+              <option value="dhan">Dhan (live)</option>
             </select>
           </label>
-          {quoteSource === "zerodha" && (
+          {quoteSource !== "cache" && (
             <label className="block">
               <span className={lbl}>Account</span>
+              {/* a broker quote source must ride an account of THAT broker (server enforces) */}
               <select className={inputClass} value={accountId ?? ""} onChange={(e) => setAccountId(e.target.value ? +e.target.value : null)}>
                 <option value="">select…</option>
-                {sessioned.map((a) => (<option key={a.id} value={a.id}>{a.label}</option>))}
+                {sessioned.filter((a) => (a.broker || "zerodha") === quoteSource).map((a) => (<option key={a.id} value={a.id}>{a.label}</option>))}
               </select>
               {sessioned.length === 0 && (
                 <span className="mt-1 block text-xs text-amber-600 dark:text-amber-400">
@@ -343,9 +345,9 @@ export default function DeployPage() {
         <div className="mt-4 flex items-center gap-3">
           <button
             onClick={deploy}
-            disabled={busy || (quoteSource === "zerodha" && !accountId)}
+            disabled={busy || (quoteSource !== "cache" && !accountId)}
             title={
-              quoteSource === "zerodha" && !accountId
+              quoteSource !== "cache" && !accountId
                 ? sessioned.length === 0
                   ? "Log in a broker session on Brokers, or switch Quotes to Cache"
                   : "Select an account"
@@ -356,7 +358,7 @@ export default function DeployPage() {
             {busy ? "Deploying…" : "Deploy"}
           </button>
           <span className="text-xs text-slate-500">
-            {quoteSource === "zerodha" ? "Live quotes" : "Cache quotes (offline)"} · simulated fills · no real orders
+            {quoteSource !== "cache" ? "Live quotes" : "Cache quotes (offline)"} · simulated fills · no real orders
           </span>
         </div>
         {error && <div className="mt-2"><ErrorBox message={error} /></div>}

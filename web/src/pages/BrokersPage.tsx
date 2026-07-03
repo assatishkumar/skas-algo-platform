@@ -15,10 +15,11 @@ const EMPTY: BrokerConnectRequest = {
   user_id: "",
 };
 
-function LoginFlow({ id, onDone }: { id: number; onDone: () => void }) {
+function LoginFlow({ id, broker, onDone }: { id: number; broker: string; onDone: () => void }) {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const isDhan = broker === "dhan";
 
   async function openLogin() {
     setErr(null);
@@ -46,16 +47,21 @@ function LoginFlow({ id, onDone }: { id: number; onDone: () => void }) {
   return (
     <div className="mt-3 border-t border-slate-800 pt-3 space-y-2">
       <div className="text-xs text-slate-400">
-        1. Open the Kite login, sign in there, and copy the <code>request_token</code> from the
-        redirected URL. 2. Paste it below.
+        {isDhan ? (
+          <>1. Open Dhan and generate an access token (My Profile → DhanHQ Trading APIs).
+            2. Paste the token below — it's valid ~24 hours, like the Kite session.</>
+        ) : (
+          <>1. Open the Kite login, sign in there, and copy the <code>request_token</code> from the
+            redirected URL. 2. Paste it below.</>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <button onClick={openLogin} className="rounded bg-slate-700 hover:bg-slate-600 px-3 py-1.5 text-xs">
-          Open Kite login ↗
+          {isDhan ? "Open Dhan ↗" : "Open Kite login ↗"}
         </button>
         <input
           className="flex-1 min-w-[220px] rounded bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm"
-          placeholder="paste request_token"
+          placeholder={isDhan ? "paste access token" : "paste request_token"}
           value={token}
           onChange={(e) => setToken(e.target.value)}
         />
@@ -64,7 +70,7 @@ function LoginFlow({ id, onDone }: { id: number; onDone: () => void }) {
           disabled={busy || !token.trim()}
           className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs disabled:opacity-50"
         >
-          {busy ? "Exchanging…" : "Submit token"}
+          {busy ? "Saving…" : "Submit token"}
         </button>
       </div>
       {err && <ErrorBox message={err} />}
@@ -186,8 +192,9 @@ export default function BrokersPage() {
       <h1 className="text-lg font-semibold">Brokers</h1>
 
       <div className="rounded-lg border border-slate-700 bg-slate-900/40 text-slate-300 p-3 text-sm">
-        You log in to Kite yourself and paste the <b>request_token</b>; we exchange it for the daily
-        access token. Only the <b>API secret</b> is stored (encrypted) — no password, no TOTP.
+        You log in to the broker yourself and paste a token — Kite's <b>request_token</b> (exchanged
+        for the daily access token) or Dhan's portal-generated <b>access token</b>. Secrets/tokens are
+        stored encrypted — no password, no TOTP.
         <b> Real orders never fire</b> unless an account is <b>armed</b> and the server has
         <code> SKAS_LIVE_TRADING_ENABLED=true</code>.
       </div>
@@ -195,10 +202,28 @@ export default function BrokersPage() {
       <Card>
         <div className="text-sm font-medium text-slate-300 mb-3">Connect a broker account</div>
         <div className="grid md:grid-cols-2 gap-3">
+          <select
+            className={inputClass}
+            value={form.broker}
+            onChange={(e) => setForm((f) => ({ ...f, broker: e.target.value }))}
+          >
+            <option value="zerodha">Zerodha (Kite Connect)</option>
+            <option value="dhan">Dhan (DhanHQ v2)</option>
+          </select>
           <input className={inputClass} placeholder="label" value={form.label} onChange={set("label")} />
-          <input className={inputClass} placeholder="user id (e.g. AB1234)" value={form.user_id} onChange={set("user_id")} />
-          <input className={inputClass} placeholder="api key" value={form.api_key} onChange={set("api_key")} />
-          <input className={inputClass} type="password" placeholder="api secret" value={form.api_secret} onChange={set("api_secret")} />
+          <input
+            className={inputClass}
+            placeholder={form.broker === "dhan" ? "client ID (from your Dhan profile)" : "user id (e.g. AB1234)"}
+            value={form.user_id}
+            onChange={set("user_id")}
+          />
+          {/* Dhan has no api key/secret pair — just the client id + a pasted daily token. */}
+          {form.broker !== "dhan" && (
+            <>
+              <input className={inputClass} placeholder="api key" value={form.api_key} onChange={set("api_key")} />
+              <input className={inputClass} type="password" placeholder="api secret" value={form.api_secret} onChange={set("api_secret")} />
+            </>
+          )}
         </div>
         <button
           onClick={() => run(() => brokers.connect(form).then(() => setForm(EMPTY)), "Connected (secret stored encrypted).")}
@@ -238,9 +263,9 @@ export default function BrokersPage() {
               </div>
             </div>
             {loginFor === a.id && (
-              <LoginFlow id={a.id} onDone={() => { setLoginFor(null); refetch(); }} />
+              <LoginFlow id={a.id} broker={a.broker} onDone={() => { setLoginFor(null); refetch(); }} />
             )}
-            {a.has_session && <RefreshData id={a.id} />}
+            {a.has_session && a.broker !== "dhan" && <RefreshData id={a.id} />}
             {a.armed && !a.live_trading_enabled && (
               <div className="text-xs text-slate-500 mt-2">
                 Armed, but server <code>SKAS_LIVE_TRADING_ENABLED</code> is false — still no real orders.

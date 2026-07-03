@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from skas_algo.brokers.dhan import DhanAdapter, DhanCredentials
 from skas_algo.brokers.zerodha import BrokerLoginError, ZerodhaAdapter, ZerodhaCredentials
 
 if TYPE_CHECKING:
@@ -51,16 +52,25 @@ def _credentials(account: BrokerAccount) -> ZerodhaCredentials:
     )
 
 
-def make_adapter(account: BrokerAccount) -> ZerodhaAdapter:
-    """Adapter for an account, resuming a stored access token if present.
-
-    Orders are still gated by ``armed`` + SKAS_LIVE_TRADING_ENABLED.
+def make_adapter(account: BrokerAccount):
+    """Adapter for an account (dispatched on ``account.broker``), resuming a stored
+    access token if present. Orders are still gated by ``armed`` +
+    SKAS_LIVE_TRADING_ENABLED — for every broker.
     """
-    adapter = ZerodhaAdapter(
-        _credentials(account),
-        armed=account.armed,
-        live_enabled=get_settings().live_trading_enabled,
-    )
+    live_enabled = get_settings().live_trading_enabled
+    if (account.broker or "").lower() == "dhan":
+        # Dhan: no api_key/secret pair — just the client id + a portal-generated token.
+        adapter = DhanAdapter(
+            DhanCredentials(client_id=account.user_id or ""),
+            armed=account.armed,
+            live_enabled=live_enabled,
+        )
+    else:
+        adapter = ZerodhaAdapter(
+            _credentials(account),
+            armed=account.armed,
+            live_enabled=live_enabled,
+        )
     token = decrypt(account.session_token)
     if token:
         adapter.set_access_token(token)
@@ -75,6 +85,10 @@ def make_data_session(account: BrokerAccount) -> SkasData:
     login. The token is injected straight onto the kite handle, so skas-data does not
     write its plaintext session file; the encrypted DB stays the single source of truth.
     """
+    if (account.broker or "zerodha").lower() != "zerodha":
+        # skas-data's history provider is Kite-coupled; Dhan accounts trade, they don't
+        # feed the cache. The Brokers page hides the refresh panel for them too.
+        raise BrokerLoginError("historical data refresh runs on the Zerodha session")
     if not has_valid_session(account):
         raise BrokerLoginError("no valid Kite session — log in (paste request token) first")
     from skas_data import SkasData

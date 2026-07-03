@@ -47,7 +47,7 @@ export default function EquityTradeBuilder() {
       trailing,
       trail_pct: trailing && trailPct > 0 ? trailPct : null,
       mode, quote_source: quoteSource,
-      broker_account_id: quoteSource === "zerodha" ? accountId : null,
+      broker_account_id: quoteSource !== "cache" ? accountId : null,
       ignore_market_hours: ignoreHours, auto,
     };
     try {
@@ -60,7 +60,7 @@ export default function EquityTradeBuilder() {
     }
   }
 
-  const canDeploy = !!symbol.trim() && !(quoteSource === "zerodha" && !accountId) &&
+  const canDeploy = !!symbol.trim() && !(quoteSource !== "cache" && !accountId) &&
     !(entryMode === "trigger" && triggerPrice <= 0);
 
   return (
@@ -113,12 +113,13 @@ export default function EquityTradeBuilder() {
           <select className={inputClass} value={quoteSource} onChange={(e) => setQuoteSource(e.target.value)}>
             <option value="cache">Cache (offline)</option>
             <option value="zerodha">Zerodha (live)</option>
+            <option value="dhan">Dhan (live)</option>
           </select></label>
-        {quoteSource === "zerodha" && (
+        {quoteSource !== "cache" && (
           <label className="block"><span className={lbl}>Account</span>
             <select className={inputClass} value={accountId ?? ""} onChange={(e) => setAccountId(e.target.value ? +e.target.value : null)}>
               <option value="">select…</option>
-              {sessioned.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+              {sessioned.filter((a) => (a.broker || "zerodha") === quoteSource).map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
             </select></label>
         )}
         <div className="flex flex-col gap-1">
@@ -127,7 +128,7 @@ export default function EquityTradeBuilder() {
         </div>
       </div>
 
-      {mode === "LIVE" && <div className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">Live places real orders only on an armed Zerodha account with live trading enabled — otherwise it runs as paper.</div>}
+      {mode === "LIVE" && <div className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">Live places real orders only on an armed broker account with live trading enabled — otherwise it runs as paper.</div>}
       <div className="mt-3 flex items-center gap-3">
         <button onClick={deploy} disabled={busy || !canDeploy}
           className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50">

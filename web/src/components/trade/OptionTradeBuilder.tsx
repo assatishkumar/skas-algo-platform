@@ -142,7 +142,9 @@ export default function OptionTradeBuilder() {
       leg_targets: Object.keys(legTargets).length ? legTargets : null,
       leg_stops: Object.keys(legStops).length ? legStops : null,
       mode,
-      quote_source: live ? "zerodha" : "cache",
+      quote_source: live
+        ? ((accounts ?? []).find((a) => a.id === liveAcc)?.broker || "zerodha")
+        : "cache",
       broker_account_id: liveAcc,
       ignore_market_hours: ignoreHours, auto,
     };

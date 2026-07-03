@@ -31,7 +31,7 @@ from .persistence import (
     start_live_run,
     sync_positions,
 )
-from .quotes import IST, QuoteSource, is_market_open, warmup_history
+from .quotes import IST, QuoteSource, is_broker_source, is_market_open, warmup_history
 
 logger = logging.getLogger("skas_algo.live")
 
@@ -307,7 +307,8 @@ class LiveRun:
     def _maybe_refresh_margin(self) -> None:
         """Throttled (~1/min) real Zerodha basket margin, built from our own legs. Falls
         back silently to the model estimate (in the session snapshot) when unavailable."""
-        if self.config.instrument_class.upper() != "DERIV" or self.config.quote_source != "zerodha":
+        if self.config.instrument_class.upper() != "DERIV" or not is_broker_source(
+                self.config.quote_source):
             return
         symbols = self.session.portfolio.lot_symbols()
         if not symbols:
@@ -494,7 +495,7 @@ class LiveRun:
         # Prefer the real Zerodha basket margin (throttled) over the model estimate.
         if self._margin is not None:
             snap["margin_used"] = self._margin
-            snap["margin_source"] = "zerodha"
+            snap["margin_source"] = self.config.quote_source  # which broker's basket margin
         # Multi-underlying basket strategies (donchian) expose a per-name breakdown + aggregate payoff.
         basket_fn = getattr(getattr(self.session, "strategy", None), "basket_status", None)
         if basket_fn is not None:
@@ -781,7 +782,7 @@ class LiveRunManager:
             while True:
                 now = datetime.now(IST)
                 mkt = is_market_open()
-                is_zerodha = live.config.quote_source == "zerodha"
+                is_zerodha = is_broker_source(live.config.quote_source)  # any real-broker feed
 
                 # Self-heal a stuck zerodha run as soon as a VALID session exists — even off-hours,
                 # so a re-login recovers the "expired" badge + P&L without waiting for market open.

@@ -44,14 +44,28 @@ class CacheQuoteSource:
         return out
 
 
+# quote_source values that mean "a real broker adapter feeds live LTPs" (vs "cache").
+# The value doubles as the required account.broker, so a dhan source can't ride a
+# zerodha account and vice-versa.
+BROKER_QUOTE_SOURCES = ("zerodha", "dhan")
+
+
+def is_broker_source(quote_source: str | None) -> bool:
+    return (quote_source or "") in BROKER_QUOTE_SOURCES
+
+
 class ZerodhaQuoteSource:
-    """Real-time LTP via a logged-in ZerodhaAdapter."""
+    """Real-time LTP via a logged-in broker adapter (name is historical — it wraps ANY
+    adapter exposing ``get_quote``; Dhan uses the same class via ``BrokerQuoteSource``)."""
 
     def __init__(self, adapter):
         self.adapter = adapter
 
     def get_quotes(self, symbols: list[str]) -> dict[str, float]:
         return self.adapter.get_quote(symbols)
+
+
+BrokerQuoteSource = ZerodhaQuoteSource  # the honest name for new call sites
 
 
 def warmup_history(

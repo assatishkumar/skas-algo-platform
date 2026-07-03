@@ -30,7 +30,7 @@ from skas_algo.db.models import Algo, AlgoRun, BrokerAccount, GreeksSnapshot, Or
 from skas_algo.engine.market import PriceLoader
 from skas_algo.engine.overrides import OverrideRule
 from skas_algo.live.manager import LiveConfig, manager
-from skas_algo.live.quotes import CacheQuoteSource, ZerodhaQuoteSource
+from skas_algo.live.quotes import BrokerQuoteSource, CacheQuoteSource, is_broker_source
 from skas_algo.services import broker as broker_svc
 from skas_algo.services.runs import delete_algo_cascade
 
@@ -40,20 +40,28 @@ router = APIRouter(tags=["live"], prefix="/live")
 def _build_quote_source(quote_source: str, broker_account_id, loader: PriceLoader, db: Session):
     if quote_source == "cache":
         return CacheQuoteSource(loader)
-    if quote_source == "zerodha":
+    if is_broker_source(quote_source):
         if broker_account_id is None:
             raise HTTPException(
-                status_code=400, detail="broker_account_id required for zerodha quotes"
+                status_code=400, detail=f"broker_account_id required for {quote_source} quotes"
             )
         account = db.get(BrokerAccount, broker_account_id)
         if account is None:
             raise HTTPException(status_code=404, detail="broker account not found")
+        # The source names the broker — a "dhan" run must ride a dhan account (and vice
+        # versa), or the adapter would silently speak the wrong API.
+        if (account.broker or "zerodha").lower() != quote_source:
+            raise HTTPException(
+                status_code=400,
+                detail=f"quote_source '{quote_source}' needs a {quote_source} account; "
+                       f"'{account.label}' is {account.broker}",
+            )
         if not broker_svc.has_valid_session(account):
             raise HTTPException(
                 status_code=400,
-                detail="broker account has no valid session — log in (paste request token) first",
+                detail="broker account has no valid session — log in (paste token) first",
             )
-        return ZerodhaQuoteSource(broker_svc.make_adapter(account))
+        return BrokerQuoteSource(broker_svc.make_adapter(account))
     raise HTTPException(status_code=400, detail=f"unknown quote_source '{quote_source}'")
 
 
@@ -93,7 +101,7 @@ def start_deployment(req: LiveStartRequest, db: Session, loader: PriceLoader, av
             ],
             mode=req.mode,
             quote_source=req.quote_source,
-            broker_account_id=req.broker_account_id if req.quote_source == "zerodha" else None,
+            broker_account_id=req.broker_account_id if is_broker_source(req.quote_source) else None,
             refresh_seconds=req.refresh_seconds,
             decision_time=req.decision_time,
             ignore_market_hours=req.ignore_market_hours,
@@ -314,7 +322,7 @@ async def set_quote_source(
 ) -> dict:
     """Swap a running run's quote source (e.g. cache -> Zerodha live) in place."""
     live = _get(run_id)
-    account_id = body.broker_account_id if body.quote_source == "zerodha" else None
+    account_id = body.broker_account_id if is_broker_source(body.quote_source) else None
     live.quote_source = _build_quote_source(body.quote_source, account_id, loader, db)
     live.config.quote_source = body.quote_source
     live.config.broker_account_id = account_id
@@ -581,7 +589,7 @@ async def go_live(
         withdrawal_rate=cfg.withdrawal_rate,
         lookback=cfg.lookback,
         mode="LIVE",
-        quote_source="zerodha",
+        quote_source=(account.broker or "zerodha").lower(),  # live quotes ride the chosen account's broker
         broker_account_id=body.broker_account_id,
         refresh_seconds=cfg.refresh_seconds,
         decision_time=cfg.decision_time,

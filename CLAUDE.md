@@ -95,6 +95,18 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   the backtest FORM defaults to auto. Model margin ignores the long hedges (≈2× broker
   SPAN), so `capital_utilization_pct=95` ≈ ~50% broker margin — the knob is the live
   calibration point. Manual `LiveControlsInput.lots` only bites in fixed mode.
+- **Two brokers.** `BrokerAccount.broker` ∈ {zerodha, dhan}; `services/broker.make_adapter`
+  dispatches. **Dhan** (`brokers/dhan.py`): no api key/secret — client id + a portal-generated
+  JWT the user PASTES (its `exp` claim is the session expiry); instruments resolve via the
+  public scrip-master CSV (module-cached daily; underlying recovered with `rsplit("-", 3)` —
+  hyphenated names like BAJAJ-AUTO); `basket_margin` = Σ per-SHORT-leg margins (Dhan has no
+  basket API → overstates, conservative); its option-chain endpoint is throttled (~1/3s) so
+  the 50-name screeners STAY on Zerodha, as does the skas-data cache refresh (Kite-coupled —
+  `make_data_session` rejects dhan accounts). quote_source ∈ {cache, zerodha, dhan} — the
+  broker sources are gated by `live/quotes.is_broker_source`, and the source must match
+  `account.broker`. **No broker places real orders yet** — even LIVE mode fills via
+  PaperBroker; the real order path (LiveBroker, LIMIT-at-touch→market, double-gated) is the
+  planned Phase B and the only place order code may ever be added.
 - **Donchian flip default:** new deploys roll a breached name **intraday** (`breach_basis="touch"`),
   **once per name per day** (`last_flip_day` guard), up to `max_flips=3` (two rolls, then close the
   name on the next breach). Defaults live in the deploy layer (`api/models.py:DonchianDeploy`); the

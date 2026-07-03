@@ -17,7 +17,12 @@ from skas_algo.db.enums import TradingMode
 from skas_algo.db.models import Algo, AlgoRun, BrokerAccount
 from skas_algo.engine.live import LiveSession
 from skas_algo.live.manager import LiveConfig, LiveRun, manager
-from skas_algo.live.quotes import CacheQuoteSource, ZerodhaQuoteSource, warmup_history
+from skas_algo.live.quotes import (
+    CacheQuoteSource,
+    ZerodhaQuoteSource,
+    is_broker_source,
+    warmup_history,
+)
 from skas_algo.services import broker as broker_svc
 from skas_algo.strategies.registry import get_strategy
 
@@ -154,7 +159,7 @@ def _quote_source(db, config: LiveConfig, loader):
     Returns ``(quote_source, on_cache_fallback)`` — the flag is True when the run
     wanted Zerodha but had to degrade to cache, so a later login can promote it.
     """
-    if config.quote_source == "zerodha" and config.broker_account_id:
+    if is_broker_source(config.quote_source) and config.broker_account_id:
         account = db.get(BrokerAccount, config.broker_account_id)
         if account is not None and broker_svc.has_valid_session(account):
             return ZerodhaQuoteSource(broker_svc.make_adapter(account)), False

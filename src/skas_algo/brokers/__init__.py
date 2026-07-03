@@ -7,6 +7,7 @@ Three implementations land in later phases behind one interface:
 """
 
 from .base import BrokerAdapter, BrokerOrder, Fill, Funds, Session
+from .dhan import DhanAdapter, DhanCredentials
 from .sim_broker import BacktestBroker, PaperBroker, SimBroker
 from .zerodha import BrokerLoginError, NotArmedError, ZerodhaAdapter, ZerodhaCredentials
 
@@ -19,6 +20,8 @@ __all__ = [
     "SimBroker",
     "BacktestBroker",
     "PaperBroker",
+    "DhanAdapter",
+    "DhanCredentials",
     "ZerodhaAdapter",
     "ZerodhaCredentials",
     "BrokerLoginError",
