@@ -49,6 +49,71 @@ function ThemeToggle() {
   );
 }
 
+/** Mobile-only bottom tab bar (md:hidden) — the installed-PWA navigation. Home indicator
+ * safe-area padded; "More" opens a small sheet with the secondary destinations. Desktop
+ * keeps the top nav untouched. */
+const MORE_PATHS = ["/trade", "/data", "/brokers", "/docs"];
+
+function TabIcon({ d }: { d: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d={d} />
+    </svg>
+  );
+}
+
+function MobileTabBar() {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const path = useLocation().pathname;
+  const moreActive = MORE_PATHS.some((p) => path.startsWith(p));
+  const tab = (active: boolean) =>
+    `flex flex-col items-center justify-center gap-0.5 flex-1 py-2 text-[10px] font-medium ${
+      active ? "text-brand-light" : "text-slate-400"
+    }`;
+  const item = ({ isActive }: { isActive: boolean }) => tab(isActive);
+  return (
+    <>
+      {moreOpen && (
+        // Backdrop + sheet — tap anywhere (or a link) to dismiss.
+        <div className="md:hidden fixed inset-0 z-20" onClick={() => setMoreOpen(false)}>
+          <div className="absolute inset-0 bg-black/40" />
+          <div className="absolute bottom-[calc(3.75rem+env(safe-area-inset-bottom))] inset-x-3 rounded-2xl border border-slate-700 bg-slate-900 p-2 grid grid-cols-2 gap-1">
+            {[["/trade", "Trade"], ["/data", "Data"], ["/brokers", "Brokers"], ["/docs", "Docs"]].map(([to, label]) => (
+              <NavLink key={to} to={to} onClick={() => setMoreOpen(false)}
+                className={({ isActive }) =>
+                  `rounded-xl px-4 py-3 text-sm font-medium text-center ${
+                    isActive ? "bg-brand text-white" : "text-slate-200 hover:bg-slate-800"
+                  }`}>
+                {label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      )}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 border-t border-slate-800 bg-slate-900/90 backdrop-blur pb-[env(safe-area-inset-bottom)]">
+        <div className="flex items-stretch">
+          <NavLink to="/" end className={item}>
+            <TabIcon d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z" />Home
+          </NavLink>
+          <NavLink to="/live" className={item}>
+            <TabIcon d="M3 12h4l3-8 4 16 3-8h4" />Live
+          </NavLink>
+          <NavLink to="/backtest" className={item}>
+            <TabIcon d="M4 20V10m5.5 10V4m5.5 16v-7m5 7V7" />Backtest
+          </NavLink>
+          <NavLink to="/research" className={item}>
+            <TabIcon d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm10 17-4.8-4.8" />Research
+          </NavLink>
+          <button onClick={() => setMoreOpen((v) => !v)} className={tab(moreActive || moreOpen)}>
+            <TabIcon d="M5 12h.01M12 12h.01M19 12h.01" />More
+          </button>
+        </div>
+      </nav>
+    </>
+  );
+}
+
 const FULL_BLEED = new Set(["/", "/backtest", "/live", "/trade"]);
 
 export default function App() {
@@ -56,24 +121,29 @@ export default function App() {
   const isHome = FULL_BLEED.has(path) || /^\/live\/\d+$/.test(path); // donchian detail is full-bleed too
   return (
     <div className="min-h-screen">
-      <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10">
+      {/* pt-[env(...)]: the PWA draws under the translucent iOS status bar — pad the blur
+          bar so content clears the clock/battery (env() = 0 in desktop browsers). */}
+      <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10 pt-[env(safe-area-inset-top)]">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-2">
           <NavLink to="/" className="flex items-center gap-2 font-semibold text-brand-light mr-4 hover:text-brand">
             <span className="w-6 h-6 rounded-[7px] bg-brand inline-block" />
             SKAS Algo
           </NavLink>
-          <NavItem to="/" label="Home" />
-          <NavItem to="/backtest" label="Backtest" />
-          <NavItem to="/trade" label="Trade" />
-          <NavItem to="/live" label="Live" />
-          <NavItem to="/docs" label="Docs" />
-          <NavItem to="/research" label="Research" />
-          <NavItem to="/data" label="Data" />
-          <NavItem to="/brokers" label="Brokers" />
+          {/* Desktop nav — the phone gets the bottom tab bar instead. */}
+          <nav className="hidden md:flex items-center gap-2">
+            <NavItem to="/" label="Home" />
+            <NavItem to="/backtest" label="Backtest" />
+            <NavItem to="/trade" label="Trade" />
+            <NavItem to="/live" label="Live" />
+            <NavItem to="/docs" label="Docs" />
+            <NavItem to="/research" label="Research" />
+            <NavItem to="/data" label="Data" />
+            <NavItem to="/brokers" label="Brokers" />
+          </nav>
           <div className="ml-auto"><ThemeToggle /></div>
         </div>
       </header>
-      <main className={isHome ? "" : "max-w-6xl mx-auto px-4 py-6"}>
+      <main className={`${isHome ? "" : "max-w-6xl mx-auto px-4 py-6"} pb-24 md:pb-0`}>
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/backtest" element={<BacktestPage />} />
@@ -95,6 +165,7 @@ export default function App() {
           <Route path="/fibret" element={<Navigate to="/trade?tab=screener" replace />} />
         </Routes>
       </main>
+      <MobileTabBar />
     </div>
   );
 }

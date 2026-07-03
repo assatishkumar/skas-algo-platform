@@ -1351,7 +1351,7 @@ export default function LivePage() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <Segmented value={tab} onChange={setTab} options={[{ value: "active", label: "Active" }, { value: "stopped", label: "Stopped" }, { value: "archived", label: "Archived" }]} />
           <input
-            className="rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-3 py-1.5 text-sm w-64 text-[var(--strong)] placeholder:text-[var(--faint)] focus:outline-none focus:border-[var(--accent)]"
+            className="rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-3 py-1.5 text-sm w-full sm:w-64 text-[var(--strong)] placeholder:text-[var(--faint)] focus:outline-none focus:border-[var(--accent)]"
             placeholder="Search name / strategy / notes"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -1378,7 +1378,7 @@ export default function LivePage() {
                 <div key={sid}>
                   <button
                     onClick={() => setOpenGroups((g) => ({ ...g, [sid]: !(g[sid] ?? false) }))}
-                    className="w-full flex items-center justify-between gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--card)] px-4 py-3 hover:bg-[var(--row-hover)]"
+                    className="w-full flex flex-col items-start gap-1.5 md:flex-row md:items-center md:justify-between md:gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--card)] px-4 py-3 hover:bg-[var(--row-hover)]"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className="text-[var(--muted)] text-xs w-3 shrink-0">{open ? "▾" : "▸"}</span>
@@ -1386,7 +1386,7 @@ export default function LivePage() {
                       {isOpt && <Tag bg="var(--opt-bg)" color="var(--opt-text)">OPT</Tag>}
                       <Tag>{deps.length}</Tag>
                     </div>
-                    <div className="flex items-center gap-4 text-xs shrink-0">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs md:flex-nowrap md:gap-4 md:shrink-0">
                       <span className="text-[var(--muted)]">
                         Realized{" "}
                         <span className={`tabular-nums font-medium ${realized >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{formatInr(realized)}</span>
