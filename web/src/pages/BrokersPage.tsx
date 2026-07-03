@@ -1,19 +1,247 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api, brokers } from "../api/client";
-import { Badge, Card, ErrorBox, Spinner } from "../components/ui";
-import type { BrokerConnectRequest } from "../types";
+import { ErrorBox, Spinner } from "../components/ui";
+import type { BrokerAccount } from "../types";
 
-const inputClass =
-  "w-full rounded-md bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:border-brand";
+/** Brokers — broker account management, rebuilt per the Claude Design handoff
+ * (design_handoff_brokers): two-column layout (sticky Connect + security cards left,
+ * account cards right), broker tiles, validation-gated Connect, and an impossible-to-miss
+ * ARMED treatment (gradient strip + danger ring + pulsing header pill). All data binds to
+ * the real brokers API; the server flag renders read-only (it's server config). */
 
-const EMPTY: BrokerConnectRequest = {
-  broker: "zerodha",
-  label: "",
-  api_key: "",
-  api_secret: "",
-  user_id: "",
+// Broker brand tints (handoff literals, not theme vars).
+const BRAND: Record<string, { bg: string; fg: string; letter: string; sub: string }> = {
+  zerodha: { bg: "#fdece7", fg: "#e8551f", letter: "Z", sub: "Kite Connect" },
+  dhan: { bg: "#e7f0fd", fg: "#2f6bd6", letter: "D", sub: "Access token" },
 };
+
+const HINTS: Record<string, string> = {
+  zerodha:
+    "Enter your Kite Connect app credentials. After connecting, hit Login to paste Kite's request_token — SKAS exchanges it for the daily access token.",
+  dhan:
+    "Enter your Dhan client ID and a portal-generated access token (My Profile → DhanHQ Trading APIs). No password or TOTP is ever stored. Live quotes additionally need Dhan's paid Data APIs plan.",
+};
+
+/** Tiny inline icon: `d` is |-separated segments — raw path, `pl:` polyline, `rc:` rect. */
+function Icon({ d, size = 15, className = "" }: { d: string; size?: number; className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {d.split("|").map((seg, i) => {
+        if (seg.startsWith("pl:")) return <polyline key={i} points={seg.slice(3)} />;
+        if (seg.startsWith("rc:")) {
+          const [x, y, w, h, r] = seg.slice(3).split(",").map(Number);
+          return <rect key={i} x={x} y={y} width={w} height={h} rx={r} />;
+        }
+        return <path key={i} d={seg} />;
+      })}
+    </svg>
+  );
+}
+
+const I = {
+  shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  bolt: "M13 2 3 14h9l-1 8 10-12h-9l1-8z",
+  login: "M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4|pl:10 17 15 12 10 7|M15 12H3",
+  lockOpen: "rc:3,11,18,11,2|M7 11V7a5 5 0 0 1 9.9-1",
+  lock: "rc:3,11,18,11,2|M7 11V7a5 5 0 0 1 10 0v4",
+  trash: "pl:3 6 5 6 21 6|M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+  db: "M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5|M21 12c0 1.66-4 3-9 3s-9-1.34-9-3",
+  refresh: "M20.49 15a9 9 0 1 1-2.12-9.36L23 10|pl:23 4 23 10 17 10",
+  check: "pl:20 6 9 17 4 12",
+};
+
+function expiresIn(iso: string | null): string {
+  if (!iso) return "";
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return "expired";
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  return h > 0 ? `expires ${h}h ${m}m` : `expires ${m}m`;
+}
+
+function lastRefreshText(id: number): string {
+  const ts = Number(localStorage.getItem(`brokers.lastRefresh.${id}`) || 0);
+  if (!ts) return "never refreshed";
+  const mins = Math.floor((Date.now() - ts) / 60_000);
+  if (mins < 1) return "updated just now";
+  if (mins < 60) return `updated ${mins}m ago`;
+  const h = Math.floor(mins / 60);
+  return h < 24 ? `updated ${h}h ago` : `updated ${Math.floor(h / 24)}d ago`;
+}
+
+function Notice({ text, ok }: { text: string; ok: boolean }) {
+  return ok ? (
+    <div className="rounded-[13px] px-4 py-2.5 text-sm"
+      style={{ background: "var(--ok-bg)", color: "var(--ok-text)" }}>
+      ✓ {text}
+    </div>
+  ) : (
+    <ErrorBox message={text} />
+  );
+}
+
+// ----------------------------------------------------------------- connect card
+
+type FormState = { label: string; userId: string; apiKey: string; apiSecret: string; token: string };
+const EMPTY_FORM: FormState = { label: "", userId: "", apiKey: "", apiSecret: "", token: "" };
+
+function ConnectCard({ onDone }: { onDone: (msg: string, id: number) => void }) {
+  const [broker, setBroker] = useState<"zerodha" | "dhan">("zerodha");
+  const [f, setF] = useState<FormState>(EMPTY_FORM);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const set = (k: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setF((v) => ({ ...v, [k]: e.target.value }));
+
+  const ready = broker === "zerodha"
+    ? !!(f.userId.trim() && f.apiKey.trim() && f.apiSecret.trim())
+    : !!(f.userId.trim() && f.token.trim());
+
+  async function connect() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const label = f.label.trim() || (broker === "zerodha" ? "Zerodha account" : "Dhan account");
+      const acct = await brokers.connect({
+        broker, label, user_id: f.userId.trim(),
+        api_key: broker === "zerodha" ? f.apiKey.trim() : "",
+        api_secret: broker === "zerodha" ? f.apiSecret.trim() : "",
+      });
+      let msg = `${label} saved — hit Login on its card to start the session.`;
+      if (broker === "dhan") {
+        // Dhan's pasted token IS the session — one step, no separate login hop.
+        await brokers.login(acct.id, f.token.trim());
+        msg = `${label} connected — session active.`;
+      }
+      setF(EMPTY_FORM);
+      onDone(msg, acct.id);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const fieldCls =
+    "w-full rounded-[11px] bg-[var(--field)] border border-[var(--field-border)] px-3 py-2 font-['Space_Grotesk'] font-medium text-[13.5px] text-[var(--strong)] focus:outline-none focus:border-[var(--accent)] focus:ring-[3px] focus:ring-[var(--accent-ring)]";
+  const FieldLabel = ({ text, required }: { text: string; required?: boolean }) => (
+    <span className="block text-[11.5px] font-bold text-[var(--muted)] mb-1.5">
+      {text}{" "}
+      <span style={{ color: required ? "var(--danger)" : "var(--faint)" }} className="font-semibold">
+        {required ? "required" : "optional"}
+      </span>
+    </span>
+  );
+
+  return (
+    <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-[22px]">
+      <div className="font-['Space_Grotesk'] font-bold text-[16px] text-[var(--strong)]">
+        Connect a broker account
+      </div>
+      <p className="mt-1 text-[12.5px] leading-relaxed text-[var(--muted)]">{HINTS[broker]}</p>
+
+      {/* broker tiles */}
+      <div className="mt-4 grid grid-cols-2 gap-2.5">
+        {(["zerodha", "dhan"] as const).map((b) => {
+          const brand = BRAND[b];
+          const sel = broker === b;
+          return (
+            <button key={b} type="button"
+              onClick={() => { setBroker(b); setF(EMPTY_FORM); setErr(null); }}
+              className="flex items-center gap-2.5 rounded-[13px] px-3 py-2.5 text-left"
+              style={sel
+                ? { background: "var(--accent-ring)", border: "1.5px solid var(--accent)" }
+                : { background: "var(--field)", border: "1px solid var(--field-border)" }}>
+              <span className="flex h-8 w-8 items-center justify-center rounded-[10px] font-['Space_Grotesk'] font-bold"
+                style={{ background: brand.bg, color: brand.fg }}>{brand.letter}</span>
+              <span>
+                <span className="block font-['Space_Grotesk'] font-bold text-[13.5px] text-[var(--strong)]">
+                  {b === "zerodha" ? "Zerodha" : "Dhan"}
+                </span>
+                <span className="block text-[11px] font-semibold text-[var(--faint)]">{brand.sub}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* adaptive fields */}
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <label className="col-span-2 block">
+          <FieldLabel text="Label" />
+          <input className={fieldCls} placeholder={broker === "zerodha" ? "e.g. Satish Kite" : "e.g. Satish Dhan"}
+            value={f.label} onChange={set("label")} />
+        </label>
+        <label className="block">
+          <FieldLabel text={broker === "zerodha" ? "User ID" : "Client ID"} required />
+          <input className={fieldCls} placeholder={broker === "zerodha" ? "AB1234" : "1000123456"}
+            value={f.userId} onChange={set("userId")} />
+        </label>
+        {broker === "zerodha" ? (
+          <>
+            <label className="block">
+              <FieldLabel text="API key" required />
+              <input className={fieldCls} placeholder="kc_…" value={f.apiKey} onChange={set("apiKey")} />
+            </label>
+            <label className="col-span-2 block">
+              <FieldLabel text="API secret" required />
+              <input className={fieldCls} type="password" placeholder="••••••••"
+                value={f.apiSecret} onChange={set("apiSecret")} />
+            </label>
+          </>
+        ) : (
+          <label className="block">
+            <FieldLabel text="Access token" required />
+            <input className={fieldCls} type="password" placeholder="paste JWT"
+              value={f.token} onChange={set("token")} />
+          </label>
+        )}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button onClick={connect} disabled={!ready || busy}
+          className="inline-flex items-center gap-2 rounded-[12px] px-4 py-2.5 text-sm font-bold text-white"
+          style={ready && !busy
+            ? { background: "var(--ft)", boxShadow: "0 6px 14px rgba(13,107,79,.24)" }
+            : { background: "var(--chip)", color: "var(--faint)", cursor: "not-allowed" }}>
+          <Icon d={I.bolt} size={14} /> {busy ? "Connecting…" : "Connect"}
+        </button>
+        <span className="text-[12px] font-semibold text-[var(--faint)]">
+          {ready ? "ready — secrets encrypted on save" : "fill the required fields to continue"}
+        </span>
+      </div>
+      {err && <div className="mt-3"><ErrorBox message={err} /></div>}
+    </div>
+  );
+}
+
+function SecurityCard() {
+  const rows: [string, string][] = [
+    ["Encrypted at rest", "API secrets and tokens are sealed with server-side encryption; never shown again after saving."],
+    ["No password, no TOTP", "you authenticate on the broker's own login page and paste back a short-lived token."],
+    ["Two-key live gate", "orders require both an armed account and the server flag; either one off means simulation only."],
+  ];
+  return (
+    <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] px-[22px] py-5">
+      <div className="font-['Space_Grotesk'] font-bold text-[16px] text-[var(--strong)]">How SKAS keeps this safe</div>
+      <div className="mt-3 space-y-3">
+        {rows.map(([t, body]) => (
+          <div key={t} className="flex gap-2.5 text-[12.5px] leading-relaxed text-[var(--muted)]">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-[7px]"
+              style={{ background: "var(--ok-bg)", color: "var(--ok-text)" }}>
+              <Icon d={I.check} size={11} />
+            </span>
+            <span><strong className="text-[var(--strong)]">{t}</strong> — {body}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ login flow
 
 function LoginFlow({ id, broker, onDone }: { id: number; broker: string; onDone: () => void }) {
   const [token, setToken] = useState("");
@@ -45,33 +273,26 @@ function LoginFlow({ id, broker, onDone }: { id: number; broker: string; onDone:
   }
 
   return (
-    <div className="mt-3 border-t border-slate-800 pt-3 space-y-2">
-      <div className="text-xs text-slate-400">
-        {isDhan ? (
-          <>1. Open Dhan and generate an access token (My Profile → DhanHQ Trading APIs).
-            2. Paste the token below — it's valid ~24 hours, like the Kite session.
-            Note: live quotes/option chains additionally need Dhan's paid <b>Data APIs</b>{" "}
-            subscription (order/fund APIs don't).</>
-        ) : (
-          <>1. Open the Kite login, sign in there, and copy the <code>request_token</code> from the
-            redirected URL. 2. Paste it below.</>
-        )}
+    <div className="mt-4 border-t border-[var(--divider)] pt-4 space-y-2.5">
+      <div className="text-[12.5px] text-[var(--muted)]">
+        {isDhan
+          ? <>Generate an access token on Dhan (My Profile → DhanHQ Trading APIs) and paste it — valid ~24h.</>
+          : <>Open the Kite login, sign in there, and copy the <code>request_token</code> from the redirected URL, then paste it.</>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <button onClick={openLogin} className="rounded bg-slate-700 hover:bg-slate-600 px-3 py-1.5 text-xs">
+        <button onClick={openLogin}
+          className="rounded-[11px] bg-[var(--chip)] px-3 py-2 text-xs font-bold text-[var(--chip-text)]">
           {isDhan ? "Open Dhan ↗" : "Open Kite login ↗"}
         </button>
         <input
-          className="flex-1 min-w-[220px] rounded bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm"
+          className="min-w-[200px] flex-1 rounded-[11px] border border-[var(--field-border)] bg-[var(--field)] px-3 py-2 font-['Space_Grotesk'] text-[13px] text-[var(--strong)] focus:outline-none focus:border-[var(--accent)]"
           placeholder={isDhan ? "paste access token" : "paste request_token"}
           value={token}
           onChange={(e) => setToken(e.target.value)}
         />
-        <button
-          onClick={submit}
-          disabled={busy || !token.trim()}
-          className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs disabled:opacity-50"
-        >
+        <button onClick={submit} disabled={busy || !token.trim()}
+          className="rounded-[11px] px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+          style={{ background: "var(--ft)" }}>
           {busy ? "Saving…" : "Submit token"}
         </button>
       </div>
@@ -80,114 +301,177 @@ function LoginFlow({ id, broker, onDone }: { id: number; broker: string; onDone:
   );
 }
 
-function RefreshData({ id }: { id: number }) {
+// ---------------------------------------------------------------- account card
+
+function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
+  a: BrokerAccount;
+  loginOpen: boolean;
+  onToggleLogin: () => void;
+  onAction: (fn: () => Promise<unknown>, ok: string) => void;
+  onLoggedIn: () => void;
+}) {
+  const brand = BRAND[a.broker] ?? BRAND.zerodha;
   const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
   const [universe, setUniverse] = useState("nifty50");
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [summary, setSummary] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState<{ done: number; total: number } | null>(null);
+  const [cacheMsg, setCacheMsg] = useState<string | null>(null);
+  const showCache = a.broker === "zerodha" && a.has_session;
 
   async function refresh() {
-    setBusy(true);
-    setErr(null);
-    setSummary(null);
-    setProgress(null);
+    setRefreshing(null);
+    setCacheMsg(null);
     try {
-      // Resolve the universe to its cached symbols, then refresh in small chunks so the button
-      // shows real progress (e.g. "Refreshing 45/491…") instead of one long opaque call.
+      // Chunked so the button shows real progress instead of one long opaque call.
       const { symbols } = await api.universeSymbols(universe);
-      if (!symbols.length) {
-        setErr("universe resolved to no cached symbols");
-        return;
-      }
       const CHUNK = 15;
-      let ok = 0;
-      let errors = 0;
-      let latest: string | undefined;
-      setProgress({ done: 0, total: symbols.length });
+      let ok = 0, errors = 0;
+      setRefreshing({ done: 0, total: symbols.length });
       for (let i = 0; i < symbols.length; i += CHUNK) {
-        const { refreshed } = await brokers.refreshCache(id, { symbols: symbols.slice(i, i + CHUNK) });
-        for (const e of Object.values(refreshed)) {
-          if (e.error) errors += 1;
-          else ok += 1;
-          if (e.last_date && (!latest || e.last_date > latest)) latest = e.last_date;
-        }
-        setProgress({ done: Math.min(i + CHUNK, symbols.length), total: symbols.length });
+        const { refreshed } = await brokers.refreshCache(a.id, { symbols: symbols.slice(i, i + CHUNK) });
+        for (const e of Object.values(refreshed)) e.error ? errors++ : ok++;
+        setRefreshing({ done: Math.min(i + CHUNK, symbols.length), total: symbols.length });
       }
-      setSummary(
-        `Refreshed ${ok} symbols on the shared session` +
-          (latest ? ` · latest ${latest}` : "") +
-          (errors ? ` · ${errors} errors` : ""),
-      );
+      localStorage.setItem(`brokers.lastRefresh.${a.id}`, String(Date.now()));
+      setCacheMsg(`refreshed ${ok} symbols${errors ? ` · ${errors} errors` : ""}`);
     } catch (e) {
-      setErr((e as Error).message);
+      setCacheMsg((e as Error).message);
     } finally {
-      setBusy(false);
-      setProgress(null);
+      setRefreshing(null);
     }
   }
 
+  const chipBtn =
+    "inline-flex items-center gap-1.5 rounded-[11px] bg-[var(--chip)] px-3 py-2 text-xs font-bold text-[var(--chip-text)] hover:opacity-85";
+
   return (
-    <div className="mt-3 border-t border-slate-800 pt-3 space-y-2">
-      <div className="text-xs text-slate-400">
-        Update the historical cache using this same Kite login (data + trading share one session).
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          className="rounded bg-slate-800 border border-slate-700 px-2 py-1.5 text-sm"
-          value={universe}
-          onChange={(e) => setUniverse(e.target.value)}
-        >
-          {(universeData ?? []).map((u) => (
-            <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
-          ))}
-        </select>
-        <button
-          onClick={refresh}
-          disabled={busy}
-          className="rounded bg-slate-700 hover:bg-slate-600 px-3 py-1.5 text-xs disabled:opacity-50"
-        >
-          {progress ? `Refreshing ${progress.done}/${progress.total}…` : busy ? "Refreshing…" : "Refresh data"}
-        </button>
-        {summary && <span className="text-xs text-emerald-600 dark:text-emerald-400">{summary}</span>}
-      </div>
-      {progress && (
-        <div className="h-1.5 w-full max-w-md rounded-full bg-slate-800 overflow-hidden">
-          <div
-            className="h-full bg-emerald-500 transition-[width] duration-200"
-            style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }}
-          />
-        </div>
+    <div id={`broker-card-${a.id}`}
+      className="overflow-hidden rounded-[16px] bg-[var(--card)]"
+      style={a.armed
+        ? { border: "1px solid var(--danger)", boxShadow: "0 0 0 3px var(--danger-ring)" }
+        : { border: "1px solid var(--border)" }}>
+      {a.armed && (
+        <div className="h-1" style={{ background: "linear-gradient(90deg, var(--danger), var(--danger-deep))" }} />
       )}
-      {err && <ErrorBox message={err} />}
+      <div className="px-5 py-[18px]">
+        <div className="flex flex-wrap items-start gap-3.5">
+          <span className="flex h-11 w-11 items-center justify-center rounded-[12px] font-['Space_Grotesk'] font-bold text-[18px]"
+            style={{ background: brand.bg, color: brand.fg }}>{brand.letter}</span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className="font-['Space_Grotesk'] font-bold text-[17px] text-[var(--strong)]">{a.label}</span>
+              <span className="font-['Space_Grotesk'] text-[12px] font-semibold text-[var(--faint)]">
+                {a.broker} · {a.user_id}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-[7px] px-2 py-1 text-[11px] font-bold"
+                style={a.has_session
+                  ? { background: "var(--ok-bg)", color: "var(--ok-text)" }
+                  : { background: "var(--chip)", color: "var(--muted)" }}>
+                <span className="h-1.5 w-1.5 rounded-full"
+                  style={{ background: a.has_session ? "var(--pos)" : "var(--faint)" }} />
+                {a.has_session ? `session · ${expiresIn(a.session_expires_at)}` : "no session"}
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-[7px] px-2 py-1 text-[11px] font-bold"
+                style={a.armed
+                  ? { background: "var(--warn-bg)", color: "var(--warn-text)" }
+                  : { background: "var(--chip)", color: "var(--muted)" }}>
+                {a.armed ? "● armed for live orders" : "disarmed"}
+              </span>
+            </div>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={onToggleLogin} className={chipBtn}>
+              <Icon d={I.login} size={13} /> {a.has_session ? "Re-login" : "Login"}
+            </button>
+            {a.armed ? (
+              <button
+                onClick={() => onAction(() => brokers.disarm(a.id), `${a.label} disarmed.`)}
+                className="inline-flex items-center gap-1.5 rounded-[11px] px-3 py-2 text-xs font-bold text-white"
+                style={{ background: "var(--danger)" }}>
+                <Icon d={I.lock} size={13} /> Disarm
+              </button>
+            ) : (
+              <button
+                onClick={() => onAction(() => brokers.arm(a.id), `${a.label} ARMED for live orders.`)}
+                className="inline-flex items-center gap-1.5 rounded-[11px] bg-transparent px-3 py-2 text-xs font-bold"
+                style={{ border: "1px solid var(--warn-text)", color: "var(--warn-text)" }}>
+                <Icon d={I.lockOpen} size={13} /> Arm
+              </button>
+            )}
+            <button
+              title="Delete account"
+              onClick={() => {
+                if (window.confirm(`Delete ${a.label}? Its encrypted credentials are removed.`))
+                  onAction(() => brokers.remove(a.id), `${a.label} deleted.`);
+              }}
+              className="flex h-[38px] w-[38px] items-center justify-center rounded-[11px] text-[var(--faint)] hover:text-[var(--danger)]"
+              style={{ border: "1px solid var(--border)" }}>
+              <Icon d={I.trash} size={14} />
+            </button>
+          </div>
+        </div>
+
+        {loginOpen && <LoginFlow id={a.id} broker={a.broker} onDone={onLoggedIn} />}
+
+        {showCache && (
+          <div className="mt-4 border-t border-[var(--divider)] pt-4">
+            <div className="flex items-start gap-2 text-[12.5px] text-[var(--muted)]">
+              <Icon d={I.db} size={14} className="mt-0.5 shrink-0" />
+              <span>Historical cache shares this Kite session — refresh candles without a second login.</span>
+            </div>
+            <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
+              <select
+                className="rounded-[11px] border border-[var(--field-border)] bg-[var(--field)] px-3 py-2 text-[13px] font-semibold text-[var(--strong)]"
+                value={universe} onChange={(e) => setUniverse(e.target.value)}>
+                {(universeData ?? []).map((u) => (
+                  <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
+                ))}
+              </select>
+              <button onClick={refresh} disabled={!!refreshing}
+                className="inline-flex items-center gap-1.5 rounded-[11px] px-3.5 py-2 text-xs font-bold text-white"
+                style={refreshing
+                  ? { background: "var(--chip)", color: "var(--muted)" }
+                  : { background: "var(--accent)" }}>
+                <Icon d={I.refresh} size={13} className={refreshing ? "animate-spin" : ""} />
+                {refreshing ? `Refreshing ${refreshing.done}/${refreshing.total}…` : "Refresh data"}
+              </button>
+              <span className="text-[12px] font-semibold text-[var(--faint)]">
+                {cacheMsg ?? lastRefreshText(a.id)}
+              </span>
+            </div>
+            {refreshing && (
+              <div className="mt-2 h-1.5 w-full max-w-md overflow-hidden rounded-full bg-[var(--track)]">
+                <div className="h-full transition-[width] duration-200"
+                  style={{ background: "var(--accent)", width: `${refreshing.total ? (refreshing.done / refreshing.total) * 100 : 0}%` }} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {a.armed && !a.live_trading_enabled && (
+          <div className="mt-3 text-xs text-[var(--faint)]">
+            Armed, but server <code>SKAS_LIVE_TRADING_ENABLED</code> is false — still no real orders.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-function Notice({ text, ok }: { text: string; ok: boolean }) {
-  // Successes were previously rendered through ErrorBox — red "Connected" reads as a failure.
-  return ok ? (
-    <div className="rounded-md border border-emerald-300 bg-emerald-100 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300 px-3 py-2 text-sm">
-      ✓ {text}
-    </div>
-  ) : (
-    <ErrorBox message={text} />
-  );
-}
+// ----------------------------------------------------------------------- page
 
 export default function BrokersPage() {
   const { data, isLoading, error, refetch } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
-  const [form, setForm] = useState<BrokerConnectRequest>(EMPTY);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
-  const [busy, setBusy] = useState(false);
   const [loginFor, setLoginFor] = useState<number | null>(null);
+  const accounts = useMemo(() => data ?? [], [data]);
 
-  const set = (k: keyof BrokerConnectRequest) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((f) => ({ ...f, [k]: e.target.value }));
+  const sessions = accounts.filter((a) => a.has_session).length;
+  const armed = accounts.filter((a) => a.armed).length;
+  const liveFlag = accounts.some((a) => a.live_trading_enabled);
 
-  async function run(fn: () => Promise<unknown>, ok: string) {
-    setBusy(true);
+  async function onAction(fn: () => Promise<unknown>, ok: string) {
     setMsg(null);
     try {
       await fn();
@@ -195,125 +479,107 @@ export default function BrokersPage() {
       refetch();
     } catch (e) {
       setMsg({ text: (e as Error).message, ok: false });
-    } finally {
-      setBusy(false);
     }
   }
 
-  // After connecting, the next step is ALWAYS "paste the token" — open the new account's
-  // login flow and scroll it into view instead of leaving it stranded below the fold.
-  async function connect() {
-    setBusy(true);
-    setMsg(null);
-    try {
-      const acct = await brokers.connect(form);
-      setForm(EMPTY);
-      setMsg({ text: `${acct.label} saved — paste its token below to start the session.`, ok: true });
-      setLoginFor(acct.id);
-      await refetch();
-      setTimeout(() => {
-        document.getElementById(`broker-card-${acct.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
-      }, 120);
-    } catch (e) {
-      setMsg({ text: (e as Error).message, ok: false });
-    } finally {
-      setBusy(false);
-    }
+  function onConnected(text: string, id: number) {
+    setMsg({ text, ok: true });
+    setLoginFor(id);
+    refetch().then(() =>
+      setTimeout(() =>
+        document.getElementById(`broker-card-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 120),
+    );
   }
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-lg font-semibold">Brokers</h1>
-
-      <div className="rounded-lg border border-slate-700 bg-slate-900/40 text-slate-300 p-3 text-sm">
-        You log in to the broker yourself and paste a token — Kite's <b>request_token</b> (exchanged
-        for the daily access token) or Dhan's portal-generated <b>access token</b>. Secrets/tokens are
-        stored encrypted — no password, no TOTP.
-        <b> Real orders never fire</b> unless an account is <b>armed</b> and the server has
-        <code> SKAS_LIVE_TRADING_ENABLED=true</code>.
-      </div>
-
-      <Card>
-        <div className="text-sm font-medium text-slate-300 mb-3">Connect a broker account</div>
-        <div className="grid md:grid-cols-2 gap-3">
-          <select
-            className={inputClass}
-            value={form.broker}
-            onChange={(e) => setForm((f) => ({ ...f, broker: e.target.value }))}
-          >
-            <option value="zerodha">Zerodha (Kite Connect)</option>
-            <option value="dhan">Dhan (DhanHQ v2)</option>
-          </select>
-          <input className={inputClass} placeholder="label" value={form.label} onChange={set("label")} />
-          <input
-            className={inputClass}
-            placeholder={form.broker === "dhan" ? "client ID (from your Dhan profile)" : "user id (e.g. AB1234)"}
-            value={form.user_id}
-            onChange={set("user_id")}
-          />
-          {/* Dhan has no api key/secret pair — just the client id + a pasted daily token. */}
-          {form.broker !== "dhan" && (
-            <>
-              <input className={inputClass} placeholder="api key" value={form.api_key} onChange={set("api_key")} />
-              <input className={inputClass} type="password" placeholder="api secret" value={form.api_secret} onChange={set("api_secret")} />
-            </>
-          )}
-        </div>
-        <button
-          onClick={connect}
-          disabled={busy || !form.label}
-          className="mt-3 rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50"
-        >
-          Connect
-        </button>
-      </Card>
-
-      {msg && <Notice text={msg.text} ok={msg.ok} />}
-
-      {isLoading ? (
-        <Spinner />
-      ) : error ? (
-        <ErrorBox message={(error as Error).message} />
-      ) : (
-        (data ?? []).map((a) => (
-          <div key={a.id} id={`broker-card-${a.id}`}>
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="font-medium">{a.label}</span>{" "}
-                <span className="text-xs text-slate-400">{a.broker} · {a.user_id}</span>{" "}
-                {a.has_session ? <Badge>session ✓</Badge> : <Badge>no session</Badge>}{" "}
-                {a.armed ? <span className="text-amber-600 dark:text-amber-400 text-xs font-semibold">ARMED</span> : <Badge>disarmed</Badge>}
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => setLoginFor((v) => (v === a.id ? null : a.id))} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
-                  {a.has_session ? "Re-login" : "Login"}
-                </button>
-                {a.armed ? (
-                  <button onClick={() => run(() => brokers.disarm(a.id), "Disarmed.")} disabled={busy} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Disarm</button>
-                ) : (
-                  <button onClick={() => run(() => brokers.arm(a.id), "Armed.")} disabled={busy} className="rounded bg-amber-900 hover:bg-amber-800 text-white px-3 py-1.5 text-xs">Arm</button>
-                )}
-                <button onClick={() => run(() => brokers.remove(a.id), "Deleted.")} disabled={busy} className="rounded bg-rose-900 hover:bg-rose-800 text-white px-3 py-1.5 text-xs">Delete</button>
-              </div>
-            </div>
-            {loginFor === a.id && (
-              <LoginFlow id={a.id} broker={a.broker} onDone={() => {
-                setLoginFor(null);
-                setMsg({ text: `${a.label}: session active.`, ok: true });
-                refetch();
-              }} />
-            )}
-            {a.has_session && a.broker !== "dhan" && <RefreshData id={a.id} />}
-            {a.armed && !a.live_trading_enabled && (
-              <div className="text-xs text-slate-500 mt-2">
-                Armed, but server <code>SKAS_LIVE_TRADING_ENABLED</code> is false — still no real orders.
-              </div>
-            )}
-          </Card>
+    <div className="font-['Manrope'] bg-[var(--page)] min-h-[calc(100vh-3.5rem)] text-[var(--strong)]">
+      <div className="mx-auto max-w-[1320px] px-4 sm:px-8 pt-7 pb-[90px]">
+        {/* page header */}
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="min-w-0 max-w-[640px]">
+            <h1 className="font-['Space_Grotesk'] text-[27px] font-bold m-0">Brokers</h1>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Connect a broker to place live orders. You log in on the broker's own site and paste a
+              token — SKAS never sees your password or TOTP.
+            </p>
           </div>
-        ))
-      )}
+          <div className="ml-auto flex items-center gap-2.5">
+            <div className="flex items-center rounded-[12px] border border-[var(--border)] bg-[var(--card)] px-3.5 py-2 text-[12px] font-semibold text-[var(--muted)]">
+              <span className="mr-3 flex items-baseline gap-1.5">
+                <span className="font-['Space_Grotesk'] text-[17px] font-bold tabular-nums text-[var(--strong)]">{accounts.length}</span>
+                accounts
+              </span>
+              <span className="mr-3 h-4 w-px bg-[var(--divider)]" />
+              <span className="flex items-baseline gap-1.5">
+                <span className="font-['Space_Grotesk'] text-[17px] font-bold tabular-nums" style={{ color: "var(--pos)" }}>{sessions}</span>
+                live sessions
+              </span>
+            </div>
+            <span className="inline-flex items-center gap-2 rounded-[12px] px-3.5 py-2.5 text-[12px] font-bold"
+              style={armed > 0
+                ? { background: "var(--warn-bg)", color: "var(--warn-text)" }
+                : { background: "var(--card)", color: "var(--muted)", border: "1px solid var(--border)" }}>
+              <span className={`h-2 w-2 rounded-full ${armed > 0 ? "animate-pulse" : ""}`}
+                style={{ background: armed > 0 ? "var(--danger)" : "var(--pos)" }} />
+              {armed > 0 ? `${armed} armed` : "none armed"}
+            </span>
+          </div>
+        </div>
+
+        {/* server-flag banner (read-only — the flag is server config, per the handoff note) */}
+        <div className="mt-5 flex items-center gap-3 rounded-[13px] px-[18px] py-3 text-sm"
+          style={liveFlag
+            ? { background: "var(--warn-bg)", color: "var(--warn-text)" }
+            : { background: "var(--stat)", color: "var(--muted)" }}>
+          <Icon d={I.shield} size={17} className="shrink-0" />
+          <span>
+            Real orders never fire unless an account is <b>armed</b> and the server flag{" "}
+            <code className="rounded bg-[var(--chip)] px-1.5 py-0.5 font-['Space_Grotesk'] text-[12px] text-[var(--chip-text)]">
+              SKAS_LIVE_TRADING_ENABLED
+            </code>{" "}
+            is <b style={{ color: liveFlag ? "var(--pos)" : "var(--danger)" }}>{String(liveFlag)}</b>.
+          </span>
+        </div>
+
+        {msg && <div className="mt-4"><Notice text={msg.text} ok={msg.ok} /></div>}
+
+        {/* two-column grid — collapses to one column below lg */}
+        <div className="mt-5 grid items-start gap-[22px] lg:grid-cols-[428px_1fr]">
+          <div className="space-y-4 lg:sticky lg:top-[92px]">
+            <ConnectCard onDone={onConnected} />
+            <SecurityCard />
+          </div>
+
+          <div>
+            <div className="flex items-baseline gap-2.5">
+              <span className="font-['Space_Grotesk'] text-[16px] font-bold">Connected accounts</span>
+              <span className="text-[12px] font-semibold text-[var(--faint)]">
+                {accounts.length} total · sessions expire daily
+              </span>
+            </div>
+            <div className="mt-3.5 space-y-3.5">
+              {isLoading ? (
+                <Spinner />
+              ) : error ? (
+                <ErrorBox message={(error as Error).message} />
+              ) : (
+                accounts.map((a) => (
+                  <AccountCard key={a.id} a={a}
+                    loginOpen={loginFor === a.id}
+                    onToggleLogin={() => setLoginFor((v) => (v === a.id ? null : a.id))}
+                    onAction={onAction}
+                    onLoggedIn={() => {
+                      setLoginFor(null);
+                      setMsg({ text: `${a.label}: session active.`, ok: true });
+                      refetch();
+                    }}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

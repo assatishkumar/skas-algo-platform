@@ -114,7 +114,7 @@ function MobileTabBar() {
   );
 }
 
-const FULL_BLEED = new Set(["/", "/backtest", "/live", "/trade"]);
+const FULL_BLEED = new Set(["/", "/backtest", "/live", "/trade", "/brokers"]);
 
 export default function App() {
   const path = useLocation().pathname;
