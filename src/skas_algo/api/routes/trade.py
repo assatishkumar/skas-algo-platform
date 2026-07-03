@@ -21,6 +21,7 @@ from skas_algo.api.models import (
     DonchianPortfolioRequest,
     EquityTradeDeploy,
     LiveStartRequest,
+    MomentumThetaDeploy,
     OptionTradeLeg,
     OptionsTradeDeploy,
 )
@@ -453,6 +454,52 @@ async def donchian_deploy(
         mode=body.mode,
         quote_source=body.quote_source,
         broker_account_id=body.broker_account_id,
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/options/momentum-theta/deploy")
+async def momentum_theta_deploy(
+    body: MomentumThetaDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the intraday momentum-theta seller as one DERIV deployment
+    (strategy_id=momentum_theta_gainer_intra), reusing the standard live-start path."""
+    unders = [u.upper() for u in body.underlyings if u.strip()]
+    if not unders:
+        raise HTTPException(status_code=422, detail="pick at least one underlying")
+    if "SENSEX" in unders and body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="SENSEX has no cached data — deploy with a broker quote source (zerodha)",
+        )
+    params = {
+        "underlyings": unders,
+        "lots": {u: int(body.lots.get(u, 1) or 1) for u in unders},
+        "st_period": body.st_period,
+        "st_multiplier": body.st_multiplier,
+        "candle_minutes": body.candle_minutes,
+        "max_trades_per_day": body.max_trades_per_day,
+        "eod_exit": body.eod_exit,
+        "entry_cutoff": body.entry_cutoff,
+        "min_dte": body.min_dte,
+    }
+    req = LiveStartRequest(
+        strategy_id="momentum_theta_gainer_intra",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=unders[0],
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
         ignore_market_hours=body.ignore_market_hours,
         auto=body.auto,
     )

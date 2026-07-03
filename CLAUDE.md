@@ -109,6 +109,16 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   `account.broker`. **No broker places real orders yet** — even LIVE mode fills via
   PaperBroker; the real order path (LiveBroker, LIMIT-at-touch→market, double-gated) is the
   planned Phase B and the only place order code may ever be added.
+- **momentum_theta_gainer_intra** (intraday 15-min SuperTrend(7,3) + daily-pivot ATM weekly
+  seller, NIFTY + SENSEX): builds its OWN 15-min candles from live spot ticks (none exist in
+  any cache) and carries them in `export_state`; pivots (R1/S1) come from its own prior-day
+  bars, NOT the daily cache. Entries only on CLOSED candles; flip exit never re-enters on the
+  same candle; 3-entries/day cap. Warmup: `ZerodhaAdapter.intraday_bars` seeds ~7 days of real
+  bars at deploy/recovery (cache source cold-starts: ST after ~2×period candles, entries day 2).
+  **SENSEX is live-only** — zero BSE history exists (spot or options), so no backtest, ever;
+  its options ride **BFO** (adapter merges the BFO dump into the NFO LUT, `_ts_exchange` keys
+  the `NFO:`/`BFO:` prefixes, spot = `BSE:SENSEX`) and the deploy route rejects SENSEX+cache.
+  Its backtest is a dedicated BS-priced 15-min service (Phase 2) — NOT the shared engine.
 - **Donchian flip default:** new deploys roll a breached name **intraday** (`breach_basis="touch"`),
   **once per name per day** (`last_flip_day` guard), up to `max_flips=3` (two rolls, then close the
   name on the next breach). Defaults live in the deploy layer (`api/models.py:DonchianDeploy`); the

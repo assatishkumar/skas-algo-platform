@@ -69,6 +69,7 @@ class ZerodhaAdapter:
         self._nfo_lut: dict | None = None  # (name, expiry, strike, CE/PE) -> tradingsymbol
         self._nfo_index: dict = {}  # name -> {expiry_iso -> {strike -> {"CE": ts, "PE": ts}}}
         self._nfo_lot: dict = {}    # name -> contract lot size
+        self._ts_exchange: dict = {}  # tradingsymbol -> exchange, NFO omitted (the default)
 
     # ------------------------------------------------------------------ kite
     def _kite_client(self):
@@ -156,11 +157,13 @@ class ZerodhaAdapter:
         for s in symbols:
             inst = parse(s)
             if inst is None:
-                key_of[s] = f"NSE:{s}"
+                # Plain symbol: an index series (may live on BSE — SENSEX) or an NSE equity.
+                exch = "BSE" if s.upper() in self._BSE_SERIES else "NSE"
+                key_of[s] = f"{exch}:{s}"
             else:
                 ts = self._option_tradingsymbol(inst)
                 if ts:
-                    key_of[s] = f"NFO:{ts}"
+                    key_of[s] = f"{self._exchange_of(ts)}:{ts}"
         if not key_of:
             return {}
         data = self._kite_client().ltp(list(key_of.values()))
@@ -185,7 +188,7 @@ class ZerodhaAdapter:
             if not ts or qty <= 0:
                 continue
             basket.append({
-                "exchange": "NFO",
+                "exchange": self._exchange_of(ts),
                 "tradingsymbol": ts,
                 "transaction_type": "SELL" if leg.get("direction", 1) < 0 else "BUY",
                 "variety": "regular",
@@ -209,23 +212,39 @@ class ZerodhaAdapter:
         return float(total) if total is not None else None
 
     def _build_nfo(self) -> None:
-        """Cache the NFO option instruments dump for the session: a (name,expiry,strike,type)
-        → tradingsymbol map, a name→expiry→strike→{CE,PE} index, and the per-name lot size."""
+        """Cache the option instruments dumps for the session: a (name,expiry,strike,type)
+        → tradingsymbol map, a name→expiry→strike→{CE,PE} index, and the per-name lot size.
+        Loads NFO **and BFO** (SENSEX/BANKEX options list on BSE F&O) into one LUT; the
+        exchange travels per-tradingsymbol in ``_ts_exchange`` so quote/chain keys prefix
+        correctly (``NFO:``/``BFO:``)."""
         if self._nfo_lut is not None:
             return
         self._nfo_lut = {}
-        for r in self._kite_client().instruments("NFO"):
-            if r.get("instrument_type") not in ("CE", "PE"):
+        for exchange in ("NFO", "BFO"):
+            try:
+                rows = self._kite_client().instruments(exchange)
+            except Exception:  # pragma: no cover - BFO dump hiccup must not kill NFO flows
+                if exchange == "NFO":
+                    raise
                 continue
-            name, it = r["name"], r["instrument_type"]
-            exp = r.get("expiry")
-            exp_iso = exp.isoformat() if hasattr(exp, "isoformat") else str(exp)[:10]
-            strike = float(r["strike"])
-            ts = r["tradingsymbol"]
-            self._nfo_lut[(name, exp_iso, strike, it)] = ts
-            self._nfo_index.setdefault(name, {}).setdefault(exp_iso, {}).setdefault(strike, {})[it] = ts
-            if r.get("lot_size"):
-                self._nfo_lot[name] = int(r["lot_size"])
+            for r in rows:
+                if r.get("instrument_type") not in ("CE", "PE"):
+                    continue
+                name, it = r["name"], r["instrument_type"]
+                exp = r.get("expiry")
+                exp_iso = exp.isoformat() if hasattr(exp, "isoformat") else str(exp)[:10]
+                strike = float(r["strike"])
+                ts = r["tradingsymbol"]
+                self._nfo_lut[(name, exp_iso, strike, it)] = ts
+                by_strike = self._nfo_index.setdefault(name, {}).setdefault(exp_iso, {})
+                by_strike.setdefault(strike, {})[it] = ts
+                if exchange != "NFO":
+                    self._ts_exchange[ts] = exchange
+                if r.get("lot_size"):
+                    self._nfo_lot[name] = int(r["lot_size"])
+
+    def _exchange_of(self, tradingsymbol: str) -> str:
+        return self._ts_exchange.get(tradingsymbol, "NFO")
 
     def _option_tradingsymbol(self, inst) -> str | None:
         """Resolve an option instrument to its Kite NFO tradingsymbol via the instruments dump."""
@@ -239,7 +258,15 @@ class ZerodhaAdapter:
     _INDEX_SPOT = {
         "NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK",
         "FINNIFTY": "NIFTY FIN SERVICE", "MIDCPNIFTY": "NIFTY MIDCAP SELECT",
+        "SENSEX": "SENSEX",
     }
+    # Index series that live on BSE — their ltp/quote keys need the BSE: prefix.
+    _BSE_SERIES = {"SENSEX", "BANKEX"}
+
+    def _spot_key(self, underlying: str) -> str:
+        series = self._INDEX_SPOT.get(underlying.upper(), underlying.upper())
+        exch = "BSE" if series.upper() in self._BSE_SERIES else "NSE"
+        return f"{exch}:{series}"
 
     def option_underlyings(self) -> list[str]:
         """All F&O option underlyings Kite currently lists (indices + stocks)."""
@@ -254,7 +281,7 @@ class ZerodhaAdapter:
 
     def underlying_ltp(self, underlying: str) -> float | None:
         """Live spot for an option underlying (its index series, or the stock itself)."""
-        key = f"NSE:{self._INDEX_SPOT.get(underlying.upper(), underlying.upper())}"
+        key = self._spot_key(underlying)
         try:
             return self._kite_client().ltp([key]).get(key, {}).get("last_price")
         except Exception:  # pragma: no cover - network hiccup
@@ -270,7 +297,7 @@ class ZerodhaAdapter:
         if not chain:
             return None
         kite = self._kite_client()
-        spot_key = f"NSE:{self._INDEX_SPOT.get(name, name)}"
+        spot_key = self._spot_key(name)
         try:
             spot = kite.ltp([spot_key]).get(spot_key, {}).get("last_price")
         except Exception:  # pragma: no cover - network hiccup
@@ -282,14 +309,15 @@ class ZerodhaAdapter:
             sel = strikes[max(0, ai - window): ai + window + 1]
         else:
             atm, sel = None, strikes
-        keys = [f"NFO:{ts}" for k in sel for ts in (chain[k].get("CE"), chain[k].get("PE")) if ts]
+        keys = [f"{self._exchange_of(ts)}:{ts}"
+                for k in sel for ts in (chain[k].get("CE"), chain[k].get("PE")) if ts]
         try:
             q = kite.quote(keys) if keys else {}
         except Exception as exc:  # pragma: no cover
             raise RuntimeError(f"live quote failed: {exc}") from exc
 
         def info(ts: str | None) -> dict | None:
-            d = q.get(f"NFO:{ts}") if ts else None
+            d = q.get(f"{self._exchange_of(ts)}:{ts}") if ts else None
             if not d:
                 return None
             depth = d.get("depth") or {}
@@ -302,3 +330,30 @@ class ZerodhaAdapter:
 
         rows = [{"strike": k, "ce": info(chain[k].get("CE")), "pe": info(chain[k].get("PE"))} for k in sel]
         return {"spot": spot, "atm_strike": atm, "lot_size": self._nfo_lot.get(name, 0), "rows": rows}
+
+    # ------------------------------------------------------- intraday bars
+    def intraday_bars(self, underlying: str, days: int = 7, minutes: int = 15) -> list[dict]:
+        """Recent intraday OHLC candles for an index/stock underlying via Kite historical
+        data — the warmup feed for intraday strategies (momentum_theta). The instrument
+        token is resolved from a live ltp() call (works for NSE and BSE series alike), so
+        no token table is maintained. Returns [{start, open, high, low, close}, ...] oldest
+        first; [] on any failure (warmup is best-effort — the strategy cold-starts)."""
+        key = self._spot_key(underlying)
+        kite = self._kite_client()
+        try:
+            token = kite.ltp([key]).get(key, {}).get("instrument_token")
+            if not token:
+                return []
+            end = datetime.now()
+            bars = kite.historical_data(
+                token, end - timedelta(days=days), end, f"{minutes}minute"
+            )
+        except Exception:  # pragma: no cover - network/permission hiccup → cold start
+            return []
+        out = []
+        for b in bars:
+            ts = b.get("date")
+            start = ts.replace(tzinfo=None).isoformat() if hasattr(ts, "isoformat") else str(ts)
+            out.append({"start": start, "open": float(b["open"]), "high": float(b["high"]),
+                        "low": float(b["low"]), "close": float(b["close"])})
+        return out

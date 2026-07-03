@@ -27,6 +27,9 @@ INDEX_SYMBOL = {
     "FINNIFTY": "NIFTY FIN SERVICE",
     "MIDCPNIFTY": "NIFTY MIDCAP SELECT",
     "GOLD": "GOLD",
+    # SENSEX quotes as itself — the Zerodha adapter routes it to BSE:SENSEX (live-only;
+    # there is no cached BSE series, so cache-source runs simply get no SENSEX spot).
+    "SENSEX": "SENSEX",
 }
 
 

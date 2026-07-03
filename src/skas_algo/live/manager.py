@@ -252,6 +252,17 @@ class LiveRun:
             market.set_chain_adapter(
                 adapter, self.config.underlying, self.config.params.get("contract_specs")
             )
+        # Intraday strategies (momentum_theta) warm their self-built candles from the
+        # broker's historical bars — strategy-side idempotent, so the re-login path that
+        # re-runs this wiring doesn't double-seed. Cache-source runs cold-start instead.
+        strategy = getattr(self.session, "strategy", None)
+        seed_fn = getattr(strategy, "seed_intraday_bars", None)
+        bars_fn = getattr(getattr(self.quote_source, "adapter", None), "intraday_bars", None)
+        if seed_fn is not None and bars_fn is not None:
+            try:
+                seed_fn(bars_fn)
+            except Exception:  # pragma: no cover - warmup must never block a deploy
+                logger.exception("intraday warmup seed failed for run %s", self.run_id)
 
     # ----------------------------------------------------------- actions
     def _quote_symbols(self) -> list[str]:

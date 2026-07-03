@@ -33,6 +33,10 @@ _LOT_SIZES: dict[str, list[tuple[date, int]]] = {
     # against live chain Jun-2026; big GOLD 1kg would be 100). Overridable via
     # params["contract_specs"].
     "GOLD": [(date(2000, 1, 1), 10)],
+    # SENSEX (BSE, BFO) is LIVE-ONLY on this platform — no BSE history exists anywhere, so
+    # the lot table is a flat snapshot (20, verified from the live BFO dump 2026-07-03);
+    # earlier revisions (10/15) are deliberately not modeled.
+    "SENSEX": [(date(2000, 1, 1), 20)],
 }
 
 # Nifty-50 stock F&O lot sizes — snapshot of the Kite NFO instruments dump (2026-07-02),
@@ -109,6 +113,13 @@ _EXPIRY_WEEKDAYS: dict[str, dict[str, list[tuple[date, int | None]]]] = {
     "MIDCPNIFTY": {
         "weekly": [(date(2000, 1, 1), 0), (date(2024, 11, 20), None)],
         "monthly": [(date(2000, 1, 1), 0), (date(2025, 9, 1), 1)],
+    },
+    # SENSEX kept its weekly through the 2024-11 cull (BSE's product). Thursday as of
+    # 2026-07 (live BFO dump: 07-09/16/23/30 all Thu); earlier weekday churn (Fri→Tue→Thu,
+    # 2023-25) is not modeled — the underlying is live-only here, nothing reads history.
+    "SENSEX": {
+        "weekly": [(date(2000, 1, 1), 3)],
+        "monthly": [(date(2000, 1, 1), 3)],
     },
 }
 

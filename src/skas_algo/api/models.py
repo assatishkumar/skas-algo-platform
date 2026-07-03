@@ -226,6 +226,32 @@ class DonchianDeploy(BaseModel):
     auto: bool = True
 
 
+class MomentumThetaDeploy(BaseModel):
+    """Deploy momentum_theta_gainer_intra: intraday 15-min SuperTrend(7,3) + daily-pivot
+    ATM weekly option seller on index underlyings (NIFTY, SENSEX). SENSEX is live-only and
+    needs a broker quote source — there is no cached BSE data for the cache source to serve."""
+
+    name: str
+    notes: str | None = None
+    underlyings: list[str] = Field(default_factory=lambda: ["NIFTY"])
+    lots: dict[str, int] = Field(default_factory=dict)   # per-underlying lots (default 1)
+    st_period: int = 7
+    st_multiplier: float = 3.0
+    candle_minutes: int = 15
+    max_trades_per_day: int = 3
+    eod_exit: str = "15:20"
+    entry_cutoff: str = "15:00"
+    min_dte: int = 0            # 0 → sell the 0DTE weekly on expiry day
+    capital: float = 500_000
+    # 15s ticks so a candle close is evaluated promptly (loop clamps to ≥5s).
+    refresh_seconds: int = 15
+    mode: str = "PAPER"
+    quote_source: str = "cache"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class EquityTradeDeploy(BaseModel):
     """Deploy a single managed equity position (strategy_id=custom_equity)."""
 

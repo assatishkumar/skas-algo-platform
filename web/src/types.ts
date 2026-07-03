@@ -776,6 +776,22 @@ export interface OptionTradeLeg {
   lots: number;
 }
 
+export interface MomentumThetaDeploy {
+  name: string;
+  underlyings: string[];
+  lots: Record<string, number>;
+  st_period: number;
+  st_multiplier: number;
+  candle_minutes: number;
+  max_trades_per_day: number;
+  min_dte: number;
+  capital: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  auto: boolean;
+}
+
 export interface OptionsTradeDeploy {
   name: string;
   underlying: string;
