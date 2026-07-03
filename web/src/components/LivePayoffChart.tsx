@@ -105,7 +105,7 @@ export default function LivePayoffChart({
           <>
             Payoff at expiry {pf.expiryDate}{" "}
             <span className="text-slate-500">— green/red = P&L if held to expiry; dashed = current value;{" "}</span>
-            <span style={{ color: "#38bdf8" }}>┊ spot</span>
+            <span className="font-bold" style={{ color: "var(--strong)" }}>▍spot</span>
             <span className="text-slate-500"> · </span>
             <span style={{ color: CE_COLOR }}>▮ CE strike</span>
             <span className="text-slate-500"> · </span>
@@ -160,8 +160,10 @@ export default function LivePayoffChart({
             );
           })}
           {spot != null && (
-            <ReferenceLine x={spot} stroke="#38bdf8" strokeWidth={1.5} strokeDasharray="3 3"
-              label={{ value: `${spotLabel} ${Math.round(spot)}`, fill: "#38bdf8", fontSize: 10, fontWeight: 700, position: "top" }} />
+            // Owner request: spot is THE reference — a thick solid high-contrast vertical
+            // (var(--strong) = black on light, white on dark) so it never hides among strikes.
+            <ReferenceLine x={spot} stroke="var(--strong)" strokeWidth={3}
+              label={{ value: `${spotLabel} ${Math.round(spot)}`, fill: "var(--strong)", fontSize: 11, fontWeight: 800, position: "top" }} />
           )}
           <Area type="monotone" dataKey="expiry" stroke="#94a3b8" strokeWidth={1.5}
             fill="url(#livePayoff)" name="expiry" />

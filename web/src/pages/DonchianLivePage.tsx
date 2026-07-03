@@ -326,7 +326,7 @@ function NameDrawer({ n, basket, trades, onClose }: { n: DonchianBasketName; bas
                 {/* sold strikes (the payoff kinks) */}
                 {po.peX != null && <line x1={po.peX} y1="0" x2={po.peX} y2="150" stroke="var(--pos)" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.7" />}
                 {po.ceX != null && <line x1={po.ceX} y1="0" x2={po.ceX} y2="150" stroke="var(--danger)" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.7" />}
-                <line x1={po.curX} y1="0" x2={po.curX} y2="150" stroke="var(--faint)" strokeWidth="1" strokeDasharray="2 3" />
+                <line x1={po.curX} y1="0" x2={po.curX} y2="150" stroke="var(--strong)" strokeWidth="2.5" />
                 <path d={po.line} style={{ fill: "none", stroke: "var(--accent-deep)", strokeWidth: 2.2 }} />
               </svg>
               {/* strike labels — HTML overlay (undistorted by the stretched viewBox) */}
@@ -502,7 +502,7 @@ export default function DonchianLivePage() {
                   <svg viewBox="0 0 560 130" preserveAspectRatio="none" className="w-full h-[130px] block">
                     <line x1="0" y1="43" x2="560" y2="43" stroke="var(--divider)" strokeWidth="1" strokeDasharray="3 4" />
                     <line x1="0" y1="86" x2="560" y2="86" stroke="var(--divider)" strokeWidth="1" strokeDasharray="3 4" />
-                    <line x1={bpCurX} y1="0" x2={bpCurX} y2="130" stroke="var(--accent)" strokeWidth="1.4" strokeDasharray="4 4" />
+                    <line x1={bpCurX} y1="0" x2={bpCurX} y2="130" stroke="var(--strong)" strokeWidth="2.5" />
                     <path d={bp.area} style={{ fill: "var(--accent)", fillOpacity: 0.12 }} />
                     <path d={bp.line} style={{ fill: "none", stroke: "var(--accent-deep)", strokeWidth: 2.2, strokeLinejoin: "round" }} />
                   </svg>

@@ -44,7 +44,7 @@ export default function PayoffChart({ cycle }: { cycle: OptionCycle }) {
         <LegendDot color="#94a3b8" label="At expiry (entry premiums)" />
         <LegendDot color="#3b82f6" label={`On exit date (model, ${cycle.exit_date ?? ""})`} />
         {entrySpot != null && <LegendDot color="#f59e0b" label="entry spot" />}
-        {exitSpot != null && <LegendDot color="#38bdf8" label="exit spot" />}
+        {exitSpot != null && <LegendDot color="var(--strong)" label="exit spot" />}
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block w-2 h-2 rounded-full bg-white border border-slate-900" /> actual exit P&L
         </span>
@@ -83,7 +83,7 @@ export default function PayoffChart({ cycle }: { cycle: OptionCycle }) {
             <ReferenceLine x={entrySpot} stroke="#f59e0b" strokeDasharray="4 3" />
           )}
           {exitSpot != null && (
-            <ReferenceLine x={exitSpot} stroke="#38bdf8" strokeDasharray="4 3" />
+            <ReferenceLine x={exitSpot} stroke="var(--strong)" strokeWidth={3} />
           )}
           <Area
             dataKey="expiry"
