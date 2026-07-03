@@ -102,7 +102,9 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   hyphenated names like BAJAJ-AUTO); `basket_margin` = Σ per-SHORT-leg margins (Dhan has no
   basket API → overstates, conservative); its option-chain endpoint is throttled (~1/3s) so
   the 50-name screeners STAY on Zerodha, as does the skas-data cache refresh (Kite-coupled —
-  `make_data_session` rejects dhan accounts). quote_source ∈ {cache, zerodha, dhan} — the
+  `make_data_session` rejects dhan accounts). **Dhan live quotes/chains need the paid "Data
+  APIs" subscription** (error 806 without it; expirylist/funds/orders don't) — verified
+  2026-07-03 on the owner's account. quote_source ∈ {cache, zerodha, dhan} — the
   broker sources are gated by `live/quotes.is_broker_source`, and the source must match
   `account.broker`. **No broker places real orders yet** — even LIVE mode fills via
   PaperBroker; the real order path (LiveBroker, LIMIT-at-touch→market, double-gated) is the

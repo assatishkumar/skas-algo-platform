@@ -49,7 +49,9 @@ function LoginFlow({ id, broker, onDone }: { id: number; broker: string; onDone:
       <div className="text-xs text-slate-400">
         {isDhan ? (
           <>1. Open Dhan and generate an access token (My Profile → DhanHQ Trading APIs).
-            2. Paste the token below — it's valid ~24 hours, like the Kite session.</>
+            2. Paste the token below — it's valid ~24 hours, like the Kite session.
+            Note: live quotes/option chains additionally need Dhan's paid <b>Data APIs</b>{" "}
+            subscription (order/fund APIs don't).</>
         ) : (
           <>1. Open the Kite login, sign in there, and copy the <code>request_token</code> from the
             redirected URL. 2. Paste it below.</>
@@ -163,10 +165,21 @@ function RefreshData({ id }: { id: number }) {
   );
 }
 
+function Notice({ text, ok }: { text: string; ok: boolean }) {
+  // Successes were previously rendered through ErrorBox — red "Connected" reads as a failure.
+  return ok ? (
+    <div className="rounded-md border border-emerald-300 bg-emerald-100 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300 px-3 py-2 text-sm">
+      ✓ {text}
+    </div>
+  ) : (
+    <ErrorBox message={text} />
+  );
+}
+
 export default function BrokersPage() {
   const { data, isLoading, error, refetch } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
   const [form, setForm] = useState<BrokerConnectRequest>(EMPTY);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [loginFor, setLoginFor] = useState<number | null>(null);
 
@@ -178,10 +191,31 @@ export default function BrokersPage() {
     setMsg(null);
     try {
       await fn();
-      setMsg(ok);
+      setMsg({ text: ok, ok: true });
       refetch();
     } catch (e) {
-      setMsg((e as Error).message);
+      setMsg({ text: (e as Error).message, ok: false });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // After connecting, the next step is ALWAYS "paste the token" — open the new account's
+  // login flow and scroll it into view instead of leaving it stranded below the fold.
+  async function connect() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const acct = await brokers.connect(form);
+      setForm(EMPTY);
+      setMsg({ text: `${acct.label} saved — paste its token below to start the session.`, ok: true });
+      setLoginFor(acct.id);
+      await refetch();
+      setTimeout(() => {
+        document.getElementById(`broker-card-${acct.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 120);
+    } catch (e) {
+      setMsg({ text: (e as Error).message, ok: false });
     } finally {
       setBusy(false);
     }
@@ -226,7 +260,7 @@ export default function BrokersPage() {
           )}
         </div>
         <button
-          onClick={() => run(() => brokers.connect(form).then(() => setForm(EMPTY)), "Connected (secret stored encrypted).")}
+          onClick={connect}
           disabled={busy || !form.label}
           className="mt-3 rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50"
         >
@@ -234,7 +268,7 @@ export default function BrokersPage() {
         </button>
       </Card>
 
-      {msg && <ErrorBox message={msg} />}
+      {msg && <Notice text={msg.text} ok={msg.ok} />}
 
       {isLoading ? (
         <Spinner />
@@ -242,7 +276,8 @@ export default function BrokersPage() {
         <ErrorBox message={(error as Error).message} />
       ) : (
         (data ?? []).map((a) => (
-          <Card key={a.id}>
+          <div key={a.id} id={`broker-card-${a.id}`}>
+          <Card>
             <div className="flex items-center justify-between">
               <div>
                 <span className="font-medium">{a.label}</span>{" "}
@@ -263,7 +298,11 @@ export default function BrokersPage() {
               </div>
             </div>
             {loginFor === a.id && (
-              <LoginFlow id={a.id} broker={a.broker} onDone={() => { setLoginFor(null); refetch(); }} />
+              <LoginFlow id={a.id} broker={a.broker} onDone={() => {
+                setLoginFor(null);
+                setMsg({ text: `${a.label}: session active.`, ok: true });
+                refetch();
+              }} />
             )}
             {a.has_session && a.broker !== "dhan" && <RefreshData id={a.id} />}
             {a.armed && !a.live_trading_enabled && (
@@ -272,6 +311,7 @@ export default function BrokersPage() {
               </div>
             )}
           </Card>
+          </div>
         ))
       )}
     </div>

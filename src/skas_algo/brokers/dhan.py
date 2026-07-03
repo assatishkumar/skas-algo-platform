@@ -250,10 +250,11 @@ class DhanAdapter:
             back[(seg, str(sid))] = s
         if not buckets:
             return {}
-        try:
-            data = (self._http.post("/marketfeed/ltp", buckets) or {}).get("data") or {}
-        except Exception:  # pragma: no cover - network hiccup → empty tick, loop retries
-            return {}
+        # Let failures PROPAGATE (mirrors ZerodhaAdapter.get_quote): the live loop turns a
+        # raising quote source into quote_error → degraded badge → self-heal on re-login.
+        # Notably Dhan 401s with "806: Data APIs not Subscribed" when the account lacks the
+        # paid Data plan — swallowing that would look like a silent dead feed.
+        data = (self._http.post("/marketfeed/ltp", buckets) or {}).get("data") or {}
         out: dict[str, float] = {}
         for seg, per_id in data.items():
             for sid, q in (per_id or {}).items():
