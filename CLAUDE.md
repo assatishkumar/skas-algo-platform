@@ -118,7 +118,15 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   **SENSEX is live-only** — zero BSE history exists (spot or options), so no backtest, ever;
   its options ride **BFO** (adapter merges the BFO dump into the NFO LUT, `_ts_exchange` keys
   the `NFO:`/`BFO:` prefixes, spot = `BSE:SENSEX`) and the deploy route rejects SENSEX+cache.
-  Its backtest is a dedicated BS-priced 15-min service (Phase 2) — NOT the shared engine.
+  Its backtest is a dedicated BS-priced 15-min service — NOT the shared engine (whose slice
+  is one trading day: settlement timing/report cadence break intraday): `services/
+  momentum_theta_bt.run_backtest` replays real 15-min NIFTY bars AS o→h→l→c ticks through
+  the ACTUAL strategy class (signal parity by construction); bars live in a csv.gz store
+  (`data/intraday_bars.py`, `~/.skas_data/intraday/`, Kite-fetched ≤190-day chunks, no
+  parquet engine in the venv). Premiums = BS both ways (prior-day HV20 × vol_multiplier,
+  same /research calibration). Endpoint: POST /research/momentum-theta-bt + panel on
+  /research. First finding (2025-26, defaults): EOD exits profit, ST-flip buybacks lose
+  ~2× that — the spec as given is net-negative on NIFTY; tune via the panel before deploying.
 - **Donchian flip default:** new deploys roll a breached name **intraday** (`breach_basis="touch"`),
   **once per name per day** (`last_flip_day` guard), up to `max_flips=3` (two rolls, then close the
   name on the next breach). Defaults live in the deploy layer (`api/models.py:DonchianDeploy`); the

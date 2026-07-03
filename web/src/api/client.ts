@@ -45,6 +45,7 @@ import type {
   Trade,
   Universe,
   MomentumThetaDeploy,
+  MtgBtResult,
   WatchRow,
 } from "../types";
 
@@ -191,6 +192,15 @@ export const api = {
   // --- research (Donchian breakout study + BS-vs-live calibration) ---
   researchDonchianStudy: (body: DonchianStudyRequest) =>
     request<DonchianStudyResult>("/research/donchian-study", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  researchMomentumThetaBt: (body: {
+    start_date: string; end_date?: string | null; lots?: number; st_period?: number;
+    st_multiplier?: number; max_trades_per_day?: number; min_dte?: number;
+    vol_multiplier?: number; slippage_bps?: number; capital?: number;
+    broker_account_id?: number | null;
+  }) =>
+    request<MtgBtResult>("/research/momentum-theta-bt", {
       method: "POST", body: JSON.stringify(body),
     }),
   researchBsCalibration: (body: { broker_account_id: number; names?: string[]; hv_window?: number; r?: number; sell_expiry?: string | null; round_out?: boolean }) =>

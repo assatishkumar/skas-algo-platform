@@ -776,6 +776,50 @@ export interface OptionTradeLeg {
   lots: number;
 }
 
+export interface MtgBtStats {
+  trades: number;
+  win_rate?: number;
+  total_pnl?: number;
+  return_pct?: number;
+  avg_pnl?: number;
+  avg_win?: number;
+  avg_loss?: number;
+  worst_day?: number;
+  best_day?: number;
+  max_drawdown_pct?: number;
+  peak_margin?: number;
+  trading_days?: number;
+  days_with_trades_pct?: number;
+  cap_saturated_days?: number;
+  by_exit_reason?: Record<string, { count: number; pnl: number }>;
+  by_side?: Record<string, { count: number; pnl: number }>;
+}
+
+export interface MtgBtTrade {
+  entry_time: string;
+  exit_time: string;
+  symbol: string;
+  side: string;
+  exit_reason: string;
+  entry_premium: number;
+  exit_premium: number;
+  units: number;
+  entry_spot: number;
+  exit_spot: number;
+  margin: number;
+  pnl: number;
+}
+
+export interface MtgBtResult {
+  error?: string;
+  note?: string;
+  skipped_entries?: number;
+  params?: Record<string, unknown>;
+  stats?: MtgBtStats;
+  equity?: { date: string; equity: number; pnl: number }[];
+  trades?: MtgBtTrade[];
+}
+
 export interface MomentumThetaDeploy {
   name: string;
   underlyings: string[];

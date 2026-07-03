@@ -7,6 +7,8 @@ import {
   Brush,
   CartesianGrid,
   Legend,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,7 +17,7 @@ import {
 import { api, brokers } from "../api/client";
 import { ErrorBox, NumberInput } from "../components/ui";
 import { Panel, Segmented, SessionBanner } from "../components/redesign";
-import type { BsCalibrationResult, CalibStats, DonchianStudyResult, StudyLeagueRow } from "../types";
+import type { BsCalibrationResult, CalibStats, DonchianStudyResult, MtgBtResult, StudyLeagueRow } from "../types";
 
 /** Research page — validates the Donchian strangle two ways:
  *  1. Breakout study (cache-only): per expiry-anchored monthly cycle, did each Nifty-50
@@ -546,11 +548,166 @@ function CalibrationSection() {
 
 // ---------------------------------------------------------------------- page
 
+const inr = (v: number | null | undefined) =>
+  v == null ? "—" : `₹${Math.round(v).toLocaleString("en-IN")}`;
+
+/** momentum_theta_gainer_intra backtest — replays real 15-min NIFTY bars through the
+ * ACTUAL strategy class; premiums are Black-Scholes (prior-day HV20 × multiplier), so
+ * results are model-priced like donchian's synthetic stock legs — calibrate the
+ * multiplier on the BS-vs-live panel above. First run needs a Zerodha session to fetch
+ * the bar store; after that it's offline. */
+function MomentumThetaBtSection() {
+  const [start, setStart] = useState("2023-01-01");
+  const [end, setEnd] = useState("");
+  const [lots, setLots] = useState(1);
+  const [volMult, setVolMult] = useState(1.1);
+  const [slip, setSlip] = useState(5);
+  const [stPeriod, setStPeriod] = useState(7);
+  const [stMult, setStMult] = useState(3);
+  const [maxTrades, setMaxTrades] = useState(3);
+  const [minDte, setMinDte] = useState(0);
+  const [capital, setCapital] = useState(500_000);
+  const [accountId, setAccountId] = useState<number | null>(null);
+  const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
+  const zer = (accounts ?? []).filter((a) => a.has_session && (a.broker || "zerodha") === "zerodha");
+
+  const run = useMutation({
+    mutationFn: () => api.researchMomentumThetaBt({
+      start_date: start, end_date: end || null, lots, st_period: stPeriod,
+      st_multiplier: stMult, max_trades_per_day: maxTrades, min_dte: minDte,
+      vol_multiplier: volMult, slippage_bps: slip, capital,
+      broker_account_id: accountId,
+    }),
+  });
+  const res: MtgBtResult | undefined = run.data;
+  const st = res?.stats;
+
+  return (
+    <Panel className="p-4">
+      <div className="flex items-baseline justify-between flex-wrap gap-2">
+        <div>
+          <div className="font-semibold">Momentum theta intra — 15-min backtest (NIFTY)</div>
+          <div className="text-xs text-[var(--muted)]">
+            Real 15-min bars through the live strategy code; premiums are <b>synthetic BS</b>
+            {" "}(HV20 × multiplier — no smile, no event crush). SENSEX has no history and is
+            live-only.
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 md:grid-cols-6 gap-3">
+        <Field label="Start"><input type="date" className={inputClass} value={start} onChange={(e) => setStart(e.target.value)} /></Field>
+        <Field label="End (empty = today)"><input type="date" className={inputClass} value={end} onChange={(e) => setEnd(e.target.value)} /></Field>
+        <Field label="Lots"><NumberInput className={inputClass} value={lots} onChange={setLots} /></Field>
+        <Field label="Vol multiplier"><NumberInput step="0.05" className={inputClass} value={volMult} onChange={setVolMult} /></Field>
+        <Field label="Slippage (bps)"><NumberInput className={inputClass} value={slip} onChange={setSlip} /></Field>
+        <Field label="Capital (₹)"><NumberInput className={inputClass} value={capital} onChange={setCapital} /></Field>
+        <Field label="ST period"><NumberInput className={inputClass} value={stPeriod} onChange={setStPeriod} /></Field>
+        <Field label="ST multiplier"><NumberInput step="0.5" className={inputClass} value={stMult} onChange={setStMult} /></Field>
+        <Field label="Max trades/day"><NumberInput className={inputClass} value={maxTrades} onChange={setMaxTrades} /></Field>
+        <Field label="Min DTE"><NumberInput className={inputClass} value={minDte} onChange={setMinDte} /></Field>
+        <Field label="Bar fetch account (first run)">
+          <select className={inputClass} value={accountId ?? ""} onChange={(e) => setAccountId(e.target.value ? +e.target.value : null)}>
+            <option value="">store only (no fetch)</option>
+            {zer.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+          </select>
+        </Field>
+        <div className="self-end">
+          <button onClick={() => run.mutate()} disabled={run.isPending}
+            className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50">
+            {run.isPending ? "Running…" : "Run backtest"}
+          </button>
+        </div>
+      </div>
+
+      {run.error && <div className="mt-3"><ErrorBox message={(run.error as Error).message} /></div>}
+      {res?.error && <div className="mt-3"><ErrorBox message={res.error} /></div>}
+      {res?.note && <div className="mt-3 text-sm text-[var(--muted)]">{res.note}</div>}
+
+      {st && st.trades > 0 && (
+        <div className="mt-4 space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+            <Tile label="Trades" value={st.trades} hint={`${st.trading_days} days`} />
+            <Tile label="Win rate" value={pct(st.win_rate)} />
+            <Tile label="Total P&L" value={inr(st.total_pnl)} hint={pct(st.return_pct)} />
+            <Tile label="Avg win / loss" value={`${inr(st.avg_win)} / ${inr(st.avg_loss)}`} />
+            <Tile label="Worst day" value={inr(st.worst_day)} />
+            <Tile label="Max DD" value={pct(st.max_drawdown_pct)} />
+            <Tile label="Peak margin" value={inr(st.peak_margin)} />
+            <Tile label="Cap-hit days" value={st.cap_saturated_days} hint={`${pct(st.days_with_trades_pct)} days traded`} />
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="rounded-[12px] border border-[var(--border)] p-3">
+              <div className="text-xs uppercase tracking-wide text-[var(--muted)] mb-2">By exit reason</div>
+              {Object.entries(st.by_exit_reason ?? {}).map(([k, v]) => (
+                <div key={k} className="flex justify-between text-sm py-0.5">
+                  <span className="text-[var(--muted)]">{k} · {v.count}</span>
+                  <span className={`tabular-nums ${v.pnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{inr(v.pnl)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="rounded-[12px] border border-[var(--border)] p-3">
+              <div className="text-xs uppercase tracking-wide text-[var(--muted)] mb-2">By side</div>
+              {Object.entries(st.by_side ?? {}).map(([k, v]) => (
+                <div key={k} className="flex justify-between text-sm py-0.5">
+                  <span className="text-[var(--muted)]">{k === "bull_put" ? "Bullish (sell PE)" : "Bearish (sell CE)"} · {v.count}</span>
+                  <span className={`tabular-nums ${v.pnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{inr(v.pnl)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {(res?.equity?.length ?? 0) > 1 && (
+            <div className="h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={res!.equity} margin={{ top: 6, right: 12, bottom: 0, left: 6 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--divider)" />
+                  <XAxis dataKey="date" tick={{ fontSize: 10 }} minTickGap={40} />
+                  <YAxis tick={{ fontSize: 10 }} width={70} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                  <Tooltip formatter={(v: number) => inr(v)} />
+                  <Line type="monotone" dataKey="equity" stroke="var(--accent)" dot={false} strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          <details>
+            <summary className="cursor-pointer text-sm text-[var(--muted)]">
+              Trades ({res?.trades?.length ?? 0}{(res?.trades?.length ?? 0) >= 2000 ? ", truncated" : ""})
+            </summary>
+            <div className="mt-2 max-h-80 overflow-auto rounded-[12px] border border-[var(--border)]">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-[var(--card)] text-[var(--muted)]">
+                  <tr>{"Entry,Exit,Side,Reason,Entry ₹,Exit ₹,Units,P&L".split(",").map((h) => <th key={h} className="px-2 py-1.5 text-left">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {(res?.trades ?? []).slice().reverse().map((t, i) => (
+                    <tr key={i} className="border-t border-[var(--divider)]">
+                      <td className="px-2 py-1 whitespace-nowrap">{t.entry_time.replace("T", " ").slice(0, 16)}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{t.exit_time.replace("T", " ").slice(11, 16)}</td>
+                      <td className="px-2 py-1">{t.side === "bull_put" ? "PE↓" : "CE↓"}</td>
+                      <td className="px-2 py-1">{t.exit_reason}</td>
+                      <td className="px-2 py-1 tabular-nums">{t.entry_premium}</td>
+                      <td className="px-2 py-1 tabular-nums">{t.exit_premium}</td>
+                      <td className="px-2 py-1 tabular-nums">{t.units}</td>
+                      <td className={`px-2 py-1 tabular-nums ${t.pnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{inr(t.pnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export default function ResearchPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-semibold">Research — Donchian strangle</h1>
+        <h1 className="text-lg font-semibold">Research</h1>
         <div className="text-sm text-[var(--muted)]">
           Pure-price breakout behaviour of the basket (does the channel hold?), and how honest
           the synthetic option pricing is (BS-with-HV vs the live market).
@@ -558,6 +715,7 @@ export default function ResearchPage() {
       </div>
       <StudySection />
       <CalibrationSection />
+      <MomentumThetaBtSection />
     </div>
   );
 }

@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
-from skas_algo.api.models import BsCalibrationRequest, DonchianStudyRequest
+from skas_algo.api.models import BsCalibrationRequest, DonchianStudyRequest, MtgBacktestRequest
 from skas_algo.api.routes.data import _live_adapter
 from skas_algo.data import universes
 from skas_algo.data.options_provider import VIX_SYMBOL, _ffill_lookup
@@ -85,6 +85,36 @@ def donchian_study(
     if body.detail:
         return result
     return {k: v for k, v in result.items() if k != "detail"}
+
+
+@router.post("/momentum-theta-bt")
+def momentum_theta_bt(body: MtgBacktestRequest, db: Session = Depends(get_db)) -> dict:
+    """Dedicated intraday backtest for momentum_theta_gainer_intra (NIFTY only): replays
+    real 15-min Kite bars through the ACTUAL strategy class; premiums are Black-Scholes
+    (prior-day HV20 × vol_multiplier). READ-ONLY: the only broker use is topping up the
+    local bar store via historical_data — no order paths.
+
+    Runs sync in-request: a 3-year replay is ~25k bars × 4 ticks ≈ a few seconds; the
+    first-ever run also fetches bars (~10-20 s with a session)."""
+    from skas_algo.services import broker as broker_svc
+    from skas_algo.services.momentum_theta_bt import MtgBtParams, run_backtest
+
+    adapter = None
+    if body.broker_account_id is not None:
+        from skas_algo.db.models import BrokerAccount
+
+        acct = db.get(BrokerAccount, body.broker_account_id)
+        ok_broker = acct is not None and (acct.broker or "zerodha").lower() == "zerodha"
+        if ok_broker and broker_svc.has_valid_session(acct):
+            adapter = broker_svc.make_adapter(acct)  # bar top-up only (read-only)
+    params = MtgBtParams(
+        start=body.start_date, end=body.end_date or date.today(), lots=body.lots,
+        st_period=body.st_period, st_multiplier=body.st_multiplier,
+        max_trades_per_day=body.max_trades_per_day, entry_cutoff=body.entry_cutoff,
+        eod_exit=body.eod_exit, min_dte=body.min_dte, vol_multiplier=body.vol_multiplier,
+        r=body.r, slippage_bps=body.slippage_bps, capital=body.capital,
+    )
+    return to_native(run_backtest(params, adapter=adapter))
 
 
 @router.post("/bs-calibration")

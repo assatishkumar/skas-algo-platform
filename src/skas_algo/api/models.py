@@ -226,6 +226,28 @@ class DonchianDeploy(BaseModel):
     auto: bool = True
 
 
+class MtgBacktestRequest(BaseModel):
+    """Dedicated momentum-theta intraday backtest (NIFTY only — SENSEX has no history).
+    Premiums are Black-Scholes with prior-day HV20 × vol_multiplier (a model, not the tape)."""
+
+    start_date: date
+    end_date: date | None = None
+    lots: int = 1
+    st_period: int = 7
+    st_multiplier: float = 3.0
+    max_trades_per_day: int = 3
+    entry_cutoff: str = "15:00"
+    eod_exit: str = "15:20"
+    min_dte: int = 0
+    vol_multiplier: float = 1.1
+    r: float = 0.065
+    slippage_bps: float = 5.0
+    capital: float = 500_000
+    # With a logged-in Zerodha account the 15-min bar store is topped up first;
+    # without one the backtest runs on whatever is already cached.
+    broker_account_id: int | None = None
+
+
 class MomentumThetaDeploy(BaseModel):
     """Deploy momentum_theta_gainer_intra: intraday 15-min SuperTrend(7,3) + daily-pivot
     ATM weekly option seller on index underlyings (NIFTY, SENSEX). SENSEX is live-only and
