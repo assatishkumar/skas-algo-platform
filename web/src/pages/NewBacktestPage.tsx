@@ -26,6 +26,7 @@ const SWEEP_FIELDS: SweepField[] = [
   { key: "dte_target", label: "Enter at DTE", unit: "num", optionsOnly: true },
   { key: "lots", label: "Lots", unit: "num", optionsOnly: true },
   { key: "stop_loss_pct", label: "Stop loss %", unit: "pct", optionsOnly: true },
+  { key: "capital_utilization_pct", label: "Capital utilization %", unit: "num", optionsOnly: true },
   { key: "profit_target_pct", label: "Profit target %", unit: "pct", optionsOnly: true },
   { key: "strike_step", label: "Strike step (pts)", unit: "num", optionsOnly: true },
   // Donchian strangle backtest (percent params are raw percents — the strategy expects them)
@@ -133,6 +134,10 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
   const [sellOffset, setSellOffset] = useState(2.6);
   const [hedgeOffset, setHedgeOffset] = useState(7.0);
   const [crLots, setCrLots] = useState(1);
+  // Sizing: "margin" = auto-fit lots to capital each entry (era-true model margin divisor,
+  // ~2x conservative vs broker SPAN); "fixed" = legacy exact lot count.
+  const [crSizing, setCrSizing] = useState("margin");
+  const [crUtil, setCrUtil] = useState(95);
   const [creditLimitPct, setCreditLimitPct] = useState(1); // % of capital
   const [crProfitPct, setCrProfitPct] = useState(2.5);
   const [crStopPct, setCrStopPct] = useState(3);
@@ -367,6 +372,9 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
     num("sell_offset", setSellOffset);
     num("hedge_offset", setHedgeOffset);
     num("credit_debit_limit_pct", setCreditLimitPct, 100);
+    // absent = the template run predates auto-sizing → faithful fixed mode
+    str("sizing", setCrSizing, "fixed");
+    num("capital_utilization_pct", setCrUtil, 1, 95);
     num("combined_credit_limit_pct", setCombinedCreditPct, 100, 2);
     num("min_credit_pct", setMinCreditPct, 100, 0);
     num("max_holding_days", setMaxHoldingDays);
@@ -586,6 +594,8 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
             sell_offset: sellOffset,
             hedge_offset: hedgeOffset,
             lots: crLots,
+            sizing: crSizing,
+            ...(crSizing === "margin" ? { capital_utilization_pct: crUtil } : {}),
             credit_debit_limit_pct: creditLimitPct / 100,
             profit_target_pct: crProfitPct / 100,
             stop_loss_pct: crStopPct / 100,
@@ -1085,14 +1095,28 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
                     ? "1:2 put ratio + outer hedge on NIFTY monthly (strikes BELOW spot — zero upside risk; watch fast sell-offs)."
                     : "1:2 call ratio + outer hedge on NIFTY monthly (strikes ABOVE spot — zero downside risk; watch fast rallies)."}{" "}
                 Entry = last Tuesday of the month for next month's expiry (EOD approximates the 3:16 PM
-                rule). All %s are on this capital.
+                rule). Auto sizing refits lot-sets to (compounding) capital at every entry using the
+                era-true model margin — ~2× conservative vs broker SPAN, so utilization 95 ≈ half the
+                real margin; credit %s then scale with current equity.
               </div>
               <Field label="Capital (₹) — ≈ ₹1L / lot">
                 <NumberInput className={inputClass} value={capital} onChange={setCapital} />
               </Field>
-              <Field label="Lots (1 buy : 2 sell : 1 hedge)">
-                <NumberInput className={inputClass} value={crLots} onChange={setCrLots} />
+              <Field label="Sizing">
+                <select className={inputClass} value={crSizing} onChange={(e) => setCrSizing(e.target.value)}>
+                  <option value="margin">Auto — fit lots to capital each entry</option>
+                  <option value="fixed">Fixed lot-sets</option>
+                </select>
               </Field>
+              {crSizing === "margin" ? (
+                <Field label="Capital utilization % (of model margin)">
+                  <NumberInput step="5" className={inputClass} value={crUtil} onChange={setCrUtil} />
+                </Field>
+              ) : (
+                <Field label="Lots (1 buy : 2 sell : 1 hedge)">
+                  <NumberInput className={inputClass} value={crLots} onChange={setCrLots} />
+                </Field>
+              )}
               <Field label="Strike basis">
                 <select className={inputClass} value={strikeMode} onChange={(e) => setStrikeMode(e.target.value)}>
                   <option value="percent">% of spot (level-aware)</option>

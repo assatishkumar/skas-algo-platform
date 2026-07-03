@@ -27,7 +27,8 @@ import math
 from datetime import date, datetime, time, timedelta
 
 from skas_algo.engine.options import black_scholes as bs
-from skas_algo.engine.options.contract_specs import lot_size_for
+from skas_algo.engine.options.contract_specs import expected_monthly_expiry, lot_size_for
+from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.engine.types import Signal, SignalAction
 
 from ._options_common import bad_close as _bad
@@ -58,6 +59,18 @@ class CallRatioMonthlyStrategy:
         buy_lots: int = 1,    # leg ratio multiples (×lots): 1:2:1 = the classic ratio;
         sell_lots: int = 2,   # HNI weekly uses 1:3:2 — net contracts must stay balanced
         hedge_lots: int = 1,  # (buy+hedge ≥ sell) or the wing carries a naked tail
+        # Lot sizing. "fixed" (legacy): trade exactly ``lots`` lot-sets — §1 backstop, keeps
+        # running deploys byte-identical. "margin": ``lots`` is only a fallback — at each
+        # entry lots = ⌊current equity × utilization ÷ model margin per lot-set⌋, where the
+        # divisor is the ERA-TRUE model formula (span+exposure)% × that day's spot × the
+        # short-body units for that expiry's lot size. Same deterministic math in backtest
+        # and live (ctx.position_margin() is model-in-BT vs broker-live ≈2× apart — never
+        # used for sizing). NOTE the model charges shorts only (no long-hedge offset), so it
+        # reads ≈2× the real broker SPAN: utilization 95 ≈ ~50% of broker margin — raise it
+        # (sweepable) once live margins are observed.
+        sizing: str = "fixed",                    # "fixed" | "margin" (auto-size to capital)
+        capital_utilization_pct: float = 95.0,    # % of equity deployed as MODEL margin
+        max_auto_lots: int = 0,                   # safety cap on auto lots (0 = uncapped)
         credit_debit_limit_pct: float = 0.01,   # max net CREDIT = this × capital (credit required)
         shift_step: float = 100,                 # strike-adjust step (searched ± both directions)
         max_shifts: int = 10,                    # search up to ±max_shifts × shift_step
@@ -67,6 +80,15 @@ class CallRatioMonthlyStrategy:
         min_vix: float = 0.0,                     # skip entry if ATM IV% (≈ India VIX) below this
         min_dte: int = 18,                        # selects the *next* month's monthly expiry
         entry_weekday: int = 1,                   # Tuesday
+        # Entry anchor: "last_weekday" (legacy — first slice on/after the month's last
+        # entry_weekday, i.e. ON/just before expiry) | "post_expiry" (first trading day
+        # AFTER the calendar-expected monthly expiry — cycle-anchored like donchian).
+        # Defaults to the legacy rule so existing runs/deploys are byte-identical (§1).
+        entry_rule: str = "last_weekday",
+        # post_expiry only: how many calendar days after the expiry the entry may retry
+        # (credit-gate failures). Mirrors the legacy window (last weekday → month end,
+        # ~5 sessions) — unbounded retry would silently enter debit months mid-cycle.
+        entry_window_days: int = 7,
         strike_step: float = 50,                  # informational; strikes are snapped to listings
         risk_free_rate: float = 0.065,
         tail_hedge_offset: float = 0.0,  # 0=off; extra far long per wing (same units as offsets)
@@ -103,6 +125,16 @@ class CallRatioMonthlyStrategy:
         self.min_vix = float(min_vix)
         self.min_dte = int(min_dte)
         self.entry_weekday = int(entry_weekday)
+        self.entry_rule = entry_rule
+        self.entry_window_days = int(entry_window_days)
+        self.sizing = sizing
+        self.capital_utilization_pct = float(capital_utilization_pct)
+        self.max_auto_lots = int(max_auto_lots)
+        # The rupee base the CURRENT entry's credit gates use — stashed by _maybe_enter so
+        # _build_side / Batman's combined cap scale with the same equity that sized the lots
+        # (fixed mode: always initial_capital → gates byte-identical to legacy).
+        self._entry_capital_base = float(initial_capital)
+        self._entered_after_expiry: date | None = None  # post_expiry cycle lock
         self.strike_step = float(strike_step)
         self.r = float(risk_free_rate)
         self.tail_hedge_offset = float(tail_hedge_offset)
@@ -141,15 +173,55 @@ class CallRatioMonthlyStrategy:
     # unchanged: month-locked entry from the last entry_weekday, monthly expiry,
     # capital-based target/stop, max-holding-days time exit.
     def _entry_allowed(self, today: date) -> bool:
+        if self.entry_rule == "post_expiry":
+            # One entry per expiry CYCLE: the first slice strictly after the month's
+            # (calendar-expected) monthly expiry. Falls back to the legacy rule when the
+            # calendar can't resolve (e.g. an unseeded underlying) so a run never sits idle.
+            anchor = self._last_completed_expiry(today)
+            if anchor is not None:
+                # New cycle AND still inside the entry window. The window cap matters:
+                # without it a credit-gate miss keeps retrying ALL cycle — entering a
+                # skipped (debit) month weeks late, sometimes onto the FOLLOWING expiry.
+                return (anchor != self._entered_after_expiry
+                        and (today - anchor).days <= self.entry_window_days)
         if self.last_entry_month == (today.year, today.month):
             return False  # already traded this month (one entry / month, zero adjustments)
         return today >= _last_weekday_of_month(today, self.entry_weekday)
 
+    def _last_completed_expiry(self, today: date) -> date | None:
+        # Latest calendar-expected monthly expiry STRICTLY before today — on the expiry
+        # day itself the completing expiry does not count (entry is the day AFTER).
+        anchors = []
+        y, m = today.year, today.month
+        for _ in range(2):  # this month + previous cover every day-after case
+            a = expected_monthly_expiry(self.underlying, y, m)
+            if a is not None and a < today:
+                anchors.append(a)
+            m -= 1
+            if m == 0:
+                m, y = 12, y - 1
+        return max(anchors) if anchors else None
+
     def _mark_entered(self, today: date) -> None:
         self.last_entry_month = (today.year, today.month)
+        if self.entry_rule == "post_expiry":
+            self._entered_after_expiry = self._last_completed_expiry(today)
 
     def _select_expiry(self, chain, today: date) -> date | None:
         return self._next_monthly_expiry(chain, today)
+
+    def _capital_base(self, ctx=None) -> float:
+        """Rupee capital the entry sizes/gates against: CURRENT equity when auto-sizing
+        (compounds — at a flat monthly entry cash == equity; guarded so stub ctxs without
+        an equity accessor fall back), else the fixed initial capital (legacy)."""
+        if self.sizing != "margin" or ctx is None:
+            return self.initial_capital
+        eq = getattr(ctx, "equity", None)
+        try:
+            val = eq() if callable(eq) else None
+        except Exception:  # pragma: no cover - defensive: sizing must never kill a slice
+            val = None
+        return float(val) if val and val > 0 else self.initial_capital
 
     def _risk_base(self, ctx=None) -> float:
         """Rupee base the profit-target/stop percentages apply to: the deployed margin (real broker
@@ -288,8 +360,23 @@ class CallRatioMonthlyStrategy:
         spot = chain.spot(self.underlying, today)
         if expiry is None or spot is None:
             return []
-        units = self.lots * lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
-        limit = self.credit_debit_limit_pct * self.initial_capital
+        lot_size = lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
+        base = self._capital_base(ctx)
+        self._entry_capital_base = base  # credit gates scale with the same base as the lots
+        if self.sizing == "margin":
+            # Era-true divisor: the model margin of ONE lot-set's short body at today's spot
+            # and this expiry's lot size — tracks lot-size revisions and price level, and
+            # matches the report's Margin Used, so utilization is self-consistent in-run.
+            per_set = short_option_margin(spot, self.sell_lots * lot_size, 1, MarginParams())
+            if per_set > 0:
+                lots = int(base * self.capital_utilization_pct / 100.0 // per_set)
+                if self.max_auto_lots > 0:
+                    lots = min(lots, self.max_auto_lots)
+                # Write self.lots (not a local): _tail_units recovers lot_size via
+                # units // self.lots, and the live snapshot/report echo the traded count.
+                self.lots = max(1, lots)
+        units = self.lots * lot_size
+        limit = self.credit_debit_limit_pct * base
 
         sides = self._entry_sides(chain, today, expiry, spot, units, limit)
         if not sides:
@@ -366,7 +453,7 @@ class CallRatioMonthlyStrategy:
             return None  # couldn't resolve a core leg (e.g. delta on thin data)
         t_units = self._tail_units(units) if with_tail else 0
 
-        floor_amt = self.min_credit_pct * self.initial_capital
+        floor_amt = self.min_credit_pct * self._entry_capital_base
         strike_list = sorted(rows)
         atm = self._snap(strike_list, spot)
         for i in range(self.max_shifts + 1):
@@ -451,6 +538,8 @@ class CallRatioMonthlyStrategy:
             "entry_expiry": self.entry_expiry.isoformat() if self.entry_expiry else None,
             "entry_date": self.entry_date.isoformat() if self.entry_date else None,
             "last_entry_month": list(self.last_entry_month) if self.last_entry_month else None,
+            "entered_after_expiry": (self._entered_after_expiry.isoformat()
+                                     if self._entered_after_expiry else None),
         }
 
     def load_state(self, state: dict) -> None:
@@ -460,6 +549,8 @@ class CallRatioMonthlyStrategy:
         self.entry_expiry = date.fromisoformat(ee) if ee else None
         self.entry_date = date.fromisoformat(ed) if ed else None
         self.last_entry_month = tuple(lem) if lem else None
+        eae = state.get("entered_after_expiry")
+        self._entered_after_expiry = date.fromisoformat(eae) if eae else None
 
 
 class PutRatioMonthlyStrategy(CallRatioMonthlyStrategy):
@@ -520,7 +611,7 @@ class BatmanRatioMonthlyStrategy(CallRatioMonthlyStrategy):
         return net
 
     def _entry_sides(self, chain, today, expiry, spot, units, limit) -> list | None:
-        combined_limit = self.combined_credit_limit_pct * self.initial_capital
+        combined_limit = self.combined_credit_limit_pct * self._entry_capital_base
         # Round 1: each wing under its own cap (≤ the combined cap, in case it's tighter).
         wing_limit = min(limit, combined_limit)
         ce = self._build_side(chain, today, expiry, spot, units, wing_limit, "CE")

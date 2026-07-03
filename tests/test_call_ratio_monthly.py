@@ -446,3 +446,97 @@ def test_batman_defaults_to_half_put_tail():
     tail = next(t for t in entries
                 if t["action"] == "BUY" and t["ticker"].split("|")[2] == "18900")
     assert tail["ticker"].endswith("|PE") and tail["units"] == 50  # 1 lot vs wings' 2
+
+
+def test_post_expiry_entry_rule_gates_by_cycle():
+    from datetime import date
+    from skas_algo.strategies.call_ratio_monthly import CallRatioMonthlyStrategy
+
+    s = CallRatioMonthlyStrategy(underlying="NIFTY", entry_rule="post_expiry")
+    # June 2024 monthly expiry (Thursday era) = Thu 27 Jun. Mid-cycle (outside the entry
+    # window) nothing happens — even on a fresh strategy — and the expiry day itself
+    # doesn't count; the window opens the day AFTER and stays open entry_window_days.
+    assert not s._entry_allowed(date(2024, 6, 20))
+    assert not s._entry_allowed(date(2024, 6, 27))
+    assert s._entry_allowed(date(2024, 6, 28))      # first day after → new cycle
+    assert s._entry_allowed(date(2024, 7, 3))       # still inside the 7-day retry window
+    s._mark_entered(date(2024, 6, 28))
+    assert not s._entry_allowed(date(2024, 7, 10))  # mid-cycle: same anchor → locked
+    assert not s._entry_allowed(date(2024, 7, 25))  # July expiry day itself — still locked
+    assert s._entry_allowed(date(2024, 7, 26))      # new cycle (day after July expiry)
+    # State round-trip keeps the cycle lock (live restart must not double-enter).
+    st = s.export_state()
+    s2 = CallRatioMonthlyStrategy(underlying="NIFTY", entry_rule="post_expiry")
+    s2.load_state(st)
+    assert not s2._entry_allowed(date(2024, 7, 10))
+    # Legacy rule untouched: last Tuesday of June 2024 = 25th.
+    legacy = CallRatioMonthlyStrategy(underlying="NIFTY")
+    assert not legacy._entry_allowed(date(2024, 6, 24))
+    assert legacy._entry_allowed(date(2024, 6, 25))
+
+
+# ─────────────────────────── capital-based auto sizing (sizing="margin")
+
+def _run_cap(strategy, capital: float):
+    sd = FakeCRSD(CALENDAR)
+    mv, _chain, settler, margin = build_options_run(sd, "NIFTY", CALENDAR[0], CALENDAR[-1])
+    runner = BacktestRunner(
+        strategy=strategy, universe=["NIFTY"], loader=lambda *a: None,
+        initial_capital=capital, tax_rate=0.0,
+        market_view=mv, settler=settler, margin_model=margin,
+    )
+    return runner.run(CALENDAR[0], CALENDAR[-1])
+
+
+def test_auto_sizing_fits_lots_to_capital():
+    # Era-true divisor at the fixture: 0.13 × 21000 × (2 lots × 50) = ₹273,000 per lot-set.
+    # ₹10L × 95% → 3 sets; ₹1L → floors to 0 → min 1 set (same as fixed lots=1).
+    big = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=1_000_000,
+                                   sizing="margin", min_dte=18)
+    r = _run_cap(big, 1_000_000)
+    shorts = [t for t in r.transactions if t["action"] == "SHORT"]
+    assert big.lots == 3 and shorts[0]["units"] == 3 * 2 * 50
+    assert big._entry_capital_base == 1_000_000  # credit gates scaled with the same base
+
+    small = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=100_000,
+                                     sizing="margin", min_dte=18)
+    r2 = _run_cap(small, 100_000)
+    shorts2 = [t for t in r2.transactions if t["action"] == "SHORT"]
+    assert small.lots == 1 and shorts2[0]["units"] == 2 * 50
+    # Strike geometry identical in both — the rupee credit gate scaled with capital, so
+    # bigger capital does NOT shift strikes.
+    def k(t):
+        return int(t["ticker"].split("|")[2])
+    assert k(shorts[0]) == k(shorts2[0]) == 21600
+
+
+def test_auto_sizing_cap_and_fixed_default_unchanged():
+    capped = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=1_000_000,
+                                      sizing="margin", max_auto_lots=2, min_dte=18)
+    _run_cap(capped, 1_000_000)
+    assert capped.lots == 2
+    # Default (fixed) ignores capital entirely — lots param is exact, like before.
+    fixed = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=1_000_000,
+                                     lots=5, min_dte=18)
+    r2 = _run_cap(fixed, 1_000_000)
+    shorts = [t for t in r2.transactions if t["action"] == "SHORT"]
+    assert fixed.lots == 5 and shorts[0]["units"] == 5 * 2 * 50
+
+
+def test_capital_base_guarded_for_stub_ctx():
+    s = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=250_000, sizing="margin")
+    assert s._capital_base(None) == 250_000            # no ctx → fallback
+
+    class NoEquity:                                     # stub ctx without an equity accessor
+        pass
+
+    assert s._capital_base(NoEquity()) == 250_000
+
+    class WithEquity:
+        def equity(self):
+            return 800_000.0
+
+    assert s._capital_base(WithEquity()) == 800_000.0
+    # fixed mode never reads equity
+    f = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=250_000)
+    assert f._capital_base(WithEquity()) == 250_000

@@ -554,6 +554,10 @@ class LiveRunManager:
         if is_deriv:
             mpl = getattr(strategy, "margin_per_lotset", None)
             lots = int(getattr(strategy, "lots", 1) or 1)
+            # Auto-sizing (sizing="margin") fits its lot count INTO the capital at each
+            # entry, so the ``lots`` param is only a fallback — require just one lot-set.
+            if getattr(strategy, "sizing", "fixed") == "margin":
+                lots = 1
             if mpl:
                 required = mpl * lots
                 if config.capital < required:
@@ -661,6 +665,8 @@ class LiveRunManager:
         if excluded_symbols is not None:
             live.session.set_excluded(excluded_symbols)
             cfg.excluded_symbols = live.session.excluded_symbols
+        # Manual lots are a FIXED-sizing control: under sizing="margin" the strategy
+        # recomputes self.lots from equity at the next entry, overwriting this value.
         if lots is not None and hasattr(live.session.strategy, "lots"):
             live.session.strategy.lots = max(1, int(lots))
             cfg.params = {**cfg.params, "lots": live.session.strategy.lots}

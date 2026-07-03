@@ -87,6 +87,14 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   is cycle-TO-DATE, so early in a cycle the width gate excludes ~everything (correctly — the
   strikes really would hug spot); it reads like the backtest only late-cycle or with a range
   override.
+- **Ratio-family auto sizing** (`call_ratio_monthly` + put/batman/HNI): `sizing="margin"`
+  refits lot-sets to CURRENT equity at every entry — divisor = era-true model margin
+  ((span+exposure)% × spot × short-body units; deterministic in both modes — never
+  `ctx.position_margin()`, which is model-in-BT vs broker-live ≈2× apart) — and scales the
+  rupee credit gates with the same equity. Constructor default stays `sizing="fixed"` (§1);
+  the backtest FORM defaults to auto. Model margin ignores the long hedges (≈2× broker
+  SPAN), so `capital_utilization_pct=95` ≈ ~50% broker margin — the knob is the live
+  calibration point. Manual `LiveControlsInput.lots` only bites in fixed mode.
 - **Donchian flip default:** new deploys roll a breached name **intraday** (`breach_basis="touch"`),
   **once per name per day** (`last_flip_day` guard), up to `max_flips=3` (two rolls, then close the
   name on the next breach). Defaults live in the deploy layer (`api/models.py:DonchianDeploy`); the
