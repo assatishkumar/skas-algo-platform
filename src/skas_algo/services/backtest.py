@@ -130,6 +130,18 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
                 lot_overrides=req.params.get("contract_specs"),
                 margin_params=req.params.get("margin"), equity_loader=loader,
             )
+        # Strategies that need the index's daily OHLC (21_ema_momentum's EMA channel —
+        # the options views expose close-only spot) get a cache-backed provider. The end
+        # bound is whatever the strategy passes (its ctx.today()) so there's no lookahead.
+        bars_hook = getattr(strategy, "set_daily_bars_fn", None)
+        if bars_hook is not None:
+            from skas_algo.data.options_provider import INDEX_SYMBOL
+
+            def _daily_bars(u: str, start, end):
+                sym = INDEX_SYMBOL.get(u.upper()) or u.upper()
+                return sd.get_prices(symbol=sym, start_date=start, end_date=end)
+
+            bars_hook(_daily_bars)
         # Options are business income (slab) → no per-trade tax modelled; instead F&O
         # transaction charges (brokerage + STT + exchange + GST + SEBI + stamp) are
         # deducted at execution so the equity curve is net of costs.

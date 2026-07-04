@@ -119,6 +119,14 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
   const [nsNewBuys, setNsNewBuys] = useState(2); // Case 1: open up to this many new/day
   const [nsAvgDown, setNsAvgDown] = useState(3); // Case 2: average a name down >this%
 
+  // 21 EMA momentum params
+  const [emaPeriod, setEmaPeriod] = useState(21);
+  const [emaWidthMin, setEmaWidthMin] = useState(300);
+  const [emaWidthMax, setEmaWidthMax] = useState(500);
+  const [emaCreditMin, setEmaCreditMin] = useState(80);
+  const [emaCreditMax, setEmaCreditMax] = useState(140);
+  const [emaRollDays, setEmaRollDays] = useState(5);
+  const [emaSwitchDay, setEmaSwitchDay] = useState(15);
   // Options (short_premium) params
   const [underlying, setUnderlying] = useState("NIFTY");
   const [structure, setStructure] = useState("straddle");
@@ -244,7 +252,8 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
   const isHni = strategyId === "hni_weekly";
   const isCoveredCall = strategyId === "staggered_covered_call";
   const isDonchianBt = strategyId === "donchian_strangle_bt";
-  const isOptions = strategyId === "short_premium" || isCallRatio || isHni || isCoveredCall || isDonchianBt;
+  const isEma21 = strategyId === "21_ema_momentum";
+  const isOptions = strategyId === "short_premium" || isCallRatio || isHni || isCoveredCall || isDonchianBt || isEma21;
   const strikeUnit =
     strikeMode === "delta" ? "Δ"
     : strikeMode === "sd" ? "× exp.move (σ)"
@@ -607,6 +616,18 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
               : {}),
             ...(minCreditPct !== 0 ? { min_credit_pct: minCreditPct / 100 } : {}),
           }
+        : isEma21
+        ? {
+            underlying,
+            lots,
+            ema_period: emaPeriod,
+            width_min: emaWidthMin,
+            width_max: emaWidthMax,
+            credit_min: emaCreditMin,
+            credit_max: emaCreditMax,
+            roll_days_before: emaRollDays,
+            expiry_switch_day: emaSwitchDay,
+          }
         : {
             underlying,
             structure,
@@ -793,7 +814,7 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
             ) : isOptions ? (
               <Field label="Underlying">
                 <select className={inputClass} value={underlying} onChange={(e) => setUnderlying(e.target.value)}>
-                  {isHni ? (
+                  {isHni || isEma21 ? (
                     <option value="NIFTY">NIFTY (weeklies cached)</option>
                   ) : (
                     <>
@@ -1196,6 +1217,43 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
               <Field label="Withdrawal rate %">
                 <NumberInput step="1" className={inputClass} value={withdrawalRate} onChange={setWithdrawalRate} />
               </Field>
+            </div>
+          ) : isEma21 ? (
+            <div key="ema21-params" className="grid md:grid-cols-3 gap-4">
+              <Field label="Capital (₹)">
+                <NumberInput className={inputClass} value={capital} onChange={setCapital} />
+              </Field>
+              <Field label="Lots">
+                <NumberInput className={inputClass} value={lots} onChange={setLots} />
+              </Field>
+              <Field label="EMA period (high/low channel)">
+                <NumberInput className={inputClass} value={emaPeriod} onChange={setEmaPeriod} />
+              </Field>
+              <Field label="Spread width min (pts)">
+                <NumberInput step="100" className={inputClass} value={emaWidthMin} onChange={setEmaWidthMin} />
+              </Field>
+              <Field label="Spread width max (pts)">
+                <NumberInput step="100" className={inputClass} value={emaWidthMax} onChange={setEmaWidthMax} />
+              </Field>
+              <Field label="Net credit min (₹/share)">
+                <NumberInput className={inputClass} value={emaCreditMin} onChange={setEmaCreditMin} />
+              </Field>
+              <Field label="Net credit max (₹/share)">
+                <NumberInput className={inputClass} value={emaCreditMax} onChange={setEmaCreditMax} />
+              </Field>
+              <Field label="Roll (days before expiry)">
+                <NumberInput className={inputClass} value={emaRollDays} onChange={setEmaRollDays} />
+              </Field>
+              <Field label="Expiry switch day (of month)">
+                <NumberInput className={inputClass} value={emaSwitchDay} onChange={setEmaSwitchDay} />
+              </Field>
+              <div className="md:col-span-3 text-[11px] text-[var(--faint)]">
+                Checked once/day at 15:20: close above the EMA-high band → bull put spread; below the
+                EMA-low band → bear call spread. 100-pt OTM strikes; credit window skips the day when
+                missed; holds until the opposite signal; exits {emaRollDays} days before expiry
+                (re-enters next month if the signal persists). Reported margin reads ~2× the real
+                broker requirement (model has no long-leg offset).
+              </div>
             </div>
           ) : isOptions ? (
             <div key="options-params" className="grid md:grid-cols-3 gap-4">

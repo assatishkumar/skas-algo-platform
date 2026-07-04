@@ -256,6 +256,51 @@ class LiveRun:
         # broker's historical bars — strategy-side idempotent, so the re-login path that
         # re-runs this wiring doesn't double-seed. Cache-source runs cold-start instead.
         strategy = getattr(self.session, "strategy", None)
+        bars_hook = getattr(strategy, "set_daily_bars_fn", None)
+        if bars_hook is not None:
+            # 21_ema_momentum: daily OHLC series INCLUDING today's forming bar (chart-at-
+            # 15:20 semantics) — cache through yesterday + today's intraday H/L from the
+            # broker (fallback: H=L=C=LTP when no session; bands read slightly tight).
+            from skas_algo.data.options_provider import INDEX_SYMBOL
+            from skas_algo.data.provider import get_price_loader
+
+            cache_loader = get_price_loader()
+
+            def _daily_bars_live(u: str, start, end):
+                import pandas as _pd
+
+                sym = INDEX_SYMBOL.get(u.upper()) or u.upper()
+                df = cache_loader(sym, start, end)
+                today = date.today()
+                if end < today or (df is not None and len(df) and
+                                   _pd.to_datetime(df["date"]).dt.date.max() >= today):
+                    return df
+                row = None
+                bars_fn = getattr(getattr(self.quote_source, "adapter", None),
+                                  "intraday_bars", None)
+                if bars_fn is not None:
+                    try:
+                        intra = [b for b in bars_fn(u, 1) or []
+                                 if str(b["start"])[:10] == today.isoformat()]
+                    except Exception:  # pragma: no cover - fall to the LTP stub
+                        intra = []
+                    if intra:
+                        row = {"date": today,
+                               "high": max(b["high"] for b in intra),
+                               "low": min(b["low"] for b in intra),
+                               "close": intra[-1]["close"]}
+                if row is None:
+                    ltp_fn = getattr(self.session.market, "index_spot", None)
+                    ltp = ltp_fn(u.upper()) if ltp_fn else None
+                    if ltp:
+                        row = {"date": today, "high": ltp, "low": ltp, "close": ltp}
+                if row is None:
+                    return df
+                add = _pd.DataFrame([row])
+                return add if df is None or not len(df) else _pd.concat(
+                    [df, add], ignore_index=True)
+
+            bars_hook(_daily_bars_live)
         ohlc_fn = getattr(strategy, "set_daily_ohlc_fn", None)
         if ohlc_fn is not None:
             from skas_algo.data.options_provider import INDEX_SYMBOL

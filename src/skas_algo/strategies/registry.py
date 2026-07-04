@@ -17,6 +17,7 @@ from .custom_equity import CustomEquityStrategy
 from .custom_options import CustomOptionsStrategy
 from .donchian_strangle_bt import DonchianStrangleBtStrategy
 from .donchian_strangle_monthly import DonchianStrangleMonthlyStrategy
+from .ema21_momentum import Ema21MomentumStrategy
 from .hni_weekly import HniWeeklyStrategy
 from .momentum_theta_intra import MomentumThetaGainerIntra
 from .nifty_shop import NiftyShopStrategy
@@ -24,8 +25,8 @@ from .short_premium import ShortPremiumStrategy
 from .sst_fifo import SSTFifoStrategy
 from .sst_lifo import SSTLifoStrategy
 from .sst_weekly import SSTWeeklyFifoStrategy, SSTWeeklyStrategy
-from .supertrend_momentum import SuperTrendMomentumStrategy
 from .staggered_covered_call import StaggeredCoveredCallStrategy
+from .supertrend_momentum import SuperTrendMomentumStrategy
 
 # strategy_id -> factory(universe, **params) -> strategy instance
 _REGISTRY: dict[str, Callable[..., Any]] = {
@@ -41,6 +42,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     BatmanRatioMonthlyStrategy.strategy_id: BatmanRatioMonthlyStrategy,
     HniWeeklyStrategy.strategy_id: HniWeeklyStrategy,
     StaggeredCoveredCallStrategy.strategy_id: StaggeredCoveredCallStrategy,
+    Ema21MomentumStrategy.strategy_id: Ema21MomentumStrategy,
     MomentumThetaGainerIntra.strategy_id: MomentumThetaGainerIntra,
     CustomOptionsStrategy.strategy_id: CustomOptionsStrategy,
     CustomEquityStrategy.strategy_id: CustomEquityStrategy,

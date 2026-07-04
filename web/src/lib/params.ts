@@ -2,6 +2,15 @@ import { formatInr } from "./format";
 
 // Human labels + a sensible display order for backtest input parameters.
 const LABELS: Record<string, string> = {
+  ema_period: "EMA period",
+  width_min: "Spread width min (pts)",
+  width_max: "Spread width max (pts)",
+  credit_min: "Net credit min (₹)",
+  credit_max: "Net credit max (₹)",
+  credit_ideal_lo: "Ideal credit lo (₹)",
+  credit_ideal_hi: "Ideal credit hi (₹)",
+  roll_days_before: "Roll days before expiry",
+  expiry_switch_day: "Expiry switch day",
   capital: "Capital",
   universe: "Universe",
   symbols: "Symbols",
@@ -187,6 +196,7 @@ export const OPTIONS_STRATEGIES = [
   "call_ratio_monthly",
   "put_ratio_monthly",
   "short_premium",
+  "21_ema_momentum",
 ];
 
 export function isOptionsStrategy(strategyId: string): boolean {

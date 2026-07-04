@@ -12,6 +12,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   sst_fifo: "SST (FIFO)",
   short_premium: "Short Premium (options)",
   momentum_theta_gainer_intra: "Momentum Theta Intra (options)",
+  "21_ema_momentum": "21 EMA Momentum (credit spreads)",
   call_ratio_monthly: "Call Ratio Monthly (options)",
   put_ratio_monthly: "Put Ratio Monthly (options)",
   batman_ratio_monthly: "Batman Ratio Monthly (options)",

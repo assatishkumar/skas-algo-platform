@@ -109,6 +109,20 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   `account.broker`. **No broker places real orders yet** — even LIVE mode fills via
   PaperBroker; the real order path (LiveBroker, LIMIT-at-touch→market, double-gated) is the
   planned Phase B and the only place order code may ever be added.
+- **21_ema_momentum** (`strategies/ema21_momentum.py`, NIFTY): daily EMA(21)-on-high/low
+  channel; fresh close beyond the band at 15:20 → OTM 100-pt credit spread (bull put /
+  bear call), width 300-500, credit ₹80-140 (ideal 90-130 preferred; miss → SKIP and
+  retry while the direction stays armed); hold till the opposite signal (close+reverse in
+  one slice); roll `roll_days_before`(5) days pre-expiry; expiry = current month before
+  the 15th else next. FULL engine backtest (real cached chain — the first new-strategy
+  since the ratio family to ride `build_options_run` untouched). Daily H/L comes via a
+  strategy-side `set_daily_bars_fn` hook (options views are close-only): backtest wires
+  the cache in `services/backtest.py`; live wires cache+today's-intraday-bar in
+  `_wire_quote_source` (bands INCLUDE today's forming bar — chart-at-15:20 semantics; no
+  broker session → today degrades to H=L=C=LTP). DERIV live ticks have no engine time
+  gate — the strategy self-gates (15:20 + once-a-day latch that only engages AFTER bands
+  computed, so a data hiccup doesn't burn the day). Margin model reads ≈2× real broker
+  for the spread (no long-leg offset — ratio-family caveat).
 - **momentum_theta_gainer_intra** (intraday 15-min SuperTrend(7,3) + daily-pivot ATM weekly
   seller, NIFTY + SENSEX): builds its OWN 15-min candles from live spot ticks (none exist in
   any cache) and carries them in `export_state`; pivots (R1/S1) come from its own prior-day
