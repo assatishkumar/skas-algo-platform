@@ -179,6 +179,25 @@ def test_state_round_trip():
     assert tick(st2, ctx, datetime(2026, 7, 3, 9, 31), spot) == []
 
 
+def test_overnight_carried_candle_never_enters():
+    """Yesterday's last candle closes on today's FIRST tick — it must not fire an entry
+    against today's pivots (the 09:15 gap-entry bug caught vs TradingView)."""
+    st, ctx = seeded_strategy()
+    spot = 24600.0
+    # Leave day2's 15:15 candle PENDING (as live would overnight)...
+    tick(st, ctx, datetime(2026, 7, 2, 15, 16), 24290.0)
+    sym_any = "NIFTY|2026-07-07|24600|PE"
+    ctx.prices[sym_any] = 180.0
+    # ...day3's first tick closes it. Conditions LOOK bullish (spot >> R1) but the closed
+    # candle is day2's → no entry.
+    sigs = tick(st, ctx, datetime(2026, 7, 3, 9, 15, 30), spot)
+    assert sigs == [] and st.entries_today["NIFTY"] == 0
+    assert st.bars["NIFTY"][-1][0].startswith("2026-07-02T15:15")
+    # The first TODAY candle (09:15-09:30) closes at 09:30 → entry now allowed.
+    sigs = tick(st, ctx, datetime(2026, 7, 3, 9, 30), spot)
+    assert len(sigs) == 1 and sigs[0].reason == "mtg_bull"
+
+
 def test_weekly_expiry_calendar_fallback():
     st = MomentumThetaGainerIntra(underlyings=["NIFTY", "SENSEX"])
     ctx = FakeCtx()

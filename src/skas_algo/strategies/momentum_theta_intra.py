@@ -113,10 +113,10 @@ class MomentumThetaGainerIntra:
         Idempotent: only fills bars we don't already have (restart keeps live-built bars)."""
         if self._seeded:
             return
-        keep = max(6 * self.st_period, 60)
+        keep = self._keep_bars()
         for u in self.underlyings:
             try:
-                hist = fetch(u, 9, self.candle_minutes) or []
+                hist = fetch(u, 14, self.candle_minutes) or []
             except Exception:  # pragma: no cover - warmup is best-effort, never fatal
                 continue
             have = {b[0] for b in self.bars[u]}
@@ -126,6 +126,12 @@ class MomentumThetaGainerIntra:
         self._seeded = True
 
     # -------------------------------------------------------------- candles
+    def _keep_bars(self) -> int:
+        """Rolling bar window. SuperTrend's band ratchet is path-dependent, so too small
+        a window shifts flip timing vs a continuous series (TradingView) — ~10 sessions
+        of 15-min bars keeps flips stable while staying trivial to recompute."""
+        return max(24 * self.st_period, 260)
+
     def _candle_start(self, now: datetime) -> datetime:
         m = (now.minute // self.candle_minutes) * self.candle_minutes
         return now.replace(minute=m, second=0, microsecond=0)
@@ -137,8 +143,7 @@ class MomentumThetaGainerIntra:
         closed = False
         if p is not None and p["start"] != start.isoformat():
             self.bars[u].append([p["start"], p["o"], p["h"], p["l"], p["c"]])
-            keep = max(6 * self.st_period, 60)
-            self.bars[u] = self.bars[u][-keep:]
+            self.bars[u] = self.bars[u][-self._keep_bars():]
             self.pending[u] = None
             closed = True
         cur = self.pending[u]
@@ -239,6 +244,12 @@ class MomentumThetaGainerIntra:
             if not fresh_close:
                 continue
             self.evaluated_candle[u] = last_start
+            # Yesterday's LAST candle closes on today's FIRST tick (it was pending
+            # overnight). Its close is stale and gap-distorted relative to today's pivots
+            # — never a valid entry signal (TradingView semantics: first evaluable close
+            # is 09:30). Exits are unaffected: the book is always flat overnight (15:20).
+            if last_start is not None and last_start[:10] != today.isoformat():
+                continue
 
             st_dir, st_line = self._supertrend(u)
             if st_dir is None:
