@@ -101,11 +101,19 @@ class MomentumThetaGainerIntra:
         # start of the last candle whose close was evaluated for entries (skip-once guard)
         self.evaluated_candle: dict[str, str | None] = {u: None for u in self.underlyings}
         self._seeded = False
+        # Optional official-daily-OHLC provider: fn(underlying, today) -> {high, low,
+        # close} of the PRIOR trading day, or None. NSE's official close is the last-30-min
+        # weighted average, so pivots from it match TradingView's "Auto" daily pivots;
+        # bar-derived stays the fallback (SENSEX has no daily series anywhere).
+        self._daily_ohlc_fn = None
 
     # ------------------------------------------------------------ live hooks
     def spot_symbols(self) -> list[str]:
         """The live loop feeds each of these names' index spot every tick."""
         return list(self.underlyings)
+
+    def set_daily_ohlc_fn(self, fn) -> None:
+        self._daily_ohlc_fn = fn
 
     def seed_intraday_bars(self, fetch) -> None:
         """Warm SuperTrend + pivots with real 15-min history at deploy/recovery.
@@ -175,6 +183,17 @@ class MomentumThetaGainerIntra:
         piv = self.pivots[u]
         if piv is not None and piv.get("day") == today.isoformat():
             return
+        if self._daily_ohlc_fn is not None:
+            try:
+                row = self._daily_ohlc_fn(u, today)
+            except Exception:  # pragma: no cover - provider hiccup → bar fallback below
+                row = None
+            if row:
+                hi, lo, close = float(row["high"]), float(row["low"]), float(row["close"])
+                p = (hi + lo + close) / 3.0
+                self.pivots[u] = {"day": today.isoformat(), "p": p,
+                                  "r1": 2 * p - lo, "s1": 2 * p - hi}
+                return
         by_day: dict[str, list[list]] = {}
         for b in self.bars[u]:
             by_day.setdefault(b[0][:10], []).append(b)
@@ -186,8 +205,10 @@ class MomentumThetaGainerIntra:
         lo = min(r[3] for r in rows)
         close = rows[-1][4]
         p = (hi + lo + close) / 3.0
+        # Traditional floor pivots: R1 = 2P − LOW, S1 = 2P − HIGH (easy to swap — doing so
+        # inverts the breakout gate into a near-no-op; caught by the owner vs TradingView).
         self.pivots[u] = {"day": today.isoformat(), "p": p,
-                          "r1": 2 * p - hi, "s1": 2 * p - lo}
+                          "r1": 2 * p - lo, "s1": 2 * p - hi}
 
     # --------------------------------------------------------------- expiry
     def _weekly_expiry(self, ctx, u: str, today: date) -> date | None:

@@ -256,6 +256,25 @@ class LiveRun:
         # broker's historical bars — strategy-side idempotent, so the re-login path that
         # re-runs this wiring doesn't double-seed. Cache-source runs cold-start instead.
         strategy = getattr(self.session, "strategy", None)
+        ohlc_fn = getattr(strategy, "set_daily_ohlc_fn", None)
+        if ohlc_fn is not None:
+            from skas_algo.data.options_provider import INDEX_SYMBOL
+            from skas_algo.data.provider import get_price_loader
+
+            loader = get_price_loader()
+
+            def _prior_day_ohlc(u: str, today):
+                from datetime import timedelta as _td
+
+                sym = INDEX_SYMBOL.get(u.upper()) or u.upper()
+                df = loader(sym, today - _td(days=14), today - _td(days=1))
+                if df is None or len(df) == 0:
+                    return None  # e.g. SENSEX — no cached series → bar-derived fallback
+                row = df.iloc[-1]
+                return {"high": float(row["high"]), "low": float(row["low"]),
+                        "close": float(row["close"])}
+
+            ohlc_fn(_prior_day_ohlc)
         seed_fn = getattr(strategy, "seed_intraday_bars", None)
         bars_fn = getattr(getattr(self.quote_source, "adapter", None), "intraday_bars", None)
         if seed_fn is not None and bars_fn is not None:

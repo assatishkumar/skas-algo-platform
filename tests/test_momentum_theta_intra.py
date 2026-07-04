@@ -179,6 +179,28 @@ def test_state_round_trip():
     assert tick(st2, ctx, datetime(2026, 7, 3, 9, 31), spot) == []
 
 
+def test_pivot_formula_exact_values():
+    """R1 = 2P − LOW, S1 = 2P − HIGH — verified against the 2026-06-30 NIFTY session
+    (H=24035.55 L=23829.20 C=23917.75 → R1≈24025.80, S1≈23819.45). The swapped version
+    put R1 BELOW S1 and inverted the gate (the Jul-1 09:30 phantom bear entry)."""
+    st = MomentumThetaGainerIntra(underlyings=["NIFTY"])
+    ctx = FakeCtx()
+    t0 = datetime(2026, 6, 30, 9, 15)
+    st.bars["NIFTY"] = [
+        [(t0 + timedelta(minutes=15 * i)).isoformat(), 23900, 23900, 23900, 23900]
+        for i in range(24)
+    ]
+    st.bars["NIFTY"][5][2] = 24035.55   # session high
+    st.bars["NIFTY"][11][3] = 23829.20  # session low
+    st.bars["NIFTY"][-1][4] = 23917.75  # session close
+    st._refresh_pivots("NIFTY", date(2026, 7, 1))
+    piv = st.pivots["NIFTY"]
+    assert abs(piv["p"] - 23927.50) < 0.01
+    assert abs(piv["r1"] - 24025.80) < 0.01
+    assert abs(piv["s1"] - 23819.45) < 0.01
+    assert piv["s1"] < piv["p"] < piv["r1"]  # sane ordering, always
+
+
 def test_overnight_carried_candle_never_enters():
     """Yesterday's last candle closes on today's FIRST tick — it must not fire an entry
     against today's pivots (the 09:15 gap-entry bug caught vs TradingView)."""

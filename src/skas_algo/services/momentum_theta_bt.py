@@ -117,6 +117,7 @@ def run_backtest(params: MtgBtParams, adapter=None) -> dict:
         eod_exit=params.eod_exit, entry_cutoff=params.entry_cutoff, min_dte=params.min_dte,
     )
     strat._seeded = True  # bars arrive via replay, not the live warmup hook
+    strat.set_daily_ohlc_fn(_official_daily_ohlc_fn())  # TV-parity pivots (official close)
     ctx = _BtCtx(sigma_of, params)
     slip = params.slippage_bps / 10_000.0
     mp = MarginParams()
@@ -186,6 +187,28 @@ def run_backtest(params: MtgBtParams, adapter=None) -> dict:
                 strat.entries_today[params.underlying] = 0
 
     return _report(trades, bars, params, skipped_entries)
+
+
+def _official_daily_ohlc_fn():
+    """Prior-day OFFICIAL NIFTY 50 OHLC from the skas-data cache (the official close is
+    the last-30-min weighted average — what TradingView's daily pivots use). None when
+    the cache is unavailable → the strategy falls back to bar-derived pivots."""
+    try:
+        from skas_algo.data.provider import get_price_loader
+
+        loader = get_price_loader()
+    except Exception:  # pragma: no cover - no cache in this environment
+        return None
+
+    def fn(_u: str, today: date) -> dict | None:
+        df = loader("NIFTY 50", today - timedelta(days=14), today - timedelta(days=1))
+        if df is None or len(df) == 0:
+            return None
+        row = df.iloc[-1]
+        return {"high": float(row["high"]), "low": float(row["low"]),
+                "close": float(row["close"])}
+
+    return fn
 
 
 def _sigma_provider(bars: pd.DataFrame, vol_multiplier: float):
