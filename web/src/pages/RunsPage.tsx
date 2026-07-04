@@ -22,7 +22,9 @@ const STRATEGY_LABELS: Record<string, string> = {
   supertrend_momentum: "supertrend_momentum",
 };
 const strategyLabel = (id: string) => STRATEGY_LABELS[id] ?? id;
-const ret = (r: RunSummary) => r.metrics["Total Return %"] ?? 0;
+// Tiles/ranking show CAGR — comparable across runs of different lengths (a 16-year
+// equity backtest vs a 3-year options one). Falls back to total return if absent.
+const ret = (r: RunSummary) => r.metrics["CAGR %"] ?? r.metrics["Total Return %"] ?? 0;
 const isBatch = (r: RunSummary) => !!r.batch_id;
 
 /** Per-run navigation + lifecycle actions, reused by the winner card and ranked rows. */
@@ -85,7 +87,7 @@ function WinnerCard({ run, isTemplate, onChanged }: { run: RunSummary; isTemplat
           <div className="text-right"><div className="text-[11px] opacity-90">Max DD</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-sm">{pct(m["Max Drawdown %"])}</div></div>
           <div className="text-right"><div className="text-[11px] opacity-90">Sharpe</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-sm">—</div></div>
           <div className="text-right"><div className="text-[11px] opacity-90">Win rate</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-sm">{(m["Win Rate %"] ?? 0).toFixed(0)}%</div></div>
-          <div className="text-right"><div className="text-[11px] opacity-90">Return</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-[25px]">{pct(ret(run))}</div></div>
+          <div className="text-right"><div className="text-[11px] opacity-90">CAGR</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-[25px]">{pct(ret(run))}</div></div>
           <div className="flex flex-col gap-1.5">
             <button onClick={a.open} className="rounded-[10px] bg-white text-[#0d6b4f] px-3 py-1.5 text-xs font-semibold">Open</button>
             <button onClick={a.forwardTest} className="rounded-[10px] bg-white/20 text-white px-3 py-1.5 text-xs font-semibold">Forward-test →</button>
@@ -119,7 +121,7 @@ function RankedRow({ run, rank, isTemplate, onChanged }: { run: RunSummary; rank
         <Metric label="Max DD" value={pct(m["Max Drawdown %"])} tone="danger" />
         <Metric label="Sharpe" value="—" />
         <Metric label="Win rate" value={`${(m["Win Rate %"] ?? 0).toFixed(0)}%`} />
-        <Metric label="Return" value={pct(ret(run))} tone={ret(run) >= 0 ? "pos" : "danger"} />
+        <Metric label="CAGR" value={pct(ret(run))} tone={ret(run) >= 0 ? "pos" : "danger"} />
       </div>
       <div className="flex items-center gap-2 shrink-0">
         <button onClick={a.open} className="rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] px-3 py-1.5 text-xs">Open</button>
@@ -172,7 +174,7 @@ export default function RunsPage({ embedded = false }: { embedded?: boolean } = 
         <Segmented value={tab} onChange={setTab} options={[{ value: "active", label: "Active" }, { value: "archived", label: "Archived" }]} />
         <span className="text-xs text-[var(--muted)]">Type</span>
         <Segmented value={typeFilter} onChange={setTypeFilter} options={[{ value: "all", label: "All" }, { value: "Batch", label: "Batch" }, { value: "Individual", label: "Individual" }]} />
-        <span className="rounded-full bg-[var(--chip)] text-[var(--chip-text)] px-3 py-1 text-xs font-medium">Return ↓</span>
+        <span className="rounded-full bg-[var(--chip)] text-[var(--chip-text)] px-3 py-1 text-xs font-medium">CAGR ↓</span>
         <input
           className="ml-auto rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-3 py-1.5 text-sm w-56 text-[var(--strong)] placeholder:text-[var(--faint)] focus:outline-none focus:border-[var(--accent)]"
           placeholder="Search runs" value={search} onChange={(e) => setSearch(e.target.value)}
@@ -185,7 +187,7 @@ export default function RunsPage({ embedded = false }: { embedded?: boolean } = 
         </div>
       ) : (
         order.map((sid) => {
-          const rs = [...byStrategy.get(sid)!].sort((x, y) => ret(y) - ret(x)); // rank by return desc
+          const rs = [...byStrategy.get(sid)!].sort((x, y) => ret(y) - ret(x)); // rank by CAGR desc
           const open = q ? true : (openMap[sid] ?? false);
           const best = rs.length ? ret(rs[0]) : 0;
           const top3 = rs.slice(0, 3).map((r) => r.run_id).join(",");
@@ -202,7 +204,7 @@ export default function RunsPage({ embedded = false }: { embedded?: boolean } = 
               {open && (
                 <div className="mt-3 space-y-2.5">
                   <div className="flex items-center justify-between text-[11px] text-[var(--faint)] uppercase tracking-wide">
-                    <span>Ranked by return · {rs.length} run{rs.length === 1 ? "" : "s"}</span>
+                    <span>Ranked by CAGR · {rs.length} run{rs.length === 1 ? "" : "s"}</span>
                     {rs.length > 1 && (
                       <button onClick={() => navigate(`/compare?ids=${top3}`)} className="rounded-full bg-[var(--chip)] text-[var(--chip-text)] px-2.5 py-0.5 normal-case">Compare top 3 →</button>
                     )}
