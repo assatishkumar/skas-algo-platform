@@ -25,6 +25,7 @@ const strategyLabel = (id: string) => STRATEGY_LABELS[id] ?? id;
 // Tiles/ranking show CAGR — comparable across runs of different lengths (a 16-year
 // equity backtest vs a 3-year options one). Falls back to total return if absent.
 const ret = (r: RunSummary) => r.metrics["CAGR %"] ?? r.metrics["Total Return %"] ?? 0;
+const totalRet = (r: RunSummary) => r.metrics["Total Return %"];
 const isBatch = (r: RunSummary) => !!r.batch_id;
 
 /** Per-run navigation + lifecycle actions, reused by the winner card and ranked rows. */
@@ -56,11 +57,12 @@ function menuFor(run: RunSummary, a: ReturnType<typeof useRunActions>, navigate:
   ];
 }
 
-function Metric({ label, value, tone, big }: { label: string; value: string; tone?: "pos" | "danger"; big?: boolean; }) {
+function Metric({ label, value, tone, big, sub }: { label: string; value: string; tone?: "pos" | "danger"; big?: boolean; sub?: string; }) {
   return (
     <div className="text-right">
       <div className={`text-[11px] ${big ? "opacity-90" : "text-[var(--muted)]"}`}>{label}</div>
       <div className={`tabular-nums font-['Space_Grotesk'] font-bold ${big ? "text-[25px]" : "text-sm"} ${tone === "pos" ? "text-[var(--pos)]" : tone === "danger" ? "text-[var(--danger)]" : ""}`}>{value}</div>
+      {sub && <div className="text-[10.5px] tabular-nums text-[var(--faint)] leading-tight">{sub}</div>}
     </div>
   );
 }
@@ -87,7 +89,7 @@ function WinnerCard({ run, isTemplate, onChanged }: { run: RunSummary; isTemplat
           <div className="text-right"><div className="text-[11px] opacity-90">Max DD</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-sm">{pct(m["Max Drawdown %"])}</div></div>
           <div className="text-right"><div className="text-[11px] opacity-90">Sharpe</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-sm">—</div></div>
           <div className="text-right"><div className="text-[11px] opacity-90">Win rate</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-sm">{(m["Win Rate %"] ?? 0).toFixed(0)}%</div></div>
-          <div className="text-right"><div className="text-[11px] opacity-90">CAGR</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-[25px]">{pct(ret(run))}</div></div>
+          <div className="text-right"><div className="text-[11px] opacity-90">CAGR</div><div className="tabular-nums font-['Space_Grotesk'] font-bold text-[25px]">{pct(ret(run))}</div>{totalRet(run) != null && <div className="text-[10.5px] tabular-nums opacity-80 leading-tight">total {pct(totalRet(run)!)}</div>}</div>
           <div className="flex flex-col gap-1.5">
             <button onClick={a.open} className="rounded-[10px] bg-white text-[#0d6b4f] px-3 py-1.5 text-xs font-semibold">Open</button>
             <button onClick={a.forwardTest} className="rounded-[10px] bg-white/20 text-white px-3 py-1.5 text-xs font-semibold">Forward-test →</button>
@@ -121,7 +123,8 @@ function RankedRow({ run, rank, isTemplate, onChanged }: { run: RunSummary; rank
         <Metric label="Max DD" value={pct(m["Max Drawdown %"])} tone="danger" />
         <Metric label="Sharpe" value="—" />
         <Metric label="Win rate" value={`${(m["Win Rate %"] ?? 0).toFixed(0)}%`} />
-        <Metric label="CAGR" value={pct(ret(run))} tone={ret(run) >= 0 ? "pos" : "danger"} />
+        <Metric label="CAGR" value={pct(ret(run))} tone={ret(run) >= 0 ? "pos" : "danger"}
+          sub={totalRet(run) != null ? `total ${pct(totalRet(run)!)}` : undefined} />
       </div>
       <div className="flex items-center gap-2 shrink-0">
         <button onClick={a.open} className="rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] px-3 py-1.5 text-xs">Open</button>
