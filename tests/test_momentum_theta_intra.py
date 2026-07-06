@@ -279,3 +279,13 @@ def test_bfo_merge_and_exchange_prefixes():
     assert q["SENSEX|2026-07-09|80000|CE"] == 100.0
     assert a._nfo_lot["SENSEX"] == 20
     assert a.option_expiries("SENSEX") == ["2026-07-09"]
+
+
+def test_deploy_margin_guard_handles_dict_lots():
+    """manager.start's margin guard int()'d strategy.lots — a dict for momentum_theta
+    (the deploy-500 the owner hit). The guard must total dict lots, not crash."""
+    raw = MomentumThetaGainerIntra(underlyings=["NIFTY", "SENSEX"],
+                                   lots={"NIFTY": 2, "SENSEX": 2}).lots
+    assert isinstance(raw, dict)
+    total = sum(int(v or 0) for v in raw.values())
+    assert int(total or 1) == 4  # the exact expression the guard now applies

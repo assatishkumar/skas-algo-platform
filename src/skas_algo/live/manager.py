@@ -629,7 +629,12 @@ class LiveRunManager:
         # the order live). Raise with a suggested capital — the route returns it as a 422.
         if is_deriv:
             mpl = getattr(strategy, "margin_per_lotset", None)
-            lots = int(getattr(strategy, "lots", 1) or 1)
+            raw_lots = getattr(strategy, "lots", 1)
+            # Multi-underlying strategies (momentum_theta) carry lots as a PER-NAME dict —
+            # the guard's notion of "lot-sets" is the total across names.
+            if isinstance(raw_lots, dict):
+                raw_lots = sum(int(v or 0) for v in raw_lots.values())
+            lots = int(raw_lots or 1)
             # Auto-sizing (sizing="margin") fits its lot count INTO the capital at each
             # entry, so the ``lots`` param is only a fallback — require just one lot-set.
             if getattr(strategy, "sizing", "fixed") == "margin":
@@ -743,7 +748,10 @@ class LiveRunManager:
             cfg.excluded_symbols = live.session.excluded_symbols
         # Manual lots are a FIXED-sizing control: under sizing="margin" the strategy
         # recomputes self.lots from equity at the next entry, overwriting this value.
-        if lots is not None and hasattr(live.session.strategy, "lots"):
+        # Per-underlying dict lots (momentum_theta) are NOT scalar-editable here — a
+        # scalar overwrite would break the strategy's per-name lookups.
+        if lots is not None and hasattr(live.session.strategy, "lots") \
+                and not isinstance(live.session.strategy.lots, dict):
             live.session.strategy.lots = max(1, int(lots))
             cfg.params = {**cfg.params, "lots": live.session.strategy.lots}
         if auto is not None:
@@ -764,7 +772,8 @@ class LiveRunManager:
                     refresh_seconds=cfg.refresh_seconds,
                     excluded_symbols=cfg.excluded_symbols,
                 )
-                if lots is not None and hasattr(live.session.strategy, "lots"):
+                if lots is not None and hasattr(live.session.strategy, "lots") \
+                        and not isinstance(live.session.strategy.lots, dict):
                     snap["lots"] = live.session.strategy.lots
                 run.params_snapshot = snap
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
