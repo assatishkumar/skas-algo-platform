@@ -40,7 +40,7 @@ def _as_date(d) -> date:
 
 def trade_event(
     ts, ticker, action, units, price, profit, pnl_pct, lots, tag,
-    *, exit_reason=None, entry_premium=None, holding_days=None,
+    *, exit_reason=None, entry_premium=None, holding_days=None, fill=None,
 ) -> dict:
     ev = {
         "date": ts,
@@ -62,6 +62,15 @@ def trade_event(
         ev["entry_premium"] = entry_premium
     if holding_days is not None:
         ev["holding_days"] = holding_days
+    # REAL-order enrichment: broker order id + commission travel on the event so
+    # persistence can audit the fill. Sim fills carry "sim-N" ids and zero commission —
+    # both are omitted, keeping backtest/paper event dicts byte-identical (parity).
+    if fill is not None:
+        bid = getattr(fill, "broker_order_id", None)
+        if bid and not str(bid).startswith("sim-"):
+            ev["broker_order_id"] = bid
+        if getattr(fill, "commission", 0.0):
+            ev["commission"] = fill.commission
     return ev
 
 
@@ -187,7 +196,8 @@ class SliceExecutor:
         fill = self.broker.execute(BrokerOrder(symbol, OrderSide.SELL, units))
         profit = self.portfolio.reduce_lot(symbol, lot_id, units, fill.price)
         pnl_pct = (fill.price - entry) / entry if entry else 0.0
-        return trade_event(ts, symbol, "SELL", units, fill.price, profit, pnl_pct, lots, tag)
+        return trade_event(ts, symbol, "SELL", units, fill.price, profit, pnl_pct, lots, tag,
+                           fill=fill)
 
     def _close_position(self, ts, symbol, tag, reason="") -> dict | None:
         lots = self.portfolio.lots(symbol)
@@ -205,7 +215,7 @@ class SliceExecutor:
         # exit_reason inserted only when non-empty → equity SST SELL events stay byte-identical.
         return trade_event(
             ts, symbol, "SELL", total_units, fill.price, profit, pnl_pct, n_lots, tag,
-            exit_reason=(reason or None),
+            exit_reason=(reason or None), fill=fill,
         )
 
     def _buy(self, ts, symbol, units, tag: str = "STRATEGY") -> dict | None:
@@ -224,6 +234,7 @@ class SliceExecutor:
             0.0,
             len(self.portfolio.lots(symbol)),
             tag,
+            fill=fill,
         )
 
     def _sell_to_open(self, ts, symbol, units, multiplier) -> dict | None:
@@ -235,6 +246,7 @@ class SliceExecutor:
         return trade_event(
             ts, symbol, "SHORT", units, fill.price, 0.0, 0.0,
             len(self.portfolio.lots(symbol)), "STRATEGY",
+            fill=fill,
         )
 
     def _buy_to_close(self, ts, symbol, lot_id, lot, tag, reason="") -> dict | None:
@@ -248,4 +260,5 @@ class SliceExecutor:
             exit_reason=(reason or "manual"),
             entry_premium=lot.price,
             holding_days=(_as_date(ts) - _as_date(lot.opened_at)).days,
+            fill=fill,
         )

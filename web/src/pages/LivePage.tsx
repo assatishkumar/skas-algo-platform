@@ -654,6 +654,17 @@ function RunCard({
   const upnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
   return (
     <div className="mt-3 border-t border-slate-800 pt-3">
+      {run.order_error && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-rose-300 bg-rose-100 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300 px-3 py-2 text-sm">
+          <span>🛑 ORDERS HALTED: {run.order_error}. Review the broker book before resuming.</span>
+          <button
+            onClick={() => { if (confirm("Acknowledge the order failure and resume decisions? Review the Kite order/position book first — whatever filled before the failure is real.")) act(() => api.liveAckOrderError(run.run_id)); }}
+            className="rounded bg-rose-700 hover:bg-rose-800 text-white px-2.5 py-1 text-xs font-medium"
+          >
+            Acknowledge &amp; resume
+          </button>
+        </div>
+      )}
       {run.quote_error && (
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-rose-300 bg-rose-100 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300 px-3 py-2 text-sm">
           <span>⚠ {run.quote_error} LTP, greeks &amp; live margin stay frozen until then.</span>
@@ -1078,6 +1089,9 @@ function DeploymentTile({
             </Tag>
             <Tag>{dep.strategy_id}</Tag>
             <BrokerChip dep={dep} />
+            {dep.order_error && (
+              <Tag bg="var(--danger)" color="#fff" title={dep.order_error}>orders halted</Tag>
+            )}
             <span className="text-[var(--faint)]">#{dep.run_id}</span>
           </div>
         </div>

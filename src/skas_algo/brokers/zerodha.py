@@ -109,28 +109,71 @@ class ZerodhaAdapter:
                 "SKAS_LIVE_TRADING_ENABLED is false."
             )
 
+    def _order_route(self, symbol: str) -> tuple[str, str, str]:
+        """(exchange, tradingsymbol, product) for an internal symbol. Options resolve via
+        the NFO/BFO instruments LUT (same one quotes/margins use) and trade NRML; a plain
+        symbol is an NSE equity and trades CNC. Raises for an unresolvable option — an
+        order must NEVER fall through to a wrong contract."""
+        from skas_algo.engine.options.instrument import parse
+
+        inst = parse(symbol)
+        if inst is None:
+            return "NSE", symbol, "CNC"
+        ts = self._option_tradingsymbol(inst)
+        if not ts:
+            raise ValueError(f"no listed contract for {symbol} in the NFO/BFO dump")
+        return self._exchange_of(ts), ts, "NRML"
+
+    _ORDER_TYPE_MAP = {
+        OrderType.LIMIT: "LIMIT", OrderType.MARKET: "MARKET",
+        OrderType.SL: "SL", OrderType.SL_M: "SL-M",
+    }
+
     def place_order(self, order: BrokerOrder) -> str:
+        """Place a REAL order; returns the Kite order id. Double-gated (armed + platform
+        flag). F&O routes NFO/BFO + NRML via the instruments LUT; equity NSE + CNC."""
         self._ensure_armed()
         kite = self._kite_client()
+        exchange, tradingsymbol, product = self._order_route(order.symbol)
         return kite.place_order(
             variety=kite.VARIETY_REGULAR,
-            exchange=kite.EXCHANGE_NSE,
-            tradingsymbol=order.symbol,
+            exchange=exchange,
+            tradingsymbol=tradingsymbol,
             transaction_type=(
                 kite.TRANSACTION_TYPE_BUY
                 if order.side is OrderSide.BUY
                 else kite.TRANSACTION_TYPE_SELL
             ),
-            quantity=order.quantity,
-            product=kite.PRODUCT_CNC,
-            order_type=(
-                kite.ORDER_TYPE_LIMIT
-                if order.order_type is OrderType.LIMIT
-                else kite.ORDER_TYPE_MARKET
-            ),
+            quantity=int(order.quantity),
+            product=product,
+            order_type=self._ORDER_TYPE_MAP.get(order.order_type, "MARKET"),
             price=order.price,
-            tag=order.tag,
+            tag=(order.tag or order.client_order_id or None),
         )
+
+    def modify_order(self, broker_order_id: str, *, order_type: OrderType | None = None,
+                     price: float | None = None) -> None:
+        """Modify a pending order — the LIMIT→MARKET escalation path."""
+        self._ensure_armed()
+        kite = self._kite_client()
+        kwargs: dict = {}
+        if order_type is not None:
+            kwargs["order_type"] = self._ORDER_TYPE_MAP.get(order_type, "MARKET")
+        if price is not None:
+            kwargs["price"] = price
+        kite.modify_order(variety=kite.VARIETY_REGULAR, order_id=broker_order_id, **kwargs)
+
+    def order_status(self, broker_order_id: str) -> dict:
+        """{status, average_price, filled_quantity, status_message} for one order —
+        terminal Kite statuses are COMPLETE / REJECTED / CANCELLED. Read-only (ungated)."""
+        hist = self._kite_client().order_history(order_id=broker_order_id)
+        last = hist[-1] if hist else {}
+        return {
+            "status": last.get("status", "UNKNOWN"),
+            "average_price": float(last.get("average_price") or 0.0),
+            "filled_quantity": int(last.get("filled_quantity") or 0),
+            "status_message": last.get("status_message"),
+        }
 
     def cancel_order(self, broker_order_id: str) -> None:
         self._ensure_armed()

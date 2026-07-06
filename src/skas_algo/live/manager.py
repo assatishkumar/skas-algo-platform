@@ -215,6 +215,9 @@ class LiveRun:
         # Last live-quote fetch error (e.g. a rejected Zerodha token), surfaced in the
         # snapshot so the UI can flag "session expired — reconnect" instead of failing silently.
         self.quote_error: str | None = None
+        # A REAL order failed (rejected/unfillable) or the broker book mismatched — halts
+        # decisions until the owner acknowledges (POST /live/{id}/ack-order-error).
+        self.order_error: str | None = None
         # Last self-heal retry of a stuck (quote_error'd) zerodha run — throttles the loop's
         # rebuild-and-repoll to ~once a minute so it doesn't hammer a rate-limited/dead token.
         self._last_quote_retry: datetime | None = None
@@ -371,6 +374,7 @@ class LiveRun:
                     self.session.market.set_index_spot(name, quotes.pop(key))
         self.session.update_quotes(quotes)
         self._maybe_refresh_margin()
+        self._maybe_reconcile()
         snap = self.snapshot()
         with session_scope() as db:
             sync_positions(db, self.algo_id, snap)
@@ -378,6 +382,38 @@ class LiveRun:
         self.broadcaster.publish({"type": "snapshot", "run_id": self.run_id, **snap})
         self._persist_state()
         return snap
+
+    def _maybe_reconcile(self) -> None:
+        """Real-order runs only: hourly, compare the broker's net book with the aggregate
+        of ALL live-order runs on this account; mismatch → order_error halt (owner acks
+        after reviewing). Covers manual trades in the account, missed fills, and drift."""
+        from skas_algo.brokers.live_broker import LiveBroker
+
+        if not isinstance(getattr(self.session, "broker", None), LiveBroker):
+            return
+        now = datetime.now(IST)
+        last = getattr(self, "_last_reconcile_at", None)
+        if last is not None and (now - last).total_seconds() < 3600:
+            return
+        self._last_reconcile_at = now
+        adapter = getattr(self.quote_source, "adapter", None)
+        if adapter is None or self.config.broker_account_id is None:
+            return
+        try:
+            problem = manager.reconcile_account_book(self.config.broker_account_id, adapter)
+        except Exception:  # pragma: no cover - reconciliation must never kill the loop
+            logger.exception("reconciliation failed for run %s", self.run_id)
+            return
+        if problem and not self.order_error:
+            self.order_error = f"book mismatch: {problem}"
+            logger.error("run %s halted on reconciliation: %s", self.run_id, problem)
+            try:
+                from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+                build_notifier().send(Alert(
+                    f"BOOK MISMATCH: {self.config.name}", problem, AlertLevel.ERROR))
+            except Exception:  # pragma: no cover
+                pass
 
     def _maybe_refresh_margin(self) -> None:
         """Throttled (~1/min) real Zerodha basket margin, built from our own legs. Falls
@@ -474,7 +510,23 @@ class LiveRun:
         """Make today's entry/exit decision; persist trades + positions; broadcast."""
         ts = ts or datetime.now(IST)
         self._refresh_supertrend()
-        events = self.session.run_decision(ts)
+        from skas_algo.brokers.live_broker import OrderExecutionError
+
+        try:
+            events = self.session.run_decision(ts)
+        except OrderExecutionError as exc:
+            # A real order failed mid-decision. Whatever DID fill is already in the book
+            # (each leg books its own Fill); halt further decisions until acknowledged.
+            self.order_error = str(exc)
+            logger.error("run %s halted on order failure: %s", self.run_id, exc)
+            try:
+                from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+                build_notifier().send(Alert(
+                    f"ORDERS HALTED: {self.config.name}", str(exc), AlertLevel.ERROR))
+            except Exception:  # pragma: no cover
+                pass
+            events = []
         self._tag_underlying_spot(events)
         snap = self.snapshot()  # wrapper: real margin override + greeks + target/stop, etc.
         with session_scope() as db:
@@ -566,6 +618,7 @@ class LiveRun:
             "underlying": self.config.underlying,
             "quote_source": self.config.quote_source,
             "on_cache_fallback": self.on_cache_fallback,
+            "order_error": self.order_error,
             "quote_error": self.quote_error,
             "parts_total": self.config.params.get("capital_parts"),
             # Options deployments expose lot-sets (editable live while flat); equity
@@ -627,6 +680,87 @@ class LiveRunManager:
         self.broadcaster = Broadcaster()
         self._tasks: dict[int, asyncio.Task] = {}
 
+    def _maybe_inject_live_broker(self, session, config: "LiveConfig", quote_source) -> None:
+        """THE real-order gate. Replace the session's PaperBroker with a LiveBroker ONLY
+        when every key turns: mode LIVE, account armed, SKAS_LIVE_TRADING_ENABLED, and the
+        quote source's adapter exposes the full order surface. Any other combination —
+        including a disarmed account on a LIVE run — keeps simulated fills (CLAUDE.md §1)."""
+        if config.mode.upper() != "LIVE":
+            return
+        from skas_algo.config import get_settings
+
+        settings = get_settings()
+        if not settings.live_trading_enabled:
+            return
+        adapter = getattr(quote_source, "adapter", None)
+        if adapter is None or not getattr(adapter, "armed", False):
+            return
+        from skas_algo.brokers.live_broker import LiveBroker, adapter_can_execute
+
+        if not adapter_can_execute(adapter):
+            return
+
+        market = getattr(session, "market", None)
+
+        def touch(symbol: str, side) -> float | None:
+            """LIMIT price at the touch: SELL→bid / BUY→ask from the live chain book."""
+            ba_fn = getattr(market, "_bid_ask", None)
+            ba = ba_fn(symbol) if ba_fn is not None else None
+            if not ba:
+                return None
+            bid, ask = ba
+            from skas_algo.db.enums import OrderSide as _OS
+
+            px = bid if side is _OS.SELL else ask
+            return float(px) if px and px > 0 else None
+
+        session.broker = LiveBroker(
+            adapter,
+            account_id=config.broker_account_id,
+            run_name=config.name,
+            touch_fn=touch,
+            max_order_notional=settings.live_max_order_notional,
+            max_orders_per_day=settings.live_max_orders_per_day,
+            order_timeout_s=settings.live_order_timeout_s,
+        )
+        logger.warning("REAL-ORDER broker injected for %s (account %s)",
+                       config.name, config.broker_account_id)
+
+    def reconcile_account_book(self, account_id: int, adapter) -> str | None:
+        """Compare the broker's NET positions against the AGGREGATE book of all LIVE-mode
+        real-order runs on this account (the broker nets per contract across runs — a
+        per-run comparison would false-alarm whenever two strategies share a strike).
+        Returns a human mismatch description, or None when consistent."""
+        from skas_algo.brokers.live_broker import LiveBroker
+        from skas_algo.engine.options.instrument import parse
+
+        ours: dict[str, float] = {}
+        for run in self.runs.values():
+            if run.config.mode.upper() != "LIVE":
+                continue
+            if run.config.broker_account_id != account_id:
+                continue
+            if not isinstance(getattr(run.session, "broker", None), LiveBroker):
+                continue
+            for sym in run.session.portfolio.lot_symbols():
+                for lot in run.session.portfolio.lots(sym):
+                    inst = parse(sym)
+                    ts = None
+                    if inst is not None:
+                        ts = adapter._option_tradingsymbol(inst)
+                    ours[ts or sym] = ours.get(ts or sym, 0.0) + lot.direction * lot.units
+        try:
+            broker_net = {p["tradingsymbol"]: float(p.get("quantity") or 0)
+                          for p in adapter.positions()}
+        except Exception as exc:  # pragma: no cover - can't reconcile → say so
+            return f"positions fetch failed: {exc}"
+        problems = []
+        for ts, qty in ours.items():
+            b = broker_net.get(ts, 0.0)
+            if abs(b - qty) > 1e-6:
+                problems.append(f"{ts}: platform {qty:+.0f} vs broker {b:+.0f}")
+        return "; ".join(problems) if problems else None
+
     def start(self, config: LiveConfig, loader: PriceLoader, quote_source: QuoteSource) -> LiveRun:
         factory = get_strategy(config.strategy_id)
         # `universe`/`initial_capital` are passed explicitly; the run's params also carry deploy/
@@ -667,6 +801,7 @@ class LiveRunManager:
                     )
 
         session = _build_session(config, strategy, loader, is_deriv, underlying)
+        self._maybe_inject_live_broker(session, config, quote_source)
 
         # Backtest-then-forward seed (PAPER, equity or options): replay from a past date and
         # carry the resulting open book + strategy state forward as the live starting position.
@@ -905,7 +1040,7 @@ class LiveRunManager:
                     try:
                         live.refresh()
                         now = datetime.now(IST)
-                        if mkt and not live.quote_error:
+                        if mkt and not live.quote_error and not live.order_error:
                             # Decisions / orders ONLY during market hours.
                             if tick_driven:
                                 # Decide EVERY tick — the strategy's own gates decide what fires

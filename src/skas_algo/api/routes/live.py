@@ -201,6 +201,7 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             snap = live.snapshot()
             tile["on_cache_fallback"] = snap.get("on_cache_fallback", False)
             tile["quote_error"] = snap.get("quote_error")
+            tile["order_error"] = snap.get("order_error")
             tile["underlying_spot"] = snap.get("underlying_spot")  # live spot for the tile subline
             upnl = sum(p["unrealized_pnl"] for p in snap.get("positions", []))
             tile["metrics"] = {
@@ -600,6 +601,18 @@ async def go_live(
     if not body.keep_paper_running:
         manager.stop(run_id)  # paper book is simulated — safe to drop
     return live.snapshot()
+
+
+@router.post("/{run_id}/ack-order-error")
+async def ack_order_error(run_id: int) -> dict:
+    """Owner acknowledges a real-order failure: clears the halt so decisions resume.
+    The book should be reviewed first — whatever filled before the failure is real."""
+    live = manager.get(run_id)
+    if live is None:
+        raise HTTPException(status_code=404, detail="run is not active")
+    prev = live.order_error
+    live.order_error = None
+    return {"cleared": prev}
 
 
 @router.post("/{run_id}/activate")

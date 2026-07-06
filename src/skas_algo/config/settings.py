@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     # Master switch. Even with an account armed, no real order is placed unless this
     # is True. Defaults False so paper/dev never fires real orders by accident.
     live_trading_enabled: bool = False
+    # Real-order safety rails (LiveBroker pre-flight; see brokers/live_broker.py).
+    live_max_order_notional: float = 500_000.0   # SKAS_LIVE_MAX_ORDER_NOTIONAL
+    live_max_orders_per_day: int = 20            # SKAS_LIVE_MAX_ORDERS_PER_DAY
+    live_order_timeout_s: float = 10.0           # SKAS_LIVE_ORDER_TIMEOUT_S (LIMIT→MARKET)
 
     # --- Logging ---
     log_level: str = "INFO"

@@ -8,10 +8,24 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 > rediscover. (Standing request from the owner.)
 
 ## 1. This is a real, live trading system with real money
-- Real orders go through `brokers/zerodha.py` and are **double-gated**: `SKAS_LIVE_TRADING_ENABLED=true`
-  **and** the broker account `armed`. Never bypass either.
-- Do **not** run ad-hoc scripts that could place/modify/cancel orders. Be deliberate around anything in
-  `live/` and order placement. When in doubt, ask.
+- **The real-order path is LIVE-CAPABLE (Phase B, 2026-07).** `brokers/live_broker.py::LiveBroker`
+  is the ONLY code that places real orders (LIMIT-at-touch → 10s → MARKET escalation, via
+  `ZerodhaAdapter.place_order/modify/status/cancel`, all behind `_ensure_armed`). It is injected by
+  `live/manager._maybe_inject_live_broker` ONLY when ALL of: mode=="LIVE" ∧ account.armed ∧
+  `SKAS_LIVE_TRADING_ENABLED` ∧ adapter has the full order surface — every other cell keeps
+  PaperBroker (matrix test in tests/test_live_broker.py). Never bypass or widen this gate.
+- **OWNER DIRECTIVE: Claude never initiates live orders.** Never arm an account, never set the flag,
+  never deploy/activate a LIVE run with an armed account, never "verify" with a real order — the
+  pilot and every real order is the owner's hand only. Order-path verification = fake-adapter tests.
+- Safety rails live in LiveBroker pre-flight: per-order notional cap, per-run daily order cap,
+  market-hours check, account-level rate governor (settings SKAS_LIVE_MAX_ORDER_NOTIONAL /
+  _MAX_ORDERS_PER_DAY / _ORDER_TIMEOUT_S). An `OrderExecutionError` (reject/unfillable) or hourly
+  book-mismatch reconciliation sets `LiveRun.order_error` → decisions HALT until the owner
+  acknowledges (POST /live/{id}/ack-order-error; banner + tile chip). Reconciliation compares the
+  broker's NET book against the AGGREGATE of all live-order runs on the account (broker nets per
+  contract across runs; manual trades in the same account will trip it — dedicate an account).
+- Do **not** run ad-hoc scripts that could place/modify/cancel orders. Be deliberate around anything
+  in `live/` and order placement. When in doubt, ask.
 - Tests use simulated brokers and an isolated DB — they never touch the broker or dev data.
 - **Don't silently change the *meaning* of a persisted strategy param.** Running deploys are rebuilt
   from their persisted `params_snapshot` on restart (`live/recovery.py`), so redefining a param (e.g.
