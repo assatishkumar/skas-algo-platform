@@ -66,6 +66,56 @@ const STRATEGIES: Rule[] = [
       "Profit zone is each name staying inside last month's range. Primary risk is a single-name gap (earnings/news) while the index is flat — the index hedge does NOT cover this, which is why the event filter is mandatory. The hedge covers correlated market crashes only.",
   },
   {
+    id: "21_ema_momentum",
+    name: "21 EMA Momentum",
+    kind: "Options",
+    bias: "Directional · positional credit spreads with the daily trend",
+    summary:
+      "Daily EMA(21)-channel breakout on NIFTY traded through defined-risk monthly credit spreads: a fresh close above the EMA-of-highs band sells a bull put spread; below the EMA-of-lows band, a bear call spread. Checked once per day at 15:20 — no intraday monitoring. Fully engine-backtestable on the real cached chain.",
+    structure: [
+      "Channel: EMA(21) of the daily HIGH (upper band) + EMA(21) of the daily LOW (lower band); bands include today's forming bar (what the chart shows at 15:20).",
+      "Bullish → BULL PUT SPREAD: sell the higher-strike OTM put, buy a lower put 300–500 pts further out.",
+      "Bearish → BEAR CALL SPREAD: sell the lower-strike OTM call, buy a higher call 300–500 pts out.",
+      "100-point strikes only; net credit must land in ₹80–140/share (₹90–130 ideal preferred).",
+      "Monthly expiry: before the 15th → current month; on/after → next month.",
+    ],
+    entry: [
+      "One check per day at 15:20 IST: close beyond the band AND yesterday was not (fresh crossover).",
+      "No spread fits the credit window → skip the day and retry each 15:20 while the signal direction stays active (never take a bad-credit trade).",
+    ],
+    exit: [
+      "Hold until the OPPOSITE signal — then close and reverse in the same decision.",
+      "Never into expiry week: exit 5 days before expiry; if the direction still holds, re-enter next month's expiry immediately.",
+    ],
+    risk:
+      "Defined both ways: max loss ≈ (width − credit) × lot ≈ ₹12–27k per lot. Reported margin reads ~2× the real broker requirement (the model doesn't offset the long leg). Backtest 2020–2026: 142 spreads, 46.8% win, +17% on capital, 6.7% max DD.",
+  },
+  {
+    id: "momentum_theta_gainer_intra",
+    name: "Momentum Theta Gainer (Intraday)",
+    kind: "Options",
+    bias: "Directional intraday · sell the opposite ATM weekly",
+    summary:
+      "Intraday 15-min SuperTrend(7,3) + daily-pivot seller on NIFTY and SENSEX: momentum above pivot R1 sells the ATM weekly PUT; momentum below S1 sells the ATM CALL. Always flat by 15:20. Deploy-only for SENSEX (no BSE history exists); the NIFTY backtest is a dedicated 15-min service on /research with Black-Scholes premiums.",
+    structure: [
+      "15-min candles built live from spot ticks; SuperTrend(7,3) + classic floor pivots (R1/S1 from the prior day's official OHLC).",
+      "Bullish candle close (above SuperTrend AND above R1) → SELL the ATM weekly PUT.",
+      "Bearish close (below SuperTrend AND below S1) → SELL the ATM weekly CALL.",
+      "Nearest weekly expiry incl. same-day 0DTE (NIFTY Tue / SENSEX Thu); one open position per underlying.",
+    ],
+    entry: [
+      "Only on CLOSED 15-min candles from today's session (the overnight-carried candle never signals).",
+      "Max 3 entries per underlying per day; no fresh entries after 15:00.",
+      "Deploying with a Zerodha session seeds ~7 days of real 15-min bars so indicators are live immediately.",
+    ],
+    exit: [
+      "SuperTrend flips against the position → exit; re-entry only on a fresh full signal on a LATER candle.",
+      "Hard EOD exit at 15:20 — never carries overnight.",
+    ],
+    risk:
+      "Naked short options intraday — gamma risk is real on expiry days even with the 15:20 flat rule. BS-priced backtest (2023–26) is net-negative on flip whipsaws; the strategy is in paper validation against real premiums before any live consideration.",
+  },
+  {
     id: "hni_weekly",
     name: "HNI Weekly",
     kind: "Options",
