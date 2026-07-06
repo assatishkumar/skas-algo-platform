@@ -13,6 +13,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   short_premium: "Short Premium (options)",
   momentum_theta_gainer_intra: "Momentum Theta Intra (options)",
   "21_ema_momentum": "21 EMA Momentum (credit spreads)",
+  call_put_ratio_expiry: "CP Ratio Expiry (options)",
   call_ratio_monthly: "Call Ratio Monthly (options)",
   put_ratio_monthly: "Put Ratio Monthly (options)",
   batman_ratio_monthly: "Batman Ratio Monthly (options)",

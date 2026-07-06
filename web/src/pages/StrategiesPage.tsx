@@ -10,6 +10,7 @@ type Rule = {
   entry: string[];
   exit: string[];
   risk: string;
+  links?: { label: string; url: string }[];
 };
 
 // Curated from the strategy implementations (src/skas_algo/strategies/*) and the design decks.
@@ -89,6 +90,33 @@ const STRATEGIES: Rule[] = [
     ],
     risk:
       "Defined both ways: max loss ≈ (width − credit) × lot ≈ ₹12–27k per lot. Reported margin reads ~2× the real broker requirement (the model doesn't offset the long leg). Backtest 2020–2026: 142 spreads, 46.8% win, +17% on capital, 6.7% max DD.",
+  },
+  {
+    id: "call_put_ratio_expiry",
+    name: "Call-Put Ratio Expiry",
+    kind: "Options",
+    bias: "Neutral intraday · expiry-day theta harvest",
+    summary:
+      "Expiry-day-only (NIFTY Tue, SENSEX Thu) 1:3 premium-ratio structure: buy the ATM straddle, then sell 3 lots per side at the strikes trading near one-third of each ATM premium. Rides the 0DTE morning-IV crush; flat by 15:20 every time. Deploy-only — strike placement is smile-driven, so validation is paper-first on real chains (no backtest).",
+    structure: [
+      "BUY 1 lot ATM CE + 1 lot ATM PE (per set).",
+      "ATM PE premium x → SELL 3 lots of the put strike trading nearest x/3 (below ATM).",
+      "ATM CE premium y → SELL 3 lots of the call strike trading nearest y/3 (above ATM).",
+      "Net per side: +1 ATM / −3 OTM → net short 2 lots beyond each ⅓ strike.",
+    ],
+    entry: [
+      "Only on the underlying's own weekly expiry day, once, between 09:20 and 09:27 IST.",
+      "Strikes read off the LIVE chain; if no strike trades within tolerance (default 30%) of the ⅓ premium, the day is skipped.",
+      "Margin deployed is frozen at entry (real broker basket margin when available, model estimate otherwise) — the day's rupee thresholds derive from it.",
+    ],
+    exit: [
+      "Profit target: +1.1% of margin deployed.",
+      "Stop-loss: −1% of margin deployed (checked every tick, ~15s).",
+      "Hard exit 15:20 — never carried into settlement.",
+    ],
+    risk:
+      "Losses are OPEN beyond the ⅓ strikes (net short 2 lots/side) — a fast 0DTE trend move loses faster than the ATM longs gain, and the margin-based stop can gap through. Expiry-day gamma is the whole game here; size the sets accordingly.",
+    links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=iorriHcOpdU" }],
   },
   {
     id: "momentum_theta_gainer_intra",
@@ -363,6 +391,16 @@ export default function StrategiesPage() {
                 <code className="ml-auto text-[11px] text-slate-500">{s.id}</code>
               </div>
               <p className="text-sm text-slate-300 mt-1">{s.summary}</p>
+              {s.links && (
+                <div className="mt-1 flex flex-wrap gap-3">
+                  {s.links.map((l) => (
+                    <a key={l.url} href={l.url} target="_blank" rel="noreferrer"
+                      className="text-xs text-[var(--accent-deep)] underline underline-offset-2">
+                      {l.label} ↗
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
             <Section title="Structure" items={s.structure} />
             <Section title="Entry" items={s.entry} />

@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from .call_put_ratio_expiry import CallPutRatioExpiryStrategy
 from .call_ratio_monthly import (
     BatmanRatioMonthlyStrategy,
     CallRatioMonthlyStrategy,
@@ -42,6 +43,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     BatmanRatioMonthlyStrategy.strategy_id: BatmanRatioMonthlyStrategy,
     HniWeeklyStrategy.strategy_id: HniWeeklyStrategy,
     StaggeredCoveredCallStrategy.strategy_id: StaggeredCoveredCallStrategy,
+    CallPutRatioExpiryStrategy.strategy_id: CallPutRatioExpiryStrategy,
     Ema21MomentumStrategy.strategy_id: Ema21MomentumStrategy,
     MomentumThetaGainerIntra.strategy_id: MomentumThetaGainerIntra,
     CustomOptionsStrategy.strategy_id: CustomOptionsStrategy,

@@ -820,6 +820,20 @@ export interface MtgBtResult {
   trades?: MtgBtTrade[];
 }
 
+export interface CpRatioExpiryDeploy {
+  name: string;
+  underlyings: string[];
+  sets: Record<string, number>;
+  profit_target_pct: number;
+  stop_loss_pct: number;
+  ratio_tolerance_pct: number;
+  capital: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  auto: boolean;
+}
+
 export interface MomentumThetaDeploy {
   name: string;
   underlyings: string[];

@@ -248,6 +248,30 @@ class MtgBacktestRequest(BaseModel):
     broker_account_id: int | None = None
 
 
+class CpRatioExpiryDeploy(BaseModel):
+    """Deploy call_put_ratio_expiry: expiry-day-only 1:3 premium-ratio seller (buy ATM
+    straddle, sell 3× at the ⅓-premium strikes). Needs a live chain for strike selection,
+    so a broker quote source is required — cache has no live premiums at 09:20."""
+
+    name: str
+    notes: str | None = None
+    underlyings: list[str] = Field(default_factory=lambda: ["NIFTY"])
+    sets: dict[str, int] = Field(default_factory=dict)   # 1 set = buy1 + sell3 per side
+    entry_start: str = "09:20"
+    entry_end: str = "09:27"
+    eod_exit: str = "15:20"
+    profit_target_pct: float = 1.1      # % of margin deployed
+    stop_loss_pct: float = 1.0
+    ratio_tolerance_pct: float = 30.0
+    capital: float = 500_000
+    refresh_seconds: int = 15
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class MomentumThetaDeploy(BaseModel):
     """Deploy momentum_theta_gainer_intra: intraday 15-min SuperTrend(7,3) + daily-pivot
     ATM weekly option seller on index underlyings (NIFTY, SENSEX). SENSEX is live-only and

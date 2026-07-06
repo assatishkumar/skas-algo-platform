@@ -16,14 +16,15 @@ from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
+    CpRatioExpiryDeploy,
     DonchianAnalyzeRequest,
     DonchianDeploy,
     DonchianPortfolioRequest,
     EquityTradeDeploy,
     LiveStartRequest,
     MomentumThetaDeploy,
-    OptionTradeLeg,
     OptionsTradeDeploy,
+    OptionTradeLeg,
 )
 from skas_algo.api.routes.data import _live_adapter
 from skas_algo.api.routes.live import start_deployment
@@ -454,6 +455,51 @@ async def donchian_deploy(
         mode=body.mode,
         quote_source=body.quote_source,
         broker_account_id=body.broker_account_id,
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/options/cp-ratio-expiry/deploy")
+async def cp_ratio_expiry_deploy(
+    body: CpRatioExpiryDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the expiry-day 1:3 premium-ratio seller as one DERIV deployment."""
+    unders = [u.upper() for u in body.underlyings if u.strip()]
+    if not unders:
+        raise HTTPException(status_code=422, detail="pick at least one underlying")
+    if body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="this strategy picks strikes off the LIVE chain at 09:20 — "
+                   "deploy with a broker quote source (zerodha)",
+        )
+    params = {
+        "underlyings": unders,
+        "sets": {u: int(body.sets.get(u, 1) or 1) for u in unders},
+        "entry_start": body.entry_start,
+        "entry_end": body.entry_end,
+        "eod_exit": body.eod_exit,
+        "profit_target_pct": body.profit_target_pct,
+        "stop_loss_pct": body.stop_loss_pct,
+        "ratio_tolerance_pct": body.ratio_tolerance_pct,
+    }
+    req = LiveStartRequest(
+        strategy_id="call_put_ratio_expiry",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=unders[0],
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
         ignore_market_hours=body.ignore_market_hours,
         auto=body.auto,
     )

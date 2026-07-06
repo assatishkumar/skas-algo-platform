@@ -123,6 +123,14 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   gate — the strategy self-gates (15:20 + once-a-day latch that only engages AFTER bands
   computed, so a data hiccup doesn't burn the day). Margin model reads ≈2× real broker
   for the spread (no long-leg offset — ratio-family caveat).
+- **call_put_ratio_expiry** (expiry-day-only 1:3 premium-ratio, NIFTY Tue / SENSEX Thu):
+  buy ATM straddle 09:20-09:27, sell 3 lots/side at the strikes trading nearest ⅓ of each
+  ATM premium (LIVE-chain lookup; >30% tolerance miss → skip the day, `traded_day` guard);
+  exits +1.1% / −1% of `margin_base` or 15:20. `margin_base` is FROZEN at entry (broker
+  basket margin if available else model Σ shorts — source recorded; model reads ~2×
+  broker). Net short 2 lots/side beyond the ⅓ strikes — open-ended risk, stop is the only
+  guard. Deploy-only + broker quote source REQUIRED (strike selection needs live premiums;
+  no backtest by design — flat-vol BS would misplace the smile-driven ⅓ strikes).
 - **momentum_theta_gainer_intra** (intraday 15-min SuperTrend(7,3) + daily-pivot ATM weekly
   seller, NIFTY + SENSEX): builds its OWN 15-min candles from live spot ticks (none exist in
   any cache) and carries them in `export_state`; pivots (R1/S1) come from its own prior-day
