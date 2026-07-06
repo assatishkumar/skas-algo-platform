@@ -75,8 +75,10 @@ class CallPutRatioExpiryStrategy:
         self.entry_start = _hhmm(entry_start, time(9, 20))
         self.entry_end = _hhmm(entry_end, time(9, 27))
         self.eod_exit = _hhmm(eod_exit, time(15, 20))
-        self.profit_target_pct = float(profit_target_pct)
-        self.stop_loss_pct = float(stop_loss_pct)
+        # Whole percents of margin_base; instance names avoid the generic snapshot's
+        # fraction convention (see delta_neutral_monthly for the full note).
+        self.target_pct = float(profit_target_pct)
+        self.stop_pct = float(stop_loss_pct)
         self.ratio_divisor = float(ratio_divisor)
         self.ratio_tolerance_pct = float(ratio_tolerance_pct)
         self.sell_lots_per_set = int(sell_lots_per_set)
@@ -257,9 +259,9 @@ class CallPutRatioExpiryStrategy:
             except KeyError:
                 return []
             pnl += (cur - leg["entry"]) * leg["units"] * leg["dir"]
-        if pnl >= base * self.profit_target_pct / 100.0:
+        if pnl >= base * self.target_pct / 100.0:
             return self._exit_all(u, legs, "target")
-        if pnl <= -base * self.stop_loss_pct / 100.0:
+        if pnl <= -base * self.stop_pct / 100.0:
             return self._exit_all(u, legs, "stop")
         return []
 
@@ -267,6 +269,22 @@ class CallPutRatioExpiryStrategy:
         sigs = [Signal(leg["symbol"], SignalAction.EXIT_ALL, reason=reason) for leg in legs]
         self.legs[u] = []
         return sigs
+
+    # ------------------------------------------------------------ snapshot hooks
+    def exit_amounts(self) -> tuple[float | None, float | None]:
+        bases = [b for u, b in self.margin_base.items()
+                 if b > 0 and self.margin_source.get(u) == "broker"]
+        if not bases:
+            return None, None
+        base = sum(bases)
+        return base * self.target_pct / 100.0, base * self.stop_pct / 100.0
+
+    def exit_rules(self) -> list[str]:
+        return [
+            f"Book profit at +{self.target_pct:g}% of broker margin",
+            f"Stop out at −{self.stop_pct:g}% of broker margin",
+            f"Hard exit {self.eod_exit.strftime('%H:%M')} — never carried",
+        ]
 
     # --------------------------------------------------------------- monitor
     def basket_status(self, market, portfolio, margin: float | None = None) -> dict:
@@ -280,8 +298,8 @@ class CallPutRatioExpiryStrategy:
                 "legs": [dict(leg) for leg in self.legs[u]],
                 "margin_base": self.margin_base.get(u),
                 "margin_source": self.margin_source.get(u),
-                "target_amt": (self.margin_base.get(u) or 0) * self.profit_target_pct / 100,
-                "stop_amt": (self.margin_base.get(u) or 0) * self.stop_loss_pct / 100,
+                "target_amt": (self.margin_base.get(u) or 0) * self.target_pct / 100,
+                "stop_amt": (self.margin_base.get(u) or 0) * self.stop_pct / 100,
             })
         return {"kind": "cp_ratio_expiry", "names": names}
 

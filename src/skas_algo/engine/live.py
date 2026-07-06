@@ -464,6 +464,12 @@ class LiveSession:
         introspection of the common exit attributes). Empty when none are configured —
         the run then simply manages to expiry."""
         s = self.strategy
+        own = getattr(s, "exit_rules", None)
+        if own is not None:
+            try:
+                return list(own())
+            except Exception:  # pragma: no cover - display-only
+                return []
         rules: list[str] = []
         pt = getattr(s, "profit_target_pct", None)
         sl = getattr(s, "stop_loss_pct", None)
@@ -489,6 +495,15 @@ class LiveSession:
 
     def _exit_amounts(self) -> tuple[float | None, float | None]:
         strat = self.strategy
+        # Strategies with their own threshold bases (delta_neutral, cp_ratio_expiry:
+        # % of FROZEN broker margin, stored as whole percents) supply exact rupee
+        # amounts — the generic fraction×base math below would misread their units.
+        own = getattr(strat, "exit_amounts", None)
+        if own is not None:
+            try:
+                return own()
+            except Exception:  # pragma: no cover - display-only, never break snapshot
+                return None, None
         pt = getattr(strat, "profit_target_pct", None)
         sl = getattr(strat, "stop_loss_pct", None)
         if pt is None and sl is None:

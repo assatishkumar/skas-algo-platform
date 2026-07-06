@@ -86,8 +86,12 @@ class DeltaNeutralMonthlyStrategy:
         self.force_entry = bool(force_entry)
         self.adjust_threshold_pct = float(adjust_threshold_pct)
         self.adjust_cooldown_min = int(adjust_cooldown_min)
-        self.profit_target_pct = float(profit_target_pct)
-        self.stop_loss_pct = float(stop_loss_pct)
+        # Whole-percent units (2.5 = 2.5% of margin_base). Deliberately NOT named
+        # profit_target_pct/stop_loss_pct on the instance: the generic snapshot
+        # introspection treats those as fractions (ratio-family convention) and would
+        # display 250% / ₹25L (bit run 203). Constructor kwarg names are unchanged (§1).
+        self.target_pct = float(profit_target_pct)
+        self.stop_pct = float(stop_loss_pct)
         self.r = float(risk_free_rate)
         self.min_leg_oi = int(min_leg_oi)
         self.initial_capital = initial_capital
@@ -313,9 +317,9 @@ class DeltaNeutralMonthlyStrategy:
             self.margin_source = "broker"
             self._refreeze = False
         if self.margin_source == "broker" and self.margin_base > 0:
-            if pnl >= self.margin_base * self.profit_target_pct / 100.0:
+            if pnl >= self.margin_base * self.target_pct / 100.0:
                 return self._exit_all(live, "target")
-            if self.stop_loss_pct > 0 and pnl <= -self.margin_base * self.stop_loss_pct / 100.0:
+            if self.stop_pct > 0 and pnl <= -self.margin_base * self.stop_pct / 100.0:
                 return self._exit_all(live, "stop")
 
         if self.phase != "strangle":
@@ -422,6 +426,23 @@ class DeltaNeutralMonthlyStrategy:
         self.cycle_expiry = None
         return sigs
 
+    # ------------------------------------------------------------ snapshot hooks
+    def exit_amounts(self) -> tuple[float | None, float | None]:
+        """Rupee target/stop for the tile — from the FROZEN broker margin only."""
+        if self.margin_source != "broker" or self.margin_base <= 0:
+            return None, None
+        target = self.margin_base * self.target_pct / 100.0
+        stop = self.margin_base * self.stop_pct / 100.0 if self.stop_pct > 0 else None
+        return target, stop
+
+    def exit_rules(self) -> list[str]:
+        rules = [f"Book profit at +{self.target_pct:g}% of broker margin"]
+        if self.stop_pct > 0:
+            rules.append(f"Stop out at −{self.stop_pct:g}% of broker margin")
+        rules.append(f"Adjust when |CE−PE| > {self.adjust_threshold_pct:g}% of combined "
+                     "(cheap side rolls; straddle max → iron fly)")
+        return rules
+
     # --------------------------------------------------------------- monitor
     def basket_status(self, market, portfolio, margin: float | None = None) -> dict:
         out: dict = {
@@ -430,9 +451,9 @@ class DeltaNeutralMonthlyStrategy:
             "legs": [dict(leg) for leg in self.legs],
             "margin_base": self.margin_base,
             "margin_source": self.margin_source,
-            "target_amt": self.margin_base * self.profit_target_pct / 100.0,
-            "stop_amt": (self.margin_base * self.stop_loss_pct / 100.0)
-            if self.stop_loss_pct > 0 else None,
+            "target_amt": self.margin_base * self.target_pct / 100.0,
+            "stop_amt": (self.margin_base * self.stop_pct / 100.0)
+            if self.stop_pct > 0 else None,
             "adjust_count": self.adjust_count,
             "cycle_expiry": self.cycle_expiry,
         }
