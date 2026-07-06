@@ -10,6 +10,7 @@ import LiveEquityTrades from "../components/LiveEquityTrades";
 import OptionMetricsPanel from "../components/OptionMetricsPanel";
 import { formatInr } from "../lib/format";
 import { isOptionsStrategy } from "../lib/params";
+import { LIVE_CATEGORIES, liveCategoryOf } from "../lib/strategyMeta";
 import { compareOptionSymbol, formatOptionSymbol } from "../lib/symbol";
 import { KebabMenu, Sparkline, Segmented, Tag, type MenuItem } from "../components/redesign";
 import type {
@@ -1234,15 +1235,15 @@ function DeploymentTile({
   );
 }
 
-function PortfolioBar({ deployments }: { deployments: Deployment[] }) {
-  // Split the summary by instrument class — equity and options book/risk differently (options use
-  // margin + net credit, not deployed capital), so a combined total mixes apples and oranges.
+function HeroStrip({ deployments }: { deployments: Deployment[] }) {
+  // Five compact KPI cards with an options/equity split subline (design handoff live2):
+  // replaces the old two-block summary — same numbers, one row. Every figure is a sum of
+  // the deployments visible under the current filter, so it always reconciles.
   const isOpt = (d: Deployment) =>
     d.instrument_class === "DERIV" || isOptionsStrategy(d.strategy_id);
   const agg = (ds: Deployment[]) =>
     ds.reduce(
       (acc, d) => {
-        acc.n += 1;
         acc.equity += d.metrics?.equity ?? 0;
         acc.invested += d.metrics?.invested ?? 0;
         acc.margin += d.metrics?.margin_used ?? 0;
@@ -1251,40 +1252,52 @@ function PortfolioBar({ deployments }: { deployments: Deployment[] }) {
         acc.positions += d.metrics?.open_positions ?? 0;
         return acc;
       },
-      { n: 0, equity: 0, invested: 0, margin: 0, realized: 0, upnl: 0, positions: 0 },
+      { equity: 0, invested: 0, margin: 0, realized: 0, upnl: 0, positions: 0 },
     );
-  const eq = agg(deployments.filter((d) => !isOpt(d)));
   const opt = agg(deployments.filter(isOpt));
-
-  const Kpi = ({ label, value, tone }: { label: string; value: string; tone?: number }) => (
-    <div>
-      <div className="text-[var(--muted)] text-xs">{label}</div>
-      <div className={`text-[22px] font-bold font-['Space_Grotesk'] tabular-nums ${tone == null ? "text-[var(--strong)]" : tone >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{value}</div>
-    </div>
-  );
-  const Row = ({ title, a, deployedLabel, deployedValue }: {
-    title: string; a: ReturnType<typeof agg>; deployedLabel: string; deployedValue: string;
-  }) => (
-    <div>
-      <div className="mb-2.5 text-[13px] font-semibold text-[var(--strong)]">
-        {title}{" "}
-        <span className="font-normal text-[var(--muted)]">· {a.n} {a.n === 1 ? "deployment" : "deployments"}</span>
-      </div>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
-        <Kpi label="Total equity" value={formatInr(a.equity)} />
-        <Kpi label={deployedLabel} value={deployedValue} />
-        <Kpi label="Realized P&L" value={formatInr(a.realized)} tone={a.realized} />
-        <Kpi label="Unrealized P&L" value={formatInr(a.upnl)} tone={a.upnl} />
-        <Kpi label="Open positions" value={String(a.positions)} />
-      </div>
+  const eq = agg(deployments.filter((d) => !isOpt(d)));
+  const signCls = (v: number) => (v >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]");
+  const short = (v: number) => {
+    const a = Math.abs(v);
+    const s = a >= 1e7 ? `₹${(a / 1e7).toFixed(2)} Cr` : a >= 1e5 ? `₹${(a / 1e5).toFixed(1)}L` : `₹${Math.round(a).toLocaleString("en-IN")}`;
+    return v < 0 ? `−${s}` : s;
+  };
+  const Card = ({ label, value, tone, sub }: { label: string; value: string; tone?: number; sub: React.ReactNode }) => (
+    <div className="rounded-[16px] border border-[var(--border)] bg-[var(--card)] px-4 py-3.5">
+      <div className="text-[12.5px] font-bold text-[var(--muted)]">{label}</div>
+      <div className={`mt-0.5 whitespace-nowrap font-['Space_Grotesk'] text-[23px] font-bold tabular-nums ${tone == null ? "text-[var(--strong)]" : signCls(tone)}`}>{value}</div>
+      <div className="mt-0.5 text-[11.5px] text-[var(--faint)]">{sub}</div>
     </div>
   );
   return (
-    <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-5 space-y-5">
-      {eq.n > 0 && <Row title="Equity" a={eq} deployedLabel="Deployed" deployedValue={formatInr(eq.invested)} />}
-      {eq.n > 0 && opt.n > 0 && <div className="border-t border-[var(--border)]" />}
-      {opt.n > 0 && <Row title="Options" a={opt} deployedLabel="Margin used" deployedValue={formatInr(opt.margin)} />}
+    <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-[1.15fr_1.15fr_1fr_1fr_0.85fr]">
+      <Card label="Total equity" value={formatInr(opt.equity + eq.equity)}
+        sub={<>options {short(opt.equity)} · equity {short(eq.equity)}</>} />
+      <Card label="Capital in play" value={formatInr(opt.margin + eq.invested)}
+        sub={<>margin {short(opt.margin)} · deployed {short(eq.invested)}</>} />
+      <Card label="Realized P&L" value={formatInr(opt.realized + eq.realized)} tone={opt.realized + eq.realized}
+        sub={<>options <span className={signCls(opt.realized)}>{short(opt.realized)}</span> · equity <span className={signCls(eq.realized)}>{short(eq.realized)}</span></>} />
+      <Card label="Unrealized P&L" value={formatInr(opt.upnl + eq.upnl)} tone={opt.upnl + eq.upnl}
+        sub={<>options <span className={signCls(opt.upnl)}>{short(opt.upnl)}</span> · equity <span className={signCls(eq.upnl)}>{short(eq.upnl)}</span></>} />
+      <Card label="Open positions" value={String(opt.positions + eq.positions)}
+        sub={<>{opt.positions} options · {eq.positions} equity</>} />
     </div>
+  );
+}
+
+function CategoryIcon({ d, size = 17 }: { d: string; size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {d.split("|").map((seg, i) => {
+        if (seg.startsWith("pl:")) return <polyline key={i} points={seg.slice(3)} />;
+        if (seg.startsWith("c:")) {
+          const [cx, cy, r] = seg.slice(2).split(",").map(Number);
+          return <circle key={i} cx={cx} cy={cy} r={r} />;
+        }
+        return <path key={i} d={seg} />;
+      })}
+    </svg>
   );
 }
 
@@ -1345,74 +1358,135 @@ export default function LivePage() {
           <Link to="/live/new" className="rounded-[11px] bg-[var(--ft)] text-white px-4 py-2 text-sm font-semibold">+ Deploy new strategy</Link>
         </div>
 
-        {filtered.length > 0 && <PortfolioBar deployments={filtered} />}
+        {filtered.length > 0 && <HeroStrip deployments={filtered} />}
 
         {/* Filters */}
-        <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
           <Segmented value={tab} onChange={setTab} options={[{ value: "active", label: "Active" }, { value: "stopped", label: "Stopped" }, { value: "archived", label: "Archived" }]} />
+          <span className="text-xs text-[var(--muted)]">
+            {filtered.length} deployment{filtered.length === 1 ? "" : "s"} · {groups.length} strateg{groups.length === 1 ? "y" : "ies"}
+          </span>
           <input
             className="rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-3 py-1.5 text-sm w-full sm:w-64 text-[var(--strong)] placeholder:text-[var(--faint)] focus:outline-none focus:border-[var(--accent)]"
             placeholder="Search name / strategy / notes"
+            style={{ marginLeft: "auto" }}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
 
         {filtered.length === 0 ? (
-          <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-6 text-[var(--muted)]">
-            {tab === "active" ? (
+          <div className={`rounded-[18px] border bg-[var(--card)] p-6 text-[var(--muted)] ${mode === "live" ? "border-dashed border-[var(--field-border)]" : "border-[var(--border)]"}`}>
+            {mode === "live" && tab === "active" ? (
+              <>No live-money deployments yet — promote a paper deployment via ⋯ → Go LIVE once you trust it.</>
+            ) : tab === "active" ? (
               <>No active {mode} deployments. <Link to="/live/new" className="text-[var(--accent-deep)] hover:underline">Deploy a strategy →</Link></>
             ) : (
               `No ${tab} ${mode} deployments.`
             )}
           </div>
         ) : (
-          <div className="space-y-3">
-            {groups.map(([sid, deps]) => {
-              const open = q ? true : (openGroups[sid] ?? false); // search force-expands
-              const upnl = deps.reduce((s, d) => s + (d.metrics?.unrealized_pnl ?? 0), 0);
-              const realized = deps.reduce((s, d) => s + (d.metrics?.realized_pnl ?? 0), 0);
-              const positions = deps.reduce((s, d) => s + (d.metrics?.open_positions ?? 0), 0);
-              const isOpt = deps.some((d) => d.instrument_class === "DERIV" || isOptionsStrategy(d.strategy_id));
+          <div className="space-y-[18px]">
+            {LIVE_CATEGORIES.map((cat) => {
+              const catGroups = groups.filter(([sid, deps]) =>
+                liveCategoryOf(sid, deps[0]?.instrument_class) === cat.id);
+              if (catGroups.length === 0) return null;
+              const catDeps = catGroups.flatMap(([, deps]) => deps);
+              const catAgg = catDeps.reduce(
+                (a, d) => {
+                  a.realized += d.metrics?.realized_pnl ?? 0;
+                  a.upnl += d.metrics?.unrealized_pnl ?? 0;
+                  a.open += d.metrics?.open_positions ?? 0;
+                  a.capital += cat.id === "equity"
+                    ? (d.metrics?.invested ?? 0)
+                    : (d.metrics?.margin_used ?? 0);
+                  return a;
+                },
+                { realized: 0, upnl: 0, open: 0, capital: 0 },
+              );
+              const Mini = ({ label, value, tone }: { label: string; value: string; tone?: number }) => (
+                <div className="text-right">
+                  <div className="text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--faint)]">{label}</div>
+                  <div className={`whitespace-nowrap font-['Space_Grotesk'] text-[14.5px] font-semibold tabular-nums ${tone == null ? "text-[var(--strong)]" : tone >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{value}</div>
+                </div>
+              );
               return (
-                <div key={sid}>
-                  <button
-                    onClick={() => setOpenGroups((g) => ({ ...g, [sid]: !(g[sid] ?? false) }))}
-                    className="w-full flex flex-col items-start gap-1.5 md:flex-row md:items-center md:justify-between md:gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--card)] px-4 py-3 hover:bg-[var(--row-hover)]"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="text-[var(--muted)] text-xs w-3 shrink-0">{open ? "▾" : "▸"}</span>
-                      <span className="font-semibold font-['Space_Grotesk'] truncate text-[var(--strong)]">{sid}</span>
-                      {isOpt && <Tag bg="var(--opt-bg)" color="var(--opt-text)">OPT</Tag>}
-                      <Tag>{deps.length}</Tag>
+                <div key={cat.id} className="rounded-[18px] border border-[var(--border)] bg-[var(--card)]">
+                  {/* category header — own top rounding; no overflow:hidden on the card
+                      so the deployment tiles' ⋯ menus can escape it (handoff gotcha) */}
+                  <div className="flex flex-wrap items-center gap-3 rounded-t-[17px] border-b border-[var(--divider)] bg-[var(--stat)] px-5 py-3.5">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-[11px]"
+                      style={{ background: cat.bg, color: cat.fg }}>
+                      <CategoryIcon d={cat.icon} />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-['Space_Grotesk'] text-[17px] font-bold">{cat.name}</span>
+                        <Tag>{catDeps.length} deployment{catDeps.length === 1 ? "" : "s"}</Tag>
+                      </div>
+                      <div className="text-[12px] text-[var(--faint)]">{cat.desc}</div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs md:flex-nowrap md:gap-4 md:shrink-0">
-                      <span className="text-[var(--muted)]">
-                        Realized{" "}
-                        <span className={`tabular-nums font-medium ${realized >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{formatInr(realized)}</span>
-                      </span>
-                      <span className="text-[var(--muted)]">
-                        Unrealized{" "}
-                        <span className={`tabular-nums font-medium ${upnl >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{formatInr(upnl)}</span>
-                      </span>
-                      <span className="text-[var(--muted)]">{positions} open</span>
+                    <div className="ml-auto flex items-center gap-5">
+                      <Mini label="Capital" value={formatInr(catAgg.capital)} />
+                      <Mini label="Realized" value={formatInr(catAgg.realized)} tone={catAgg.realized} />
+                      <Mini label="Unrealized" value={formatInr(catAgg.upnl)} tone={catAgg.upnl} />
+                      <Mini label="Open" value={String(catAgg.open)} />
                     </div>
-                  </button>
-                  {open && (
-                    <div className="grid gap-3 md:grid-cols-2 mt-3">
-                      {deps.map((dep) => (
-                        <DeploymentTile
-                          key={dep.run_id}
-                          dep={dep}
-                          snapshot={snapshots[dep.run_id]}
-                          version={versions[dep.run_id] ?? 0}
-                          expanded={expanded === dep.run_id}
-                          onToggle={() => setExpanded((prev) => (prev === dep.run_id ? null : dep.run_id))}
-                          onChanged={onChanged}
-                        />
-                      ))}
-                    </div>
-                  )}
+                  </div>
+                  {/* strategy rows */}
+                  {catGroups.map(([sid, deps], gi) => {
+                    const open = q ? true : (openGroups[sid] ?? false); // search force-expands
+                    const upnl = deps.reduce((s2, d) => s2 + (d.metrics?.unrealized_pnl ?? 0), 0);
+                    const realized = deps.reduce((s2, d) => s2 + (d.metrics?.realized_pnl ?? 0), 0);
+                    const positions = deps.reduce((s2, d) => s2 + (d.metrics?.open_positions ?? 0), 0);
+                    const isOpt = deps.some((d) => d.instrument_class === "DERIV" || isOptionsStrategy(d.strategy_id));
+                    const last = gi === catGroups.length - 1;
+                    return (
+                      <div key={sid} className={`${last ? "" : "border-b border-[var(--divider)]"} ${open ? "bg-[var(--row-hover)]" : ""}`}>
+                        <button
+                          onClick={() => setOpenGroups((g) => ({ ...g, [sid]: !(g[sid] ?? false) }))}
+                          className={`w-full flex flex-col items-start gap-1.5 md:flex-row md:items-center md:justify-between md:gap-3 px-5 py-3 hover:bg-[var(--row-hover)] ${last && !open ? "rounded-b-[17px]" : ""}`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span className="text-[var(--muted)] text-xs w-3 shrink-0 transition-transform" style={{ transform: open ? "rotate(90deg)" : undefined }}>▸</span>
+                            <span className="font-semibold font-['Space_Grotesk'] text-[15px] truncate text-[var(--strong)]">{sid}</span>
+                            {isOpt
+                              ? <Tag bg="var(--opt-bg)" color="var(--opt-text)">OPT</Tag>
+                              : <Tag bg="var(--ok-bg)" color="var(--ok-text)">EQ</Tag>}
+                            <Tag>{deps.length}</Tag>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs md:flex-nowrap md:gap-4 md:shrink-0">
+                            <span className="text-[var(--muted)] whitespace-nowrap">
+                              Realized{" "}
+                              <span className={`tabular-nums font-medium ${realized >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{formatInr(realized)}</span>
+                            </span>
+                            <span className="text-[var(--muted)] whitespace-nowrap">
+                              Unrealized{" "}
+                              <span className={`tabular-nums font-medium ${upnl >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{formatInr(upnl)}</span>
+                            </span>
+                            <span className="text-[var(--muted)]">{positions} open</span>
+                          </div>
+                        </button>
+                        {open && (
+                          <div className={`bg-[var(--stat)] px-4 pb-4 pt-1 md:px-6 ${last ? "rounded-b-[17px]" : ""}`}>
+                            <div className="grid gap-3 md:grid-cols-2 mt-2">
+                              {deps.map((dep) => (
+                                <DeploymentTile
+                                  key={dep.run_id}
+                                  dep={dep}
+                                  snapshot={snapshots[dep.run_id]}
+                                  version={versions[dep.run_id] ?? 0}
+                                  expanded={expanded === dep.run_id}
+                                  onToggle={() => setExpanded((prev) => (prev === dep.run_id ? null : dep.run_id))}
+                                  onChanged={onChanged}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}

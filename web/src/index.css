@@ -87,6 +87,10 @@ input[type="number"] {
   --track: #edf1f0; --ghost: #ffffff; --overlay: rgba(15,30,27,.42);
   /* Brokers redesign (design handoff): focus/armed rings + deep danger. */
   --accent-ring: rgba(18,179,164,.16); --danger-ring: rgba(217,84,74,.12); --danger-deep: #b23d34;
+  /* Docs redesign (design handoff): docs-purple accent + section colors + rose bias. */
+  --doc: #6a4fd0; --doc-bg: #efebfd; --doc-border: #e0d8fb; --doc-ring: rgba(106,79,208,.16);
+  --rose-bg: #fdeceb; --rose-text: #c0483d;
+  --sec-struct: #6a4fd0; --sec-entry: #0f9d63; --sec-exit: #12b3a4; --sec-risk: #b07d10;
 }
 .dark {
   --page: #0c1a18; --card: #142926; --border: #24403b; --strong: #f1f6f5; --muted: #92aaa4;
@@ -98,6 +102,9 @@ input[type="number"] {
   --opt-bg: rgba(139,108,240,.20); --opt-text: #b39cf5; --atm: #26352b;
   --track: #1c322e; --ghost: #142926; --overlay: rgba(0,0,0,.58);
   --accent-ring: rgba(21,194,178,.22); --danger-ring: rgba(240,118,106,.18); --danger-deep: #f0766a;
+  --doc: #b39cf5; --doc-bg: rgba(139,108,240,.18); --doc-border: #3a3466; --doc-ring: rgba(139,108,240,.28);
+  --rose-bg: rgba(240,118,106,.16); --rose-text: #f0a89f;
+  --sec-struct: #b39cf5; --sec-entry: #34d399; --sec-exit: #15c2b2; --sec-risk: #f0bd5e;
 }
 
 /* Donchian detail drawer slide-in (transform only — resting state fully opaque). */
