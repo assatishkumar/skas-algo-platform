@@ -248,6 +248,32 @@ class MtgBacktestRequest(BaseModel):
     broker_account_id: int | None = None
 
 
+class DeltaNeutralDeploy(BaseModel):
+    """Deploy delta_neutral_monthly: 18Δ monthly strangle (BANKNIFTY default) with
+    premium-rebalance rolls → straddle cap → iron fly. Live-chain-driven (delta solve +
+    premium-matched rolls) → broker quote source required; no backtest (BANKNIFTY has
+    ~no cached chain history)."""
+
+    name: str
+    notes: str | None = None
+    underlying: str = "BANKNIFTY"
+    lots: int = 1
+    target_delta: float = 0.18
+    entry_time: str = "11:00"
+    force_entry: bool = False           # enter next window tick instead of waiting for entry day
+    adjust_threshold_pct: float = 40.0
+    adjust_cooldown_min: int = 15
+    profit_target_pct: float = 2.5      # % of margin deployed
+    stop_loss_pct: float = 0.0          # 0 = off (spec-faithful)
+    capital: float = 1_000_000
+    refresh_seconds: int = 20
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class CpRatioExpiryDeploy(BaseModel):
     """Deploy call_put_ratio_expiry: expiry-day-only 1:3 premium-ratio seller (buy ATM
     straddle, sell 3× at the ⅓-premium strikes). Needs a live chain for strike selection,

@@ -820,6 +820,23 @@ export interface MtgBtResult {
   trades?: MtgBtTrade[];
 }
 
+export interface DeltaNeutralDeploy {
+  name: string;
+  underlying: string;
+  lots: number;
+  target_delta: number;
+  force_entry: boolean;
+  adjust_threshold_pct: number;
+  adjust_cooldown_min: number;
+  profit_target_pct: number;
+  stop_loss_pct: number;
+  capital: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  auto: boolean;
+}
+
 export interface CpRatioExpiryDeploy {
   name: string;
   underlyings: string[];

@@ -45,6 +45,7 @@ import type {
   Trade,
   Universe,
   CpRatioExpiryDeploy,
+  DeltaNeutralDeploy,
   MomentumThetaDeploy,
   MtgBtResult,
   WatchRow,
@@ -179,6 +180,8 @@ export const api = {
     request<DonchianPanel>("/trade/options/donchian/portfolio", { method: "POST", body: JSON.stringify(body) }),
   donchianDeploy: (body: DonchianDeploy) =>
     request<LiveRunSnapshot>("/trade/options/donchian/deploy", { method: "POST", body: JSON.stringify(body) }),
+  deltaNeutralDeploy: (body: DeltaNeutralDeploy) =>
+    request<LiveRunSnapshot>("/trade/options/delta-neutral/deploy", { method: "POST", body: JSON.stringify(body) }),
   cpRatioExpiryDeploy: (body: CpRatioExpiryDeploy) =>
     request<LiveRunSnapshot>("/trade/options/cp-ratio-expiry/deploy", { method: "POST", body: JSON.stringify(body) }),
   momentumThetaDeploy: (body: MomentumThetaDeploy) =>

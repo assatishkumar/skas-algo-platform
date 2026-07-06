@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import OptionTradeBuilder from "../components/trade/OptionTradeBuilder";
 import EquityTradeBuilder from "../components/trade/EquityTradeBuilder";
 import CpRatioExpiryBuilder from "../components/trade/CpRatioExpiryBuilder";
+import DeltaNeutralBuilder from "../components/trade/DeltaNeutralBuilder";
 import MomentumThetaBuilder from "../components/trade/MomentumThetaBuilder";
 import FibRetPage from "./FibRetPage";
 import DonchianStranglePage from "./DonchianStranglePage";
@@ -24,7 +25,7 @@ export default function TradePage() {
     else p.delete("tab");
     setParams(p, { replace: true });
   };
-  const [builderTab, setBuilderTab] = useState<"option" | "equity" | "intraday" | "cpre">("option");
+  const [builderTab, setBuilderTab] = useState<"option" | "equity" | "intraday" | "cpre" | "dnm">("option");
   const [screener, setScreener] = useState("fibret");
 
   return (
@@ -38,12 +39,12 @@ export default function TradePage() {
         {top === "builder" ? (
           <div className="space-y-3">
             <div className="flex items-center gap-3 flex-wrap">
-              <Segmented value={builderTab} onChange={setBuilderTab} options={[{ value: "option", label: "Option" }, { value: "equity", label: "Equity" }, { value: "intraday", label: "Intraday theta" }, { value: "cpre", label: "CP ratio expiry" }]} />
+              <Segmented value={builderTab} onChange={setBuilderTab} options={[{ value: "option", label: "Option" }, { value: "equity", label: "Equity" }, { value: "intraday", label: "Intraday theta" }, { value: "cpre", label: "CP ratio expiry" }, { value: "dnm", label: "Delta neutral" }]} />
               <span className="text-sm text-[var(--muted)]">
                 Build a position, set target / stop-loss, and deploy it live (paper or real). It runs and reports like any deployment on the Live page.
               </span>
             </div>
-            {builderTab === "option" ? <OptionTradeBuilder /> : builderTab === "equity" ? <EquityTradeBuilder /> : builderTab === "intraday" ? <MomentumThetaBuilder /> : <CpRatioExpiryBuilder />}
+            {builderTab === "option" ? <OptionTradeBuilder /> : builderTab === "equity" ? <EquityTradeBuilder /> : builderTab === "intraday" ? <MomentumThetaBuilder /> : builderTab === "cpre" ? <CpRatioExpiryBuilder /> : <DeltaNeutralBuilder />}
           </div>
         ) : (
           <div className="space-y-4">

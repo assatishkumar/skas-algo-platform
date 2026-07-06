@@ -3,6 +3,10 @@ import { formatInr } from "./format";
 // Human labels + a sensible display order for backtest input parameters.
 const LABELS: Record<string, string> = {
   ema_period: "EMA period",
+  target_delta: "Target delta",
+  adjust_threshold_pct: "Adjust threshold %",
+  adjust_cooldown_min: "Adjust cooldown (min)",
+  force_entry: "Force entry",
   width_min: "Spread width min (pts)",
   width_max: "Spread width max (pts)",
   credit_min: "Net credit min (₹)",

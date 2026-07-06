@@ -131,6 +131,15 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   broker). Net short 2 lots/side beyond the ⅓ strikes — open-ended risk, stop is the only
   guard. Deploy-only + broker quote source REQUIRED (strike selection needs live premiums;
   no backtest by design — flat-vol BS would misplace the smile-driven ⅓ strikes).
+- **delta_neutral_monthly** (18Δ BANKNIFTY monthly strangle): entry expiry+2 TRADING days
+  ~11:00 (force_entry deploy flag skips the wait); adjustment rule is the spec's EXAMPLE,
+  not its prose — when |CE−PE| > 40% of (CE+PE), the CHEAP side rolls to the strike whose
+  LTP matches the rich side, hard-capped at the other strike (straddle max, never
+  crossing); straddle → breakeven hedges (K ± combined) in the SAME decision → ironfly =
+  terminal (adjustments stop). margin_base frozen at entry AND re-frozen after every
+  roll/hedge (broker-else-model); profit 2.5% of it, stop param default OFF; recurring
+  monthly (done_expiry gates same-month re-entry). Deploy-only + broker source required
+  (live-chain delta solve); NO backtest — BANKNIFTY chain history ≈ 2 months in cache.
 - **momentum_theta_gainer_intra** (intraday 15-min SuperTrend(7,3) + daily-pivot ATM weekly
   seller, NIFTY + SENSEX): builds its OWN 15-min candles from live spot ticks (none exist in
   any cache) and carries them in `export_state`; pivots (R1/S1) come from its own prior-day

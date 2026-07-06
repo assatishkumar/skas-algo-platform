@@ -91,6 +91,7 @@ const STRATEGIES: Rule[] = [
     ],
     risk:
       "Defined both ways: max loss ≈ (width − credit) × lot ≈ ₹12–27k per lot. Reported margin reads ~2× the real broker requirement (the model doesn't offset the long leg). Backtest 2020–2026: 142 spreads, 46.8% win, +17% on capital, 6.7% max DD.",
+    links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=f2S_S9NoJco" }],
   },
   {
     id: "call_put_ratio_expiry",
@@ -143,6 +144,31 @@ const STRATEGIES: Rule[] = [
     ],
     risk:
       "Naked short options intraday — gamma risk is real on expiry days even with the 15:20 flat rule. BS-priced backtest (2023–26) is net-negative on flip whipsaws; the strategy is in paper validation against real premiums before any live consideration.",
+  },
+  {
+    id: "delta_neutral_monthly",
+    name: "Delta Neutral Monthly",
+    kind: "Options",
+    bias: "Neutral · delta-balanced monthly strangle",
+    summary:
+      "Sell the ~18-delta PE and CE of the BANKNIFTY monthly two trading days after expiry (~11:00). When one side's premium runs 40% ahead of the combined premium, the cheap side rolls to the strike matching the rich side's LTP — capped at a straddle, which is immediately hedged at its breakevens into an iron fly. Books at 2.5% of margin deployed, then waits for the next cycle. Deploy-only: BANKNIFTY has no usable chain history, so validation is paper-first on real chains.",
+    structure: [
+      "SELL 1× PE at ~18Δ (monthly expiry)",
+      "SELL 1× CE at ~18Δ — deltas solved from each strike's own implied vol off the live chain.",
+      "Adjustment: cheap side rolls to the strike whose LTP ≈ the rich side's LTP; strikes never cross (straddle max).",
+      "BUY CE + PE hedges at the straddle's breakevens (K ± combined premium) once a straddle forms → iron fly, adjustments stop.",
+    ],
+    entry: [
+      "2nd trading day after the previous monthly expiry, between 11:00 and 15:00 (force-entry flag skips the wait on deploy day).",
+      "Recurring: re-enters every cycle automatically after an exit.",
+    ],
+    exit: [
+      "Profit target: +2.5% of margin deployed (frozen at entry, re-frozen after every adjustment).",
+      "Optional stop (% of margin, default off). Expiry settlement is the backstop.",
+    ],
+    risk:
+      "A NAKED short strangle until a straddle forms — rolls add credit but tighten the rolled side's breakeven, and a fast one-way month can roll several times before the iron fly caps risk. The 15-min adjustment cooldown limits churn; the model margin figure reads ~2× the real broker requirement until the broker number is available.",
+    links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=VYNEvDhcV1k" }],
   },
   {
     id: "hni_weekly",
@@ -402,6 +428,14 @@ const META: Record<string, Meta> = {
             ["Sells", "ATM weekly (0DTE ok)"], ["Cap", "3 entries/day"], ["Flat by", "15:20 — always"]],
     deployNote: "Deploy-only (SENSEX has no history). The NIFTY backtest lives on /research (BS premiums).",
     deployCta: { label: "Deploy Intraday theta", to: "/trade" },
+  },
+  delta_neutral_monthly: {
+    group: "Premium selling", biasKind: "neutral",
+    facts: [["Bias", "Neutral · delta-balanced"], ["Instrument", "BANKNIFTY monthly"],
+            ["Structure", "18Δ strangle → iron fly"], ["Adjust", ">40% premium imbalance"],
+            ["Target", "+2.5% of margin"], ["Entry", "Expiry+2d · ~11:00"]],
+    deployNote: "Deploy-only, broker quotes required (live-chain delta solve + premium-matched rolls). Paper-first.",
+    deployCta: { label: "Deploy Delta neutral", to: "/trade" },
   },
   hni_weekly: {
     group: "Ratio & income", biasKind: "income",

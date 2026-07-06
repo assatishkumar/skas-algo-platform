@@ -51,6 +51,7 @@ const CATEGORY_OF: Record<string, LiveCategoryId> = {
   short_premium: "positional",
   staggered_covered_call: "positional",
   "21_ema_momentum": "positional",
+  delta_neutral_monthly: "positional",
   supertrend_momentum: "equity",
   nifty_shop: "equity",
   custom_equity: "equity",

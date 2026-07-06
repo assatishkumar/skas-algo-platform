@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
     CpRatioExpiryDeploy,
+    DeltaNeutralDeploy,
     DonchianAnalyzeRequest,
     DonchianDeploy,
     DonchianPortfolioRequest,
@@ -455,6 +456,49 @@ async def donchian_deploy(
         mode=body.mode,
         quote_source=body.quote_source,
         broker_account_id=body.broker_account_id,
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/options/delta-neutral/deploy")
+async def delta_neutral_deploy(
+    body: DeltaNeutralDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the 18Δ delta-neutral monthly strangle as one DERIV deployment."""
+    if body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="delta selection and premium-matched rolls need the LIVE chain — "
+                   "deploy with a broker quote source (zerodha)",
+        )
+    params = {
+        "underlying": body.underlying.upper(),
+        "lots": body.lots,
+        "target_delta": body.target_delta,
+        "entry_time": body.entry_time,
+        "force_entry": body.force_entry,
+        "adjust_threshold_pct": body.adjust_threshold_pct,
+        "adjust_cooldown_min": body.adjust_cooldown_min,
+        "profit_target_pct": body.profit_target_pct,
+        "stop_loss_pct": body.stop_loss_pct,
+    }
+    req = LiveStartRequest(
+        strategy_id="delta_neutral_monthly",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=body.underlying.upper(),
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
         ignore_market_hours=body.ignore_market_hours,
         auto=body.auto,
     )
