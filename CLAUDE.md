@@ -136,8 +136,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   not its prose — when |CE−PE| > 40% of (CE+PE), the CHEAP side rolls to the strike whose
   LTP matches the rich side, hard-capped at the other strike (straddle max, never
   crossing); straddle → breakeven hedges (K ± combined) in the SAME decision → ironfly =
-  terminal (adjustments stop). margin_base frozen at entry AND re-frozen after every
-  roll/hedge (broker-else-model); profit 2.5% of it, stop param default OFF; recurring
+  terminal (adjustments stop). margin_base tracks the BROKER basket
+  margin ONLY (manager `set_broker_margin` push; thresholds WAIT while "pending";
+  re-frozen after every roll/hedge — the margin refresh throttle yields to a changed
+  book); profit 2.5% of it, stop param default OFF; recurring
   monthly (done_expiry gates same-month re-entry). Deploy-only + broker source required
   (live-chain delta solve); NO backtest — BANKNIFTY chain history ≈ 2 months in cache.
 - **momentum_theta_gainer_intra** (intraday 15-min SuperTrend(7,3) + daily-pivot ATM weekly

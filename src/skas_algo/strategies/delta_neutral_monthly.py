@@ -20,9 +20,12 @@ Design notes:
 - Live-chain-driven throughout (delta solve + premium-matched rolls) → deploy-only with
   a broker quote source; BANKNIFTY has ~no cached chain history, so there is no backtest
   (CLAUDE.md; paper-first like CPRE/momentum_theta).
-- ``margin_base`` (the rupee base for target/stop) is FROZEN at entry and RE-FROZEN
-  after every structural change (roll / hedge): broker basket margin when available,
-  else the deterministic model Σ over short legs (reads ~2× broker — source recorded).
+- ``margin_base`` (the rupee base for target/stop) tracks the BROKER basket margin ONLY
+  (owner rule — the model reads ~2× real and distorts the thresholds): the manager pushes
+  the throttled Zerodha basket margin via ``set_broker_margin``; the base freezes on the
+  first push after entry and re-freezes after every structural change (roll / hedge).
+  Until a broker number arrives the target/stop checks WAIT (monitor shows "pending") —
+  adjustments and the EOD/settle paths don't depend on it.
 - Adjustments are cooldown-gated (default 15 min) so a whippy day can't churn rolls
   every tick; the straddle is the hard floor regardless of count.
 """
@@ -34,7 +37,6 @@ from datetime import date, datetime, time, timedelta
 from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.options.instrument import make
-from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.engine.types import Signal, SignalAction
 
 from ._options_common import bad_close
@@ -101,10 +103,19 @@ class DeltaNeutralMonthlyStrategy:
         self.last_adjust_at: str | None = None
         self.adjust_count: int = 0
         self.entered_day: str | None = None   # entry attempted/made this day (once/day gate)
+        # Latest broker basket margin pushed by the live manager (NOT persisted — it
+        # re-arrives within a tick of recovery). margin_base freezes from this only.
+        self._broker_margin: float | None = None
+        self._refreeze = False  # structural change → re-base on the next push
 
     # ------------------------------------------------------------ live hooks
     def spot_symbols(self) -> list[str]:
         return [self.underlying]
+
+    def set_broker_margin(self, value: float) -> None:
+        """Manager push: the real broker basket margin for OUR current legs."""
+        if value and value > 0:
+            self._broker_margin = float(value)
 
     # ------------------------------------------------------------ cycle math
     def _listed_expiries(self, ctx, today: date) -> list[date]:
@@ -227,23 +238,13 @@ class DeltaNeutralMonthlyStrategy:
         return (best[1], best[2]) if best else None
 
     def _freeze_margin(self, ctx, spot: float) -> None:
-        """Freeze/refreeze the rupee base for target/stop: broker basket margin when the
-        live path can serve it, else the model sum over SHORT legs (~2× broker)."""
-        broker = None
-        margin_fn = getattr(ctx, "position_margin", None)
-        if margin_fn is not None:
-            try:
-                broker = margin_fn()
-            except Exception:  # pragma: no cover
-                broker = None
-        if broker:
-            self.margin_base = float(broker)
-            self.margin_source = "broker"
-        else:
-            p = MarginParams()
-            short_units = sum(leg["units"] for leg in self.legs if leg["dir"] < 0)
-            self.margin_base = float(short_option_margin(float(spot), short_units, 1, p))
-            self.margin_source = "model"
+        """Mark the rupee base for target/stop as awaiting the BROKER basket margin (the
+        only base we track — owner rule; the model reads ~2× real). The manager pushes
+        the number via set_broker_margin within ~a tick of the fill; _manage freezes it
+        then. spot/ctx kept for signature stability."""
+        self._refreeze = True
+        if self.margin_source != "broker":
+            self.margin_source = "pending"
 
     def _try_enter(self, ctx, now: datetime, today: date) -> list[Signal]:
         expiries = self._listed_expiries(ctx, today)
@@ -305,7 +306,13 @@ class DeltaNeutralMonthlyStrategy:
                 return []
             marks[leg["symbol"]] = cur
             pnl += (cur - leg["entry"]) * leg["units"] * leg["dir"]
-        if self.margin_base > 0:
+        # Freeze / re-freeze the threshold base from the latest BROKER margin push.
+        # (Also upgrades runs recovered with an old "model" base — e.g. run 203.)
+        if self._broker_margin and (self._refreeze or self.margin_source != "broker"):
+            self.margin_base = self._broker_margin
+            self.margin_source = "broker"
+            self._refreeze = False
+        if self.margin_source == "broker" and self.margin_base > 0:
             if pnl >= self.margin_base * self.profit_target_pct / 100.0:
                 return self._exit_all(live, "target")
             if self.stop_loss_pct > 0 and pnl <= -self.margin_base * self.stop_loss_pct / 100.0:
@@ -461,6 +468,8 @@ class DeltaNeutralMonthlyStrategy:
         self.done_expiry = state.get("done_expiry")
         self.margin_base = float(state.get("margin_base", 0.0))
         self.margin_source = state.get("margin_source", "")
+        if self.margin_source == "model":  # pre-broker-only state → re-base on next push
+            self._refreeze = True
         self.last_adjust_at = state.get("last_adjust_at")
         self.adjust_count = int(state.get("adjust_count", 0))
         self.entered_day = state.get("entered_day")

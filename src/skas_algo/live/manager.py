@@ -388,11 +388,17 @@ class LiveRun:
         symbols = self.session.portfolio.lot_symbols()
         if not symbols:
             self._margin = None
+            self._margin_symbols = []
             return
         now = datetime.now(IST)
-        if self._last_margin_at and (now - self._last_margin_at).total_seconds() < 60:
+        # The 1/min throttle yields to a CHANGED book (entry/roll/hedge just filled):
+        # broker-margin-tracked strategies freeze their thresholds off this number, so a
+        # structural change should re-base within a tick, not up to a minute later.
+        same_book = sorted(symbols) == getattr(self, "_margin_symbols", [])
+        if same_book and self._last_margin_at and (now - self._last_margin_at).total_seconds() < 60:
             return
         self._last_margin_at = now
+        self._margin_symbols = sorted(symbols)
         adapter = getattr(self.quote_source, "adapter", None)
         if adapter is None or not hasattr(adapter, "basket_margin"):
             return
@@ -412,6 +418,15 @@ class LiveRun:
             self._margin = m
             # Let the strategy's %-of-margin profit/stop targets apply to the real basket margin.
             self.session.set_margin_override(m)
+            # Broker-margin-tracked strategies (delta_neutral, cp_ratio_expiry) freeze
+            # their rupee thresholds off THIS number — push it (owner rule: broker margin
+            # only, never the model).
+            push = getattr(getattr(self.session, "strategy", None), "set_broker_margin", None)
+            if push is not None:
+                try:
+                    push(float(m))
+                except Exception:  # pragma: no cover - never break the loop
+                    logger.exception("set_broker_margin failed for run %s", self.run_id)
 
     def _maybe_record_greeks(self, db, snap: dict) -> None:
         """Sample the deployment's live greeks to history at most once a minute."""

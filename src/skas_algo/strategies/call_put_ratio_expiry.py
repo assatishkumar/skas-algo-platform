@@ -17,10 +17,11 @@ Design notes:
   the donchian 30Δ precedent): the ⅓-premium placement is smile-driven, which is also why
   there is deliberately NO backtest (flat-vol BS would systematically misplace the
   strikes; paper-first validation instead — CLAUDE.md).
-- **margin_base is FROZEN at entry**: the real broker basket margin when available
-  (that's what "margin deployed" means in practice), else the deterministic model sum
-  over the short legs (reads ~2× broker — the source travels with the number so the
-  monitor shows which one the day's rupee thresholds came from).
+- **margin_base tracks the BROKER basket margin ONLY** (owner rule — the model reads
+  ~2× real and would double the rupee thresholds): the live manager pushes the throttled
+  Zerodha basket margin via ``set_broker_margin`` within ~a tick of the fill; the base
+  freezes on the first push and the target/stop checks WAIT until then (the 15:20 exit
+  is time-based and never waits).
 - One entry per underlying per expiry day (`traded_day` guard, persisted); missing the
   window (deploy at 09:30, chain hiccups through 09:27) skips the day — never a late chase.
 """
@@ -31,7 +32,6 @@ from datetime import date, time
 
 from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size_for
 from skas_algo.engine.options.instrument import make
-from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.engine.types import Signal, SignalAction
 
 from ._options_common import bad_close
@@ -89,10 +89,20 @@ class CallPutRatioExpiryStrategy:
         self.margin_base: dict[str, float] = {u: 0.0 for u in self.underlyings}
         self.margin_source: dict[str, str] = {u: "" for u in self.underlyings}
         self.traded_day: dict[str, str | None] = {u: None for u in self.underlyings}
+        # Latest broker basket margin pushed by the live manager (not persisted; NOTE it
+        # covers the WHOLE book — with both underlyings entered the same day the base is
+        # shared, which only happens if NIFTY's Tuesday coincides with a SENSEX Thursday
+        # holiday-shift: acceptable).
+        self._broker_margin: float | None = None
 
     # ------------------------------------------------------------ live hooks
     def spot_symbols(self) -> list[str]:
         return list(self.underlyings)
+
+    def set_broker_margin(self, value: float) -> None:
+        """Manager push: the real broker basket margin for our current legs."""
+        if value and value > 0:
+            self._broker_margin = float(value)
 
     # ---------------------------------------------------------------- expiry
     def _is_expiry_day(self, ctx, u: str, today: date) -> bool:
@@ -189,27 +199,11 @@ class CallPutRatioExpiryStrategy:
             {"symbol": mk(pe_k, "PE"), "dir": -1, "units": sell_units, "entry": pe_prem},
         ]
 
-        # margin_base: broker basket margin when live (throttled, hedge-benefited),
-        # else the model sum over shorts. FROZEN for the day at entry.
-        broker = None
-        margin_fn = getattr(ctx, "position_margin", None)
-        spot = chain.get("spot") or atm
-        if margin_fn is not None:
-            try:
-                broker = margin_fn()
-            except Exception:  # pragma: no cover - monitoring-path hiccup
-                broker = None
-        if broker:
-            # position_margin() reflects the CURRENT book (empty pre-entry) — only trust a
-            # positive number; the model is the reliable pre-entry estimate.
-            self.margin_base[u] = float(broker)
-            self.margin_source[u] = "broker"
-        else:
-            p = MarginParams()
-            self.margin_base[u] = float(
-                short_option_margin(float(spot), sell_units, 1, p) * 2  # CE + PE shorts
-            )
-            self.margin_source[u] = "model"
+        # margin_base: BROKER basket margin only (owner rule). It isn't computable
+        # until the legs exist at the broker — the manager pushes it within ~a tick;
+        # target/stop wait for it (EOD exit is time-based and doesn't).
+        self.margin_base[u] = 0.0
+        self.margin_source[u] = "pending"
 
         self.legs[u] = legs
         self.traded_day[u] = today.isoformat()
@@ -245,6 +239,11 @@ class CallPutRatioExpiryStrategy:
     def _manage(self, ctx, u: str, legs: list[dict], now) -> list[Signal]:
         if now.time() >= self.eod_exit:
             return self._exit_all(u, legs, "eod_1520")
+        if self.margin_source.get(u) != "broker":
+            if not self._broker_margin:
+                return []  # thresholds wait for the broker number (never the model)
+            self.margin_base[u] = self._broker_margin
+            self.margin_source[u] = "broker"
         base = self.margin_base.get(u) or 0.0
         if base <= 0:
             return []

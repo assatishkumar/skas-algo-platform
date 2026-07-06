@@ -124,8 +124,14 @@ def test_leg_construction_1_3_and_third_premium_strikes():
     assert abs(pe_short["entry"] - 170.0 / 3) <= 17.0
     assert float(ce_short["symbol"].split("|")[2]) > 24000
     assert float(pe_short["symbol"].split("|")[2]) < 24000
-    # margin_base frozen, model source (no broker margin in the fake).
-    assert st.margin_base["NIFTY"] > 0 and st.margin_source["NIFTY"] == "model"
+    # Broker-only rule: base pending at entry, frozen from the manager's push.
+    assert st.margin_source["NIFTY"] == "pending"
+    st.set_broker_margin(300_000.0)
+    for leg in legs:
+        ctx.positions[leg["symbol"]] = leg["units"]
+        ctx.market.prices[leg["symbol"]] = leg["entry"]
+    tick(st, ctx, datetime(2026, 7, 7, 9, 40))
+    assert st.margin_source["NIFTY"] == "broker" and st.margin_base["NIFTY"] == 300_000.0
     assert by  # silence lint
 
 
@@ -145,7 +151,8 @@ def test_target_stop_and_eod_exits():
     for s in sigs:
         ctx.positions[s.symbol] = s.quantity
     legs = st.legs["NIFTY"]
-    base = st.margin_base["NIFTY"]
+    st.set_broker_margin(300_000.0)
+    base = 300_000.0
     entry_of = {leg["symbol"]: leg for leg in legs}
 
     def set_all(pnl_per_unit_map):
@@ -171,7 +178,8 @@ def test_target_stop_and_eod_exits():
     for s in sigs:
         ctx2.positions[s.symbol] = s.quantity
     legs2 = st2.legs["NIFTY"]
-    base2 = st2.margin_base["NIFTY"]
+    st2.set_broker_margin(300_000.0)
+    base2 = 300_000.0
     tot2 = sum(leg["units"] for leg in legs2 if leg["dir"] < 0)
     per_unit2 = (base2 * 0.01) / tot2 + 0.01
     for leg in legs2:
@@ -200,7 +208,7 @@ def test_one_entry_per_day_and_state_round_trip():
     st2 = CallPutRatioExpiryStrategy(underlyings=["NIFTY"])
     st2.load_state(dump)
     assert st2.legs["NIFTY"] == st.legs["NIFTY"]
-    assert st2.margin_base["NIFTY"] == st.margin_base["NIFTY"]
+    assert st2.margin_source["NIFTY"] == "pending"  # broker base re-arrives post-recovery
     assert st2.traded_day["NIFTY"] == "2026-07-07"
     # Restarted mid-day flat (engine settled everything) → no re-entry same day.
     ctx.positions.clear()

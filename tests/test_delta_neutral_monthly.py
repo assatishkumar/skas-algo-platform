@@ -104,6 +104,7 @@ def enter(st=None):
     # feed marks = entries so manage() has prints
     for leg in st.legs:
         ctx.market.prices[leg["symbol"]] = leg["entry"]
+    st.set_broker_margin(500_000.0)  # the manager's push (broker-only margin rule)
     return st, ctx, sigs
 
 
@@ -132,7 +133,15 @@ def test_18_delta_strikes_are_otm_and_sane():
     # 18Δ at 14% IV / 26d on 57000 ≈ 1400-2600 pts OTM — sanity band, not exact.
     assert 700 <= ce_k - SPOT <= 3500 and 700 <= SPOT - pe_k <= 3500
     assert all(s.quantity == 35 for s in sigs)  # 1 lot × 35
-    assert st.margin_base > 0 and st.margin_source == "model"
+    # Broker-only rule: at entry the base is PENDING until the manager pushes it...
+    assert st.margin_source == "pending" and st.margin_base == 0.0
+    # ...and the first managed tick after a push freezes it.
+    st.set_broker_margin(500_000.0)
+    for leg in st.legs:
+        ctx.positions[leg["symbol"]] = leg["units"]
+        ctx.market.prices[leg["symbol"]] = leg["entry"]
+    tick(st, ctx, datetime(2026, 7, 2, 11, 1))
+    assert st.margin_source == "broker" and st.margin_base == 500_000.0
 
 
 def test_force_entry_bypasses_the_day_gate():
@@ -244,7 +253,9 @@ def test_straddle_cap_builds_iron_fly():
 
 def test_profit_target_and_optional_stop():
     st, ctx, sigs = enter()
+    tick(st, ctx, datetime(2026, 7, 2, 11, 2))  # freeze the pushed broker base
     base = st.margin_base
+    assert base == 500_000.0 and st.margin_source == "broker"
     total_units = sum(leg["units"] for leg in st.legs)
     gain_per_unit = base * 0.025 / total_units + 0.01
     for leg in st.legs:
@@ -269,11 +280,28 @@ def test_profit_target_and_optional_stop():
     s3 = tick(st3, ctx3, datetime(2026, 7, 2, 11, 0))
     for s in s3:
         ctx3.positions[s.symbol] = s.quantity
+    st3.set_broker_margin(500_000.0)
     tot3 = sum(leg["units"] for leg in st3.legs)
     for leg in st3.legs:
-        ctx3.market.prices[leg["symbol"]] = leg["entry"] + st3.margin_base * 0.025 / tot3 + 0.01
+        ctx3.market.prices[leg["symbol"]] = leg["entry"] + 500_000.0 * 0.025 / tot3 + 0.01
     sigs3 = tick(st3, ctx3, datetime(2026, 7, 8, 12, 0))
     assert sigs3 and all(s.reason == "stop" for s in sigs3)
+
+
+def test_thresholds_wait_for_broker_margin():
+    """Broker-only rule: no target/stop until the manager pushes a broker margin —
+    even a monster profit holds. Adjustments (non-margin logic) still run."""
+    st = DeltaNeutralMonthlyStrategy()
+    ctx = FakeCtx(FakeMarket(bs_chain()))
+    sigs = tick(st, ctx, datetime(2026, 7, 2, 11, 0))
+    for s in sigs:
+        ctx.positions[s.symbol] = s.quantity
+    for leg in st.legs:
+        ctx.market.prices[leg["symbol"]] = 0.05  # shorts nearly worthless → huge profit
+    assert tick(st, ctx, datetime(2026, 7, 3, 12, 0)) == []  # pending → no exit
+    st.set_broker_margin(500_000.0)
+    sigs = tick(st, ctx, datetime(2026, 7, 3, 12, 1))
+    assert sigs and all(s.reason == "target" for s in sigs)
 
 
 def test_cycle_gating_and_state_round_trip():
