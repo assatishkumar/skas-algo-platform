@@ -289,3 +289,15 @@ def test_cycle_gating_and_state_round_trip():
     st3.done_expiry = CUR_EXP.isoformat()
     ctx3 = FakeCtx(FakeMarket(bs_chain()))
     assert tick(st3, ctx3, datetime(2026, 7, 10, 11, 30)) == []
+
+
+def test_entry_with_tz_aware_clock():
+    """Live now() is IST-aware — run 203's force-entry crashed on naive-minus-aware.
+    The whole entry path must work with an aware clock."""
+    from zoneinfo import ZoneInfo
+
+    st = DeltaNeutralMonthlyStrategy(force_entry=True)
+    ctx = FakeCtx(FakeMarket(bs_chain()))
+    ctx._now = datetime(2026, 7, 6, 13, 20, tzinfo=ZoneInfo("Asia/Kolkata"))
+    sigs = st.on_slice(ctx)
+    assert len(sigs) == 2 and st.phase == "strangle"

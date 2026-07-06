@@ -198,8 +198,10 @@ class DeltaNeutralMonthlyStrategy:
         return int((row or {}).get("oi") or 0) >= self.min_leg_oi
 
     def _t_years(self, expiry: date, now: datetime) -> float:
+        # Live now() is IST-aware; backtest/test clocks are naive — build the expiry
+        # timestamp in the SAME tz-ness or the subtraction raises (bit run 203).
         exp_dt = datetime(expiry.year, expiry.month, expiry.day,
-                          _EXPIRY_CUTOFF.hour, _EXPIRY_CUTOFF.minute)
+                          _EXPIRY_CUTOFF.hour, _EXPIRY_CUTOFF.minute, tzinfo=now.tzinfo)
         return max((exp_dt - now).total_seconds(), 0.0) / (365.0 * 86400.0)
 
     def _pick_delta_strike(self, rows: dict[float, dict], side: str, spot: float,
@@ -313,6 +315,9 @@ class DeltaNeutralMonthlyStrategy:
             return []  # straddle already hedged (ironfly) → ride to target/settle
         if self.last_adjust_at is not None:
             last = datetime.fromisoformat(self.last_adjust_at)
+            # Normalize tz-ness before subtracting (live=aware, backtest/tests=naive).
+            if (last.tzinfo is None) != (now.tzinfo is None):
+                last = last.replace(tzinfo=now.tzinfo)
             if (now - last).total_seconds() < self.adjust_cooldown_min * 60:
                 return []
         return self._maybe_adjust(ctx, live, marks, now)
