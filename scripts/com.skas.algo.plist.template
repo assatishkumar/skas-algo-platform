@@ -43,11 +43,16 @@
   <string>Interactive</string>
 
   <!-- launchd starts with a minimal env; the app reads secrets from .env (via
-       WorkingDirectory). PATH is set so the venv's interpreter and tools resolve. -->
+       WorkingDirectory). PATH is set so the venv's interpreter and tools resolve.
+       SKAS_DEBUG=false turns OFF uvicorn --reload: a supervised production backend must
+       run as ONE process, not reload on a stray file-touch (and avoid the orphan-prone
+       reload worker, CLAUDE.md §10). Env vars beat .env in pydantic-settings precedence. -->
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
     <string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin</string>
+    <key>SKAS_DEBUG</key>
+    <string>false</string>
   </dict>
 </dict>
 </plist>
