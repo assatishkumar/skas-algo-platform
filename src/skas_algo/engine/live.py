@@ -373,8 +373,12 @@ class LiveSession:
         out = dict(t)
         d = out.get("date")
         if isinstance(d, str):
+            # Restore the FULL timestamp when one was stored — the old d[:10] truncation
+            # stripped the time off every historical trade on every restart, which is why
+            # the owner kept seeing date-only rows no matter what the fill path stamped.
             try:
-                out["date"] = date.fromisoformat(d[:10])
+                out["date"] = (datetime.fromisoformat(d) if len(d) > 10
+                               else date.fromisoformat(d))
             except ValueError:
                 pass
         return out
