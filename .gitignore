@@ -19,6 +19,7 @@ htmlcov/
 # Secrets & local config (never commit broker creds / TOTP / tokens)
 .env
 .env.*
+!.env.example
 *.key
 *.pem
 access_token.txt
