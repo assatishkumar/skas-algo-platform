@@ -238,9 +238,10 @@ puts the backend under a launchd LaunchAgent (auto-start + auto-restart on any e
 `uninstall-supervisor.sh` reverts. NOTE: while supervised, launchd re-spawns the backend
 within ~15s of any kill — so a manual restart during dev means `launchctl kickstart -k
 gui/$(id -u)/com.skas.algo`, not a bare `pkill` (which just triggers a respawn). A recovered
-LIVE-order run keeps PaperBroker (recovery never injects LiveBroker); a freshly-deployed
-LiveBroker run reconciles its broker book before its first decision (`reconcile_pending`,
-ARCHITECTURE §3).
+LIVE-order run keeps PaperBroker by default (recovery re-injects LiveBroker ONLY when
+`live_resume_orders_on_recovery` is on — still behind the 4-key gate); a LiveBroker run —
+fresh deploy or resumed — reconciles its broker book before its first decision
+(`reconcile_pending`, ARCHITECTURE §3).
 
 **Footguns when launching:**
 - **Relative SQLite path.** `SKAS_DATABASE_URL=sqlite:///./skas_algo.db` is relative to the CWD —

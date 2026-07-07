@@ -144,6 +144,16 @@ def _rebuild(db, run: AlgoRun, loader) -> None:
         session.load_state(run.state)
 
     quote_source, on_cache_fallback = _quote_source(db, config, loader)
+    # Owner-gated (default OFF): resume REAL-order management for a recovered LIVE run.
+    # Off → the run keeps PaperBroker (a restart PAUSES real orders until re-activation).
+    # On → re-inject the LiveBroker, but the 4-key gate (mode/flag/armed/adapter) still
+    # fully applies, and the run starts reconcile_pending (verifies its broker book before
+    # the first decision — the double-fill guard). Injected BEFORE the LiveRun is built so
+    # its reconcile_pending flag reflects the real-order broker.
+    from skas_algo.config import get_settings
+
+    if get_settings().live_resume_orders_on_recovery:
+        manager._maybe_inject_live_broker(session, config, quote_source)
     live = LiveRun(run.id, run.algo_id, config, session, quote_source, manager.broadcaster)
     live.on_cache_fallback = on_cache_fallback
 

@@ -119,13 +119,14 @@ position the restored book is missing. Two guards now stand between that and a d
   Dormant while live orders are disabled; it is the safety net that exists *before* the first
   real order. Tests: `tests/test_live_broker.py::test_reconcile_gate_pending_lifecycle`.
 
-> **Owner-gated decision — resume real orders on recovery.** Because recovery keeps
-> PaperBroker, a restart currently makes a *live* run stop placing real orders (its real
-> position is then managed only on the next deliberate re-activation). Making recovery
-> re-inject the LiveBroker (so a live run resumes real management after a crash) is an
-> order-ENABLING change: it should sit behind a new setting defaulting to today's fail-safe
-> behavior (e.g. `live_resume_orders_on_recovery=false`), and the reconcile gate above already
-> guarantees such a run would reconcile before trading. Left for the owner's explicit choice.
+> **Resume real orders on recovery — `live_resume_orders_on_recovery` (default OFF).** By
+> default, recovery keeps PaperBroker, so a restart makes a *live* run stop placing real
+> orders until the owner re-activates (fail-safe). Setting the flag makes `recovery._rebuild`
+> re-inject the LiveBroker — but the 4-key gate (mode/flag/armed/adapter) still fully applies,
+> and the run starts `reconcile_pending`, so it verifies its broker book before its first
+> decision. It is an order-ENABLING switch that defaults to the safe behavior; the owner turns
+> it on deliberately (env `SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY=true`) when they want a live
+> book to keep being managed across restarts. Tests: `tests/test_recovery.py`.
 
 ---
 
@@ -255,11 +256,9 @@ cap; WebSocket price feed; `preflight.sh`; this doc.
 **P1 — done (2026-07 review):**
 - **Process supervision** — `scripts/install-supervisor.sh` (launchd LaunchAgent, auto-restart).
 - **Double-fill safety net** — the reconcile-before-first-decision gate (§3).
+- **Resume real orders on recovery** — `live_resume_orders_on_recovery` flag (default OFF, §3).
 
 **P1 — remaining (each has a clear trigger):**
-- **Resume real orders on recovery** (owner-gated, §3) — decide + wire the
-  `live_resume_orders_on_recovery` flag before the first real-money pilot runs unattended,
-  so a restart re-manages a live book (it reconciles first). Highest operational priority.
 - **`greeks_snapshot` retention job** — the table grows ~375 rows/run/day unbounded; add a
   pruning job when the DB crosses a size you care about.
 - **Encrypt `api_key`; `MultiFernet` key rotation; pin dependencies; CSRF/bearer token** if

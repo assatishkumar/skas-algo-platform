@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     live_max_order_notional: float = 500_000.0   # SKAS_LIVE_MAX_ORDER_NOTIONAL
     live_max_orders_per_day: int = 20            # SKAS_LIVE_MAX_ORDERS_PER_DAY
     live_order_timeout_s: float = 10.0           # SKAS_LIVE_ORDER_TIMEOUT_S (LIMIT→MARKET)
+    # Resume REAL-order management for a LIVE run after a restart/recovery. Default False =
+    # fail-safe: a recovered live run keeps PaperBroker (a restart PAUSES real orders until
+    # the owner re-activates). When True, recovery re-injects the LiveBroker — but the 4-key
+    # gate still fully applies AND the run reconciles its broker book before its first
+    # decision (reconcile_pending). Off unless the owner deliberately turns it on.
+    live_resume_orders_on_recovery: bool = False  # SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY
 
     # --- Live pricing feed (WebSocket) ---
     # When True (default), zerodha runs pull marks from a shared per-account KiteTicker
