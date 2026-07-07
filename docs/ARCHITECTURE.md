@@ -6,6 +6,7 @@
 > claim below carries a file reference; when they disagree, trust the code and fix the doc.
 
 Written after the 2026-07 architecture review (security + robustness + performance sweeps).
+For a feature-by-feature catalog of everything the platform does, see `docs/FEATURES.md`.
 
 ---
 

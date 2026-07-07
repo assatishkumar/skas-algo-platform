@@ -10,6 +10,9 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 > **Full system map:** `docs/ARCHITECTURE.md` — the as-built architecture (price/data flow,
 > order path, failure modes, security model), the guidelines "constitution", how to develop
 > without breaking live, and the P0/P1/P2 hardening roadmap. Read it before large changes.
+> **Feature catalog:** `docs/FEATURES.md` — a detailed, plain-language catalog of everything
+> implemented (all strategies, backtest, live, order path, brokers, feed, research, UI, API,
+> config). Start here to learn WHAT the platform does.
 
 ## 1. This is a real, live trading system with real money
 - **The real-order path is LIVE-CAPABLE (Phase B, 2026-07).** `brokers/live_broker.py::LiveBroker`
