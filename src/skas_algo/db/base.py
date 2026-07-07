@@ -27,6 +27,21 @@ def get_engine() -> Engine:
         url = get_settings().database_url
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         _engine = create_engine(url, future=True, connect_args=connect_args)
+        if url.startswith("sqlite"):
+            # The live app writes from many threads (loop ticks, API requests, greeks
+            # sampling). Without WAL + a busy timeout, SQLite writers FAIL instantly
+            # ("database is locked") whenever transactions overlap — the 2026-07-07
+            # lock-storm incident. WAL lets readers and the writer coexist; the busy
+            # timeout makes contending writers queue instead of raising.
+            from sqlalchemy import event
+
+            @event.listens_for(_engine, "connect")
+            def _sqlite_pragmas(dbapi_conn, _record):  # pragma: no cover - env wiring
+                cur = dbapi_conn.cursor()
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA busy_timeout=15000")
+                cur.execute("PRAGMA synchronous=NORMAL")
+                cur.close()
     return _engine
 
 
