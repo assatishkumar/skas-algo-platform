@@ -62,20 +62,29 @@ def recover_running_sessions() -> int:
         return 0
 
     recovered = 0
+    # One SHORT read to list candidates, then ONE TRANSACTION PER RUN. Recovery now runs
+    # in the background while recovered runs already tick and write — a single giant
+    # transaction here held the SQLite write lock for the whole multi-minute recovery,
+    # starving every other writer AND draining the connection pool with 15s busy-waits
+    # (the 2026-07-07 lock storm, part 3).
     with session_scope() as db:
-        runs = (
-            db.query(AlgoRun)
+        run_ids = [
+            r.id for r in db.query(AlgoRun.id)
             .filter(AlgoRun.stopped_at.is_(None), AlgoRun.mode != TradingMode.BACKTEST)
             .all()
-        )
-        for run in runs:
-            if run.id in manager.runs:
-                continue
-            try:
+        ]
+    for run_id in run_ids:
+        if run_id in manager.runs:
+            continue
+        try:
+            with session_scope() as db:
+                run = db.get(AlgoRun, run_id)
+                if run is None or run.id in manager.runs:
+                    continue
                 _rebuild(db, run, loader)
-                recovered += 1
-            except Exception:
-                logger.exception("could not recover live run %s", run.id)
+            recovered += 1
+        except Exception:
+            logger.exception("could not recover live run %s", run_id)
     if recovered:
         logger.info("recovered %d running live session(s)", recovered)
     return recovered

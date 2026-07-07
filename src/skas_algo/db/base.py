@@ -26,7 +26,11 @@ def get_engine() -> Engine:
     if _engine is None:
         url = get_settings().database_url
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-        _engine = create_engine(url, future=True, connect_args=connect_args)
+        # Pool sized for the threaded live world: ~22 run-tick threads + API requests
+        # can hold short sessions concurrently; the default 5+10 drained under busy-wait
+        # pileups and starved read-only routes (2026-07-07).
+        _engine = create_engine(url, future=True, connect_args=connect_args,
+                                pool_size=15, max_overflow=25, pool_timeout=10)
         if url.startswith("sqlite"):
             # The live app writes from many threads (loop ticks, API requests, greeks
             # sampling). Without WAL + a busy timeout, SQLite writers FAIL instantly

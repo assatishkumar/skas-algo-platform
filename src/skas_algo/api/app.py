@@ -27,13 +27,29 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(get_engine())
     except Exception:  # pragma: no cover - never block startup
         logger.exception("schema create_all failed")
-    # Rebuild any paper/live runs that were still running before a restart.
+    # Rebuild any paper/live runs that were still running before a restart — in a
+    # BACKGROUND thread. Recovery of ~20 runs does real broker/cache I/O and used to run
+    # inline here, leaving the API completely unresponsive for minutes after every
+    # restart/reload during market hours (2026-07-07). The API now serves immediately;
+    # runs appear as they recover (start_loop/publish hop onto this loop thread-safely).
     try:
+        import asyncio
+        import threading
+
+        from skas_algo.live.manager import manager
         from skas_algo.live.recovery import recover_running_sessions
 
-        recover_running_sessions()
+        manager.broadcaster.loop = asyncio.get_running_loop()
+
+        def _recover() -> None:
+            try:
+                recover_running_sessions()
+            except Exception:  # pragma: no cover - never crash the app
+                logger.exception("live-session recovery failed")
+
+        threading.Thread(target=_recover, daemon=True, name="skas-recovery").start()
     except Exception:  # pragma: no cover - never block startup
-        logger.exception("live-session recovery failed")
+        logger.exception("live-session recovery failed to start")
     yield
 
 

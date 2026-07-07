@@ -180,10 +180,15 @@ def _seed_supertrend(session, strategy, loader, symbols) -> None:
 
 
 class Broadcaster:
-    """Tiny pub/sub over asyncio queues for WebSocket fan-out (single-user)."""
+    """Tiny pub/sub over asyncio queues for WebSocket fan-out (single-user).
+
+    ``publish`` may be called from worker THREADS (background recovery/promotion,
+    threadpool routes) — asyncio queues are not thread-safe, so off-loop publishes
+    hop onto the serving loop via ``call_soon_threadsafe`` (loop attached at startup)."""
 
     def __init__(self) -> None:
         self._subs: set[asyncio.Queue] = set()
+        self.loop: asyncio.AbstractEventLoop | None = None  # attached in app lifespan
 
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -194,6 +199,16 @@ class Broadcaster:
         self._subs.discard(q)
 
     def publish(self, message: dict) -> None:
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is None and self.loop is not None:
+            self.loop.call_soon_threadsafe(self._publish_on_loop, message)
+            return
+        self._publish_on_loop(message)
+
+    def _publish_on_loop(self, message: dict) -> None:
         for q in list(self._subs):
             try:
                 q.put_nowait(to_native(message))
@@ -1031,9 +1046,44 @@ class LiveRunManager:
 
     # ----------------------------------------------------- async driver
     def start_loop(self, run_id: int) -> None:
-        """Kick off the background refresh/decision loop (call from an event loop)."""
-        live = self.runs[run_id]
+        """Kick off the background refresh/decision loop. Thread-safe: called from the
+        event loop it schedules directly; from a worker thread (background recovery)
+        it hops onto the serving loop attached to the broadcaster."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            loop = self.broadcaster.loop
+            if loop is None:  # pragma: no cover - startup ordering bug
+                logger.error("start_loop(%s) called with no event loop attached", run_id)
+                return
+            loop.call_soon_threadsafe(self._start_loop_on_loop, run_id)
+            return
+        self._start_loop_on_loop(run_id)
+
+    def _start_loop_on_loop(self, run_id: int) -> None:
+        live = self.runs.get(run_id)
+        if live is None:  # pragma: no cover - stopped between schedule and fire
+            return
         self._tasks[run_id] = asyncio.create_task(self._loop(live))
+
+    def _tick(self, live: LiveRun, tick_driven: bool, decide_at: time) -> None:
+        """One synchronous pricing/decision tick — always called via asyncio.to_thread."""
+        live.refresh()
+        now = datetime.now(IST)
+        mkt = is_market_open()
+        if mkt and not live.quote_error and not live.order_error:
+            # Decisions / orders ONLY during market hours.
+            if tick_driven:
+                # Decide EVERY tick — the strategy's own gates decide what fires
+                # (options exit cadences; an equity trade's trigger/stop/trailing).
+                live.run_decision(now)
+                if now.time() >= time(15, 30) and live.last_decision_day != now.date():
+                    live.end_day()
+                    live.last_decision_day = now.date()
+            elif now.time() >= decide_at and live.last_decision_day != now.date():
+                live.run_decision(now)
+                live.end_day()
+                live.last_decision_day = now.date()
 
     async def _loop(self, live: LiveRun) -> None:
         try:
@@ -1068,21 +1118,12 @@ class LiveRunManager:
                 )
                 if should_price:
                     try:
-                        live.refresh()
-                        now = datetime.now(IST)
-                        if mkt and not live.quote_error and not live.order_error:
-                            # Decisions / orders ONLY during market hours.
-                            if tick_driven:
-                                # Decide EVERY tick — the strategy's own gates decide what fires
-                                # (options exit cadences; an equity trade's trigger/stop/trailing).
-                                live.run_decision(now)
-                                if now.time() >= time(15, 30) and live.last_decision_day != now.date():
-                                    live.end_day()
-                                    live.last_decision_day = now.date()
-                            elif now.time() >= decide_at and live.last_decision_day != now.date():
-                                live.run_decision(now)
-                                live.end_day()
-                                live.last_decision_day = now.date()
+                        # The WHOLE tick runs in a worker thread: refresh/decisions do real
+                        # I/O (broker calls, or per-symbol DuckDB reads on cache fallback —
+                        # a 50-name basket is ~50 queries) and 20+ runs ticking these
+                        # synchronously on the ONE event loop starved the entire API
+                        # (2026-07-07 morning). publish/start_loop are thread-safe now.
+                        await asyncio.to_thread(self._tick, live, tick_driven, decide_at)
                     except Exception:  # pragma: no cover - keep the loop alive
                         logger.exception("live loop tick failed for run %s", live.run_id)
                 await asyncio.sleep(live.config.refresh_seconds)
