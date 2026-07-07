@@ -7,6 +7,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 > convention emerges — not after-the-fact docs, but the things a fresh session would otherwise have to
 > rediscover. (Standing request from the owner.)
 
+> **Full system map:** `docs/ARCHITECTURE.md` — the as-built architecture (price/data flow,
+> order path, failure modes, security model), the guidelines "constitution", how to develop
+> without breaking live, and the P0/P1/P2 hardening roadmap. Read it before large changes.
+
 ## 1. This is a real, live trading system with real money
 - **The real-order path is LIVE-CAPABLE (Phase B, 2026-07).** `brokers/live_broker.py::LiveBroker`
   is the ONLY code that places real orders (LIMIT-at-touch → 10s → MARKET escalation, via
@@ -211,7 +215,23 @@ venv/bin/skas-algo
 cd web && npm run dev
 ```
 Health check: `curl http://localhost:8080/api/v1/health`. The DB schema is created on startup
-(idempotent); Alembic migrations are in `alembic/` for evolving an existing DB.
+(idempotent); Alembic migrations are in `alembic/` for evolving an existing DB. Startup also
+takes a pre-recovery DB backup (`services/backup.py` → `backups/`, retain 7) and starts the
+manager maintenance task (loop watchdog + daily ~16:30 backup).
+
+**Preflight before any restart/deploy:** `./scripts/preflight.sh` — ruff (advisory) + the FULL
+test suite incl. the parity/mode-equivalence suites + web typecheck. Green = the change didn't
+alter the engine or a live path. It auto-deselects the two DuckDB-cache parity suites while a
+backend is live and tells you to re-run them against a stopped backend. This is THE gate that
+lets you develop continuously without silently breaking a live strategy (see ARCHITECTURE §7).
+
+**Binds `127.0.0.1` by default** (`config/settings.py::api_host`) — a single-user, no-auth,
+real-money API must not be on the LAN. If the UI can't reach the backend on a container/remote,
+set `SKAS_API_HOST` (the docker path already sets `0.0.0.0`). Live marks come from a shared
+per-account KiteTicker WS feed (`live/pricefeed.py`, `SKAS_WS_FEED_ENABLED`, default on) with a
+REST fallback — strategies still read via `QuoteSource` (no tick callbacks, parity intact).
+NSE holidays close the market like weekends (`live/holidays.py`; festival dates PROVISIONAL,
+env-correctable via `NSE_HOLIDAYS_ADD`/`NSE_HOLIDAYS_REMOVE`).
 
 **Footguns when launching:**
 - **Relative SQLite path.** `SKAS_DATABASE_URL=sqlite:///./skas_algo.db` is relative to the CWD —
