@@ -224,6 +224,13 @@ Health check: `curl http://localhost:8080/api/v1/health`. The DB schema is creat
 - **Detached dev servers (agents):** the harness reaps `run_in_background` tasks and kills child
   processes at turn end. To keep servers up across turns, launch with `nohup … & disown`
   (macOS has **no** `setsid`). The durable option is the user running them in their own terminal.
+- **Orphaned uvicorn reload workers (2026-07-07 incident).** Killing the backend can leave the
+  `--reload` CHILD alive (a `multiprocessing spawn_main` process, reparented to launchd — its
+  cmdline does NOT contain "skas-algo"), silently holding :8080 AND the SQLite write lock →
+  "database is locked" spam, hung API, port races on restart. Before any relaunch:
+  `pkill -9 -f "venv/bin/skas-algo"` (exact pattern — a bare "skas-algo" also matches vite/esbuild
+  via the repo path!), then check `lsof -nP -iTCP:8080 -sTCP:LISTEN` and kill any survivor by PID.
+  Launch exactly ONE backend, always from the repo root.
 - **Parity tests vs a running backend (DuckDB lock).** `test_sst_parity` / `test_sst_fifo_parity`
   read the REAL skas-data cache, and skas-data opens DuckDB read-write — **one process only**. If
   the running backend has touched the cache since its last `--reload` restart, those tests fail
