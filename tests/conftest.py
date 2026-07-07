@@ -11,6 +11,11 @@ _db_fd, _DB_PATH = tempfile.mkstemp(suffix=".db", prefix="skas_test_")
 os.close(_db_fd)
 os.environ["SKAS_DATABASE_URL"] = f"sqlite:///{_DB_PATH}"
 os.environ["SKAS_ENVIRONMENT"] = "test"
+# Tests must NEVER page the owner: the dev .env carries real Telegram credentials, and
+# every arm/disarm/login in the API tests fired a REAL message (the 2026-07-07 flood of
+# "Account arm ARMED" alerts on the owner's phone). Blank them before any settings load.
+os.environ["SKAS_TELEGRAM_BOT_TOKEN"] = ""
+os.environ["SKAS_TELEGRAM_CHAT_ID"] = ""
 
 # A throwaway Fernet key so credential-encryption tests work in isolation.
 from cryptography.fernet import Fernet  # noqa: E402
