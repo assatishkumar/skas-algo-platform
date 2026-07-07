@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode, useState } from "react";
 import {
   Area,
   ComposedChart,
@@ -41,6 +41,9 @@ function StrikeLabel({ viewBox, text, color }: { viewBox?: { x: number; y: numbe
 /** Sensibull-style payoff for the OPEN option legs of a live deployment: the expiry tent
  *  (green/red split at zero) + a current-value (T+0) curve, with the live spot marked.
  *  Built client-side from the position legs + live LTPs. */
+// Zoom ladder for the x-range: null = auto (all strikes ±10%), else spot ± pct.
+const ZOOMS: (number | null)[] = [null, 0.08, 0.05, 0.03, 0.015];
+
 export default function LivePayoffChart({
   positions,
   spot,
@@ -54,6 +57,7 @@ export default function LivePayoffChart({
   caption?: ReactNode; // overrides the default "Payoff at expiry …" caption
   spotLabel?: string; // label on the vertical spot line
 }) {
+  const [zoomIdx, setZoomIdx] = useState(0);
   const pf = useMemo(() => {
     const legs: LiveLeg[] = [];
     let expiry = "";
@@ -71,8 +75,8 @@ export default function LivePayoffChart({
       });
     }
     if (!legs.length || !spot || !expiry) return null;
-    return buildLivePayoff(legs, spot, expiry, asOf);
-  }, [positions, spot, asOf]);
+    return buildLivePayoff(legs, spot, expiry, asOf, ZOOMS[zoomIdx]);
+  }, [positions, spot, asOf, zoomIdx]);
 
   // Unique CE/PE strikes to mark on the chart (a strangle → one CE + one PE line; dedup exact dupes).
   const strikes = useMemo(() => {
@@ -98,8 +102,22 @@ export default function LivePayoffChart({
   const eMin = Math.min(...exp);
   const off = eMax <= 0 ? 0 : eMin >= 0 ? 1 : eMax / (eMax - eMin);
 
+  const zoom = ZOOMS[zoomIdx];
   return (
     <div className="mt-3">
+      <div className="mb-1 flex items-center justify-end gap-1">
+        <span className="mr-1 text-[11px] tabular-nums text-[var(--faint)]">
+          {zoom == null ? "auto range" : `±${(zoom * 100).toFixed(1).replace(/\.0$/, "")}%`}
+        </span>
+        <button onClick={() => setZoomIdx((i) => Math.min(i + 1, ZOOMS.length - 1))}
+          disabled={zoomIdx >= ZOOMS.length - 1} title="Zoom in (narrower spot range)"
+          className="rounded-[7px] bg-[var(--chip)] px-2 py-0.5 text-xs font-bold text-[var(--chip-text)] disabled:opacity-40">+</button>
+        <button onClick={() => setZoomIdx((i) => Math.max(i - 1, 0))}
+          disabled={zoomIdx === 0} title="Zoom out"
+          className="rounded-[7px] bg-[var(--chip)] px-2 py-0.5 text-xs font-bold text-[var(--chip-text)] disabled:opacity-40">−</button>
+        <button onClick={() => setZoomIdx(0)} disabled={zoomIdx === 0} title="Reset to auto range (all strikes)"
+          className="rounded-[7px] bg-[var(--chip)] px-2 py-0.5 text-xs font-bold text-[var(--chip-text)] disabled:opacity-40">⟲</button>
+      </div>
       <div className="text-xs text-slate-400 mb-1">
         {caption ?? (
           <>

@@ -142,10 +142,13 @@ export interface LivePayoffData {
   expiryDate: string;
 }
 
-/** Expiry payoff tent + a current-value (T+0) curve for the OPEN option legs, across a
- *  ±10% underlying range. IV per leg is backed out of its live LTP (fallback 15%). */
+/** Expiry payoff tent + a current-value (T+0) curve for the OPEN option legs.
+ *  Default range spans spot AND every strike ±10%; ``rangePct`` (zoom) overrides it
+ *  with a symmetric spot ± pct window — strikes outside simply fall off the chart,
+ *  which is the point of zooming in. IV per leg from its live LTP (fallback 15%). */
 export function buildLivePayoff(
   legs: LiveLeg[], spot: number, expiryDate: string, today?: string,
+  rangePct?: number | null,
 ): LivePayoffData | null {
   if (!legs.length || !spot) return null;
   const asOf = today ?? new Date().toISOString().slice(0, 10);
@@ -154,10 +157,11 @@ export function buildLivePayoff(
     (l) => (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, t, RISK_FREE, l.right) : null) ?? 0.15,
   );
   // Span spot AND every strike (padded) so the payoff kinks + breakevens are visible even when a
-  // strike sits well outside ±10% of spot (e.g. a far-OTM short call).
+  // strike sits well outside ±10% of spot (e.g. a far-OTM short call). A zoom override
+  // narrows to spot ± rangePct instead.
   const refs = [spot, ...legs.map((l) => l.strike)];
-  const lo = Math.min(...refs) * 0.9;
-  const hi = Math.max(...refs) * 1.1;
+  const lo = rangePct ? spot * (1 - rangePct) : Math.min(...refs) * 0.9;
+  const hi = rangePct ? spot * (1 + rangePct) : Math.max(...refs) * 1.1;
   const n = 81;
   const data = [];
   for (let i = 0; i < n; i++) {
