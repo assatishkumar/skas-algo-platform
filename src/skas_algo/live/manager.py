@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 
@@ -696,6 +697,14 @@ class LiveRunManager:
         self.runs: dict[int, LiveRun] = {}
         self.broadcaster = Broadcaster()
         self._tasks: dict[int, asyncio.Task] = {}
+        # DEDICATED tick pool: every run's per-tick body (broker/cache I/O, order polling)
+        # runs here via run_in_executor, isolated from the default loop executor that
+        # FastAPI/anyio use for request-side work. Sized for 20+ concurrent runs (the
+        # default 14 workers on this box starved ticks — 2026-07-07). Idle threads cost
+        # nothing; the ceiling just caps how many ticks run truly in parallel.
+        self._tick_pool = ThreadPoolExecutor(max_workers=32, thread_name_prefix="tick")
+        self._maint_task: asyncio.Task | None = None
+        self._last_backup_day: date | None = None
 
     def _maybe_inject_live_broker(self, session, config: "LiveConfig", quote_source) -> None:
         """THE real-order gate. Replace the session's PaperBroker with a LiveBroker ONLY
@@ -1068,6 +1077,62 @@ class LiveRunManager:
             return
         self._tasks[run_id] = asyncio.create_task(self._loop(live))
 
+    # ------------------------------------------------- maintenance (singleton)
+    def start_maintenance(self) -> None:
+        """Start the singleton watchdog + daily-backup task on the running loop.
+        Idempotent; called from the app lifespan after the loop is attached."""
+        if self._maint_task is not None and not self._maint_task.done():
+            return
+        self._maint_task = asyncio.create_task(self._maintenance_loop())
+
+    async def _maintenance_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(300)
+                self._watchdog_scan()
+                await self._maybe_daily_backup()
+            except asyncio.CancelledError:  # pragma: no cover
+                return
+            except Exception:  # pragma: no cover - maintenance must never die
+                logger.exception("maintenance loop iteration failed")
+
+    def _watchdog_scan(self) -> None:
+        """Restart any AUTO run whose loop task has silently died — a dead task means no
+        decisions, no stop enforcement, with nothing surfacing it. Exceptions inside a
+        tick are caught and keep the loop alive; this catches the rarer case of the whole
+        loop/task ending (config parse, cancellation, unexpected raise outside the guard)."""
+        for run_id, live in list(self.runs.items()):
+            if not live.config.auto:
+                continue
+            task = self._tasks.get(run_id)
+            if task is None or task.done():
+                logger.error("watchdog: run %s (%s) loop is dead — restarting",
+                             run_id, live.config.name)
+                self._notify_watchdog(live)
+                self._start_loop_on_loop(run_id)
+
+    def _notify_watchdog(self, live: "LiveRun") -> None:
+        try:
+            from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+            build_notifier().send(Alert(
+                "Run loop restarted",
+                f"[{live.config.name}] background loop had died and was restarted by the "
+                f"watchdog — check for a repeating crash.",
+                AlertLevel.WARNING))
+        except Exception:  # pragma: no cover - alert is best-effort
+            logger.exception("watchdog notification failed")
+
+    async def _maybe_daily_backup(self) -> None:
+        """One DB snapshot per day, after the session + settlement (~16:30 IST)."""
+        now = datetime.now(IST)
+        if now.time() < time(16, 30) or self._last_backup_day == now.date():
+            return
+        self._last_backup_day = now.date()
+        from skas_algo.services.backup import backup_db
+
+        await asyncio.to_thread(backup_db)
+
     def _tick(self, live: LiveRun, tick_driven: bool, decide_at: time) -> None:
         """One synchronous pricing/decision tick — always called via asyncio.to_thread."""
         live.refresh()
@@ -1089,6 +1154,7 @@ class LiveRunManager:
 
     async def _loop(self, live: LiveRun) -> None:
         try:
+            loop = asyncio.get_running_loop()
             is_deriv = live.config.instrument_class.upper() == "DERIV"
             # Tick-driven runs decide every refresh (options, and custom equity trades whose
             # GTT trigger / stop / trailing must react intraday). Plain equity decides once a day.
@@ -1120,12 +1186,13 @@ class LiveRunManager:
                 )
                 if should_price:
                     try:
-                        # The WHOLE tick runs in a worker thread: refresh/decisions do real
-                        # I/O (broker calls, or per-symbol DuckDB reads on cache fallback —
+                        # The WHOLE tick runs in a DEDICATED worker pool: refresh/decisions do
+                        # real I/O (broker calls, or per-symbol DuckDB reads on cache fallback —
                         # a 50-name basket is ~50 queries) and 20+ runs ticking these
                         # synchronously on the ONE event loop starved the entire API
                         # (2026-07-07 morning). publish/start_loop are thread-safe now.
-                        await asyncio.to_thread(self._tick, live, tick_driven, decide_at)
+                        await loop.run_in_executor(
+                            self._tick_pool, self._tick, live, tick_driven, decide_at)
                     except Exception:  # pragma: no cover - keep the loop alive
                         logger.exception("live loop tick failed for run %s", live.run_id)
                 await asyncio.sleep(live.config.refresh_seconds)

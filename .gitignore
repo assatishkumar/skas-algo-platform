@@ -27,9 +27,13 @@ secrets/
 
 # Databases / data
 *.db
+*.db-wal
+*.db-shm
 *.duckdb
 *.sqlite
 *.sqlite3
+# On-box rolling DB snapshots (services/backup.py) — live state, never commit.
+/backups/
 # Root-anchored so these only ignore the local cache/output dirs at the repo root —
 # NOT the src/skas_algo/data Python package (which must be tracked).
 /data/

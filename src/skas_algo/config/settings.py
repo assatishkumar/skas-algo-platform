@@ -36,7 +36,11 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite:///./skas_algo.db")
 
     # --- API server ---
-    api_host: str = "0.0.0.0"
+    # Bind LOCALHOST by default: this is a single-user, real-money system with NO auth on
+    # its routes (arm/force-entry/flatten/delete are all anonymous). Binding 0.0.0.0 would
+    # expose those to anyone on the LAN — CORS does NOT protect a direct HTTP client. Only
+    # the container path sets SKAS_API_HOST=0.0.0.0 explicitly (docker publishes a port).
+    api_host: str = "127.0.0.1"
     api_port: int = 8080
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
@@ -63,6 +67,16 @@ class Settings(BaseSettings):
     live_max_order_notional: float = 500_000.0   # SKAS_LIVE_MAX_ORDER_NOTIONAL
     live_max_orders_per_day: int = 20            # SKAS_LIVE_MAX_ORDERS_PER_DAY
     live_order_timeout_s: float = 10.0           # SKAS_LIVE_ORDER_TIMEOUT_S (LIMIT→MARKET)
+
+    # --- Live pricing feed (WebSocket) ---
+    # When True (default), zerodha runs pull marks from a shared per-account KiteTicker
+    # WebSocket feed (push) with a REST fallback on any staleness; False forces the legacy
+    # per-run REST polling. Broker-agnostic surface — Dhan/cache paths are unaffected.
+    ws_feed_enabled: bool = True
+    ws_feed_stale_s: float = 10.0        # in-market: a mark older than this → REST fallback
+
+    # --- Backups ---
+    db_backup_keep: int = 7              # rolling on-box snapshots of the sqlite DB to retain
 
     # --- Logging ---
     log_level: str = "INFO"

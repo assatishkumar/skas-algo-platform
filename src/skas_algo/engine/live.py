@@ -766,6 +766,12 @@ class LiveSession:
                 "date": ts,
             }
 
+    # Cap the in-memory equity-curve history: tick-driven (options) runs append one row
+    # per decision — ~750/day — and persistence already collapses to one row/day
+    # (_daily_history), so an unbounded list only leaks memory over a long-lived run. Keep
+    # a generous tail (many days of intraday points) and drop the oldest beyond it.
+    _HISTORY_CAP = 20_000
+
     def _record_history(self, ts) -> None:
         closes = self.market.mark_prices()
         holdings = self.portfolio.holdings_value(closes)
@@ -778,3 +784,5 @@ class LiveSession:
                 "total_equity": self.portfolio.cash + holdings,
             }
         )
+        if len(self.history) > self._HISTORY_CAP:
+            del self.history[: len(self.history) - self._HISTORY_CAP]

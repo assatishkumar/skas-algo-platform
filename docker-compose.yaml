@@ -4,6 +4,11 @@ services:
     ports:
       - "8080:8080"
     environment:
+      # The app binds 127.0.0.1 by default (localhost-only, see config/settings.py); inside
+      # a container that would be unreachable through the published port, so the container
+      # MUST bind all interfaces. Container network isolation + the host firewall are the
+      # access control here — do NOT publish 8080 to a public interface without a proxy+auth.
+      SKAS_API_HOST: ${SKAS_API_HOST:-0.0.0.0}
       # On the VPS, point this at the postgres service below.
       SKAS_DATABASE_URL: ${SKAS_DATABASE_URL:-postgresql+psycopg://skas:skas@db:5432/skas_algo}
       SKAS_ENVIRONMENT: ${SKAS_ENVIRONMENT:-production}

@@ -86,8 +86,14 @@ def warmup_history(
 
 
 def is_market_open(now: datetime | None = None) -> bool:
-    """NSE regular session: Mon-Fri, 09:15-15:30 IST (holidays not modelled)."""
+    """NSE regular session: Mon-Fri, 09:15-15:30 IST, excluding trading holidays.
+
+    Holidays make this return False so the loop treats them like a weekend — marks may
+    re-price off-hours (read-only) but NO decisions/orders fire. See live/holidays.py.
+    """
+    from .holidays import is_nse_holiday
+
     now = now or datetime.now(IST)
-    if now.weekday() >= 5:
+    if now.weekday() >= 5 or is_nse_holiday(now.date()):
         return False
     return time(9, 15) <= now.timetz().replace(tzinfo=None) <= time(15, 30)

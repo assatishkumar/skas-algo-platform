@@ -40,9 +40,16 @@ async def lifespan(app: FastAPI):
         from skas_algo.live.recovery import recover_running_sessions
 
         manager.broadcaster.loop = asyncio.get_running_loop()
+        # Watchdog (restarts dead run loops) + daily DB backup, one singleton task.
+        manager.start_maintenance()
 
         def _recover() -> None:
             try:
+                # Snapshot the DB BEFORE recovery mutates anything — captures the last known
+                # good state each restart, independent of the daily backup.
+                from skas_algo.services.backup import backup_db
+
+                backup_db()
                 recover_running_sessions()
             except Exception:  # pragma: no cover - never crash the app
                 logger.exception("live-session recovery failed")

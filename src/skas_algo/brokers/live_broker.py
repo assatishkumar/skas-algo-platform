@@ -55,12 +55,17 @@ class _RateGovernor:
         self._last = 0.0
 
     def wait(self) -> None:
+        # Reserve this call's slot under the lock, then sleep OUTSIDE it. Sleeping while
+        # holding the lock serialized every waiter behind a full ~0.25s each; now the lock
+        # is held only for the arithmetic, so N simultaneous entries on one account still
+        # pace ~1/0.25s at the broker but don't stack their sleeps into seconds of latency.
         with self._lock:
             now = _time.monotonic()
-            delta = now - self._last
-            if delta < self.min_interval_s:
-                _time.sleep(self.min_interval_s - delta)
-            self._last = _time.monotonic()
+            scheduled = max(now, self._last + self.min_interval_s)
+            self._last = scheduled
+        delay = scheduled - _time.monotonic()
+        if delay > 0:
+            _time.sleep(delay)
 
 
 # One governor per broker account, shared across every LiveBroker in the process —
@@ -110,8 +115,11 @@ class LiveBroker:
 
     # ------------------------------------------------------------------ rails
     def _check_rails(self, order: BrokerOrder, ref_price: float | None) -> None:
+        from skas_algo.live.holidays import is_nse_holiday
+
         now = self._clock.now()
-        if now.weekday() >= 5 or not ("09:15" <= now.strftime("%H:%M") <= "15:30"):
+        if (now.weekday() >= 5 or is_nse_holiday(now.date())
+                or not ("09:15" <= now.strftime("%H:%M") <= "15:30")):
             raise OrderExecutionError("market closed — refusing to place a real order")
         today = now.date()
         if self._orders_day != today:
