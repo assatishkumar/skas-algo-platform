@@ -612,7 +612,7 @@ def test_settles_at_expiry():
     sess.update_quotes(ENTRY_Q)
     sess.run_decision(datetime(2026, 1, 5, 9, 50))
     assert sess.portfolio.lot_symbols()
-    settle = sess.run_decision(datetime(2026, 1, 13, 15, 20))  # expiry day
+    settle = sess.run_decision(datetime(2026, 1, 13, 15, 31))  # expiry day, past the 15:30 cutoff
     assert any(e["action"] == "SETTLE" for e in settle)
     assert not sess.portfolio.lot_symbols() and strat.done
 

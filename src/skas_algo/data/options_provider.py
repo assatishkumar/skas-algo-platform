@@ -194,7 +194,11 @@ def build_live_options_run(sd, underlying: str, lot_overrides: dict | None = Non
     chain_view = OptionChainView(live_chain_provider, live_spot, lot_overrides=lot_overrides)
     market_view = LiveOptionsMarketView(chain_view, loader=loader, current_datetime=now,
                                         index_spots=index_spots)
-    settler = ExpirySettler(cache_spot, lot_overrides=lot_overrides)
+    # Settlement prices intrinsic off the LIVE index spot when available (the shared
+    # index_spots dict the loop feeds every tick) — the cached close is yesterday's and
+    # mid-day mis-settled 0DTE legs (2026-07-07); cache stays the off-hours fallback.
+    settler = ExpirySettler(cache_spot, lot_overrides=lot_overrides,
+                            live_spot_fn=lambda u: index_spots.get(u.upper()))
     margin_model = MarginModel(cache_spot, MarginParams.from_dict(margin_params),
                                lot_overrides=lot_overrides)
     return market_view, chain_view, settler, margin_model

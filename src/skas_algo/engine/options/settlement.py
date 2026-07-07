@@ -21,10 +21,20 @@ from skas_algo.engine.options.instrument import parse
 SpotProvider = Callable[[str, date], "float | None"]
 
 
+# NSE options cease trading 15:30 IST on expiry day; settlement realizes after that.
+_EXPIRY_CUTOFF_HHMM = (15, 30)
+
+
 class ExpirySettler:
-    def __init__(self, spot_provider: SpotProvider, lot_overrides: dict | None = None):
+    def __init__(self, spot_provider: SpotProvider, lot_overrides: dict | None = None,
+                 live_spot_fn=None):
         self.spot_provider = spot_provider
         self.lot_overrides = lot_overrides
+        # Live runs: fn(underlying) -> live index spot. Settlement on expiry day must
+        # price intrinsic off the REAL spot — the cached series only has yesterday's
+        # close, which mid-day mis-settled run 200's 0DTE legs at phantom intrinsics
+        # (24500 PE "settled" ₹324 vs a true ₹50, 2026-07-07).
+        self.live_spot_fn = live_spot_fn
 
     def settle(self, ts: date | datetime, portfolio) -> list[dict]:
         """Settle every held option lot whose expiry is on/before ``ts``.
@@ -34,12 +44,28 @@ class ExpirySettler:
         equity portfolio produces no events.
         """
         today = ts.date() if isinstance(ts, datetime) else ts
+        # LIVE intraday guard: with a real clock (datetime carrying a time-of-day — the
+        # backtest's daily slices are midnight timestamps and keep the old settle-on-
+        # expiry-day semantics BYTE-IDENTICALLY), a contract expiring TODAY is still
+        # alive until 15:30. Settling it at the morning's first decision force-closed
+        # run 200's freshly-sold 0DTE legs (2026-07-07).
+        intraday = isinstance(ts, datetime) and (ts.hour, ts.minute, ts.second) != (0, 0, 0)
+        cutoff_passed = (not intraday) or (ts.hour, ts.minute) >= _EXPIRY_CUTOFF_HHMM
         events: list[dict] = []
         for symbol in list(portfolio.lot_symbols()):
             inst = parse(symbol, lot_overrides=self.lot_overrides)
             if inst is None or inst.expiry > today:
                 continue
-            spot = self.spot_provider(inst.underlying, inst.expiry)
+            if inst.expiry == today and not cutoff_passed:
+                continue  # 0DTE, market still open — the strategy owns it until 15:30
+            spot = None
+            if self.live_spot_fn is not None:
+                try:
+                    spot = self.live_spot_fn(inst.underlying)
+                except Exception:  # pragma: no cover - fall through to the cache
+                    spot = None
+            if spot is None:
+                spot = self.spot_provider(inst.underlying, inst.expiry)
             if spot is None:
                 # No settlement spot available — leave the lot; caller can warn/retry.
                 continue

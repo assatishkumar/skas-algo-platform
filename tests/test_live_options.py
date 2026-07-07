@@ -209,7 +209,7 @@ def test_live_expiry_settles_legs():
     assert strat.legs
     # Jump to expiry day — the settler realizes the contracts to intrinsic (flat spot →
     # all OTM → ~0), and the strategy sees a flat book.
-    settle_events = sess.run_decision(datetime(2026, 1, 13, 15, 20))
+    settle_events = sess.run_decision(datetime(2026, 1, 13, 15, 31))
     assert any(e["action"] == "SETTLE" for e in settle_events)
     assert not any(strat.legs)
 

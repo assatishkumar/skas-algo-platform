@@ -184,7 +184,6 @@ def test_pivot_formula_exact_values():
     (H=24035.55 L=23829.20 C=23917.75 → R1≈24025.80, S1≈23819.45). The swapped version
     put R1 BELOW S1 and inverted the gate (the Jul-1 09:30 phantom bear entry)."""
     st = MomentumThetaGainerIntra(underlyings=["NIFTY"])
-    ctx = FakeCtx()
     t0 = datetime(2026, 6, 30, 9, 15)
     st.bars["NIFTY"] = [
         [(t0 + timedelta(minutes=15 * i)).isoformat(), 23900, 23900, 23900, 23900]
@@ -289,3 +288,42 @@ def test_deploy_margin_guard_handles_dict_lots():
     assert isinstance(raw, dict)
     total = sum(int(v or 0) for v in raw.values())
     assert int(total or 1) == 4  # the exact expression the guard now applies
+
+
+def test_expiry_settlement_time_gate_and_live_spot():
+    """Run-200 incident: a 0DTE leg sold at 09:30 was force-settled on the NEXT tick at
+    intrinsic vs a STALE cached close. (1) With a real intraday clock, expiry-day legs
+    must survive until 15:30; (2) settlement prices off the live spot when available;
+    (3) midnight timestamps (backtest daily slices) keep the old settle-on-expiry-day
+    behavior byte-identically."""
+    from datetime import datetime
+
+    from skas_algo.engine.options.settlement import ExpirySettler
+    from skas_algo.engine.portfolio import Portfolio
+
+    def cached_spot(_u, _d):
+        return 24175.7  # stale Friday close (the phantom-settle culprit)
+
+    live_spots = {"NIFTY": 24450.0}
+
+    pf = Portfolio(cash=1_000_000)
+    pf.sell_to_open("NIFTY|2026-07-07|24500|PE", 130, 46.25, datetime(2026, 7, 7, 9, 30), 1)
+
+    settler = ExpirySettler(cached_spot, live_spot_fn=lambda u: live_spots.get(u))
+    # Mid-session on expiry day → NOT settled.
+    assert settler.settle(datetime(2026, 7, 7, 10, 45), pf) == []
+    assert pf.lot_symbols()
+    # After the 15:30 cutoff → settled at intrinsic vs the LIVE spot (24500-24450=50).
+    events = settler.settle(datetime(2026, 7, 7, 15, 31), pf)
+    assert len(events) == 1 and events[0]["price"] == 50.0
+    assert not pf.lot_symbols()
+
+    # Backtest daily slice (midnight timestamp) settles on expiry day as always —
+    # and with no live fn it uses the cached spot (old behavior, parity-safe).
+    import pandas as pd
+
+    pf2 = Portfolio(cash=1_000_000)
+    pf2.sell_to_open("NIFTY|2026-07-07|24500|PE", 130, 46.25, datetime(2026, 7, 6), 1)
+    settler2 = ExpirySettler(cached_spot)
+    events2 = settler2.settle(pd.Timestamp("2026-07-07"), pf2)
+    assert len(events2) == 1 and round(events2[0]["price"], 2) == round(24500 - 24175.7, 2)
