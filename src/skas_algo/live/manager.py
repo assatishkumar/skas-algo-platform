@@ -955,7 +955,7 @@ class LiveRunManager:
         live._last_offhours_refresh = None  # re-price immediately (next tick) — even off-hours
         return True
 
-    def promote_quote_source(self, run_id: int, db) -> bool:
+    def promote_quote_source(self, run_id: int, db, adapter=None) -> bool:
         """Upgrade a cache-fallback run back to live Zerodha quotes if a session exists.
 
         Returns True if promoted. Used by the reconnect endpoint and auto-called when a
@@ -973,7 +973,9 @@ class LiveRunManager:
         account = db.get(BrokerAccount, live.config.broker_account_id)
         if account is None or not broker_svc.has_valid_session(account):
             return False
-        live.quote_source = ZerodhaQuoteSource(broker_svc.make_adapter(account))
+        # A shared ``adapter`` (one per account) avoids re-downloading the NFO/BFO
+        # instruments dumps once per promoted run — the 2026-07-07 login hang.
+        live.quote_source = ZerodhaQuoteSource(adapter or broker_svc.make_adapter(account))
         live.on_cache_fallback = False
         live.quote_error = None
         live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter
@@ -982,11 +984,39 @@ class LiveRunManager:
         return True
 
     def promote_account_runs(self, account_id: int, db) -> list[int]:
-        """Promote every cache-fallback run on this account (called after a login)."""
+        """Promote every cache-fallback run on this account (called after a login).
+        ONE adapter is built for the account and shared by every promoted run."""
+        from skas_algo.db.models import BrokerAccount
+        from skas_algo.services import broker as broker_svc
+
+        account = db.get(BrokerAccount, account_id)
+        if account is None or not broker_svc.has_valid_session(account):
+            return []
+        adapter = broker_svc.make_adapter(account)
         return [rid for rid, live in self.runs.items()
                 if (live.on_cache_fallback or live.quote_error)
                 and live.config.broker_account_id == account_id
-                and self.promote_quote_source(rid, db)]
+                and self.promote_quote_source(rid, db, adapter=adapter)]
+
+    def promote_account_runs_async(self, account_id: int) -> None:
+        """Fire-and-forget promotion on a daemon thread with its OWN db session.
+        The login route must return the moment the token is saved — promoting ~20 runs
+        does minutes of serial broker I/O (instruments dumps, per-leg quote warmups) and
+        hanging the request bricked the Brokers page twice (2026-07-07). The runs' own
+        1/min self-heal would recover them anyway; this just makes it immediate."""
+        import threading
+
+        def _job() -> None:
+            try:
+                with session_scope() as db:
+                    promoted = self.promote_account_runs(account_id, db)
+                if promoted:
+                    logger.info("promoted %d runs after login on account %s",
+                                len(promoted), account_id)
+            except Exception:  # pragma: no cover - background best-effort
+                logger.exception("background promotion failed for account %s", account_id)
+
+        threading.Thread(target=_job, daemon=True).start()
 
     @staticmethod
     def _due_offhours_refresh(live: "LiveRun", now: datetime) -> bool:

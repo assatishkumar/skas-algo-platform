@@ -92,9 +92,11 @@ def login(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"token exchange failed: {exc}") from exc
     # A fresh session can revive any live run that had degraded to cache quotes.
-    db.flush()
+    # COMMIT FIRST, then promote in the BACKGROUND: promotion does minutes of broker
+    # I/O and must never hold this request (or its write transaction) open.
+    db.commit()
     from skas_algo.live.manager import manager
-    manager.promote_account_runs(account_id, db)
+    manager.promote_account_runs_async(account_id)
     return _to_out(account)
 
 
