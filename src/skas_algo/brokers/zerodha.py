@@ -190,27 +190,43 @@ class ZerodhaAdapter:
         used = margins.get("utilised", {}).get("debits", 0.0)
         return Funds(available=available, used=used)
 
-    def get_quote(self, symbols: list[str]) -> dict[str, float]:
-        """LTP per symbol. Equities map to ``NSE:<symbol>``; option contracts
+    def _ltp_keys(self, symbols: list[str]) -> dict[str, str]:
+        """Map each of OUR symbols to its Kite ltp/subscribe key (``EXCH:TRADINGSYMBOL``).
+        Equities map to ``NSE:<symbol>`` (SENSEX/BANKEX → ``BSE:``); option contracts
         (``UNDERLYING|EXPIRY|STRIKE|RIGHT``) map to ``NFO:<tradingsymbol>`` via the Kite
-        NFO instruments dump (so we don't hand-encode weekly/monthly tradingsymbols)."""
+        NFO/BFO instruments dump (so we don't hand-encode weekly/monthly tradingsymbols)."""
         from skas_algo.engine.options.instrument import parse
 
-        key_of: dict[str, str] = {}  # my_symbol -> kite ltp key
+        key_of: dict[str, str] = {}  # my_symbol -> kite key
         for s in symbols:
             inst = parse(s)
             if inst is None:
-                # Plain symbol: an index series (may live on BSE — SENSEX) or an NSE equity.
                 exch = "BSE" if s.upper() in self._BSE_SERIES else "NSE"
                 key_of[s] = f"{exch}:{s}"
             else:
                 ts = self._option_tradingsymbol(inst)
                 if ts:
                     key_of[s] = f"{self._exchange_of(ts)}:{ts}"
+        return key_of
+
+    def get_quote(self, symbols: list[str]) -> dict[str, float]:
+        """LTP per symbol (batched into one ``kite.ltp()`` call)."""
+        key_of = self._ltp_keys(symbols)
         if not key_of:
             return {}
         data = self._kite_client().ltp(list(key_of.values()))
         return {s: data[k]["last_price"] for s, k in key_of.items() if k in data}
+
+    def instrument_tokens(self, symbols: list[str]) -> dict[str, int]:
+        """Resolve OUR symbols to Kite ``instrument_token``s for a WebSocket subscription.
+        One ``kite.ltp()`` call — its response carries the token per key. Used by the
+        KiteTicker price feed (live/pricefeed.py)."""
+        key_of = self._ltp_keys(symbols)
+        if not key_of:
+            return {}
+        data = self._kite_client().ltp(list(key_of.values()))
+        return {s: int(data[k]["instrument_token"]) for s, k in key_of.items()
+                if k in data and data[k].get("instrument_token")}
 
     def basket_margin(self, legs: list[dict]) -> float | None:
         """Net margin (₹) Zerodha would block for a basket built from THESE legs.

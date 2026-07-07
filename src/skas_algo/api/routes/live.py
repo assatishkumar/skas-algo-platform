@@ -30,7 +30,7 @@ from skas_algo.db.models import Algo, AlgoRun, BrokerAccount, GreeksSnapshot, Or
 from skas_algo.engine.market import PriceLoader
 from skas_algo.engine.overrides import OverrideRule
 from skas_algo.live.manager import LiveConfig, manager
-from skas_algo.live.quotes import BrokerQuoteSource, CacheQuoteSource, is_broker_source
+from skas_algo.live.quotes import CacheQuoteSource, is_broker_source
 from skas_algo.services import broker as broker_svc
 from skas_algo.services.runs import delete_algo_cascade
 
@@ -61,7 +61,9 @@ def _build_quote_source(quote_source: str, broker_account_id, loader: PriceLoade
                 status_code=400,
                 detail="broker account has no valid session — log in (paste token) first",
             )
-        return BrokerQuoteSource(broker_svc.make_adapter(account))
+        from skas_algo.live.pricefeed import build_quote_source
+
+        return build_quote_source(account, broker_svc.make_adapter(account))
     raise HTTPException(status_code=400, detail=f"unknown quote_source '{quote_source}'")
 
 

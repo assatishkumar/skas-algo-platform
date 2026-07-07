@@ -16,6 +16,10 @@ os.environ["SKAS_ENVIRONMENT"] = "test"
 # "Account arm ARMED" alerts on the owner's phone). Blank them before any settings load.
 os.environ["SKAS_TELEGRAM_BOT_TOKEN"] = ""
 os.environ["SKAS_TELEGRAM_CHAT_ID"] = ""
+# Integration paths (manager/recovery quote-source construction) must NOT open a real
+# KiteTicker WebSocket in tests. The feed's own logic is covered by tests/test_pricefeed.py
+# with a fake ticker; here we force the legacy REST path (same reasoning as the notifiers).
+os.environ["SKAS_WS_FEED_ENABLED"] = "false"
 
 # A throwaway Fernet key so credential-encryption tests work in isolation.
 from cryptography.fernet import Fernet  # noqa: E402

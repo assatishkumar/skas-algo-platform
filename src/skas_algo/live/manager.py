@@ -961,7 +961,6 @@ class LiveRunManager:
         adapter from the current DB token and clear the error so the loop polls again. Throttled
         to ~once/minute. Recovers a re-login (and transient rate-limits) without manual Reconnect."""
         from skas_algo.db.models import BrokerAccount
-        from skas_algo.live.quotes import ZerodhaQuoteSource
         from skas_algo.services import broker as broker_svc
 
         if not live.config.broker_account_id:
@@ -974,7 +973,9 @@ class LiveRunManager:
             account = db.get(BrokerAccount, live.config.broker_account_id)
             if account is None or not broker_svc.has_valid_session(account):
                 return False
-            live.quote_source = ZerodhaQuoteSource(broker_svc.make_adapter(account))
+            from skas_algo.live.pricefeed import build_quote_source
+
+            live.quote_source = build_quote_source(account, broker_svc.make_adapter(account))
         live.on_cache_fallback = False
         live.quote_error = None
         live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter
@@ -993,7 +994,7 @@ class LiveRunManager:
         if live is None or not (live.on_cache_fallback or live.quote_error) or not live.config.broker_account_id:
             return False
         from skas_algo.db.models import BrokerAccount
-        from skas_algo.live.quotes import ZerodhaQuoteSource
+        from skas_algo.live.pricefeed import build_quote_source
         from skas_algo.services import broker as broker_svc
 
         account = db.get(BrokerAccount, live.config.broker_account_id)
@@ -1001,7 +1002,7 @@ class LiveRunManager:
             return False
         # A shared ``adapter`` (one per account) avoids re-downloading the NFO/BFO
         # instruments dumps once per promoted run — the 2026-07-07 login hang.
-        live.quote_source = ZerodhaQuoteSource(adapter or broker_svc.make_adapter(account))
+        live.quote_source = build_quote_source(account, adapter or broker_svc.make_adapter(account))
         live.on_cache_fallback = False
         live.quote_error = None
         live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter

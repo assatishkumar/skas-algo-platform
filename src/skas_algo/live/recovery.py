@@ -15,13 +15,10 @@ from datetime import date
 from skas_algo.db.base import session_scope
 from skas_algo.db.enums import TradingMode
 from skas_algo.db.models import Algo, AlgoRun, BrokerAccount
-from skas_algo.engine.live import LiveSession
 from skas_algo.live.manager import LiveConfig, LiveRun, manager
 from skas_algo.live.quotes import (
     CacheQuoteSource,
-    ZerodhaQuoteSource,
     is_broker_source,
-    warmup_history,
 )
 from skas_algo.services import broker as broker_svc
 from skas_algo.strategies.registry import get_strategy
@@ -171,7 +168,9 @@ def _quote_source(db, config: LiveConfig, loader):
     if is_broker_source(config.quote_source) and config.broker_account_id:
         account = db.get(BrokerAccount, config.broker_account_id)
         if account is not None and broker_svc.has_valid_session(account):
-            return ZerodhaQuoteSource(broker_svc.make_adapter(account)), False
+            from skas_algo.live.pricefeed import build_quote_source
+
+            return build_quote_source(account, broker_svc.make_adapter(account)), False
         logger.warning(
             "run for account %s has no valid session; recovering with cache quotes",
             config.broker_account_id,
