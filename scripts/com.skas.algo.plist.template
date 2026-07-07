@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent that keeps the skas-algo backend always-up: starts it at login and restarts
+  it within ThrottleInterval seconds if it ever exits (crash, OOM, manual kill). Generated
+  from this template by scripts/install-supervisor.sh (placeholders filled with absolute
+  paths) into ~/Library/LaunchAgents/com.skas.algo.plist. WorkingDirectory is the repo root
+  so the RELATIVE sqlite path and .env resolve correctly (the #1 launch footgun).
+
+  This is a per-user LaunchAgent → runs while the user is logged in. For always-on operation
+  across logout/reboot without a login, convert to a LaunchDaemon (needs sudo +
+  /Library/LaunchDaemons + a UserName key) — see docs/ARCHITECTURE.md.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.skas.algo</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__SKAS_BIN__</string>
+  </array>
+
+  <!-- Repo root: relative sqlite path (./skas_algo.db) + .env are read from here. -->
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on ANY exit. ThrottleInterval caps a crash-loop to 1 start / 15s. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>15</integer>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/skas-algo.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/skas-algo.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <!-- launchd starts with a minimal env; the app reads secrets from .env (via
+       WorkingDirectory). PATH is set so the venv's interpreter and tools resolve. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin</string>
+  </dict>
+</dict>
+</plist>

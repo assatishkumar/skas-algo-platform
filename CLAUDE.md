@@ -233,6 +233,15 @@ REST fallback — strategies still read via `QuoteSource` (no tick callbacks, pa
 NSE holidays close the market like weekends (`live/holidays.py`; festival dates PROVISIONAL,
 env-correctable via `NSE_HOLIDAYS_ADD`/`NSE_HOLIDAYS_REMOVE`).
 
+**Supervision (optional but recommended for real-money):** `./scripts/install-supervisor.sh`
+puts the backend under a launchd LaunchAgent (auto-start + auto-restart on any exit);
+`uninstall-supervisor.sh` reverts. NOTE: while supervised, launchd re-spawns the backend
+within ~15s of any kill — so a manual restart during dev means `launchctl kickstart -k
+gui/$(id -u)/com.skas.algo`, not a bare `pkill` (which just triggers a respawn). A recovered
+LIVE-order run keeps PaperBroker (recovery never injects LiveBroker); a freshly-deployed
+LiveBroker run reconciles its broker book before its first decision (`reconcile_pending`,
+ARCHITECTURE §3).
+
 **Footguns when launching:**
 - **Relative SQLite path.** `SKAS_DATABASE_URL=sqlite:///./skas_algo.db` is relative to the CWD —
   start the backend from the **repo root** or it opens/creates a *different, empty* DB (no accounts /

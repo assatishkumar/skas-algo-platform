@@ -103,14 +103,29 @@ default PaperBroker.
 > the flag, no deploying a LIVE+armed run, no "verify with a real order." Order-path
 > verification = fake-adapter tests only. See `CLAUDE.md` §1.
 
-**KNOWN GAP → double-fill window (P1).** Real fills are booked into the in-memory portfolio
-inside `run_decision` *before* the tick's `record_trades` + `_persist_state` commit. If the
-process dies in that window, recovery restores the pre-fill book and the strategy may
-re-enter → a second real order. `Order.client_order_id` is unique but is minted *after* the
-fill, so it doesn't currently dedup. Hourly reconciliation only *surfaces* the divergence
-later. **P1 fix:** on LIVE-run recovery, reconcile the broker book BEFORE the first decision
-and dedup by a pre-placement client_order_id/positions check. Until then, mitigations: the
-paper twin, the hourly halt, and the dedicated-account recommendation.
+**Double-fill window — mitigated by the reconcile-before-first-decision gate.** Real fills
+are booked into the in-memory portfolio inside `run_decision` *before* the tick's
+`record_trades` + `_persist_state` commit; a crash in that window leaves the broker holding a
+position the restored book is missing. Two guards now stand between that and a double order:
+- **Recovery downgrades to PaperBroker.** `_maybe_inject_live_broker` is called only in the
+  deploy path, never in `recovery.py` — so a recovered run uses PaperBroker and *cannot*
+  place a real re-order. (This is also a limitation — see the injection note below.)
+- **Reconcile-before-first-decision gate** (`LiveRun.reconcile_pending`). Any run that got a
+  real-order LiveBroker starts *pending*: `_maybe_reconcile` runs every tick (bypassing the
+  hourly throttle) and the decision gate — in the loop AND the manual `/run-decision` route —
+  blocks until it succeeds. A book mismatch → `order_error` halt (owner acks); an inability to
+  reconcile (no session / transient error) leaves it pending and retries (the throttle is
+  armed only after a comparison *completes*, so an unreconciled decision never slips through).
+  Dormant while live orders are disabled; it is the safety net that exists *before* the first
+  real order. Tests: `tests/test_live_broker.py::test_reconcile_gate_pending_lifecycle`.
+
+> **Owner-gated decision — resume real orders on recovery.** Because recovery keeps
+> PaperBroker, a restart currently makes a *live* run stop placing real orders (its real
+> position is then managed only on the next deliberate re-activation). Making recovery
+> re-inject the LiveBroker (so a live run resumes real management after a crash) is an
+> order-ENABLING change: it should sit behind a new setting defaulting to today's fail-safe
+> behavior (e.g. `live_resume_orders_on_recovery=false`), and the reconcile gate above already
+> guarantees such a run would reconcile before trading. Left for the owner's explicit choice.
 
 ---
 
@@ -122,10 +137,14 @@ paper twin, the hourly halt, and the dedicated-account recommendation.
   position's risk on the next recovery (§6 rule 2).
 - **State-loss window.** Between a fill and its persist (see §3 gap). Everything else
   persists at the end of each `refresh`/`run_decision`.
-- **Process supervision (P1).** The documented daily driver is a bare `nohup venv/bin/skas-algo`.
-  Stops are **engine-side only** (evaluated in `run_decision`); there is no broker GTT/OCO.
-  A box reboot with open positions and no restart = unmanaged exposure. Add supervision
-  (launchd/systemd) so the process always comes back — this is the top operational P1.
+- **Process supervision.** Stops are **engine-side only** (evaluated in `run_decision`); there
+  is no broker GTT/OCO, so a backend that is DOWN with open positions = unmanaged exposure.
+  `scripts/install-supervisor.sh` puts the backend under a launchd LaunchAgent
+  (`com.skas.algo`): auto-start at login + auto-restart within 15s on any exit, WorkingDirectory
+  pinned to the repo root. `uninstall-supervisor.sh` reverts. This is a per-user agent (runs
+  while logged in); for always-on across logout/reboot, convert to a LaunchDaemon (sudo +
+  `/Library/LaunchDaemons` + a `UserName` key). A restart still has a brief no-management gap —
+  broker-side GTT stops would remove it entirely and remain a future option.
 - **Watchdog.** The manager maintenance task (5-min) restarts any AUTO run whose loop task
   died silently and Telegram-alerts it (`manager._watchdog_scan`).
 - **Holidays.** `live/holidays.py` makes `is_market_open` treat NSE holidays like weekends
@@ -233,14 +252,19 @@ strategy or the engine:
 retention; dead-loop watchdog; dedicated tick executor; governor lock fix; in-memory history
 cap; WebSocket price feed; `preflight.sh`; this doc.
 
-**P1 — do next (each has a clear trigger):**
-- **Process supervision** (launchd/systemd) — *before* the first real-money pilot runs
-  unattended. Highest operational priority.
-- **Close the double-fill window** (§3) — before scaling live size past the 1-lot pilot.
+**P1 — done (2026-07 review):**
+- **Process supervision** — `scripts/install-supervisor.sh` (launchd LaunchAgent, auto-restart).
+- **Double-fill safety net** — the reconcile-before-first-decision gate (§3).
+
+**P1 — remaining (each has a clear trigger):**
+- **Resume real orders on recovery** (owner-gated, §3) — decide + wire the
+  `live_resume_orders_on_recovery` flag before the first real-money pilot runs unattended,
+  so a restart re-manages a live book (it reconciles first). Highest operational priority.
 - **`greeks_snapshot` retention job** — the table grows ~375 rows/run/day unbounded; add a
   pruning job when the DB crosses a size you care about.
 - **Encrypt `api_key`; `MultiFernet` key rotation; pin dependencies; CSRF/bearer token** if
   the API surface ever leaves localhost.
+- **Broker-side GTT/OCO stops** — to remove the brief no-management gap during a restart.
 
 **P2 — at scale (50+ runs / multi-year):**
 - Serialize/guard concurrent DuckDB cache reads across tick threads (single-connection

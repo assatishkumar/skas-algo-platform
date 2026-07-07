@@ -49,3 +49,6 @@ web/.vite/
 .idea/
 .vscode/
 *.log
+
+# launchd supervisor logs
+/logs/

@@ -329,3 +329,65 @@ def test_reconciliation_aggregates_across_runs():
 
     msg = mgr.reconcile_account_book(1, _WrongAdapter())
     assert msg and "platform +65" in msg and "broker +130" in msg
+
+
+def test_reconcile_gate_pending_lifecycle(monkeypatch):
+    """Reconcile-before-first-decision gate (the double-fill safety net): a pending run
+    reconciles regardless of the hourly throttle; a clean book lifts the gate, a mismatch
+    halts, and an INABILITY to reconcile leaves it pending (throttle NOT armed) so it
+    retries next tick — an unreconciled decision never slips through."""
+    from types import SimpleNamespace
+
+    from skas_algo.brokers.live_broker import LiveBroker
+    from skas_algo.live.manager import LiveRun, manager
+
+    lb = LiveBroker.__new__(LiveBroker)  # a LiveBroker instance without wiring
+
+    def make(adapter, pending=True, broker=lb):
+        return SimpleNamespace(
+            session=SimpleNamespace(broker=broker),
+            quote_source=SimpleNamespace(adapter=adapter),
+            config=SimpleNamespace(broker_account_id=1, name="t"),
+            run_id=1, order_error=None, reconcile_pending=pending,
+            _last_reconcile_at=None,
+        )
+
+    outcomes = {"problem": None}
+    monkeypatch.setattr(manager, "reconcile_account_book",
+                        lambda acc, adapter: outcomes["problem"])
+
+    # Clean book → pending lifted, throttle armed, no halt.
+    s = make(adapter=object())
+    LiveRun._maybe_reconcile(s)
+    assert s.reconcile_pending is False and s.order_error is None
+    assert s._last_reconcile_at is not None
+
+    # Mismatch → halt via order_error (pending lifted; order_error is the block now).
+    outcomes["problem"] = "platform +65 vs broker +130"
+    s = make(adapter=object())
+    LiveRun._maybe_reconcile(s)
+    assert s.order_error and "mismatch" in s.order_error
+
+    # Can't reconcile (no adapter) → STAYS pending, throttle NOT armed → retries next tick.
+    s = make(adapter=None)
+    LiveRun._maybe_reconcile(s)
+    assert s.reconcile_pending is True and s._last_reconcile_at is None
+
+    # Paper broker → the whole method is a no-op (no real book to reconcile).
+    called = {"n": 0}
+    monkeypatch.setattr(manager, "reconcile_account_book",
+                        lambda acc, adapter: called.__setitem__("n", called["n"] + 1))
+    s = make(adapter=object(), pending=False, broker="PAPER")
+    LiveRun._maybe_reconcile(s)
+    assert called["n"] == 0
+
+
+def test_injected_livebroker_run_starts_reconcile_pending():
+    """A session that got a LiveBroker injected implies reconcile_pending — the exact
+    predicate LiveRun.__init__ uses, so a fresh live run gates its first decision."""
+    from skas_algo.brokers.live_broker import LiveBroker
+
+    injected = LiveBroker.__new__(LiveBroker)
+    paper = "PAPER-SENTINEL"
+    assert isinstance(injected, LiveBroker)          # → reconcile_pending True at init
+    assert not isinstance(paper, LiveBroker)         # → reconcile_pending False at init

@@ -365,6 +365,13 @@ async def refresh_live(run_id: int, decide: bool = False) -> dict:
 @router.post("/{run_id}/run-decision")
 async def run_decision(run_id: int) -> dict:
     live = _get(run_id)
+    # A real-order run that hasn't reconciled its broker book yet must not decide (the
+    # loop enforces this too; the manual trigger bypasses the tick's refresh→reconcile).
+    if getattr(live, "reconcile_pending", False):
+        raise HTTPException(
+            status_code=409,
+            detail="run is reconciling its broker book — decisions are held until it clears",
+        )
     events = live.run_decision()
     return {
         "run_id": run_id,

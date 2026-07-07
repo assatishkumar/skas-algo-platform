@@ -234,6 +234,14 @@ class LiveRun:
         # A REAL order failed (rejected/unfillable) or the broker book mismatched — halts
         # decisions until the owner acknowledges (POST /live/{id}/ack-order-error).
         self.order_error: str | None = None
+        # A run that got a REAL-order broker must reconcile its book against the broker
+        # BEFORE its first decision — so a pre-existing/manual position, or a fill a crash
+        # left unpersisted (the double-fill window), is DETECTED and halts instead of being
+        # re-traded. True only when a LiveBroker was injected (deploy path today; recovery
+        # keeps PaperBroker → False); cleared by the first clean reconcile. Dormant while
+        # live orders are disabled — the safety net that must exist BEFORE the first order.
+        from skas_algo.brokers.live_broker import LiveBroker
+        self.reconcile_pending: bool = isinstance(getattr(session, "broker", None), LiveBroker)
         # Last self-heal retry of a stuck (quote_error'd) zerodha run — throttles the loop's
         # rebuild-and-repoll to ~once a minute so it doesn't hammer a rate-limited/dead token.
         self._last_quote_retry: datetime | None = None
@@ -400,26 +408,36 @@ class LiveRun:
         return snap
 
     def _maybe_reconcile(self) -> None:
-        """Real-order runs only: hourly, compare the broker's net book with the aggregate
-        of ALL live-order runs on this account; mismatch → order_error halt (owner acks
-        after reviewing). Covers manual trades in the account, missed fills, and drift."""
+        """Real-order runs only: compare the broker's net book with the aggregate of ALL
+        live-order runs on this account; mismatch → order_error halt (owner acks after
+        reviewing). Covers manual trades in the account, missed fills, and drift.
+
+        Runs hourly, EXCEPT a ``reconcile_pending`` run (fresh live injection) reconciles
+        every tick until it succeeds — its first decision is gated on this. The hourly
+        throttle is armed ONLY after a comparison actually completes: a transient inability
+        (no adapter / broker error) leaves the run pending so it retries next tick, rather
+        than arming the throttle and letting an UNRECONCILED decision slip through."""
         from skas_algo.brokers.live_broker import LiveBroker
 
         if not isinstance(getattr(self.session, "broker", None), LiveBroker):
             return
         now = datetime.now(IST)
         last = getattr(self, "_last_reconcile_at", None)
-        if last is not None and (now - last).total_seconds() < 3600:
+        throttled = last is not None and (now - last).total_seconds() < 3600
+        if throttled and not self.reconcile_pending:
             return
-        self._last_reconcile_at = now
         adapter = getattr(self.quote_source, "adapter", None)
         if adapter is None or self.config.broker_account_id is None:
-            return
+            return  # can't reconcile → stay pending, retry next tick (throttle NOT armed)
         try:
             problem = manager.reconcile_account_book(self.config.broker_account_id, adapter)
         except Exception:  # pragma: no cover - reconciliation must never kill the loop
             logger.exception("reconciliation failed for run %s", self.run_id)
-            return
+            return  # transient → stay pending, retry (throttle NOT armed)
+        # A comparison completed: arm the hourly throttle and lift the pending gate. On a
+        # mismatch, order_error becomes the (owner-acked) block instead.
+        self._last_reconcile_at = now
+        self.reconcile_pending = False
         if problem and not self.order_error:
             self.order_error = f"book mismatch: {problem}"
             logger.error("run %s halted on reconciliation: %s", self.run_id, problem)
@@ -635,6 +653,7 @@ class LiveRun:
             "quote_source": self.config.quote_source,
             "on_cache_fallback": self.on_cache_fallback,
             "order_error": self.order_error,
+            "reconcile_pending": self.reconcile_pending,
             "supports_force_entry": hasattr(
                 getattr(self.session, "strategy", None), "request_force_entry"),
             "quote_error": self.quote_error,
@@ -1139,7 +1158,9 @@ class LiveRunManager:
         live.refresh()
         now = datetime.now(IST)
         mkt = is_market_open()
-        if mkt and not live.quote_error and not live.order_error:
+        # refresh() ran the reconcile; a still-pending run has NOT verified its book yet
+        # (no session / transient failure) → do not decide/trade until it clears.
+        if mkt and not live.quote_error and not live.order_error and not live.reconcile_pending:
             # Decisions / orders ONLY during market hours.
             if tick_driven:
                 # Decide EVERY tick — the strategy's own gates decide what fires
