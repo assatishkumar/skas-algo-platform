@@ -351,10 +351,20 @@ class CallRatioMonthlyStrategy:
             return [spot + sg * o * em for o in offs]
         return [spot + sg * o for o in offs]  # points (default)
 
+    def request_force_entry(self) -> str:
+        """Live-page 'Force entry now' (works for the whole ratio family incl. HNI):
+        the next flat tick enters the current cycle, bypassing the calendar/weekday and
+        entry-time gates. Credit gates still apply — a structure that can't be built at
+        an acceptable credit stays out (that guard is the strategy's core)."""
+        self._force_pending = True
+        return ("next tick enters the current cycle (credit gates still apply — "
+                "no entry if the structure can't be built at an acceptable credit)")
+
     def _maybe_enter(self, ctx, chain, today: date) -> list[Signal]:
-        if not self._entry_allowed(today):
+        forced = getattr(self, "_force_pending", False)
+        if not forced and not self._entry_allowed(today):
             return []
-        if not self._entry_time_ok(self._now(ctx)):
+        if not forced and not self._entry_time_ok(self._now(ctx)):
             return []  # entry window not yet reached today (live intraday; EOD-safe)
         expiry = self._select_expiry(chain, today)
         spot = chain.spot(self.underlying, today)
@@ -416,6 +426,7 @@ class CallRatioMonthlyStrategy:
         self.entry_expiry = expiry
         self.entry_date = today
         self._mark_entered(today)
+        self._force_pending = False  # a forced entry is consumed by success
         return signals
 
     def _entry_sides(self, chain, today, expiry, spot, units, limit) -> list | None:

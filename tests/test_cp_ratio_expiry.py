@@ -226,3 +226,22 @@ def test_sensex_thursday_gate():
     sigs = st.on_slice(ctx)
     assert len(sigs) == 4
     assert all(s.quantity in (20, 60) for s in sigs)  # 1×20 longs, 3×20 shorts
+
+
+def test_force_entry_bypasses_gates():
+    """request_force_entry: enters on a NON-expiry Monday outside the window, and the
+    flag survives a state round-trip until an entry actually constructs."""
+    st, ctx = setup()
+    # Normal path refuses (Monday, and outside the window).
+    assert tick(st, ctx, datetime(2026, 7, 6, 11, 0)) == []
+    note = st.request_force_entry()
+    assert "1:3" in note or "flat" in note
+    # Restart mid-arm: flag persists.
+    st2 = CallPutRatioExpiryStrategy(underlyings=["NIFTY"])
+    st2.load_state(st.export_state())
+    ctx2 = FakeCtx(FakeMarket(live_chain()), FakeCacheChain([NIFTY_EXP]))
+    sigs = tick(st2, ctx2, datetime(2026, 7, 6, 11, 0))
+    assert len(sigs) == 4 and not st2.force_pending  # consumed by the entry
+    # The forced Monday entry must sell TOMORROW's weekly, not a phantom "today" expiry
+    # (the run-202 bug: chain fetched for today → empty → silent retry loop).
+    assert all(s.symbol.split("|")[1] == NIFTY_EXP.isoformat() for s in sigs)

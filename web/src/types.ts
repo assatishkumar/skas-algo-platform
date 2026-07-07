@@ -446,6 +446,7 @@ export interface LiveRunSnapshot {
   on_cache_fallback?: boolean;
   quote_error?: string | null; // last live-quote fetch failure (e.g. rejected Zerodha token)
   order_error?: string | null;
+  supports_force_entry?: boolean;
   realized_taxes: number;
   positions: LivePosition[];
   net_delta?: number | null; // options: Σ position delta (None for equity)

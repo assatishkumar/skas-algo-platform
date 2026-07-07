@@ -603,6 +603,24 @@ async def go_live(
     return live.snapshot()
 
 
+@router.post("/{run_id}/force-entry")
+async def force_entry(run_id: int) -> dict:
+    """Arm the strategy's force-entry: the next tick attempts entry, bypassing its
+    schedule gates (entry day/window). Only strategies exposing request_force_entry
+    support it; structural gates (credit windows, chain availability) still apply."""
+    live = manager.get(run_id)
+    if live is None:
+        raise HTTPException(status_code=404, detail="run is not active")
+    strategy = getattr(live.session, "strategy", None)
+    fn = getattr(strategy, "request_force_entry", None)
+    if fn is None:
+        raise HTTPException(status_code=400,
+                            detail="this strategy has no forced-entry semantics")
+    note = fn()
+    live._persist_state()  # the armed flag survives a restart
+    return {"armed": True, "note": note}
+
+
 @router.post("/{run_id}/ack-order-error")
 async def ack_order_error(run_id: int) -> dict:
     """Owner acknowledges a real-order failure: clears the halt so decisions resume.

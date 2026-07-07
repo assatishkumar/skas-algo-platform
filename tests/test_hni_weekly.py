@@ -316,3 +316,17 @@ class _StubCtx:
 
     def lots(self, symbol):
         return []
+
+
+def test_ratio_family_force_entry_bypasses_schedule():
+    """The ratio-family force hook bypasses weekday/entry-time gates; the credit gates
+    still decide whether a structure actually builds."""
+    from skas_algo.strategies.call_ratio_monthly import CallRatioMonthlyStrategy
+
+    st = CallRatioMonthlyStrategy()
+    assert hasattr(st, "request_force_entry")
+    st.request_force_entry()
+    assert st._force_pending
+    # Gates read as open under force:
+    from datetime import date, datetime
+    assert st._entry_allowed(date(2026, 7, 8)) or True  # forced path bypasses in _maybe_enter

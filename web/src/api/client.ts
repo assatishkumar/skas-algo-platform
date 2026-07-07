@@ -262,6 +262,8 @@ export const api = {
   liveDeployments: (status?: string) =>
     request<Deployment[]>(`/live/deployments${status ? `?status=${status}` : ""}`),
   liveSummary: () => request<LiveSummary>("/live/summary"),
+  liveForceEntry: (id: number) =>
+    request<{ armed: boolean; note: string }>(`/live/${id}/force-entry`, { method: "POST" }),
   liveAckOrderError: (id: number) =>
     request<{ cleared: string | null }>(`/live/${id}/ack-order-error`, { method: "POST" }),
   liveArchive: (id: number) => request(`/live/${id}/archive`, { method: "POST" }),

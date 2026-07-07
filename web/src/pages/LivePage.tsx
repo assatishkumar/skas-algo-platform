@@ -791,6 +791,19 @@ function RunCard({
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={refresh} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Refresh</button>
             <button onClick={() => act(() => api.liveRunDecision(run.run_id))} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs">Run decision</button>
+            {run.supports_force_entry && (
+              <button
+                onClick={async () => {
+                  if (!confirm("Force entry now? The strategy's schedule gates (entry day/window) are bypassed on the next tick. Structural gates (credit/chain) still apply.")) return;
+                  const res = await api.liveForceEntry(run.run_id).catch((e) => { alert((e as Error).message); return null; });
+                  if (res) { alert(`Force entry armed — ${res.note}`); api.liveRunDecision(run.run_id).catch(() => {}); }
+                }}
+                className="rounded bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 text-xs"
+                title="Enter on the next tick, bypassing the strategy's entry-day/window gates"
+              >
+                Force entry
+              </button>
+            )}
             <Link to={`/analyze?run=${run.run_id}`} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs" title="Round-trips, per-stock charts & P&L for this deployment">Analyze →</Link>
             {!isOptions && (
               <button onClick={() => setShowSignals((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">

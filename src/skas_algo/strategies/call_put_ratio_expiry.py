@@ -28,7 +28,7 @@ Design notes:
 
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, time, timedelta
 
 from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size_for
 from skas_algo.engine.options.instrument import make
@@ -91,6 +91,10 @@ class CallPutRatioExpiryStrategy:
         self.margin_base: dict[str, float] = {u: 0.0 for u in self.underlyings}
         self.margin_source: dict[str, str] = {u: "" for u in self.underlyings}
         self.traded_day: dict[str, str | None] = {u: None for u in self.underlyings}
+        # Owner-requested force entry (Live page button): the NEXT tick attempts entry
+        # for every flat underlying, bypassing the expiry-day gate, the 09:20-09:27
+        # window, AND today's traded_day skip. Persisted so a restart doesn't lose it.
+        self.force_pending: bool = False
         # Latest broker basket margin pushed by the live manager (not persisted; NOTE it
         # covers the WHOLE book — with both underlyings entered the same day the base is
         # shared, which only happens if NIFTY's Tuesday coincides with a SENSEX Thursday
@@ -106,10 +110,19 @@ class CallPutRatioExpiryStrategy:
         if value and value > 0:
             self._broker_margin = float(value)
 
+    def request_force_entry(self) -> str:
+        """Live-page 'Force entry now': next tick enters flat underlyings regardless of
+        expiry-day/window/traded-day gates (a non-expiry-day forced entry sells 1-2 DTE
+        legs — the owner's call). Returns a human note for the UI."""
+        self.force_pending = True
+        return ("next tick sells the 1:3 structure on every flat underlying — "
+                "NOTE: outside its expiry day the legs are 1-2 DTE, not 0DTE")
+
     # ---------------------------------------------------------------- expiry
-    def _is_expiry_day(self, ctx, u: str, today: date) -> bool:
-        """Today is this underlying's weekly expiry: nearest listed expiry == today
-        (live chain expiries when available), else the calendar weekday."""
+    def _nearest_expiry(self, ctx, u: str, today: date) -> date | None:
+        """Nearest listed weekly ≥ today (live chain expiries when available), else the
+        calendar weekday. On expiry day this IS today — the normal case; a FORCED entry
+        on any other day sells the coming weekly (1-2 DTE)."""
         chain = ctx.option_chain()
         if chain is not None:
             try:
@@ -117,11 +130,16 @@ class CallPutRatioExpiryStrategy:
                           for e in chain.expiries(u, today)]
                 nearest = min((e for e in listed if e >= today), default=None)
                 if nearest is not None:
-                    return nearest == today
+                    return nearest
             except Exception:  # pragma: no cover - fall through to the calendar
                 pass
         wd = expiry_weekday_for(u, today, "weekly")
-        return wd is not None and today.weekday() == wd
+        if wd is None:
+            return None
+        return today + timedelta(days=(wd - today.weekday()) % 7)
+
+    def _is_expiry_day(self, ctx, u: str, today: date) -> bool:
+        return self._nearest_expiry(ctx, u, today) == today
 
     # ----------------------------------------------------------------- slice
     def on_slice(self, ctx) -> list[Signal]:
@@ -132,6 +150,11 @@ class CallPutRatioExpiryStrategy:
             live = self._live_legs(ctx, u)
             if live:
                 signals += self._manage(ctx, u, live, now)
+            elif self.force_pending:
+                got = self._try_enter(ctx, u, today)
+                if got:  # chain hiccups keep the flag armed for the next tick
+                    self.force_pending = False
+                signals += got
             elif (self.traded_day.get(u) != today.isoformat()
                     and self.entry_start <= now.time() <= self.entry_end
                     and self._is_expiry_day(ctx, u, today)):
@@ -150,15 +173,18 @@ class CallPutRatioExpiryStrategy:
 
     # ----------------------------------------------------------------- entry
     def _try_enter(self, ctx, u: str, today: date) -> list[Signal]:
+        expiry = self._nearest_expiry(ctx, u, today)
+        if expiry is None:
+            return []
         chain_fn = getattr(ctx.market, "live_chain", None)
-        chain = chain_fn(u, today.isoformat()) if chain_fn else None
+        chain = chain_fn(u, expiry.isoformat()) if chain_fn else None
         if not chain or not chain.get("rows") or not chain.get("atm_strike"):
             return []  # no live chain this tick — retry within the window
         atm = float(chain["atm_strike"])
         per_lot = int(chain.get("lot_size") or 0)
         if per_lot <= 0:
             try:
-                per_lot = lot_size_for(u, today, overrides=self.lot_overrides)
+                per_lot = lot_size_for(u, expiry, overrides=self.lot_overrides)
             except KeyError:
                 return []
 
@@ -192,7 +218,7 @@ class CallPutRatioExpiryStrategy:
         n = self.sets.get(u, 1)
         buy_units = float(n * per_lot)
         sell_units = float(n * self.sell_lots_per_set * per_lot)
-        mk = lambda k, right: make(u, today, float(k), right, lot_size=per_lot,  # noqa: E731
+        mk = lambda k, right: make(u, expiry, float(k), right, lot_size=per_lot,  # noqa: E731
                                    lot_overrides=self.lot_overrides).symbol
         legs = [
             {"symbol": mk(atm, "CE"), "dir": 1, "units": buy_units, "entry": y},
@@ -310,6 +336,7 @@ class CallPutRatioExpiryStrategy:
             "margin_base": dict(self.margin_base),
             "margin_source": dict(self.margin_source),
             "traded_day": dict(self.traded_day),
+            "force_pending": self.force_pending,
         }
 
     def load_state(self, state: dict) -> None:
@@ -318,4 +345,5 @@ class CallPutRatioExpiryStrategy:
             self.margin_base[u] = float(state.get("margin_base", {}).get(u, 0.0))
             self.margin_source[u] = state.get("margin_source", {}).get(u, "")
             self.traded_day[u] = state.get("traded_day", {}).get(u)
+        self.force_pending = bool(state.get("force_pending", False))
 

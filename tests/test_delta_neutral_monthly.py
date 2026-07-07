@@ -329,3 +329,13 @@ def test_entry_with_tz_aware_clock():
     ctx._now = datetime(2026, 7, 6, 13, 20, tzinfo=ZoneInfo("Asia/Kolkata"))
     sigs = st.on_slice(ctx)
     assert len(sigs) == 2 and st.phase == "strangle"
+
+
+def test_force_entry_hook_bypasses_window_and_day():
+    st = DeltaNeutralMonthlyStrategy()
+    ctx = FakeCtx(FakeMarket(bs_chain()))
+    # Mid-cycle Friday, before the entry window → refused normally.
+    assert tick(st, ctx, datetime(2026, 7, 10, 9, 30)) == []
+    st.request_force_entry()
+    sigs = tick(st, ctx, datetime(2026, 7, 10, 9, 31))
+    assert len(sigs) == 2 and not st.force_pending

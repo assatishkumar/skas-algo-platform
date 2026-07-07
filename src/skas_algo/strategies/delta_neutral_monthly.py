@@ -107,6 +107,7 @@ class DeltaNeutralMonthlyStrategy:
         self.last_adjust_at: str | None = None
         self.adjust_count: int = 0
         self.entered_day: str | None = None   # entry attempted/made this day (once/day gate)
+        self.force_pending: bool = False       # Live-page force entry (persisted)
         # Latest broker basket margin pushed by the live manager (NOT persisted — it
         # re-arrives within a tick of recovery). margin_base freezes from this only.
         self._broker_margin: float | None = None
@@ -120,6 +121,12 @@ class DeltaNeutralMonthlyStrategy:
         """Manager push: the real broker basket margin for OUR current legs."""
         if value and value > 0:
             self._broker_margin = float(value)
+
+    def request_force_entry(self) -> str:
+        """Live-page 'Force entry now': next tick sells the 18Δ strangle into the current
+        monthly, bypassing the entry-day, window and once-per-day gates."""
+        self.force_pending = True
+        return "next tick sells the 18Δ strangle on the current monthly"
 
     # ------------------------------------------------------------ cycle math
     def _listed_expiries(self, ctx, today: date) -> list[date]:
@@ -181,6 +188,11 @@ class DeltaNeutralMonthlyStrategy:
             self.adjust_count = 0
             self.last_adjust_at = None
 
+        if self.force_pending:
+            got = self._try_enter(ctx, now, today)
+            if got:
+                self.force_pending = False
+            return got
         if self.entered_day == today.isoformat():
             return []
         if not (self.entry_time <= now.time() <= self.entry_window_end):
@@ -480,6 +492,7 @@ class DeltaNeutralMonthlyStrategy:
             "last_adjust_at": self.last_adjust_at,
             "adjust_count": self.adjust_count,
             "entered_day": self.entered_day,
+            "force_pending": self.force_pending,
         }
 
     def load_state(self, state: dict) -> None:
@@ -494,3 +507,4 @@ class DeltaNeutralMonthlyStrategy:
         self.last_adjust_at = state.get("last_adjust_at")
         self.adjust_count = int(state.get("adjust_count", 0))
         self.entered_day = state.get("entered_day")
+        self.force_pending = bool(state.get("force_pending", False))

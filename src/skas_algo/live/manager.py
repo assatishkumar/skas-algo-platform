@@ -634,6 +634,8 @@ class LiveRun:
             "quote_source": self.config.quote_source,
             "on_cache_fallback": self.on_cache_fallback,
             "order_error": self.order_error,
+            "supports_force_entry": hasattr(
+                getattr(self.session, "strategy", None), "request_force_entry"),
             "quote_error": self.quote_error,
             "parts_total": self.config.params.get("capital_parts"),
             # Options deployments expose lot-sets (editable live while flat); equity
