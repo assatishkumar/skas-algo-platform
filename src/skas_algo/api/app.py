@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from skas_algo import __version__
 from skas_algo.config import get_settings
 
-from .routes import backtest, brokers, data, health, live, research, trade
+from .deps import require_auth
+from .routes import auth, backtest, brokers, data, health, live, research, trade
 
 logger = logging.getLogger("skas_algo")
 
@@ -77,13 +78,21 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # OPEN routes: health (liveness) + auth (login). The WebSocket rides its own dep-free
+    # router and self-gates (a browser can't send an auth header on a WS — see live.py).
     app.include_router(health.router, prefix="/api/v1")
-    app.include_router(backtest.router, prefix="/api/v1")
-    app.include_router(brokers.router, prefix="/api/v1")
-    app.include_router(data.router, prefix="/api/v1")
-    app.include_router(live.router, prefix="/api/v1")
-    app.include_router(research.router, prefix="/api/v1")
-    app.include_router(trade.router, prefix="/api/v1")
+    app.include_router(auth.router, prefix="/api/v1")
+    app.include_router(live.ws_router, prefix="/api/v1")
+
+    # PROTECTED routes: require a valid JWT bearer token when auth is configured (fail-open
+    # otherwise — see deps.require_auth). One dependency, applied per router.
+    protected = [Depends(require_auth)]
+    app.include_router(backtest.router, prefix="/api/v1", dependencies=protected)
+    app.include_router(brokers.router, prefix="/api/v1", dependencies=protected)
+    app.include_router(data.router, prefix="/api/v1", dependencies=protected)
+    app.include_router(live.router, prefix="/api/v1", dependencies=protected)
+    app.include_router(research.router, prefix="/api/v1", dependencies=protected)
+    app.include_router(trade.router, prefix="/api/v1", dependencies=protected)
 
     return app
 

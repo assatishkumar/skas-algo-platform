@@ -29,7 +29,8 @@ hosts the live trading engine in-process. A Vite dev server (`web/`, `:5173`) pr
   is NOT here — it lives in the sibling `skas-data` DuckDB cache (`../skas-data`).
 - **Recovery.** On restart, `live/recovery.py` rebuilds every still-running deployment from
   its persisted `state` + `params_snapshot`. Kite tokens self-heal.
-- **Single user, no auth.** By design (§5). The process binds `127.0.0.1`.
+- **Single user, opt-in auth.** One operator password → JWT bearer, fail-open when
+  unconfigured (§5). The process binds `127.0.0.1`.
 
 ```
   Browser (web/ :5173) ──proxy──▶ FastAPI (:8080) ──┬─ REST/WS routes (api/routes/*)
@@ -175,20 +176,25 @@ position the restored book is missing. Two guards now stand between that and a d
 
 ## 5. Security model
 
-- **Localhost, single-user, no route auth — by design.** The API binds `127.0.0.1`
-  (`config/settings.py`); only the container path sets `SKAS_API_HOST=0.0.0.0` (network
-  isolation + firewall are the control there). Do NOT expose `:8080` on a public/LAN
-  interface without a reverse proxy + auth — arm/force-entry/flatten/delete are anonymous,
-  and CORS does not protect a direct HTTP client.
+- **App authentication (single operator → JWT bearer).** One operator password (bcrypt hash
+  in `SKAS_AUTH_PASSWORD_HASH`) → `POST /api/v1/auth/login` mints a signed HS256 JWT
+  (`security/auth.py`); every route requires it except `/health` and `/auth/login`, and the
+  WebSocket self-gates on a `?token=`. **Fail-OPEN:** enforced only when both the hash and
+  `SKAS_AUTH_JWT_SECRET` are set (`settings.auth_enabled`), so localhost dev and the test
+  suite are unchanged until configured. A networked host (the VPS) MUST set both.
+- **Localhost bind still applies.** The API binds `127.0.0.1` by default; only the container
+  path sets `0.0.0.0` (behind isolation/proxy). Even with auth, don't expose `:8080` raw on a
+  public interface without TLS.
 - **Credentials at rest.** `api_secret` + `session_token` are Fernet-encrypted
   (`security/crypto.py`, key from `SKAS_SECRET_ENCRYPTION_KEY`). No secrets appear in API
   responses, logs, snapshots, WS broadcasts, or the repo. `.env` and tokens are gitignored.
 - **Gate chain.** The live-order path is 4-key gated (§3) + `_ensure_armed` in the adapter +
-  pre-flight rails. Sound; the exposure is at transport (localhost bind closes it).
-- **Non-goals (current):** multi-user auth, RBAC. The paused iOS app would add token auth.
+  pre-flight rails.
+- **Non-goals (current):** multi-user auth, RBAC. The single-operator JWT already covers the
+  future iOS app (same bearer scheme).
 - **P1 items:** encrypt `api_key` too (currently plaintext in the DB — can't trade alone,
-  but it's a live credential); a CSRF token / bearer token if the surface ever widens beyond
-  localhost; `MultiFernet` key rotation; pin dependencies.
+  but it's a live credential); `MultiFernet` key rotation; pin dependencies; TLS in front of
+  the VPS.
 
 ---
 

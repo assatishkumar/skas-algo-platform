@@ -2,6 +2,7 @@ import type {
   BacktestRequest,
   BacktestResponse,
   BenchmarkPoint,
+  LoginResponse,
   BrokerAccount,
   BrokerConnectRequest,
   BsCalibrationResult,
@@ -51,14 +52,32 @@ import type {
   WatchRow,
 } from "../types";
 
+import { clearToken, getToken } from "../lib/auth";
+
 const BASE = "/api/v1";
+
+/** Build request headers: JSON + the Authorization bearer token (if we have one), without
+ *  clobbering any per-call headers a caller passes. */
+function authHeaders(extra?: HeadersInit): HeadersInit {
+  const token = getToken();
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(extra ?? {}),
+  };
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers: authHeaders(init?.headers),
   });
   if (!resp.ok) {
+    // Session expired / no token but the server now enforces auth → back to the login gate.
+    if (resp.status === 401 && window.location.pathname !== "/login") {
+      clearToken();
+      window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+    }
     let detail = resp.statusText;
     try {
       detail = (await resp.json()).detail ?? detail;
@@ -71,6 +90,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  login: (password: string) =>
+    request<LoginResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
   strategies: () => request<{ strategies: string[] }>("/strategies"),
   universes: () => request<Universe[]>("/universes"),
   universeSymbols: (name: string) =>
@@ -112,7 +136,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  tradesCsvUrl: (id: number) => `${BASE}/runs/${id}/trades.csv`,
+  // Authed download: a plain <a href download> can't carry the bearer header, so fetch the
+  // CSV with auth, then save the blob (also keeps the token out of URLs).
+  downloadTradesCsv: (id: number) => downloadCsv(`/runs/${id}/trades.csv`, `run-${id}-trades.csv`),
   benchmarks: () => request<{ benchmarks: string[] }>("/benchmarks"),
   dataSummary: () => request<DataSummary>("/data/summary"),
   dataCoverage: (instrumentClass: string, underlying?: string) =>
@@ -302,8 +328,31 @@ export const brokers = {
   remove: (id: number) => request<{ deleted: number }>(`/brokers/${id}`, { method: "DELETE" }),
 };
 
-/** WebSocket URL for the live feed, proxied through the dev server / same origin. */
+/** Fetch a file with auth and trigger a browser download of the resulting blob. */
+async function downloadCsv(path: string, filename: string): Promise<void> {
+  const resp = await fetch(`${BASE}${path}`, { headers: authHeaders() });
+  if (!resp.ok) {
+    if (resp.status === 401 && window.location.pathname !== "/login") {
+      clearToken();
+      window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+    }
+    throw new Error(`${resp.status}: ${resp.statusText}`);
+  }
+  const url = URL.createObjectURL(await resp.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** WebSocket URL for the live feed, proxied through the dev server / same origin.
+ *  A WS can't send an Authorization header, so the token rides as a query param. */
 export function liveWsUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${window.location.host}${BASE}/live/ws`;
+  const token = getToken();
+  const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `${proto}://${window.location.host}${BASE}/live/ws${q}`;
 }

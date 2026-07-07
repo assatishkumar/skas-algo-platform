@@ -334,7 +334,13 @@ blanked in the test bootstrap).
 
 ## 12. Operations & safety infrastructure
 
-- **Localhost bind**: the API binds `127.0.0.1` by default (a single-user, no-auth, real-money
+- **Authentication**: an opt-in single-operator login — a password (bcrypt hash in
+  `SKAS_AUTH_PASSWORD_HASH`) exchanged at `/auth/login` for a signed JWT bearer token that every
+  API route + the WebSocket require; the web app has a login page + logout, stores the token,
+  and redirects to `/login` on a 401. **Fail-open**: enforced only when both the hash and
+  `SKAS_AUTH_JWT_SECRET` are set — off on localhost, required on a networked host. Generate the
+  hash with `skas-algo hash-password`. The same token scheme covers the future iOS app.
+- **Localhost bind**: the API binds `127.0.0.1` by default (a single-user, real-money
   API must not be on the LAN; the container path sets `0.0.0.0` behind its own isolation).
 - **NSE holiday calendar** (`live/holidays.py`): holidays close the market like weekends (no
   decisions/orders; marks re-price read-only). Festival dates are provisional and env-correctable
@@ -464,6 +470,9 @@ the shared deployment path: **M** `POST /options/deploy` (custom_options), `/opt
 | `SKAS_API_HOST` | `127.0.0.1` | API bind address (localhost by default; container sets `0.0.0.0`). |
 | `SKAS_DATABASE_URL` | `sqlite:///./skas_algo.db` | Platform DB (relative → start from repo root). |
 | `SKAS_SECRET_ENCRYPTION_KEY` | — | Fernet key for encrypting broker credentials. |
+| `SKAS_AUTH_PASSWORD_HASH` | — | bcrypt hash of the operator password (`skas-algo hash-password`). |
+| `SKAS_AUTH_JWT_SECRET` | — | HS256 signing key for login tokens. Auth is on only when both this + the hash are set. |
+| `SKAS_AUTH_TOKEN_TTL_HOURS` | `24` | Login token lifetime. |
 | `SKAS_DEBUG` | `true` | Dev auto-reload; the supervisor sets `false` (single process). |
 | `SKAS_LIVE_TRADING_ENABLED` | `false` | Master switch for real orders (one of the 4 keys). |
 | `SKAS_LIVE_MAX_ORDER_NOTIONAL` | `500000` | Per-order notional cap (rail). |

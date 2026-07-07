@@ -80,7 +80,9 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 ## 7. Single-user, in-process state
 - Process-wide singleton `manager = LiveRunManager()` (`live/manager.py`) holds running sessions in
   memory. On restart, `live/recovery.py` rebuilds them from DB-persisted state; Zerodha token expiry
-  self-heals. No auth / multi-tenancy (the iOS app would add a token — **paused**).
+  self-heals. **Opt-in single-operator auth** (password → JWT bearer, fail-open when unconfigured —
+  `security/auth.py`, `SKAS_AUTH_PASSWORD_HASH`+`SKAS_AUTH_JWT_SECRET`); no multi-tenancy. The
+  same bearer scheme covers the (paused) iOS app.
 
 ## 8. Conventions
 - New strategies onboard via `strategies/registry.py`, **not** engine edits.
@@ -228,9 +230,11 @@ alter the engine or a live path. It auto-deselects the two DuckDB-cache parity s
 backend is live and tells you to re-run them against a stopped backend. This is THE gate that
 lets you develop continuously without silently breaking a live strategy (see ARCHITECTURE §7).
 
-**Binds `127.0.0.1` by default** (`config/settings.py::api_host`) — a single-user, no-auth,
-real-money API must not be on the LAN. If the UI can't reach the backend on a container/remote,
-set `SKAS_API_HOST` (the docker path already sets `0.0.0.0`). Live marks come from a shared
+**Binds `127.0.0.1` by default** (`config/settings.py::api_host`) — a single-user real-money API
+must not be on the LAN. If the UI can't reach the backend on a container/remote, set
+`SKAS_API_HOST` (the docker path already sets `0.0.0.0`). **Auth** is opt-in and fail-open: set
+BOTH `SKAS_AUTH_PASSWORD_HASH` (via `skas-algo hash-password`) + `SKAS_AUTH_JWT_SECRET` to enforce
+a login (required on any networked host; off on localhost). Live marks come from a shared
 per-account KiteTicker WS feed (`live/pricefeed.py`, `SKAS_WS_FEED_ENABLED`, default on) with a
 REST fallback — strategies still read via `QuoteSource` (no tick callbacks, parity intact).
 NSE holidays close the market like weekends (`live/holidays.py`; festival dates PROVISIONAL,

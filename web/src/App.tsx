@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { clearToken, isLoggedIn } from "./lib/auth";
 import { applyTheme, getTheme, type Theme } from "./lib/theme";
 import AnalysisPage from "./pages/AnalysisPage";
 import BacktestPage from "./pages/BacktestPage";
@@ -10,6 +11,7 @@ import DeployPage from "./pages/DeployPage";
 import DonchianLivePage from "./pages/DonchianLivePage";
 import HomePage from "./pages/HomePage";
 import LivePage from "./pages/LivePage";
+import LoginPage from "./pages/LoginPage";
 import ResearchPage from "./pages/ResearchPage";
 import RunDetailPage from "./pages/RunDetailPage";
 import StrategiesPage from "./pages/StrategiesPage";
@@ -116,8 +118,27 @@ function MobileTabBar() {
 
 const FULL_BLEED = new Set(["/", "/backtest", "/live", "/trade", "/brokers"]);
 
+function LogoutButton() {
+  // Only meaningful when a token exists (auth-enabled host). Hard redirect so all state resets.
+  if (!isLoggedIn()) return null;
+  return (
+    <button
+      onClick={() => {
+        clearToken();
+        window.location.assign("/login");
+      }}
+      title="Log out"
+      className="rounded-md px-2 py-1.5 text-sm text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+    >
+      ⎋
+    </button>
+  );
+}
+
 export default function App() {
   const path = useLocation().pathname;
+  // Login is a standalone screen — no header/nav/tab-bar chrome behind it.
+  if (path === "/login") return <LoginPage />;
   const isHome = FULL_BLEED.has(path) || /^\/live\/\d+$/.test(path); // donchian detail is full-bleed too
   return (
     <div className="min-h-screen">
@@ -140,7 +161,7 @@ export default function App() {
             <NavItem to="/data" label="Data" />
             <NavItem to="/brokers" label="Brokers" />
           </nav>
-          <div className="ml-auto"><ThemeToggle /></div>
+          <div className="ml-auto flex items-center gap-1"><ThemeToggle /><LogoutButton /></div>
         </div>
       </header>
       <main className={`${isHome ? "" : "max-w-6xl mx-auto px-4 py-6"} pb-24 md:pb-0`}>

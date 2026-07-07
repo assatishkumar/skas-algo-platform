@@ -234,7 +234,7 @@ export default function RunDetailPage() {
         <ReportView
           report={data.report}
           trades={data.trades}
-          csvUrl={api.tradesCsvUrl(runId)}
+          onDownloadCsv={() => api.downloadTradesCsv(runId)}
           runId={runId}
           defaultBenchmark={
             (data.params as Record<string, unknown>)?.universe === "nifty500" ? "NIFTY 500" : undefined

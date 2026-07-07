@@ -319,13 +319,13 @@ function MonthlyGrid({
 export default function ReportView({
   report,
   trades,
-  csvUrl,
+  onDownloadCsv,
   runId,
   defaultBenchmark,
 }: {
   report: Report;
   trades: Trade[];
-  csvUrl?: string;
+  onDownloadCsv?: () => void;
   runId?: number;
   defaultBenchmark?: string;
 }) {
@@ -419,13 +419,13 @@ export default function ReportView({
         totalLabel="EoY"
       />
       <TradesTable trades={trades} runId={runId} />
-      {csvUrl && (
-        <a
-          href={csvUrl}
+      {onDownloadCsv && (
+        <button
+          onClick={onDownloadCsv}
           className="inline-block rounded-md bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
         >
           ↓ Download trades CSV
-        </a>
+        </button>
       )}
     </div>
   );

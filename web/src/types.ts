@@ -1333,3 +1333,8 @@ export interface BasketCycle {
   return_on_margin_pct: number | null;
   name_rows: BasketNameRow[];
 }
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+}

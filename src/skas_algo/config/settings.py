@@ -50,6 +50,16 @@ class Settings(BaseSettings):
     #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     secret_encryption_key: str | None = None
 
+    # --- App authentication (single operator password → JWT bearer) ---
+    # FAIL-OPEN: auth is enforced only when BOTH of these are set (auth_enabled). Unset →
+    # the API is open (localhost dev + the existing test suite are unchanged). A networked
+    # host (the VPS) MUST set both, or it is unauthenticated.
+    #   hash:   venv/bin/skas-algo hash-password
+    #   secret: python -c "import secrets; print(secrets.token_urlsafe(48))"
+    auth_password_hash: str | None = None   # SKAS_AUTH_PASSWORD_HASH (bcrypt)
+    auth_jwt_secret: str | None = None      # SKAS_AUTH_JWT_SECRET (HS256 signing key)
+    auth_token_ttl_hours: int = 24          # SKAS_AUTH_TOKEN_TTL_HOURS (login token lifetime)
+
     # --- Alerts (Telegram) ---
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
@@ -90,6 +100,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def auth_enabled(self) -> bool:
+        """Auth is enforced only when both the password hash and the JWT secret are set."""
+        return bool(self.auth_password_hash and self.auth_jwt_secret)
 
 
 @lru_cache

@@ -35,6 +35,10 @@ from skas_algo.services import broker as broker_svc
 from skas_algo.services.runs import delete_algo_cascade
 
 router = APIRouter(tags=["live"], prefix="/live")
+# The WebSocket lives on its OWN router registered WITHOUT the require_auth dependency: a
+# browser can't attach an Authorization header to a WS, so router-level auth would reject
+# every connection. It's gated inline instead (token via ?token=). See app.py.
+ws_router = APIRouter(prefix="/live")
 
 
 def _build_quote_source(quote_source: str, broker_account_id, loader: PriceLoader, db: Session):
@@ -714,8 +718,20 @@ async def delete_deployment(run_id: int, db: Session = Depends(get_db)) -> dict:
     return {"deleted": run_id}
 
 
-@router.websocket("/ws")
+@ws_router.websocket("/ws")
 async def live_ws(ws: WebSocket) -> None:
+    # Auth gate BEFORE accept(): when configured, require a valid ?token= (a WS can't send an
+    # Authorization header). Fail-open when auth is off. Close 1008 (policy violation) on a bad
+    # token so the client sees a clean rejection.
+    if get_settings().auth_enabled:
+        from skas_algo.security import AuthError, decode_token
+
+        token = ws.query_params.get("token", "")
+        try:
+            decode_token(token)
+        except AuthError:
+            await ws.close(code=1008)
+            return
     await ws.accept()
     queue = manager.broadcaster.subscribe()
     try:

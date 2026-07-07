@@ -1513,7 +1513,9 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
           <ReportView
             report={result.report}
             trades={result.trades}
-            csvUrl={result.run_id != null ? api.tradesCsvUrl(result.run_id) : undefined}
+            onDownloadCsv={
+              result.run_id != null ? () => api.downloadTradesCsv(result.run_id!) : undefined
+            }
             runId={result.run_id ?? undefined}
           />
         </div>

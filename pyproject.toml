@@ -29,6 +29,8 @@ dependencies = [
     "pyotp>=2.9.0",          # TOTP 2FA code generation for broker login
     "requests>=2.31.0",      # Zerodha login flow + Telegram
     "kiteconnect>=4.2.0",    # Zerodha order/quote API
+    "pyjwt>=2.8.0",          # signed JWT bearer tokens for app auth
+    "bcrypt>=4.1.0",         # operator-password hashing for app auth
     # Market data + broker abstraction (sibling project)
     # "skas-data",  # installed via: pip install -e ../skas-data
 ]
