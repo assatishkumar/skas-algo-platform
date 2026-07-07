@@ -440,7 +440,11 @@ def _orders_to_trades(orders: list[Order]) -> list[dict]:
     for o in orders:
         side = o.side.value if hasattr(o.side, "value") else str(o.side)
         sym, units, px = o.symbol, int(o.quantity), float(o.price or 0.0)
-        d = o.created_at.date().isoformat() if o.created_at else None
+        # Owner rule: dates ALWAYS carry the time. created_at is naive-UTC → IST.
+        d = None
+        if o.created_at:
+            from datetime import timedelta as _td
+            d = (o.created_at + _td(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M")
         q = open_lots[sym]
         closing = q and q[0][2] != side  # opposite side of the open position → an exit
         if closing:
