@@ -157,6 +157,12 @@ class CallRatioMonthlyStrategy:
         self.legs: list[dict] = []
         self.entry_expiry: date | None = None
         self.entry_date: date | None = None
+        # LIVE risk base for the %-target/stop, FROZEN at entry from the real broker basket
+        # margin (set_broker_margin). Prevents the target from FLOATING with the live margin,
+        # which collapses off-hours / at the open → premature exits (the 2026-07-08 batman
+        # exit at ~1/9 of the intended target). None in backtest (never pushed) → the model
+        # margin path is used, unchanged (parity). Reset flat on exit; re-frozen next entry.
+        self._frozen_margin: float | None = None
         self.last_entry_month: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------ decide
@@ -223,9 +229,22 @@ class CallRatioMonthlyStrategy:
             val = None
         return float(val) if val and val > 0 else self.initial_capital
 
+    def set_broker_margin(self, value: float) -> None:
+        """Manager push (IN-MARKET only — gated in live/manager.py): freeze the risk base to
+        the REAL broker basket margin, once per cycle, the first time the position is open.
+        This stops the %-target/stop floating with the live margin (which drops sharply
+        off-hours / at the open → premature exits). Ignored once frozen; reset on _flat().
+        Backtest never calls this → _risk_base keeps the model-margin path (parity)."""
+        if value and value > 0 and self.legs and self._frozen_margin is None:
+            self._frozen_margin = float(value)
+
     def _risk_base(self, ctx=None) -> float:
-        """Rupee base the profit-target/stop percentages apply to: the deployed margin (real broker
-        margin live, model estimate in backtest) when known, else the account capital."""
+        """Rupee base the profit-target/stop percentages apply to. LIVE: the broker basket
+        margin FROZEN at entry (set_broker_margin) — stable, never floats. BACKTEST / the
+        one pre-freeze tick: the deployed margin (model estimate via ctx.position_margin)
+        else the account capital."""
+        if self._frozen_margin is not None:
+            return self._frozen_margin
         fn = getattr(ctx, "position_margin", None) if ctx is not None else None
         m = fn() if fn is not None else None
         return m if m and m > 0 else self.initial_capital
@@ -540,6 +559,7 @@ class CallRatioMonthlyStrategy:
         self.legs = []
         self.entry_expiry = None
         self.entry_date = None
+        self._frozen_margin = None  # re-frozen from the broker push after the next entry
 
     # ------------------------------------------------------- (de)serialize
     def export_state(self) -> dict:
@@ -551,6 +571,7 @@ class CallRatioMonthlyStrategy:
             "last_entry_month": list(self.last_entry_month) if self.last_entry_month else None,
             "entered_after_expiry": (self._entered_after_expiry.isoformat()
                                      if self._entered_after_expiry else None),
+            "frozen_margin": self._frozen_margin,
         }
 
     def load_state(self, state: dict) -> None:
@@ -562,6 +583,7 @@ class CallRatioMonthlyStrategy:
         self.last_entry_month = tuple(lem) if lem else None
         eae = state.get("entered_after_expiry")
         self._entered_after_expiry = date.fromisoformat(eae) if eae else None
+        self._frozen_margin = state.get("frozen_margin")
 
 
 class PutRatioMonthlyStrategy(CallRatioMonthlyStrategy):

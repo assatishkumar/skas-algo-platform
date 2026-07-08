@@ -540,3 +540,73 @@ def test_capital_base_guarded_for_stub_ctx():
     # fixed mode never reads equity
     f = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=250_000)
     assert f._capital_base(WithEquity()) == 250_000
+
+
+def test_risk_base_frozen_at_entry_not_floating():
+    """The %-target/stop base FREEZES at entry from the broker basket margin and does NOT
+    float with later ctx.position_margin() swings (the 2026-07-08 batman premature exit:
+    an off-hours-collapsed margin shrank the target ~9x). Backtest path (no push) unchanged."""
+    from types import SimpleNamespace
+
+    from skas_algo.strategies.call_ratio_monthly import BatmanRatioMonthlyStrategy
+
+    st = BatmanRatioMonthlyStrategy()
+    st.legs = [{"symbol": "NIFTY|2026-07-28|24450|CE", "dir": -1, "units": 1300, "entry": 168.45}]
+
+    # Backtest / pre-freeze: uses ctx.position_margin() (model margin) — unchanged behavior.
+    ctx_big = SimpleNamespace(position_margin=lambda: 8_000_000.0)
+    assert st._risk_base(ctx_big) == 8_000_000.0
+
+    # First in-market broker push freezes the REAL basket margin.
+    st.set_broker_margin(1_626_499.0)
+    assert st._risk_base(ctx_big) == 1_626_499.0          # frozen, ignores the model margin
+
+    # A later collapsed/off-hours margin must NOT move the base, and re-pushes are ignored.
+    ctx_tiny = SimpleNamespace(position_margin=lambda: 176_000.0)
+    st.set_broker_margin(176_000.0)
+    assert st._risk_base(ctx_tiny) == 1_626_499.0          # STILL the entry value
+
+    # Persists across a restart; resets flat on exit (re-frozen next cycle).
+    st2 = BatmanRatioMonthlyStrategy()
+    st2.load_state(st.export_state())
+    assert st2._risk_base(ctx_tiny) == 1_626_499.0
+    st._flat()
+    assert st._frozen_margin is None
+    assert st._risk_base(ctx_big) == 8_000_000.0           # back to the model path when flat
+
+
+def test_maybe_refresh_margin_skips_off_hours(monkeypatch):
+    """The manager recomputes the broker basket margin ONLY in market hours — off-hours it
+    returns early so a collapsed margin never poisons the override/frozen base/display."""
+    from types import SimpleNamespace
+
+    from skas_algo.live import manager as mgr
+    from skas_algo.live.manager import LiveRun
+
+    calls = {"basket_margin": 0}
+
+    class _Adapter:
+        def basket_margin(self, legs):
+            calls["basket_margin"] += 1
+            return 1_626_499.0
+
+    def make_self():
+        pf = SimpleNamespace(
+            lot_symbols=lambda: ["NIFTY|2026-07-28|24450|CE"],
+            lots=lambda s: [SimpleNamespace(direction=-1, units=1300)],
+        )
+        return SimpleNamespace(
+            config=SimpleNamespace(instrument_class="DERIV", quote_source="zerodha"),
+            session=SimpleNamespace(portfolio=pf, strategy=SimpleNamespace(),
+                                    set_margin_override=lambda m: None),
+            quote_source=SimpleNamespace(adapter=_Adapter()),
+            _margin_symbols=[], _last_margin_at=None, _margin=None, run_id=1,
+        )
+
+    monkeypatch.setattr(mgr, "is_market_open", lambda: False)
+    LiveRun._maybe_refresh_margin(make_self())
+    assert calls["basket_margin"] == 0                     # off-hours → no broker call
+
+    monkeypatch.setattr(mgr, "is_market_open", lambda: True)
+    LiveRun._maybe_refresh_margin(make_self())
+    assert calls["basket_margin"] == 1                     # in-market → recomputes

@@ -455,6 +455,15 @@ class LiveRun:
         if self.config.instrument_class.upper() != "DERIV" or not is_broker_source(
                 self.config.quote_source):
             return
+        # MARKET HOURS ONLY. Off-hours the broker basket margin collapses to a small stale
+        # value; recomputing it then poisons the margin override + any frozen base + the
+        # display, and the ~1/min throttle then carries that stale number into the FIRST
+        # market-open tick — shrinking a %-of-margin target so an overnight-accrued P&L trips
+        # it at 09:15 (the 2026-07-08 batman exit at ~1/9 of the intended target). Off-hours
+        # we hold the last in-session margin; the session's first tick refreshes it (the
+        # throttle has long expired because we didn't touch it overnight).
+        if not is_market_open():
+            return
         symbols = self.session.portfolio.lot_symbols()
         if not symbols:
             self._margin = None
@@ -488,9 +497,9 @@ class LiveRun:
             self._margin = m
             # Let the strategy's %-of-margin profit/stop targets apply to the real basket margin.
             self.session.set_margin_override(m)
-            # Broker-margin-tracked strategies (delta_neutral, cp_ratio_expiry) freeze
-            # their rupee thresholds off THIS number — push it (owner rule: broker margin
-            # only, never the model).
+            # Broker-margin-tracked strategies (delta_neutral, cp_ratio_expiry, and the
+            # ratio family) freeze their rupee thresholds off THIS number — push it (owner
+            # rule: broker margin only, never the model).
             push = getattr(getattr(self.session, "strategy", None), "set_broker_margin", None)
             if push is not None:
                 try:
