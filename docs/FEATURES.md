@@ -346,8 +346,10 @@ blanked in the test bootstrap).
   decisions/orders; marks re-price read-only). Festival dates are provisional and env-correctable
   (`NSE_HOLIDAYS_ADD` / `NSE_HOLIDAYS_REMOVE`).
 - **DB backups** (`services/backup.py`): crash-consistent `VACUUM INTO` snapshots to `backups/`
-  (retain 7) — one on every startup (pre-recovery) + one daily ~16:30 IST. On-box only; keep
-  off-box copies yourself.
+  (retain 7) — one on every startup (pre-recovery) + one daily ~16:30 IST. Set
+  `SKAS_BACKUP_REMOTE_CMD` (an rsync/rclone/`aws s3` command with `{path}` = the snapshot) and
+  the nightly backup also ships it off-box for disk-failure protection (best-effort; alerts on
+  failure). Unset → on-box only.
 - **Loop watchdog**: a 5-min maintenance task restarts any auto run whose loop died silently and
   Telegram-alerts it.
 - **Process supervision** (`scripts/install-supervisor.sh`): a launchd LaunchAgent auto-starts
@@ -482,5 +484,6 @@ the shared deployment path: **M** `POST /options/deploy` (custom_options), `/opt
 | `SKAS_WS_FEED_ENABLED` | `true` | Use the KiteTicker WebSocket price feed (REST fallback). |
 | `SKAS_WS_FEED_STALE_S` | `10` | In-market staleness before a mark falls back to REST. |
 | `SKAS_DB_BACKUP_KEEP` | `7` | Rolling on-box DB snapshots to retain. |
+| `SKAS_BACKUP_REMOTE_CMD` | — | Command the nightly backup runs to ship the snapshot off-box (`{path}`/`{name}`). |
 | `SKAS_TELEGRAM_BOT_TOKEN` / `_CHAT_ID` | — | Telegram alerts (unset → alerts are no-ops). |
 | `NSE_HOLIDAYS_ADD` / `NSE_HOLIDAYS_REMOVE` | — | Correct the holiday calendar without a redeploy. |

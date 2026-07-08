@@ -93,6 +93,13 @@ class Settings(BaseSettings):
 
     # --- Backups ---
     db_backup_keep: int = 7              # rolling on-box snapshots of the sqlite DB to retain
+    # OFF-BOX durability: a shell command run AFTER the nightly snapshot to ship it off the
+    # box (disk-failure protection). ``{path}`` = the snapshot's absolute path, ``{name}`` =
+    # its filename. Unset → on-box only (unchanged). Destination-agnostic, e.g.:
+    #   rsync -az {path} user@backup-host:/skas-backups/
+    #   rclone copy {path} b2:my-bucket/skas-backups/
+    #   aws s3 cp {path} s3://my-bucket/skas-backups/
+    backup_remote_cmd: str | None = None   # SKAS_BACKUP_REMOTE_CMD
 
     # --- Logging ---
     log_level: str = "INFO"

@@ -155,8 +155,10 @@ position the restored book is missing. Two guards now stand between that and a d
   env-correctable via `NSE_HOLIDAYS_ADD` / `NSE_HOLIDAYS_REMOVE` (VERIFY against the NSE
   circular).
 - **Backups.** `services/backup.py` VACUUM-INTO snapshots to `backups/` (retain 7): one per
-  startup (pre-recovery) + one daily ~16:30 IST. **On-box only** — off-box durability is the
-  owner's job (copy `backups/` off the machine periodically).
+  startup (pre-recovery) + one daily ~16:30 IST. **Off-box**: set `SKAS_BACKUP_REMOTE_CMD`
+  (e.g. `rsync -az {path} user@host:/skas-backups/`, or an rclone/`aws s3` command) and the
+  nightly backup ships the fresh snapshot off the box (best-effort; failures alert via
+  Telegram). Unset → on-box only. Set it on the VPS (disk-failure protection).
 
 ### Operational runbook
 - **Start (repo root!):** `venv/bin/skas-algo`. Relative SQLite path means the CWD must be

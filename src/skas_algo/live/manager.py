@@ -1160,7 +1160,8 @@ class LiveRunManager:
         self._last_backup_day = now.date()
         from skas_algo.services.backup import backup_db
 
-        await asyncio.to_thread(backup_db)
+        # offbox=True → also ship this nightly snapshot off the machine (if configured).
+        await asyncio.to_thread(backup_db, None, None, True)
 
     def _tick(self, live: LiveRun, tick_driven: bool, decide_at: time) -> None:
         """One synchronous pricing/decision tick — always called via asyncio.to_thread."""

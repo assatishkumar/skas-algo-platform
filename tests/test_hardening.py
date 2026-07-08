@@ -112,3 +112,54 @@ def test_watchdog_restarts_dead_auto_run(monkeypatch):
     live.config.auto = False
     m._watchdog_scan()
     assert restarted == []
+
+
+def _make_sqlite(path):
+    c = sqlite3.connect(str(path))
+    c.execute("CREATE TABLE t (id INTEGER)")
+    c.execute("INSERT INTO t VALUES (1)")
+    c.commit()
+    c.close()
+
+
+def test_backup_offbox_push_ships_snapshot(tmp_path, monkeypatch):
+    from skas_algo.config import get_settings
+    from skas_algo.services.backup import backup_db
+
+    db = tmp_path / "s.db"
+    _make_sqlite(db)
+    offbox = tmp_path / "offbox"
+    offbox.mkdir()
+    monkeypatch.setattr(get_settings(), "backup_remote_cmd", f"cp {{path}} {offbox}/")
+
+    # offbox=True → the fresh snapshot is shipped by the configured command.
+    p = backup_db(database_url=f"sqlite:///{db}", keep=3, offbox=True)
+    shipped = list(offbox.glob("s-*.db"))
+    assert p is not None and len(shipped) == 1 and shipped[0].name == p.name
+
+    # offbox=False (startup path) → not shipped even when the command is set.
+    backup_db(database_url=f"sqlite:///{db}", keep=3, offbox=False)
+    assert len(list(offbox.glob("*.db"))) == 1
+
+
+def test_backup_offbox_failure_is_best_effort(tmp_path, monkeypatch):
+    from skas_algo.config import get_settings
+    from skas_algo.services.backup import backup_db
+
+    db = tmp_path / "s.db"
+    _make_sqlite(db)
+    monkeypatch.setattr(get_settings(), "backup_remote_cmd", "false")  # command exits nonzero
+
+    # The local snapshot still succeeds despite the off-box command failing.
+    p = backup_db(database_url=f"sqlite:///{db}", keep=3, offbox=True)
+    assert p is not None and p.exists()
+
+
+def test_backup_no_offbox_when_unconfigured(tmp_path, monkeypatch):
+    from skas_algo.config import get_settings
+    from skas_algo.services.backup import backup_db
+
+    db = tmp_path / "s.db"
+    _make_sqlite(db)
+    monkeypatch.setattr(get_settings(), "backup_remote_cmd", None)
+    assert backup_db(database_url=f"sqlite:///{db}", keep=3, offbox=True) is not None  # no-op push
