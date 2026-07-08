@@ -36,6 +36,7 @@ _BUILTIN: dict[int, tuple[tuple[date, str], ...]] = {
         (date(2026, 4, 14), "Dr. Ambedkar Jayanti"),
         (date(2026, 5, 1), "Maharashtra Day"),
         (date(2026, 5, 27), "Bakri Id / Id-ul-Adha"),   # PROVISIONAL (lunar)
+        (date(2026, 6, 26), "Muharram"),                # PROVISIONAL — Fri; bhavcopy-confirmed closed
         (date(2026, 8, 15), "Independence Day"),        # Saturday
         (date(2026, 9, 14), "Ganesh Chaturthi"),        # PROVISIONAL (lunar)
         (date(2026, 10, 2), "Gandhi Jayanti"),

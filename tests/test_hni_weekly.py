@@ -119,6 +119,23 @@ def test_friday_force_exit():
     assert not any(t["action"] == "SETTLE" for t in result.transactions)  # out before expiry
 
 
+def test_holiday_friday_exits_on_thursday():
+    # Good Friday 2026-04-03 is an NSE holiday → the "no weekend carry" exit must fire on
+    # Thursday 04-02 (the week's last trading day), NOT hold over the long weekend to Monday.
+    from skas_algo.live import holidays
+
+    holidays._holidays_for.cache_clear()
+    s = HniWeeklyStrategy(universe=["NIFTY"], initial_capital=1_000_000)
+    s.entry_date = date(2026, 3, 30)  # Monday of the Good-Friday week
+    assert not s._time_exit(date(2026, 4, 1))  # Wed — Thursday still trades, hold
+    assert s._time_exit(date(2026, 4, 2))      # Thu — Friday is a holiday → last trading day, exit
+
+    # A NORMAL week is unchanged: hold Thursday, exit Friday.
+    s.entry_date = date(2026, 1, 5)  # Monday
+    assert not s._time_exit(date(2026, 1, 8))  # Thu — Friday 01-09 trades → hold
+    assert s._time_exit(date(2026, 1, 9))      # Fri → exit
+
+
 def test_one_trade_per_isoweek():
     strat = HniWeeklyStrategy(universe=["NIFTY"], initial_capital=1_000_000)
     result = _run(strat)  # two full weeks

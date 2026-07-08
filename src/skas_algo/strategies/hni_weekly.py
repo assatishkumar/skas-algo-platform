@@ -6,9 +6,10 @@ From the HNI deck (StockMock-verified):
   * BUY  2× at ~spot+600 (far hedge)
 Net contracts +1−3+2 = 0 → limited risk on BOTH sides, no naked tail. Enter MONDAY
 (or the week's first trading day if Monday is a holiday) into the weekly expiring
-NEXT Tuesday (~8 DTE — the deck's "bi-weekly"), exit FRIDAY of the entry week (the
-deck's 5-day duration; no weekend carry), with ±1% of DEPLOYED MARGIN (₹1.32L per
-1-3-2 lot-set) as the profit target / stop loss.
+NEXT Tuesday (~8 DTE — the deck's "bi-weekly"), exit FRIDAY of the entry week — or the
+week's LAST trading day if Friday is an NSE holiday (the deck's 5-day duration; strictly
+no weekend/holiday carry) — with ±1% of DEPLOYED MARGIN (₹1.32L per 1-3-2 lot-set) as the
+profit target / stop loss.
 
 The equidistant 200/400/600 offsets + net-zero ratio make max profit ≈ max loss
 (R:R ~1:1) by construction — a small net credit/debit only nudges it — so entry is
@@ -22,7 +23,7 @@ exist in the cache from 2025-09-01, so backtest from there.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from .call_ratio_monthly import CallRatioMonthlyStrategy
 
@@ -113,8 +114,27 @@ class HniWeeklyStrategy(CallRatioMonthlyStrategy):
     def _time_exit(self, today: date) -> bool:
         if self.entry_date is None:
             return False
-        return (today.weekday() >= self.exit_weekday
-                or today.isocalendar()[:2] != self.entry_date.isocalendar()[:2])
+        # A different ISO week (a Friday exit was missed / fell through) — always exit.
+        if today.isocalendar()[:2] != self.entry_date.isocalendar()[:2]:
+            return True
+        # On/after the exit weekday (Friday) — exit, no weekend carry.
+        if today.weekday() >= self.exit_weekday:
+            return True
+        # Holiday-aware "no weekend carry": if every remaining day this week up to Friday is a
+        # non-trading day (weekend / NSE holiday), TODAY is the last trading day before the break
+        # — exit now rather than hold a holiday-Friday + weekend to the next Monday. Deterministic
+        # (calendar-only) so backtest == live. Depends on the NSE holiday calendar being complete
+        # for the exit-week's Friday (live/holidays.py; env-correctable via NSE_HOLIDAYS_ADD).
+        return self._last_trading_day_before_exit(today)
+
+    def _last_trading_day_before_exit(self, today: date) -> bool:
+        from skas_algo.live.holidays import is_nse_holiday
+
+        for offset in range(1, self.exit_weekday - today.weekday() + 1):
+            d = today + timedelta(days=offset)
+            if d.weekday() < 5 and not is_nse_holiday(d):
+                return False  # a trading day still remains this week before the weekend
+        return True
 
     # ------------------------------------------------------- (de)serialize
     def export_state(self) -> dict:
