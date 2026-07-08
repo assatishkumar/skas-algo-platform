@@ -1,0 +1,48 @@
+# Keep the Docker build context small and secret-safe. The image only needs
+# pyproject.toml, README.md, src/, alembic.ini, alembic/ (see Dockerfile) — everything
+# else is excluded so no live DB, secrets, caches, or node_modules ever reach the daemon.
+.git
+.gitignore
+.dockerignore
+.github
+
+# Platform state + backups (real-money data — never bake into an image)
+*.db
+*.db-wal
+*.db-shm
+*.duckdb
+*.sqlite
+*.sqlite3
+backups/
+logs/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+
+# Python envs + caches
+venv/
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+*.egg-info/
+
+# Web build artifacts (the API image doesn't serve the SPA)
+web/node_modules/
+web/dist/
+
+# Not needed in the runtime image
+tests/
+docs/
+scripts/
+*.md
+!README.md

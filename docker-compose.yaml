@@ -1,8 +1,21 @@
 services:
   api:
-    build: .
+    build:
+      context: .
+      # The sibling market-data package, brought in as a named build context so the main
+      # context stays this repo (BuildKit / Compose v2). Adjust the path if skas-data lives
+      # elsewhere on the VPS.
+      additional_contexts:
+        skas-data: ../skas-data
     ports:
       - "8080:8080"
+    volumes:
+      # The market-data cache (~/.skas_data, ~650 MB) is NOT in the image — mount the host
+      # dump here. SKAS_DATA_DIR = the absolute host path to the copied ~/.skas_data.
+      - ${SKAS_DATA_DIR:?set SKAS_DATA_DIR to the host market-data cache dir}:/root/.skas_data
+      # SQLite option (if you copy skas_algo.db instead of migrating to Postgres): mount it
+      # and set SKAS_DATABASE_URL=sqlite:////data/skas_algo.db (four slashes = absolute).
+      # - ${SKAS_STATE_DB:-./skas_algo.db}:/data/skas_algo.db
     environment:
       # The app binds 127.0.0.1 by default (localhost-only, see config/settings.py); inside
       # a container that would be unreachable through the published port, so the container
