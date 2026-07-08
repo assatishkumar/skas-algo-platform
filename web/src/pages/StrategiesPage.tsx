@@ -137,6 +137,7 @@ const STRATEGIES: Rule[] = [
       "Only on CLOSED 15-min candles from today's session (the overnight-carried candle never signals).",
       "Max 3 entries per underlying per day; no fresh entries after 15:00.",
       "Deploying with a Zerodha session seeds ~7 days of real 15-min bars so indicators are live immediately.",
+      "Daily pivots (R1/S1) use the broker's fresh prior-day OHLC — if that data is unexpectedly stale the strategy skips the day and alerts, rather than trade off wrong levels.",
     ],
     exit: [
       "SuperTrend flips against the position → exit; re-entry only on a fresh full signal on a LATER candle.",

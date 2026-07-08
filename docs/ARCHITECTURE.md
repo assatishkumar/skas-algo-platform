@@ -77,6 +77,21 @@ for LIVE runs only.
 alone. With the feed, steady-state marks are ~0 REST (push); REST remains for chains,
 margins, and fallback. Kite REST cap is ~10/s and WS supports ≤3000 instruments/connection.
 
+**Daily / historical data is broker-first (2026-07).** Marks are the *current* price; the
+strategies that also need PRIOR-day data — momentum_theta's pivots (`manager._prior_day_ohlc`),
+21-EMA's daily bands (`manager._daily_bars_live`) — used to read the skas-data **cache**, so a
+stale/unrefreshed cache silently corrupted a live entry (07-08: a 5-day-old pivot mis-timed a fill
+by hours). They now prefer `ZerodhaAdapter.daily_bars` (fresh Kite `interval="day"`, via
+`manager._broker_daily_df`), cache as fallback (Dhan has no broker history; SENSEX has no cache →
+own 15-min bars). momentum_theta additionally **guards against staleness**: `_refresh_pivots` checks
+the provider's prior day is the actual adjacent trading day (`holidays.previous_trading_day`) and, if
+not, uses current own-bars else GATES entries + alerts once — never trading off a stale pivot. The
+guard engages ONLY on a live-only `date` field, so the backtest (dateless, cache-fed) is
+byte-identical (parity §7). The equity SuperTrend/Donchian ~50-symbol daily series stay cache-backed
+(one batch ≪ ~50 broker calls/decision), kept fresh by the daily cache-refresh maintenance task
+(below). Net: a LIVE run no longer depends on anyone remembering to click Refresh; the cache is
+backtest-focused + a fallback.
+
 ---
 
 ## 3. Order path & safety chain
@@ -150,6 +165,15 @@ position the restored book is missing. Two guards now stand between that and a d
   broker-side GTT stops would remove it entirely and remain a future option.
 - **Watchdog.** The manager maintenance task (5-min) restarts any AUTO run whose loop task
   died silently and Telegram-alerts it (`manager._watchdog_scan`).
+- **Daily cache refresh.** The same maintenance task refreshes the index + running-equity daily
+  cache **once per trading day, in the background, as soon as a valid Zerodha session exists**
+  (`manager._maybe_daily_cache_refresh` → `services/market_data.refresh_cache` via
+  `make_data_session` — historical/read-only, never `make_adapter`/arm/orders; picks any zerodha
+  account with a live session). This keeps the cache-backed equity strategies + any live fallback
+  fresh WITHOUT the manual Data/Brokers refresh button (the index strategies are broker-first and
+  don't need it). On success it broadcasts a `cache_refreshed` WS event and surfaces
+  `manager.last_cache_refresh` on `GET /live/summary` → the web header's quiet "Data ✓ HH:MM" chip.
+  Fail-safe: if it never runs, correctness is unaffected (the live pivots/bands are broker-first).
 - **Holidays.** `live/holidays.py` makes `is_market_open` treat NSE holidays like weekends
   (marks re-price read-only; no decisions/orders). Festival dates are PROVISIONAL —
   env-correctable via `NSE_HOLIDAYS_ADD` / `NSE_HOLIDAYS_REMOVE` (VERIFY against the NSE

@@ -140,9 +140,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   the 15th else next. FULL engine backtest (real cached chain — the first new-strategy
   since the ratio family to ride `build_options_run` untouched). Daily H/L comes via a
   strategy-side `set_daily_bars_fn` hook (options views are close-only): backtest wires
-  the cache in `services/backtest.py`; live wires cache+today's-intraday-bar in
-  `_wire_quote_source` (bands INCLUDE today's forming bar — chart-at-15:20 semantics; no
-  broker session → today degrades to H=L=C=LTP). DERIV live ticks have no engine time
+  the cache in `services/backtest.py`; live wires **broker-first daily bars**
+  (`manager._broker_daily_df`, fresh Kite `daily_bars`) + today's-intraday-bar in
+  `_wire_quote_source`, cache as fallback (bands INCLUDE today's forming bar — chart-at-15:20
+  semantics; no broker session → today degrades to H=L=C=LTP). DERIV live ticks have no engine time
   gate — the strategy self-gates (15:20 + once-a-day latch that only engages AFTER bands
   computed, so a data hiccup doesn't burn the day). Margin model reads ≈2× real broker
   for the spread (no long-leg offset — ratio-family caveat).
@@ -167,10 +168,17 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   (live-chain delta solve); NO backtest — BANKNIFTY chain history ≈ 2 months in cache.
 - **momentum_theta_gainer_intra** (intraday 15-min SuperTrend(7,3) + daily-pivot ATM weekly
   seller, NIFTY + SENSEX): builds its OWN 15-min candles from live spot ticks (none exist in
-  any cache) and carries them in `export_state`; pivots (R1/S1) come from its own prior-day
-  bars, NOT the daily cache. Entries only on CLOSED candles; flip exit never re-enters on the
-  same candle; 3-entries/day cap. Warmup: `ZerodhaAdapter.intraday_bars` seeds ~7 days of real
-  bars at deploy/recovery (cache source cold-starts: ST after ~2×period candles, entries day 2).
+  any cache) and carries them in `export_state`; pivots (R1/S1) come from a daily-OHLC provider —
+  **broker-first in LIVE** (`ZerodhaAdapter.daily_bars`, Kite `interval="day"`, always fresh so a
+  stale/unrefreshed cache can't corrupt a live entry), cache fallback, then own prior-day bars —
+  with a **stale-pivot guard**: if the provider's prior day isn't the actual adjacent trading day
+  (`live/holidays.previous_trading_day`) it uses current own-bars else GATES entries + alerts once
+  (never trades off a stale pivot — this is exactly the bug that mis-timed a live entry 07-08). The
+  guard engages ONLY on the live-only `date` field, so the backtest provider (dateless, cache-fed
+  `services/momentum_theta_bt._official_daily_ohlc_fn`) stays byte-identical. Entries only on CLOSED
+  candles; flip exit never re-enters on the same candle; 3-entries/day cap. Warmup:
+  `ZerodhaAdapter.intraday_bars` seeds ~7 days of real bars at deploy/recovery (cache source
+  cold-starts: ST after ~2×period candles, entries day 2).
   **SENSEX is live-only** — zero BSE history exists (spot or options), so no backtest, ever;
   its options ride **BFO** (adapter merges the BFO dump into the NFO LUT, `_ts_exchange` keys
   the `NFO:`/`BFO:` prefixes, spot = `BSE:SENSEX`) and the deploy route rejects SENSEX+cache.
@@ -227,7 +235,8 @@ cd web && npm run dev
 Health check: `curl http://localhost:8080/api/v1/health`. The DB schema is created on startup
 (idempotent); Alembic migrations are in `alembic/` for evolving an existing DB. Startup also
 takes a pre-recovery DB backup (`services/backup.py` → `backups/`, retain 7) and starts the
-manager maintenance task (loop watchdog + daily ~16:30 backup).
+manager maintenance task (5-min: loop watchdog + a once-per-trading-day background cache refresh
++ daily ~16:30 backup).
 
 **Preflight before any restart/deploy:** `./scripts/preflight.sh` — ruff (advisory) + the FULL
 test suite incl. the parity/mode-equivalence suites + web typecheck. Green = the change didn't
@@ -242,8 +251,20 @@ BOTH `SKAS_AUTH_PASSWORD_HASH` (via `skas-algo hash-password`) + `SKAS_AUTH_JWT_
 a login (required on any networked host; off on localhost). Live marks come from a shared
 per-account KiteTicker WS feed (`live/pricefeed.py`, `SKAS_WS_FEED_ENABLED`, default on) with a
 REST fallback — strategies still read via `QuoteSource` (no tick callbacks, parity intact).
-NSE holidays close the market like weekends (`live/holidays.py`; festival dates PROVISIONAL,
-env-correctable via `NSE_HOLIDAYS_ADD`/`NSE_HOLIDAYS_REMOVE`).
+**Live daily/historical data is broker-first too (2026-07)** — the founding invariant is that a
+LIVE run should not depend on the (manually-refreshed) skas-data cache: the daily-OHLC hooks
+(`manager._prior_day_ohlc` for momentum_theta pivots, `manager._daily_bars_live` for ema21 bands)
+prefer `ZerodhaAdapter.daily_bars` (fresh Kite `interval="day"`, `manager._broker_daily_df`), with
+the cache as fallback (Dhan has NO broker history → cache; SENSEX has no cache → own bars). The
+skas-data cache is now **backtest-focused + a live fallback**, and is kept fresh by a maintenance
+task `manager._maybe_daily_cache_refresh` (once/trading-day, background, fires as soon as a valid
+Zerodha session exists; equity SuperTrend/Donchian stay cache-backed — a 50-symbol batch beats ~50
+broker calls/decision — so THEY rely on this refresh). It is historical/read-only
+(`make_data_session`, never `make_adapter`/arm/orders), and on success broadcasts a `cache_refreshed`
+WS event + surfaces `manager.last_cache_refresh` on `GET /live/summary` → the web header's quiet
+"Data ✓ HH:MM" chip. NSE holidays close the market like weekends (`live/holidays.py`; festival dates
+PROVISIONAL, env-correctable via `NSE_HOLIDAYS_ADD`/`NSE_HOLIDAYS_REMOVE`;
+`previous_trading_day(d)` is the adjacency helper the pivot stale-guard uses).
 
 **Supervision (optional but recommended for real-money):** `./scripts/install-supervisor.sh`
 puts the backend under a launchd LaunchAgent (auto-start + auto-restart on any exit);

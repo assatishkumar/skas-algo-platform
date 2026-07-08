@@ -136,7 +136,9 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
 - **`momentum_theta_gainer_intra` — 15-min SuperTrend + pivot ATM seller.** Builds its OWN
   15-min candles from live spot ticks; on a closed candle, close > SuperTrend(7,3) AND > pivot
   R1 → SELL the ATM PUT of the nearest weekly (0DTE allowed); the mirror → SELL the ATM CALL.
-  Max 3 entries/day/underlying; exit on a SuperTrend flip (never re-enters on the flip candle)
+  **Pivots are broker-sourced in live** (`ZerodhaAdapter.daily_bars`, fresh Kite daily — a stale
+  cache can't corrupt them) with a stale-guard that gates entries + alerts rather than trade off an
+  out-of-date prior day. Max 3 entries/day/underlying; exit on a SuperTrend flip (never re-enters on the flip candle)
   or 15:20. NIFTY + SENSEX. **Dedicated BS backtest** (`services/momentum_theta_bt` replays real
   15-min NIFTY bars through the actual strategy class; SENSEX is live-only — no BSE history).
 - **`donchian_strangle_monthly` — Nifty-50 basket short-strangle (the active frontier).** For
@@ -353,6 +355,12 @@ blanked in the test bootstrap).
   failure). Unset → on-box only.
 - **Loop watchdog**: a 5-min maintenance task restarts any auto run whose loop died silently and
   Telegram-alerts it.
+- **Daily cache refresh**: the same task refreshes the index + running-equity daily cache once per
+  trading day, in the background, as soon as a valid Zerodha session exists (historical/read-only —
+  never orders/arming). So live keeps working without a manual Data-page refresh: the index
+  strategies (momentum_theta pivots, 21-EMA bands) read daily bars broker-first anyway, and the
+  cache-backed equity strategies stay fresh via this task. A quiet **"Data ✓ HH:MM"** chip in the
+  web header shows the last refresh (from `GET /live/summary` + a `cache_refreshed` WS event).
 - **Process supervision** (`scripts/install-supervisor.sh`): a launchd LaunchAgent auto-starts
   the backend at login and auto-restarts it within 15s of any exit (single-process, reload off);
   `uninstall-supervisor.sh` reverts.
@@ -457,7 +465,10 @@ the shared deployment path: **M** `POST /options/deploy` (custom_options), `/opt
 - **`skas-algo-platform`** (this repo): the engine, strategies, API, and web UI.
 - **`../skas-data`** (installed editable): the market-data cache (DuckDB + Kite) — all daily
   bars and cached chains. Opened read-write by one process at a time (parity tests need
-  exclusive access — see the preflight caveat).
+  exclusive access — see the preflight caveat). **Backtest-focused + a live fallback**: LIVE runs
+  now source daily/historical data broker-first (fresh Kite `daily_bars`), so a stale cache no
+  longer affects live; the daily cache-refresh task keeps it current for the cache-backed equity
+  strategies.
 - **`../skas-trading`**: original strategy reference (SST etc.).
 - **`../skas-options`**: old options code, explicitly not reused.
 - **`skas_algo.db`** (~200 MB, gitignored): all platform state — accounts, deployments, per-run
