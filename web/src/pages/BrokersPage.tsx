@@ -303,6 +303,10 @@ function LoginFlow({ id, broker, onDone }: { id: number; broker: string; onDone:
 
 // ---------------------------------------------------------------- account card
 
+// Index SPOT series (not in any equity universe) — they drive the options backtest calendar,
+// so a refresh must include them or they go stale (the NIFTY-50 lag).
+const INDEX_SPOTS = ["NIFTY 50", "NIFTY BANK"];
+
 function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
   a: BrokerAccount;
   loginOpen: boolean;
@@ -313,6 +317,7 @@ function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
   const brand = BRAND[a.broker] ?? BRAND.zerodha;
   const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
   const [universe, setUniverse] = useState("nifty50");
+  const [alsoOptions, setAlsoOptions] = useState(false);
   const [refreshing, setRefreshing] = useState<{ done: number; total: number } | null>(null);
   const [cacheMsg, setCacheMsg] = useState<string | null>(null);
   const showCache = a.broker === "zerodha" && a.has_session;
@@ -321,18 +326,43 @@ function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
     setRefreshing(null);
     setCacheMsg(null);
     try {
-      // Chunked so the button shows real progress instead of one long opaque call.
-      const { symbols } = await api.universeSymbols(universe);
+      // The index SPOT series drive the backtest calendar but sit in no equity universe, so
+      // they silently go stale (why NIFTY 50 lagged). Always fold them into every refresh;
+      // "indices" refreshes just them.
+      let symbols: string[];
+      if (universe === "indices") {
+        symbols = [...INDEX_SPOTS];
+      } else {
+        const { symbols: stocks } = await api.universeSymbols(universe);
+        symbols = [...INDEX_SPOTS, ...stocks];
+      }
       const CHUNK = 15;
       let ok = 0, errors = 0;
       setRefreshing({ done: 0, total: symbols.length });
       for (let i = 0; i < symbols.length; i += CHUNK) {
+        // Chunked so the button shows real progress instead of one long opaque call.
         const { refreshed } = await brokers.refreshCache(a.id, { symbols: symbols.slice(i, i + CHUNK) });
         for (const e of Object.values(refreshed)) e.error ? errors++ : ok++;
         setRefreshing({ done: Math.min(i + CHUNK, symbols.length), total: symbols.length });
       }
+      // Optionally catch up the NIFTY + BANKNIFTY options bhavcopy (last ~60 days).
+      let optMsg = "";
+      if (alsoOptions) {
+        try {
+          const today = new Date();
+          const from = new Date(today);
+          from.setDate(from.getDate() - 60);
+          const iso = (d: Date) => d.toISOString().slice(0, 10);
+          await api.optionsRefresh({
+            underlyings: ["NIFTY", "BANKNIFTY"], start_date: iso(from), end_date: iso(today),
+          });
+          optMsg = " · NIFTY+BN options ✓";
+        } catch (e) {
+          optMsg = ` · options failed: ${(e as Error).message}`;
+        }
+      }
       localStorage.setItem(`brokers.lastRefresh.${a.id}`, String(Date.now()));
-      setCacheMsg(`refreshed ${ok} symbols${errors ? ` · ${errors} errors` : ""}`);
+      setCacheMsg(`refreshed ${ok} symbols${errors ? ` · ${errors} errors` : ""}${optMsg}`);
     } catch (e) {
       setCacheMsg((e as Error).message);
     } finally {
@@ -418,16 +448,24 @@ function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
           <div className="mt-4 border-t border-[var(--divider)] pt-4">
             <div className="flex items-start gap-2 text-[12.5px] text-[var(--muted)]">
               <Icon d={I.db} size={14} className="mt-0.5 shrink-0" />
-              <span>Historical cache shares this Kite session — refresh candles without a second login.</span>
+              <span>Historical cache shares this Kite session — refresh candles without a second login.
+                Every refresh also updates the NIFTY 50 &amp; NIFTY BANK index series (needed by options backtests).</span>
             </div>
             <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
               <select
                 className="rounded-[11px] border border-[var(--field-border)] bg-[var(--field)] px-3 py-2 text-[13px] font-semibold text-[var(--strong)]"
                 value={universe} onChange={(e) => setUniverse(e.target.value)}>
+                <option value="indices">Indices only (NIFTY 50, NIFTY BANK)</option>
                 {(universeData ?? []).map((u) => (
-                  <option key={u.name} value={u.name}>{u.label} ({u.count})</option>
+                  <option key={u.name} value={u.name}>{u.label} stocks + indices ({u.count})</option>
                 ))}
               </select>
+              <label className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-[var(--muted)]"
+                title="Also refresh the last ~60 days of NIFTY & BANKNIFTY option bhavcopy">
+                <input type="checkbox" checked={alsoOptions}
+                  onChange={(e) => setAlsoOptions(e.target.checked)} />
+                + NIFTY &amp; BN options
+              </label>
               <button onClick={refresh} disabled={!!refreshing}
                 className="inline-flex items-center gap-1.5 rounded-[11px] px-3.5 py-2 text-xs font-bold text-white"
                 style={refreshing
