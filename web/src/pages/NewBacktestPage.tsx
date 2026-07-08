@@ -351,7 +351,12 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
   const [appliedTemplate, setAppliedTemplate] = useState<StrategyTemplate | null>(null);
   useEffect(() => {
     // A clone prefills from its own params (one-shot); otherwise use the strategy's template.
-    const useClone = !!clonePrefill && !cloneParamsRef.current && clonePrefill.strategy_id === strategyId;
+    const cloneActive = !!clonePrefill && clonePrefill.strategy_id === strategyId;
+    // Once the clone's params have landed, never re-apply anything for that strategy — a LATER
+    // async templatesData load (or any re-render) must not fall back to the strategy template and
+    // clobber the clone's params OR the user's subsequent edits (both were silently lost before).
+    if (cloneActive && cloneParamsRef.current) return;
+    const useClone = cloneActive && !cloneParamsRef.current;
     const t = useClone
       ? ({ run_id: 0, name: clonePrefill!.name ?? "", capital: clonePrefill!.capital ?? undefined, params: clonePrefill!.params } as StrategyTemplate)
       : templatesData?.templates?.[strategyId];
@@ -1499,7 +1504,14 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
                 <button
                   onClick={() =>
                     mutation.variables &&
-                    saveMutation.mutate({ request: mutation.variables, report: result.report, trades: result.trades })
+                    // name/notes are metadata (don't affect the computed report/trades), so take
+                    // them from the CURRENT form — an edit after previewing must not be lost to the
+                    // stale preview-time request.
+                    saveMutation.mutate({
+                      request: { ...mutation.variables, name: name.trim() || undefined, notes: notes.trim() || undefined },
+                      report: result.report,
+                      trades: result.trades,
+                    })
                   }
                   disabled={saveMutation.isPending}
                   className="rounded-md bg-[var(--ft)] text-white px-3 py-1.5 text-sm font-medium disabled:opacity-50"
