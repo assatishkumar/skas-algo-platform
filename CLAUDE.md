@@ -213,6 +213,11 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   (no pipes) through unchanged, so it's safe to wrap any `.symbol` / `.ticker` you print.
 
 ## 10. Running locally
+**One-command stack:** `./scripts/start.sh` (backend via launchd + Vite web) · `./scripts/stop.sh`
+(unloads the agent so the backend stays down — a bare `pkill` would just get respawned) ·
+`./scripts/status.sh`. There is only ONE backend process — the live loop, order/broker
+reconciliation, watchdog, backups, and WebSocket all run inside it; no separate monitor server.
+The manual commands underneath:
 ```bash
 # Backend (FastAPI + uvicorn on :8080) — START FROM THE REPO ROOT (see footgun below)
 venv/bin/skas-algo
