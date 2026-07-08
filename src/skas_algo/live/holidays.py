@@ -21,7 +21,7 @@ Correct WITHOUT a code change via env (comma-separated ISO dates, ``SKAS_`` unpr
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, timedelta
 from functools import lru_cache
 
 # NSE equity/F&O trading holidays. Weekends are handled separately (they're closed anyway;
@@ -82,3 +82,16 @@ def holiday_name(d: date) -> str | None:
         if hd == d:
             return name
     return "NSE holiday" if is_nse_holiday(d) else None
+
+
+def previous_trading_day(d: date) -> date:
+    """The most recent NSE trading day STRICTLY BEFORE ``d`` — skips weekends and listed
+    holidays. Used to detect a stale daily-data source (a pivot's prior day that isn't the
+    actual adjacent trading day). Bounded 15-day walk so a bad ``NSE_HOLIDAYS_ADD`` env can
+    never spin (a >2-week exchange closure doesn't happen)."""
+    cur = d - timedelta(days=1)
+    for _ in range(15):
+        if cur.weekday() < 5 and not is_nse_holiday(cur):
+            return cur
+        cur -= timedelta(days=1)
+    return cur

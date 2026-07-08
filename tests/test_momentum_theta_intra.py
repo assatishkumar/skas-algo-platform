@@ -200,6 +200,78 @@ def test_pivot_formula_exact_values():
     assert piv["s1"] < piv["p"] < piv["r1"]  # sane ordering, always
 
 
+def _bars_for_day(day_iso, base=24000, n=24):
+    t0 = datetime.fromisoformat(f"{day_iso}T09:15:00")
+    return [[(t0 + timedelta(minutes=15 * i)).isoformat(), base, base, base, base]
+            for i in range(n)]
+
+
+def test_pivot_fresh_provider_used():
+    # Provider returns the ACTUAL prior trading day → its official pivots are used (matches
+    # TradingView: 07-07 H=24530.9 L=24348.9 C=24398.7 → R1=24503.4, S1=24321.5).
+    from skas_algo.live.holidays import previous_trading_day
+    st = MomentumThetaGainerIntra(underlyings=["NIFTY"])
+    today = date(2026, 7, 8)
+    prev = previous_trading_day(today).isoformat()  # 2026-07-07
+    st.set_daily_ohlc_fn(lambda u, t: {"date": prev, "high": 24530.9, "low": 24348.9, "close": 24398.7})
+    st._refresh_pivots("NIFTY", today)
+    piv = st.pivots["NIFTY"]
+    assert abs(piv["r1"] - 24503.4) < 0.2 and abs(piv["s1"] - 24321.5) < 0.2
+
+
+def test_pivot_stale_provider_falls_back_to_current_bars_and_alerts():
+    # A 5-day-stale provider (07-02) must NOT be used; the strategy's own CURRENT bars (07-07)
+    # give the pivots, and the owner is alerted exactly once.
+    st = MomentumThetaGainerIntra(underlyings=["NIFTY"])
+    today = date(2026, 7, 8)
+    st.bars["NIFTY"] = _bars_for_day("2026-07-07", base=24350)
+    st.bars["NIFTY"][5][2] = 24528.0    # session high
+    st.bars["NIFTY"][11][3] = 24175.0   # session low
+    st.bars["NIFTY"][-1][4] = 24356.0   # session close
+    alerts: list = []
+    st.set_notify_fn(lambda u, msg: alerts.append(msg))
+    st.set_daily_ohlc_fn(lambda u, t: {"date": "2026-07-02", "high": 24194.6, "low": 24058.8, "close": 24167.2})
+    st._refresh_pivots("NIFTY", today)
+    piv = st.pivots["NIFTY"]
+    assert piv is not None and piv["s1"] > 24150      # ~24178 from bars, NOT the stale 24091
+    assert len(alerts) == 1 and "stale" in alerts[0]
+    st._refresh_pivots("NIFTY", today)                 # same day → no re-alert
+    assert len(alerts) == 1
+
+
+def test_pivot_stale_provider_no_current_bars_gates_entries():
+    # Stale provider AND no current own bars → pivots stay None (entries gated) + one alert.
+    st = MomentumThetaGainerIntra(underlyings=["NIFTY"])
+    today = date(2026, 7, 8)
+    st.bars["NIFTY"] = _bars_for_day("2026-07-02")     # only STALE own bars
+    calls = {"n": 0}
+
+    def _provider(u, t):
+        calls["n"] += 1
+        return {"date": "2026-07-02", "high": 24194.6, "low": 24058.8, "close": 24167.2}
+
+    alerts: list = []
+    st.set_notify_fn(lambda u, msg: alerts.append(msg))
+    st.set_daily_ohlc_fn(_provider)
+    st._refresh_pivots("NIFTY", today)
+    assert st.pivots["NIFTY"] is None                  # gated — never trades off a stale pivot
+    assert len(alerts) == 1 and "gated" in alerts[0]
+    st._refresh_pivots("NIFTY", today)                 # provider cached (no re-hit), no re-alert
+    assert calls["n"] == 1 and len(alerts) == 1
+
+
+def test_pivot_dateless_provider_trusted_no_alert():
+    # Backtest contract: a provider row WITHOUT a "date" is used as-is; the guard never engages.
+    st = MomentumThetaGainerIntra(underlyings=["NIFTY"])
+    alerts: list = []
+    st.set_notify_fn(lambda u, msg: alerts.append(msg))
+    st.set_daily_ohlc_fn(lambda u, t: {"high": 24035.55, "low": 23829.20, "close": 23917.75})
+    st._refresh_pivots("NIFTY", date(2026, 7, 1))
+    piv = st.pivots["NIFTY"]
+    assert abs(piv["r1"] - 24025.80) < 0.01 and abs(piv["s1"] - 23819.45) < 0.01
+    assert alerts == []
+
+
 def test_overnight_carried_candle_never_enters():
     """Yesterday's last candle closes on today's FIRST tick — it must not fire an entry
     against today's pivots (the 09:15 gap-entry bug caught vs TradingView)."""

@@ -104,6 +104,40 @@ def test_get_quote_skips_unlisted_option():
     assert out == {}
 
 
+class _HistKite(_FakeKite):
+    """ltp() → an instrument token, historical_data() → daily candles (interval='day')."""
+    def ltp(self, keys):
+        return {k: {"instrument_token": 256265} for k in keys}
+
+    def historical_data(self, token, start, end, interval):
+        assert interval == "day"
+        from datetime import datetime as _dt
+        return [
+            {"date": _dt(2026, 7, 6, 9, 15), "open": 24300, "high": 24458, "low": 24287, "close": 24430},
+            {"date": _dt(2026, 7, 7, 9, 15), "open": 24175, "high": 24530, "low": 24348, "close": 24398},
+        ]
+
+
+def test_daily_bars_returns_dated_ohlc():
+    adapter = ZerodhaAdapter(CREDS, kite=_HistKite())
+    bars = adapter.daily_bars("NIFTY", days=10)
+    assert bars == [
+        {"date": "2026-07-06", "open": 24300.0, "high": 24458.0, "low": 24287.0, "close": 24430.0},
+        {"date": "2026-07-07", "open": 24175.0, "high": 24530.0, "low": 24348.0, "close": 24398.0},
+    ]
+
+
+def test_daily_bars_empty_on_error():
+    class _BadHist(_FakeKite):
+        def ltp(self, keys):
+            return {k: {"instrument_token": 1} for k in keys}
+
+        def historical_data(self, *a, **k):
+            raise RuntimeError("kite historical down")
+
+    assert ZerodhaAdapter(CREDS, kite=_BadHist()).daily_bars("NIFTY") == []
+
+
 class _MarginKite(_QuoteKite):
     """Adds basket_margins() so basket-margin building can be tested."""
 

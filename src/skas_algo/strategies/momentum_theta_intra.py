@@ -106,6 +106,13 @@ class MomentumThetaGainerIntra:
         # weighted average, so pivots from it match TradingView's "Auto" daily pivots;
         # bar-derived stays the fallback (SENSEX has no daily series anywhere).
         self._daily_ohlc_fn = None
+        # Per-day cache of the provider row so an ungated day doesn't re-hit the broker every
+        # tick: {underlying: (day_iso, row_or_None)}. Transient (not serialized).
+        self._daily_ohlc_cache: dict[str, tuple[str, dict | None]] = {}
+        # Optional live alert sink: fn(underlying, message) — used ONLY to warn that the
+        # daily pivot source was stale (never wired in backtest). Dedup per day per name.
+        self._notify_fn = None
+        self._stale_alerted: dict[str, str] = {}
 
     # ------------------------------------------------------------ live hooks
     def spot_symbols(self) -> list[str]:
@@ -114,6 +121,9 @@ class MomentumThetaGainerIntra:
 
     def set_daily_ohlc_fn(self, fn) -> None:
         self._daily_ohlc_fn = fn
+
+    def set_notify_fn(self, fn) -> None:
+        self._notify_fn = fn
 
     def seed_intraday_bars(self, fetch) -> None:
         """Warm SuperTrend + pivots with real 15-min history at deploy/recovery.
@@ -178,37 +188,82 @@ class MomentumThetaGainerIntra:
 
     # --------------------------------------------------------------- pivots
     def _refresh_pivots(self, u: str, today: date) -> None:
-        """Classic floor pivots from the LATEST full prior day present in our own bars:
-        P=(H+L+C)/3, R1=2P−H, S1=2P−L. Recomputed once per day per underlying."""
+        """Floor pivots from the PRIOR TRADING DAY (P=(H+L+C)/3, R1=2P−L, S1=2P−H), once per
+        day per underlying. Prefers the official daily provider (broker-fresh in live); if the
+        provider returns a STALE prior day — one that isn't the actual adjacent trading day,
+        e.g. an unrefreshed cache — it falls back to the strategy's own live-built 15-min bars
+        when THOSE are current, else leaves pivots ungated and alerts once (never trades off a
+        stale pivot). The staleness guard engages ONLY when the provider surfaces a ``date``
+        (live wiring); the dateless backtest provider short-circuits below, so the backtest
+        path is byte-identical."""
         piv = self.pivots[u]
         if piv is not None and piv.get("day") == today.isoformat():
             return
+        # Call the daily provider at most ONCE per day per underlying (an ungated day must not
+        # re-hit the broker every tick); cache the (day, row) result.
+        row = None
         if self._daily_ohlc_fn is not None:
-            try:
-                row = self._daily_ohlc_fn(u, today)
-            except Exception:  # pragma: no cover - provider hiccup → bar fallback below
-                row = None
-            if row:
-                hi, lo, close = float(row["high"]), float(row["low"]), float(row["close"])
-                p = (hi + lo + close) / 3.0
-                self.pivots[u] = {"day": today.isoformat(), "p": p,
-                                  "r1": 2 * p - lo, "s1": 2 * p - hi}
+            cached = self._daily_ohlc_cache.get(u)
+            if cached is not None and cached[0] == today.isoformat():
+                row = cached[1]
+            else:
+                try:
+                    row = self._daily_ohlc_fn(u, today)
+                except Exception:  # pragma: no cover - provider hiccup → fallback below
+                    row = None
+                self._daily_ohlc_cache[u] = (today.isoformat(), row)
+        # BACKTEST / dateless provider → trusted (its data is never stale). Short-circuit
+        # BEFORE any holiday calc so the backtest is byte-identical.
+        if row and row.get("date") is None:
+            self._set_pivots(u, today, float(row["high"]), float(row["low"]), float(row["close"]))
+            return
+
+        from skas_algo.live.holidays import previous_trading_day
+        expected = previous_trading_day(today).isoformat()
+        stale_date = None
+        if row:  # LIVE provider row carries a date → freshness-gate it
+            rd = str(row["date"])[:10]
+            if rd >= expected:
+                self._set_pivots(u, today, float(row["high"]), float(row["low"]),
+                                 float(row["close"]))
                 return
+            stale_date = rd  # a pre-adjacent (stale) prior day — don't use it
+
         by_day: dict[str, list[list]] = {}
         for b in self.bars[u]:
             by_day.setdefault(b[0][:10], []).append(b)
         prior = sorted(d for d in by_day if d < today.isoformat())
+
+        if stale_date is not None:
+            if prior and prior[-1] >= expected:  # our own live bars ARE current → use them
+                rows = by_day[prior[-1]]
+                self._set_pivots(u, today, max(r[2] for r in rows), min(r[3] for r in rows),
+                                 rows[-1][4])
+                self._notify_stale_once(u, today, stale_date, expected, "using bar-derived pivots")
+            else:  # nothing current anywhere → gate entries rather than trade stale numbers
+                self._notify_stale_once(u, today, stale_date, expected, "entries gated for the day")
+            return
+
+        # No provider row (cache-source live / SENSEX) → EXISTING bar fallback, unchanged.
         if not prior:
             return  # cold start — no pivots yet, entries stay gated
         rows = by_day[prior[-1]]
-        hi = max(r[2] for r in rows)
-        lo = min(r[3] for r in rows)
-        close = rows[-1][4]
+        self._set_pivots(u, today, max(r[2] for r in rows), min(r[3] for r in rows), rows[-1][4])
+
+    def _set_pivots(self, u: str, today: date, hi: float, lo: float, close: float) -> None:
+        """P=(H+L+C)/3; R1 = 2P − LOW, S1 = 2P − HIGH (breakout-gate direction, validated vs
+        TradingView — swapping inverts the gate into a near-no-op)."""
         p = (hi + lo + close) / 3.0
-        # Traditional floor pivots: R1 = 2P − LOW, S1 = 2P − HIGH (easy to swap — doing so
-        # inverts the breakout gate into a near-no-op; caught by the owner vs TradingView).
-        self.pivots[u] = {"day": today.isoformat(), "p": p,
-                          "r1": 2 * p - lo, "s1": 2 * p - hi}
+        self.pivots[u] = {"day": today.isoformat(), "p": p, "r1": 2 * p - lo, "s1": 2 * p - hi}
+
+    def _notify_stale_once(self, u: str, today: date, stale_date: str, expected: str,
+                           action: str) -> None:
+        if self._stale_alerted.get(u) == today.isoformat():
+            return
+        self._stale_alerted[u] = today.isoformat()
+        if self._notify_fn is not None:
+            self._notify_fn(u, f"daily pivot source stale for {u} (prior day {stale_date}, "
+                               f"expected ≥ {expected}) — {action}")
 
     # --------------------------------------------------------------- expiry
     def _weekly_expiry(self, ctx, u: str, today: date) -> date | None:

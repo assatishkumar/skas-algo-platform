@@ -538,3 +538,38 @@ def test_go_live_blocked_without_armed_account(api_client: TestClient):
     finally:
         api_client.post(f"/api/v1/live/{rid}/stop")
         api_client.delete(f"/api/v1/live/{rid}")
+
+
+# --- broker-first daily bars (Part 2: decouple live index-daily from the cache) ---
+
+def test_broker_daily_df_uses_broker_and_excludes_today():
+    from skas_algo.live.manager import _broker_daily_df
+
+    today = date.today()
+
+    class _Adapter:
+        def daily_bars(self, u, days):
+            return [
+                {"date": (today - timedelta(days=3)).isoformat(),
+                 "open": 1, "high": 12, "low": 8, "close": 10},
+                {"date": (today - timedelta(days=2)).isoformat(),
+                 "open": 1, "high": 14, "low": 9, "close": 11},
+                # today's forming daily candle — must be EXCLUDED (caller adds it separately)
+                {"date": today.isoformat(), "open": 1, "high": 99, "low": 1, "close": 50},
+            ]
+
+    df = _broker_daily_df(_Adapter(), "NIFTY", today - timedelta(days=10), today)
+    assert df is not None
+    assert df["high"].tolist() == [12, 14]            # complete prior days only
+    assert today.isoformat() not in list(df["date"])  # today excluded
+
+
+def test_broker_daily_df_none_without_daily_bars():
+    from skas_algo.live.manager import _broker_daily_df
+
+    class _NoHist:  # e.g. Dhan — no historical API → caller uses the cache
+        pass
+
+    span = (date.today() - timedelta(days=5), date.today())
+    assert _broker_daily_df(_NoHist(), "NIFTY", *span) is None
+    assert _broker_daily_df(None, "NIFTY", *span) is None

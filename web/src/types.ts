@@ -968,6 +968,8 @@ export interface LiveSummary {
   equity_series: number[]; // ~30d aggregated daily paper equity (sparkline)
   equity_change_pct_30d: number | null;
   sharpe_30d: number | null; // annualized, from the daily series
+  // Last successful daily historical-cache refresh (the quiet "Data ✓ HH:MM" chip).
+  last_cache_refresh: { at: string; symbols: number; ok: number; errors: number } | null;
 }
 
 export interface Deployment {

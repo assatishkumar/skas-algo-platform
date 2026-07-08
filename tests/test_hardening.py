@@ -36,6 +36,16 @@ def test_holiday_env_overrides(monkeypatch):
         _clear_holiday_cache()
 
 
+def test_previous_trading_day_skips_weekends_and_holidays():
+    _clear_holiday_cache()
+    # 2026-07-08 (Wed) → 07-07 (Tue, ordinary)
+    assert holidays.previous_trading_day(datetime(2026, 7, 8).date()) == datetime(2026, 7, 7).date()
+    # Monday 2026-01-05 → previous Friday 2026-01-02 (skips the weekend)
+    assert holidays.previous_trading_day(datetime(2026, 1, 5).date()) == datetime(2026, 1, 2).date()
+    # 2026-06-29 (Mon) → 06-25 (Thu): skips 06-26 (Muharram) + the weekend
+    assert holidays.previous_trading_day(datetime(2026, 6, 29).date()) == datetime(2026, 6, 25).date()
+
+
 def test_is_market_open_excludes_holidays():
     _clear_holiday_cache()
     open_day = datetime(2026, 1, 5, 11, 0, tzinfo=IST)     # Mon, session hours
@@ -163,3 +173,72 @@ def test_backup_no_offbox_when_unconfigured(tmp_path, monkeypatch):
     _make_sqlite(db)
     monkeypatch.setattr(get_settings(), "backup_remote_cmd", None)
     assert backup_db(database_url=f"sqlite:///{db}", keep=3, offbox=True) is not None  # no-op push
+
+
+# --- Part 3: daily background cache refresh + quiet indication ---
+
+def test_daily_refresh_symbols_indices_plus_equity():
+    from skas_algo.live.manager import LiveRunManager
+
+    m = LiveRunManager()
+    m.runs[1] = SimpleNamespace(config=SimpleNamespace(instrument_class="STOCK",
+                                                       symbols=["RELIANCE", "TCS"]))
+    m.runs[2] = SimpleNamespace(config=SimpleNamespace(instrument_class="DERIV",
+                                                       symbols=["NIFTY"]))
+    syms = m._daily_refresh_symbols()
+    assert "NIFTY 50" in syms and "NIFTY BANK" in syms   # index spots, always
+    assert "RELIANCE" in syms and "TCS" in syms          # the equity run's universe
+    assert "NIFTY" not in syms                            # a DERIV underlying isn't a daily series
+
+
+def _freeze_now(monkeypatch, when):
+    from skas_algo.live import manager as mgr
+    monkeypatch.setattr(mgr, "datetime",
+                        type("_D", (), {"now": staticmethod(lambda tz=None: when)}))
+
+
+def test_daily_cache_refresh_runs_once_and_broadcasts(monkeypatch):
+    import asyncio
+    from datetime import datetime
+
+    from skas_algo.live.manager import IST, LiveRunManager
+
+    m = LiveRunManager()
+    _freeze_now(monkeypatch, datetime(2026, 7, 8, 10, 0, tzinfo=IST))  # Wed, trading day
+    monkeypatch.setattr(m, "_run_cache_refresh",
+                        lambda s: {"NIFTY 50": {"rows": 5}, "NIFTY BANK": {"error": "x"}})
+    published: list = []
+    monkeypatch.setattr(m.broadcaster, "publish", lambda msg: published.append(msg))
+
+    asyncio.run(m._maybe_daily_cache_refresh())
+    assert m.last_cache_refresh["ok"] == 1 and m.last_cache_refresh["errors"] == 1
+    assert published[-1]["type"] == "cache_refreshed"
+    assert m._last_cache_refresh_day == datetime(2026, 7, 8).date()
+
+    published.clear()                                     # second call same day → no-op
+    asyncio.run(m._maybe_daily_cache_refresh())
+    assert published == []
+
+
+def test_daily_cache_refresh_skips_weekend_and_retries_without_session(monkeypatch):
+    import asyncio
+    from datetime import datetime
+
+    from skas_algo.live.manager import IST, LiveRunManager
+
+    # Saturday → never even attempts
+    m = LiveRunManager()
+    _freeze_now(monkeypatch, datetime(2026, 7, 11, 10, 0, tzinfo=IST))
+    called: list = []
+    monkeypatch.setattr(m, "_run_cache_refresh", lambda s: called.append(1) or {})
+    asyncio.run(m._maybe_daily_cache_refresh())
+    assert called == [] and m.last_cache_refresh is None
+
+    # trading day but no valid session (→ None) → no broadcast, flag stays unset (retries)
+    m2 = LiveRunManager()
+    _freeze_now(monkeypatch, datetime(2026, 7, 8, 10, 0, tzinfo=IST))
+    monkeypatch.setattr(m2, "_run_cache_refresh", lambda s: None)
+    pub: list = []
+    monkeypatch.setattr(m2.broadcaster, "publish", lambda msg: pub.append(msg))
+    asyncio.run(m2._maybe_daily_cache_refresh())
+    assert pub == [] and m2._last_cache_refresh_day is None

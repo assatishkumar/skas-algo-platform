@@ -304,6 +304,8 @@ def live_summary() -> dict:
         "equity_series": series,
         "equity_change_pct_30d": change,
         "sharpe_30d": sharpe,
+        # Last successful daily historical-cache refresh (for the quiet "Data ✓ HH:MM" chip).
+        "last_cache_refresh": manager.last_cache_refresh,
     }
 
 

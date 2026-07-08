@@ -416,3 +416,30 @@ class ZerodhaAdapter:
             out.append({"start": start, "open": float(b["open"]), "high": float(b["high"]),
                         "low": float(b["low"]), "close": float(b["close"])})
         return out
+
+    # ------------------------------------------------------- daily bars
+    def daily_bars(self, underlying: str, days: int = 30) -> list[dict]:
+        """Recent DAILY OHLC candles for an index/stock underlying via Kite historical data
+        (interval='day') — the FRESH prior-day source for live pivots / EMA bands, so live
+        never depends on the (manually-refreshed) skas-data cache. Mirrors intraday_bars:
+        token resolved from a live ltp() (NSE + BSE series alike, so SENSEX — which has no
+        cached daily series — also gets official pivots). Returns [{date, open, high, low,
+        close}, ...] oldest-first with the candle's calendar DATE surfaced (callers detect
+        staleness); [] on any failure (caller falls back to the cache / its own bars)."""
+        key = self._spot_key(underlying)
+        kite = self._kite_client()
+        try:
+            token = kite.ltp([key]).get(key, {}).get("instrument_token")
+            if not token:
+                return []
+            end = datetime.now()
+            bars = kite.historical_data(token, end - timedelta(days=days), end, "day")
+        except Exception:  # pragma: no cover - network/permission hiccup → cache fallback
+            return []
+        out = []
+        for b in bars:
+            ts = b.get("date")
+            d = ts.date().isoformat() if hasattr(ts, "date") else str(ts)[:10]
+            out.append({"date": d, "open": float(b["open"]), "high": float(b["high"]),
+                        "low": float(b["low"]), "close": float(b["close"])})
+        return out

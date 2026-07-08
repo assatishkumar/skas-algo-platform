@@ -180,6 +180,26 @@ def _seed_supertrend(session, strategy, loader, symbols) -> None:
             market.set_supertrend_dir(sym, None)
 
 
+def _broker_daily_df(adapter, u: str, start, end):
+    """Fresh daily OHLC in [start, end] — COMPLETE days only (today excluded; the caller adds
+    today's forming bar) — from the broker adapter's ``daily_bars``, as a DataFrame(date, open,
+    high, low, close). None when the adapter can't serve it (Dhan / no session / error) → the
+    caller falls back to the skas-data cache. Read-only historical data; this is what lets a
+    live run keep running off the broker when the cache is stale/unrefreshed."""
+    daily_fn = getattr(adapter, "daily_bars", None)
+    if daily_fn is None:
+        return None
+    import pandas as pd
+
+    s, e, tdy = start.isoformat(), end.isoformat(), date.today().isoformat()
+    try:
+        rows = [b for b in (daily_fn(u, (end - start).days + 5) or [])
+                if s <= str(b["date"])[:10] <= e and str(b["date"])[:10] < tdy]
+    except Exception:  # pragma: no cover - broker hiccup → cache fallback
+        return None
+    return pd.DataFrame(rows) if rows else None
+
+
 class Broadcaster:
     """Tiny pub/sub over asyncio queues for WebSocket fan-out (single-user).
 
@@ -297,7 +317,11 @@ class LiveRun:
                 import pandas as _pd
 
                 sym = INDEX_SYMBOL.get(u.upper()) or u.upper()
-                df = cache_loader(sym, start, end)
+                # Prefer the broker's fresh daily series (backfills any gap a stale cache has);
+                # fall back to the cache (Dhan / logged-out) when the broker can't serve it.
+                df = _broker_daily_df(getattr(self.quote_source, "adapter", None), u, start, end)
+                if df is None:
+                    df = cache_loader(sym, start, end)
                 today = date.today()
                 if end < today or (df is not None and len(df) and
                                    _pd.to_datetime(df["date"]).dt.date.max() >= today):
@@ -338,15 +362,44 @@ class LiveRun:
             def _prior_day_ohlc(u: str, today):
                 from datetime import timedelta as _td
 
+                # Prefer the broker's FRESH daily bars so live never depends on a manually
+                # refreshed cache; surface the row's DATE so the strategy can detect a stale
+                # source. Fall back to the cache (Dhan / logged-out), then None (→ bar fallback).
+                adapter = getattr(self.quote_source, "adapter", None)
+                daily_fn = getattr(adapter, "daily_bars", None)
+                if daily_fn is not None:
+                    try:
+                        bars = [b for b in (daily_fn(u, 30) or [])
+                                if str(b["date"])[:10] < today.isoformat()]
+                    except Exception:  # pragma: no cover - broker hiccup → cache below
+                        bars = []
+                    if bars:
+                        b = bars[-1]
+                        return {"date": str(b["date"])[:10], "high": float(b["high"]),
+                                "low": float(b["low"]), "close": float(b["close"])}
                 sym = INDEX_SYMBOL.get(u.upper()) or u.upper()
                 df = loader(sym, today - _td(days=14), today - _td(days=1))
                 if df is None or len(df) == 0:
                     return None  # e.g. SENSEX — no cached series → bar-derived fallback
                 row = df.iloc[-1]
-                return {"high": float(row["high"]), "low": float(row["low"]),
+                rd = row["date"]
+                return {"date": (rd.date().isoformat() if hasattr(rd, "date") else str(rd)[:10]),
+                        "high": float(row["high"]), "low": float(row["low"]),
                         "close": float(row["close"])}
 
             ohlc_fn(_prior_day_ohlc)
+            notify_hook = getattr(strategy, "set_notify_fn", None)
+            if notify_hook is not None:
+                def _pivot_notify(u: str, message: str):
+                    try:  # pragma: no cover - alert is best-effort
+                        from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+                        build_notifier().send(Alert(
+                            f"{self.config.name} · {u}", message, AlertLevel.WARNING))
+                    except Exception:
+                        logger.exception("pivot-stale alert failed for run %s", self.run_id)
+
+                notify_hook(_pivot_notify)
         seed_fn = getattr(strategy, "seed_intraday_bars", None)
         bars_fn = getattr(getattr(self.quote_source, "adapter", None), "intraday_bars", None)
         if seed_fn is not None and bars_fn is not None:
@@ -733,6 +786,9 @@ class LiveRunManager:
         self._tick_pool = ThreadPoolExecutor(max_workers=32, thread_name_prefix="tick")
         self._maint_task: asyncio.Task | None = None
         self._last_backup_day: date | None = None
+        self._last_cache_refresh_day: date | None = None
+        # Last successful daily cache refresh, surfaced to the UI (quiet "Data ✓ HH:MM" chip).
+        self.last_cache_refresh: dict | None = None
 
     def _maybe_inject_live_broker(self, session, config: "LiveConfig", quote_source) -> None:
         """THE real-order gate. Replace the session's PaperBroker with a LiveBroker ONLY
@@ -1119,6 +1175,7 @@ class LiveRunManager:
             try:
                 await asyncio.sleep(300)
                 self._watchdog_scan()
+                await self._maybe_daily_cache_refresh()
                 await self._maybe_daily_backup()
             except asyncio.CancelledError:  # pragma: no cover
                 return
@@ -1162,6 +1219,70 @@ class LiveRunManager:
 
         # offbox=True → also ship this nightly snapshot off the machine (if configured).
         await asyncio.to_thread(backup_db, None, None, True)
+
+    async def _maybe_daily_cache_refresh(self) -> None:
+        """Refresh the index + running-equity DAILY cache ONCE per trading day, in the
+        background, as soon as a valid Zerodha connection exists — so equity strategies and
+        any cache fallback stay fresh WITHOUT a manual refresh (the momentum_theta/ema21 index
+        pivots go broker-first and don't need this). Broadcasts a quiet 'cache_refreshed' event
+        on success. Historical / read-only (make_data_session) — never constructs an order
+        adapter, never arms, never places an order."""
+        from skas_algo.live.holidays import is_nse_holiday
+
+        now = datetime.now(IST)
+        if (now.weekday() >= 5 or is_nse_holiday(now.date())
+                or self._last_cache_refresh_day == now.date()):
+            return
+        symbols = self._daily_refresh_symbols()
+        result = await asyncio.to_thread(self._run_cache_refresh, symbols)
+        if result is None:
+            return  # no valid Zerodha session yet → retry next tick (once connected)
+        self._last_cache_refresh_day = now.date()
+        ok = sum(1 for r in result.values() if "error" not in r)
+        self.last_cache_refresh = {"at": now.isoformat(), "symbols": len(result),
+                                   "ok": ok, "errors": len(result) - ok}
+        self.broadcaster.publish({"type": "cache_refreshed", **self.last_cache_refresh})
+        logger.info("daily cache refresh: %s symbols (%s ok, %s errors)",
+                    len(result), ok, len(result) - ok)
+
+    def _run_cache_refresh(self, symbols: list[str]) -> dict | None:
+        """Worker-thread body: pick a valid Zerodha account and refresh_cache. Returns the
+        per-symbol result, or None if no valid session yet (caller retries next tick). Arming
+        is irrelevant — refresh_cache → make_data_session is historical/read-only."""
+        from skas_algo.db.models import BrokerAccount
+        from skas_algo.services import broker as broker_svc
+        from skas_algo.services.market_data import refresh_cache
+
+        with session_scope() as db:
+            account, seen = None, set()
+            for live in list(self.runs.values()):  # prefer an account backing a running run
+                aid = live.config.broker_account_id
+                if not aid or aid in seen:
+                    continue
+                seen.add(aid)
+                acct = db.get(BrokerAccount, aid)
+                if acct and acct.broker == "zerodha" and broker_svc.has_valid_session(acct):
+                    account = acct
+                    break
+            if account is None:  # else any zerodha account with a live session
+                for acct in broker_svc.list_accounts(db):
+                    if acct.broker == "zerodha" and broker_svc.has_valid_session(acct):
+                        account = acct
+                        break
+            if account is None:
+                return None
+            return refresh_cache(account, symbols) if symbols else {}
+
+    def _daily_refresh_symbols(self) -> list[str]:
+        """The daily series strategies read: the index spots (NIFTY 50 / NIFTY BANK) + the
+        symbols of every running EQUITY run (SuperTrend / Donchian universe)."""
+        from skas_algo.data.options_provider import INDEX_SYMBOL
+
+        syms: set[str] = {INDEX_SYMBOL["NIFTY"], INDEX_SYMBOL["BANKNIFTY"]}
+        for live in list(self.runs.values()):
+            if live.config.instrument_class.upper() != "DERIV":
+                syms.update(live.config.symbols or [])
+        return sorted(syms)
 
     def _tick(self, live: LiveRun, tick_driven: bool, decide_at: time) -> None:
         """One synchronous pricing/decision tick — always called via asyncio.to_thread."""

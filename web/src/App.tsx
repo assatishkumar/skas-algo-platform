@@ -1,5 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { api } from "./api/client";
 import { clearToken, isLoggedIn } from "./lib/auth";
 import { applyTheme, getTheme, type Theme } from "./lib/theme";
 import AnalysisPage from "./pages/AnalysisPage";
@@ -135,6 +137,29 @@ function LogoutButton() {
   );
 }
 
+/** Quiet, glanceable indicator that the daily historical cache was refreshed (once each
+ * trading morning, in the background). Non-intrusive — a small chip, no toast/modal. */
+function DataStatusChip() {
+  const { data } = useQuery({
+    queryKey: ["live", "summary"],
+    queryFn: api.liveSummary,
+    refetchInterval: 5 * 60_000, // pick up the morning refresh within ~5 min
+    staleTime: 60_000,
+  });
+  const r = data?.last_cache_refresh;
+  if (!r) return null;
+  const hhmm = new Date(r.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const title = `Historical data refreshed at ${hhmm} — ${r.ok}/${r.symbols} symbols`
+    + (r.errors ? `, ${r.errors} error(s)` : "");
+  return (
+    <span title={title}
+      className="hidden sm:inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold text-slate-400">
+      <span className={r.errors ? "text-amber-400" : "text-emerald-400"}>{r.errors ? "⚠" : "✓"}</span>
+      Data {hhmm}
+    </span>
+  );
+}
+
 export default function App() {
   const path = useLocation().pathname;
   // Login is a standalone screen — no header/nav/tab-bar chrome behind it.
@@ -161,7 +186,7 @@ export default function App() {
             <NavItem to="/data" label="Data" />
             <NavItem to="/brokers" label="Brokers" />
           </nav>
-          <div className="ml-auto flex items-center gap-1"><ThemeToggle /><LogoutButton /></div>
+          <div className="ml-auto flex items-center gap-1"><DataStatusChip /><ThemeToggle /><LogoutButton /></div>
         </div>
       </header>
       <main className={`${isHome ? "" : "max-w-6xl mx-auto px-4 py-6"} pb-24 md:pb-0`}>
