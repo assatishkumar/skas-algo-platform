@@ -98,8 +98,9 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   the shorts (theta both sides); a half-size put tail hedge cushions gap-crashes. FULL backtest.
 - **`hni_weekly` — NIFTY 1-3-2 net-zero call "tent".** BUY 1 @+200, SELL 3 @+400, BUY 2 @+600
   → net-zero contracts → limited risk both sides, so *not* credit-gated. Enter Monday into the
-  next-Tuesday weekly, force-exit Friday (no weekend carry); ±1% of *deployed margin* as
-  target/stop. FULL backtest (weekly expiries cached from 2025-09).
+  next-Tuesday weekly, force-exit Friday — or the week's LAST trading day if Friday is an NSE
+  holiday (strictly no weekend/holiday carry); ±1% of *deployed margin* as target/stop. FULL
+  backtest (weekly expiries cached from 2025-09).
 - **`staggered_covered_call` — covered-call wheel on an ETF.** SELL an OTM CE against an ETF
   accumulated in tranches (GOLD→GOLDBEES etc.); GTT tranche buys fire as spot falls; roll down
   when ≥80% of premium is captured; at expiry ITM → liquidate (called away) & restart, OTM →

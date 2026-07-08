@@ -144,6 +144,7 @@ const STRATEGIES: Rule[] = [
     ],
     risk:
       "Naked short options intraday — gamma risk is real on expiry days even with the 15:20 flat rule. BS-priced backtest (2023–26) is net-negative on flip whipsaws; the strategy is in paper validation against real premiums before any live consideration.",
+    links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=bLVNs9HD1dw" }],
   },
   {
     id: "delta_neutral_monthly",
@@ -188,11 +189,12 @@ const STRATEGIES: Rule[] = [
       "Picks the ~8-DTE weekly expiry; strikes are snapped to the listed 50-pt grid.",
     ],
     exit: [
-      "Profit target checked on an intraday cadence (default every 15 min).",
-      "Stop-loss and time exit evaluated at EOD (default 15:15).",
+      "Time exit: FRIDAY of the entry week — or the week's LAST trading day if Friday is an NSE holiday (the deck's 5-day duration; strictly no weekend/holiday carry).",
+      "Profit target checked on an intraday cadence (default every 15 min); stop-loss at EOD (default 15:15).",
       "Anything left at expiry is settled to intrinsic by the engine.",
     ],
     risk: "Bounded both ways (the +200/+600 longs cap the 3× short body). Margin ≈ ₹1–1.3L per lot-set.",
+    links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=PKe7PNM_ZM4" }],
   },
   {
     id: "batman_ratio_monthly",

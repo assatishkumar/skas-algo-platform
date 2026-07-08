@@ -10,9 +10,10 @@
 A new **HNI Weekly** strategy (NIFTY-only). It's a *net-zero* call-ratio "broken-wing"
 tent: **BUY 1× ≈200 OTM, SELL 3× ≈400 OTM, BUY 2× ≈600 OTM** (net contracts
 +1−3+2 = 0 → limited risk on **both** sides; no naked tail). Enter **Monday** into the
-**next Tuesday's weekly (8 DTE = "bi-weekly")**, exit **Friday** of the same week (no
-weekend carry — the deck's "DURATION: 5 DAYS"), with a **±1% of deployed margin**
-target/stop. Target R:R ≈ **1:1** (max profit ≈ max loss).
+**next Tuesday's weekly (8 DTE = "bi-weekly")**, exit **Friday** of the same week — or the
+week's **last trading day** if Friday is an NSE holiday (no weekend/holiday carry — the deck's
+"DURATION: 5 DAYS"), with a **±1% of deployed margin** target/stop. Target R:R ≈ **1:1**
+(max profit ≈ max loss).
 
 Geometry: for the equidistant net-zero tent, `max profit = (sell−buy offset)·lot + credit`
 and `max loss = (sell−buy offset)·lot − credit`, so the **1:1 R:R is intrinsic to the fixed
@@ -73,8 +74,12 @@ the fixed 200/400/600 geometry gives the ~1:1 R:R); credit-sign gate **disabled*
   the ISO-week if Monday is a holiday) **and** this ISO-week not yet entered.
   `_mark_entered`: store `last_entry_week = today.isocalendar()[:2]`.
 - `_risk_base`: `margin_per_lotset × lots` (deployed margin, not account capital).
-- `_time_exit`: `today.weekday() >= exit_weekday OR isoweek(today) != isoweek(entry_date)`
-  → force-exit Friday (and never carry past the entry week, holiday-robust).
+- `_time_exit`: exit if `isoweek(today) != isoweek(entry_date)` (safety net) **OR**
+  `today.weekday() >= exit_weekday` (Friday) **OR** every remaining day this week up to Friday is a
+  non-trading day (weekend/NSE holiday) → i.e. today is the week's **last trading day**. So a
+  holiday Friday exits **Thursday**, never carrying over the long weekend. Calendar-only +
+  deterministic → backtest == live. Depends on `live/holidays.py` listing the exit-week's Friday
+  (env-correctable via `NSE_HOLIDAYS_ADD`).
 - `export_state`/`load_state`: add `last_entry_week`.
 Everything else inherited: strike snap/`_bad`, OI>0 filter, credit gate, stale-mark guard,
 EOD MTM target/stop, `EXIT_ALL` per leg, expiry settlement.
