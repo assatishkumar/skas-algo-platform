@@ -315,58 +315,57 @@ function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
   onLoggedIn: () => void;
 }) {
   const brand = BRAND[a.broker] ?? BRAND.zerodha;
-  const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
-  const [universe, setUniverse] = useState("nifty50");
-  const [alsoOptions, setAlsoOptions] = useState(false);
-  const [refreshing, setRefreshing] = useState<{ done: number; total: number } | null>(null);
+  const [busy, setBusy] = useState<null | "stocks" | "options">(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [cacheMsg, setCacheMsg] = useState<string | null>(null);
   const showCache = a.broker === "zerodha" && a.has_session;
 
-  async function refresh() {
-    setRefreshing(null);
+  // All equity daily bars — the Nifty 500 stocks PLUS the NIFTY 50 / NIFTY BANK index series
+  // (the index spots sit in no stock universe, so they'd otherwise silently go stale).
+  async function refreshStocks() {
+    setBusy("stocks");
     setCacheMsg(null);
+    setProgress(null);
     try {
-      // The index SPOT series drive the backtest calendar but sit in no equity universe, so
-      // they silently go stale (why NIFTY 50 lagged). Always fold them into every refresh;
-      // "indices" refreshes just them.
-      let symbols: string[];
-      if (universe === "indices") {
-        symbols = [...INDEX_SPOTS];
-      } else {
-        const { symbols: stocks } = await api.universeSymbols(universe);
-        symbols = [...INDEX_SPOTS, ...stocks];
-      }
+      const { symbols: stocks } = await api.universeSymbols("nifty500");
+      const symbols = [...INDEX_SPOTS, ...stocks];
       const CHUNK = 15;
       let ok = 0, errors = 0;
-      setRefreshing({ done: 0, total: symbols.length });
+      setProgress({ done: 0, total: symbols.length });
       for (let i = 0; i < symbols.length; i += CHUNK) {
         // Chunked so the button shows real progress instead of one long opaque call.
         const { refreshed } = await brokers.refreshCache(a.id, { symbols: symbols.slice(i, i + CHUNK) });
         for (const e of Object.values(refreshed)) e.error ? errors++ : ok++;
-        setRefreshing({ done: Math.min(i + CHUNK, symbols.length), total: symbols.length });
-      }
-      // Optionally catch up the NIFTY + BANKNIFTY options bhavcopy (last ~60 days).
-      let optMsg = "";
-      if (alsoOptions) {
-        try {
-          const today = new Date();
-          const from = new Date(today);
-          from.setDate(from.getDate() - 60);
-          const iso = (d: Date) => d.toISOString().slice(0, 10);
-          await api.optionsRefresh({
-            underlyings: ["NIFTY", "BANKNIFTY"], start_date: iso(from), end_date: iso(today),
-          });
-          optMsg = " · NIFTY+BN options ✓";
-        } catch (e) {
-          optMsg = ` · options failed: ${(e as Error).message}`;
-        }
+        setProgress({ done: Math.min(i + CHUNK, symbols.length), total: symbols.length });
       }
       localStorage.setItem(`brokers.lastRefresh.${a.id}`, String(Date.now()));
-      setCacheMsg(`refreshed ${ok} symbols${errors ? ` · ${errors} errors` : ""}${optMsg}`);
+      setCacheMsg(`refreshed ${ok} stocks + indices${errors ? ` · ${errors} errors` : ""}`);
     } catch (e) {
       setCacheMsg((e as Error).message);
     } finally {
-      setRefreshing(null);
+      setBusy(null);
+      setProgress(null);
+    }
+  }
+
+  // NIFTY + BANKNIFTY option bhavcopy (last ~60 days).
+  async function refreshOptions() {
+    setBusy("options");
+    setCacheMsg(null);
+    try {
+      const today = new Date();
+      const from = new Date(today);
+      from.setDate(from.getDate() - 60);
+      const iso = (d: Date) => d.toISOString().slice(0, 10);
+      const res = await api.optionsRefresh({
+        underlyings: ["NIFTY", "BANKNIFTY"], start_date: iso(from), end_date: iso(today),
+      });
+      localStorage.setItem(`brokers.lastRefresh.${a.id}`, String(Date.now()));
+      setCacheMsg(`NIFTY + BN options: ${res.days_saved} day(s) refreshed`);
+    } catch (e) {
+      setCacheMsg(`options failed: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -449,39 +448,34 @@ function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
             <div className="flex items-start gap-2 text-[12.5px] text-[var(--muted)]">
               <Icon d={I.db} size={14} className="mt-0.5 shrink-0" />
               <span>Historical cache shares this Kite session — refresh candles without a second login.
-                Every refresh also updates the NIFTY 50 &amp; NIFTY BANK index series (needed by options backtests).</span>
+                <b>Stocks + indices</b> = Nifty 500 + NIFTY 50/NIFTY BANK; <b>Options</b> = ~60 days of
+                NIFTY &amp; BANKNIFTY bhavcopy.</span>
             </div>
             <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
-              <select
-                className="rounded-[11px] border border-[var(--field-border)] bg-[var(--field)] px-3 py-2 text-[13px] font-semibold text-[var(--strong)]"
-                value={universe} onChange={(e) => setUniverse(e.target.value)}>
-                <option value="indices">Indices only (NIFTY 50, NIFTY BANK)</option>
-                {(universeData ?? []).map((u) => (
-                  <option key={u.name} value={u.name}>{u.label} stocks + indices ({u.count})</option>
-                ))}
-              </select>
-              <label className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-[var(--muted)]"
-                title="Also refresh the last ~60 days of NIFTY & BANKNIFTY option bhavcopy">
-                <input type="checkbox" checked={alsoOptions}
-                  onChange={(e) => setAlsoOptions(e.target.checked)} />
-                + NIFTY &amp; BN options
-              </label>
-              <button onClick={refresh} disabled={!!refreshing}
+              <button onClick={refreshStocks} disabled={!!busy}
                 className="inline-flex items-center gap-1.5 rounded-[11px] px-3.5 py-2 text-xs font-bold text-white"
-                style={refreshing
+                style={busy ? { background: "var(--chip)", color: "var(--muted)" } : { background: "var(--accent)" }}>
+                <Icon d={I.refresh} size={13} className={busy === "stocks" ? "animate-spin" : ""} />
+                {busy === "stocks"
+                  ? `Refreshing ${progress?.done ?? 0}/${progress?.total ?? 0}…`
+                  : "Refresh stocks + indices"}
+              </button>
+              <button onClick={refreshOptions} disabled={!!busy}
+                className="inline-flex items-center gap-1.5 rounded-[11px] px-3.5 py-2 text-xs font-bold"
+                style={busy
                   ? { background: "var(--chip)", color: "var(--muted)" }
-                  : { background: "var(--accent)" }}>
-                <Icon d={I.refresh} size={13} className={refreshing ? "animate-spin" : ""} />
-                {refreshing ? `Refreshing ${refreshing.done}/${refreshing.total}…` : "Refresh data"}
+                  : { border: "1px solid var(--accent)", color: "var(--accent)" }}>
+                <Icon d={I.refresh} size={13} className={busy === "options" ? "animate-spin" : ""} />
+                {busy === "options" ? "Refreshing options…" : "Refresh options"}
               </button>
               <span className="text-[12px] font-semibold text-[var(--faint)]">
                 {cacheMsg ?? lastRefreshText(a.id)}
               </span>
             </div>
-            {refreshing && (
+            {busy === "stocks" && progress && (
               <div className="mt-2 h-1.5 w-full max-w-md overflow-hidden rounded-full bg-[var(--track)]">
                 <div className="h-full transition-[width] duration-200"
-                  style={{ background: "var(--accent)", width: `${refreshing.total ? (refreshing.done / refreshing.total) * 100 : 0}%` }} />
+                  style={{ background: "var(--accent)", width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }} />
               </div>
             )}
           </div>
