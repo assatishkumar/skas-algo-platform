@@ -129,7 +129,8 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   the prior monthly expiry ~11:00: SELL the ~18-delta PE and CE (delta solved from the live
   chain). When |CE−PE| > 40% of the combined premium, roll the *cheap* side to the strike whose
   LTP matches the rich side (capped at the other strike → straddle max); the straddle then buys
-  breakeven hedges → **iron fly is terminal** (adjustments stop). Exit at 2.5% of the **broker**
+  long wings at **K ± (CE+PE premium)** — its two breakevens, snapped to the strike grid, same
+  lots as the shorts → **iron fly is terminal** (adjustments stop). Exit at 2.5% of the **broker**
   basket margin (optional stop default off); recurring monthly. **Deploy-only, no backtest**
   (live-chain delta solve; only ~2 months of BANKNIFTY chain history cached). `force_entry`
   deploy flag skips the entry-day wait.

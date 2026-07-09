@@ -158,7 +158,7 @@ const STRATEGIES: Rule[] = [
       "SELL 1× PE at ~18Δ (monthly expiry)",
       "SELL 1× CE at ~18Δ — deltas solved from each strike's own implied vol off the live chain.",
       "Adjustment: cheap side rolls to the strike whose LTP ≈ the rich side's LTP; strikes never cross (straddle max).",
-      "BUY CE + PE hedges at the straddle's breakevens (K ± combined premium) once a straddle forms → iron fly, adjustments stop.",
+      "Iron-fly hedge — the moment both shorts sit at the SAME strike K (a straddle): immediately BUY a long CALL at K + (CE+PE premium) and a long PUT at K − (CE+PE premium), snapped to the strike grid, SAME lots as the shorts. Those two strikes are the short straddle's breakevens, so beyond them the long wings cap the loss ~1:1; the book is now an iron fly and adjustments stop.",
     ],
     entry: [
       "2nd trading day after the previous monthly expiry, between 11:00 and 15:00 (force-entry flag skips the wait on deploy day).",
