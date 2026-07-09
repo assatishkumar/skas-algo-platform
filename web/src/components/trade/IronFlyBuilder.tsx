@@ -79,8 +79,9 @@ export default function IronFlyBuilder() {
           <input className={inputClass} placeholder={`Iron fly ${underlying}`} value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="block"><span className={lbl}>Underlying</span>
           <select className={inputClass} value={underlying} onChange={(e) => setUnderlying(e.target.value)}>
-            <option value="BANKNIFTY">BANKNIFTY (monthly)</option>
             <option value="NIFTY">NIFTY (monthly)</option>
+            <option value="BANKNIFTY">BANKNIFTY (monthly)</option>
+            <option value="SENSEX">SENSEX (monthly · BFO)</option>
           </select></label>
         <label className="block"><span className={lbl}>Lots</span><NumberInput className={inputClass} value={lots} onChange={setLots} /></label>
       </div>
@@ -120,6 +121,7 @@ export default function IronFlyBuilder() {
       <div className="mt-1.5 text-[11px] text-[var(--faint)]">
         Recurring monthly. The naked untested-side short adds an uncapped tail — arm the stop above if
         you want a hard MTM floor beyond the payoff-negative exit.
+        {underlying === "SENSEX" && " SENSEX has no cached expiry history, so tick ‘force entry now’ to enter — the schedule-based auto-entry (2 days after expiry) can't fire without it."}
       </div>
 
       {mode === "LIVE" && <div className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">Live places real orders only on an armed broker account with live trading enabled — otherwise it runs as paper.</div>}

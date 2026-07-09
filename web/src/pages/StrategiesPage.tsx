@@ -179,7 +179,7 @@ const STRATEGIES: Rule[] = [
     kind: "Options",
     bias: "Neutral · defined-risk monthly income",
     summary:
-      "Enter the BANKNIFTY monthly IRON FLY directly (two trading days after expiry, ~11:00): sell the ATM straddle, buy the wings at the straddle's breakevens. When spot breaches a breakeven, actively repair it by selling a naked ~15-20Δ short on the untested side and rolling it as it decays — collecting credit to keep the payoff positive — and exit everything only if the payoff can no longer be made positive. Books at 2.5% of margin deployed. Deploy-only, paper-first on real chains.",
+      "Enter the monthly IRON FLY directly on NIFTY, BANKNIFTY or SENSEX (two trading days after expiry, ~11:00): sell the ATM straddle, buy the wings at the straddle's breakevens. When spot breaches a breakeven, actively repair it by selling a naked ~15-20Δ short on the untested side and rolling it as it decays — collecting credit to keep the payoff positive — and exit everything only if the payoff can no longer be made positive. Books at 2.5% of margin deployed. Deploy-only, paper-first on real chains.",
     structure: [
       "SELL 1× ATM CE + 1× ATM PE — the straddle at strike K (nearest listed strike to spot).",
       "BUY 1× CE at K + (CE+PE premium) and 1× PE at K − (CE+PE premium) — the straddle breakevens, snapped to the grid → a defined-risk iron fly.",
@@ -468,7 +468,7 @@ const META: Record<string, Meta> = {
   },
   iron_fly_monthly: {
     group: "Premium selling", biasKind: "neutral",
-    facts: [["Bias", "Neutral · defined-risk"], ["Instrument", "BANKNIFTY monthly"],
+    facts: [["Bias", "Neutral · defined-risk"], ["Instrument", "NIFTY / BANKNIFTY / SENSEX monthly"],
             ["Structure", "ATM straddle + breakeven wings"], ["Adjust", "sell ~15-20Δ untested side"],
             ["Target", "+2.5% of margin"], ["Entry", "Expiry+2d · ~11:00"]],
     deployNote: "Deploy-only, broker quotes required (live-chain ATM + wings + delta-based adjustment). Paper-first.",

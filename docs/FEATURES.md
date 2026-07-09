@@ -136,7 +136,7 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   BANKNIFTY chain history cached). `force_entry` deploy flag skips the entry-day wait. An optional
   **post-iron-fly adjustment** (off by default here, on for `iron_fly_monthly`) is togglable on a
   running deploy — see below.
-- **`iron_fly_monthly` — BANKNIFTY monthly iron fly + active repair.** Enters the iron fly directly
+- **`iron_fly_monthly` — NIFTY / BANKNIFTY / SENSEX monthly iron fly + active repair.** Enters the iron fly directly
   (SELL ATM straddle, BUY wings at ATM ± (CE+PE premium)) on the same cadence. Its **adjustment**
   (default on): when spot breaches a breakeven (K ± net credit), SELL a naked ~15-20Δ short on the
   UNTESTED side and roll it (close at ≤10Δ or ≤¼ of its sold premium, re-sell); it exits ALL only

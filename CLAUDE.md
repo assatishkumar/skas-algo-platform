@@ -179,9 +179,14 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   hard MTM backstop.
 - **iron_fly_monthly** (`strategies/iron_fly_monthly.py`, subclasses DeltaNeutralMonthly): enters
   the iron fly DIRECTLY (override `_try_enter` = SELL ATM straddle + BUY wings at ATM ± (CE+PE
-  premium), grid-snapped), `ironfly_adjust` defaults **True**. Same monthly cadence + margin/
-  target/exit machinery inherited. Deploy-only (`POST /trade/options/iron-fly/deploy`, broker
-  source required, `_DEPLOY_ONLY`); no backtest.
+  premium), grid-snapped), `ironfly_adjust` defaults **True**. **NIFTY / BANKNIFTY / SENSEX**
+  (the base machinery is underlying-generic — `_STRIKE_STEP`/`lot_size_for` cover all three; SENSEX
+  resolves off the broker BFO chain + BSE:SENSEX spot, no cache needed for a single-underlying
+  broker-source run). Same monthly cadence + margin/target/exit machinery inherited. Deploy-only
+  (`POST /trade/options/iron-fly/deploy`, broker source required, `_DEPLOY_ONLY`); no backtest.
+  **SENSEX (and BANKNIFTY beyond its ~2-month cache) needs `force_entry`/the Live force button** —
+  `_is_entry_day`'s 45-day expiry lookback is cache-only + `option_expiries` returns only FUTURE
+  expiries, so the "2 days after expiry" auto-trigger can't fire without cached expiry history.
 - **momentum_theta_gainer_intra** (intraday 15-min SuperTrend(7,3) + daily-pivot ATM weekly
   seller, NIFTY + SENSEX): builds its OWN 15-min candles from live spot ticks (none exist in
   any cache) and carries them in `export_state`; pivots (R1/S1) come from a daily-OHLC provider —
