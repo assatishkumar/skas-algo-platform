@@ -655,6 +655,9 @@ async def ironfly_adjust(run_id: int, body: dict) -> dict:
                             detail="this strategy has no iron-fly adjustment")
     note = fn(bool(body.get("on", True)))
     live._persist_state()
+    # Push the updated snapshot NOW so the live card's toggle reflects it immediately
+    # (a plain refresh only re-broadcasts on the next decision tick).
+    manager.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
     return {"ironfly_adjust": strategy.ironfly_adjust, "note": note}
 
 
