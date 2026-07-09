@@ -15,6 +15,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   "21_ema_momentum": "21 EMA Momentum (credit spreads)",
   call_put_ratio_expiry: "CP Ratio Expiry (options)",
   delta_neutral_monthly: "Delta Neutral Monthly (options)",
+  iron_fly_monthly: "Iron Fly Monthly (options)",
   call_ratio_monthly: "Call Ratio Monthly (options)",
   put_ratio_monthly: "Put Ratio Monthly (options)",
   batman_ratio_monthly: "Batman Ratio Monthly (options)",

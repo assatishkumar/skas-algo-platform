@@ -274,6 +274,32 @@ class DeltaNeutralDeploy(BaseModel):
     auto: bool = True
 
 
+class IronFlyDeploy(BaseModel):
+    """Deploy iron_fly_monthly: BANKNIFTY monthly IRON FLY (ATM straddle + breakeven wings)
+    with the post-iron-fly adjustment (default ON — sell ~15-20Δ on the untested side on a
+    breakeven breach, roll it, exit-all if the payoff turns fully negative). Live-chain-driven
+    → broker quote source required; no backtest."""
+
+    name: str
+    notes: str | None = None
+    underlying: str = "BANKNIFTY"
+    lots: int = 1
+    entry_time: str = "11:00"
+    force_entry: bool = False           # enter next window tick instead of waiting for entry day
+    ironfly_adjust: bool = True         # the active adjustment (the whole point)
+    adjust_target_delta: float = 0.175  # 15-20Δ untested-side sell
+    adjust_cooldown_min: int = 15
+    profit_target_pct: float = 2.5      # % of margin deployed
+    stop_loss_pct: float = 0.0          # 0 = off; optional hard MTM floor for the naked tail
+    capital: float = 1_000_000
+    refresh_seconds: int = 20
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class CpRatioExpiryDeploy(BaseModel):
     """Deploy call_put_ratio_expiry: expiry-day-only 1:3 premium-ratio seller (buy ATM
     straddle, sell 3× at the ⅓-premium strikes). Needs a live chain for strike selection,

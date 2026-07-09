@@ -339,3 +339,35 @@ def test_force_entry_hook_bypasses_window_and_day():
     st.request_force_entry()
     sigs = tick(st, ctx, datetime(2026, 7, 10, 9, 31))
     assert len(sigs) == 2 and not st.force_pending
+
+
+def test_ironfly_adjust_gated_off_by_default_and_togglable():
+    """The iron fly stays TERMINAL by default (§1: run 203 unchanged); set_ironfly_adjust(True)
+    unlocks the post-iron-fly adjustment (sell the untested side on a breakeven breach)."""
+    from skas_algo.engine.types import SignalAction
+
+    st = DeltaNeutralMonthlyStrategy()          # default ironfly_adjust=False
+    assert st.ironfly_adjust is False
+
+    def leg(k, right, d, e):
+        return {"symbol": f"BANKNIFTY|2026-07-28|{float(k)}|{right}", "right": right,
+                "dir": d, "units": 175, "entry": e}
+
+    st.legs = [leg(57000, "CE", -1, 850), leg(57000, "PE", -1, 850),
+               leg(58700, "CE", 1, 300), leg(55300, "PE", 1, 300)]
+    st.phase = "ironfly"
+    st.cycle_expiry = CUR_EXP.isoformat()
+    st.set_broker_margin(500_000.0)
+    ctx = FakeCtx(FakeMarket(bs_chain(spot=59000)))   # spot well above the upper breakeven
+    for lg in st.legs:
+        ctx.market.prices[lg["symbol"]] = lg["entry"]
+        ctx.positions[lg["symbol"]] = 175
+
+    assert tick(st, ctx, datetime(2026, 7, 2, 11, 30, 0)) == []   # OFF → terminal, no adjustment
+    st.set_ironfly_adjust(True)
+    sigs = tick(st, ctx, datetime(2026, 7, 2, 12, 0, 0))          # ON → adjusts
+    assert any(s.action == SignalAction.ENTER_SHORT and s.symbol.endswith("PE") for s in sigs)
+    # and it round-trips through state (survives a restart)
+    st2 = DeltaNeutralMonthlyStrategy()
+    st2.load_state(st.export_state())
+    assert st2.ironfly_adjust is True

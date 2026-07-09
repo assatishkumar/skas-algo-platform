@@ -70,6 +70,14 @@ class DeltaNeutralMonthlyStrategy:
         force_entry: bool = False,           # deploy-time: enter next window tick, any day
         adjust_threshold_pct: float = 40.0,  # |CE−PE| vs (CE+PE)
         adjust_cooldown_min: int = 15,
+        # Post-iron-fly adjustment (default OFF here per §1 — a running delta_neutral deploy is
+        # unchanged on recovery; iron_fly_monthly overrides to True; runtime-togglable via
+        # set_ironfly_adjust). When a breakeven is breached, sell a naked ~15-20Δ short on the
+        # untested side and roll it as it decays; exit all if the expiry payoff goes fully negative.
+        ironfly_adjust: bool = False,
+        adjust_target_delta: float = 0.175,   # 15-20Δ midpoint for the untested-side sell
+        adjust_close_delta: float = 0.10,     # roll the adjustment leg at ≤10Δ ...
+        adjust_close_prem_frac: float = 0.25, # ... OR when its LTP ≤ ¼ of its sold premium
         profit_target_pct: float = 2.5,      # % of margin_base
         stop_loss_pct: float = 0.0,          # 0 = off (spec-faithful)
         risk_free_rate: float = 0.065,
@@ -86,6 +94,10 @@ class DeltaNeutralMonthlyStrategy:
         self.force_entry = bool(force_entry)
         self.adjust_threshold_pct = float(adjust_threshold_pct)
         self.adjust_cooldown_min = int(adjust_cooldown_min)
+        self.ironfly_adjust = bool(ironfly_adjust)
+        self.adjust_target_delta = float(adjust_target_delta)
+        self.adjust_close_delta = float(adjust_close_delta)
+        self.adjust_close_prem_frac = float(adjust_close_prem_frac)
         # Whole-percent units (2.5 = 2.5% of margin_base). Deliberately NOT named
         # profit_target_pct/stop_loss_pct on the instance: the generic snapshot
         # introspection treats those as fractions (ratio-family convention) and would
@@ -108,6 +120,8 @@ class DeltaNeutralMonthlyStrategy:
         self.adjust_count: int = 0
         self.entered_day: str | None = None   # entry attempted/made this day (once/day gate)
         self.force_pending: bool = False       # Live-page force entry (persisted)
+        self.adjust_symbol: str | None = None  # the active untested-side adjustment short (persisted)
+        self.adjust_realized: float = 0.0      # banked P&L from CLOSED adjustment legs (persisted)
         # Latest broker basket margin pushed by the live manager (NOT persisted — it
         # re-arrives within a tick of recovery). margin_base freezes from this only.
         self._broker_margin: float | None = None
@@ -231,24 +245,35 @@ class DeltaNeutralMonthlyStrategy:
                           _EXPIRY_CUTOFF.hour, _EXPIRY_CUTOFF.minute, tzinfo=now.tzinfo)
         return max((exp_dt - now).total_seconds(), 0.0) / (365.0 * 86400.0)
 
+    def _leg_delta(self, spot: float, k: float, t: float, right: str,
+                   prem: float) -> float | None:
+        """Absolute BS delta of a leg, IV solved from its own LTP. None if unsolvable."""
+        if t <= 0 or prem is None:
+            return None
+        iv = bs.implied_vol(prem, spot, k, t, self.r, right)
+        if iv is None or iv <= 0:
+            return None
+        return abs(bs.delta(spot, k, t, self.r, iv, right))
+
     def _pick_delta_strike(self, rows: dict[float, dict], side: str, spot: float,
-                           t: float) -> tuple[float, float] | None:
+                           t: float, target_delta: float | None = None) -> tuple[float, float] | None:
         """(strike, ltp) whose BS |delta| (IV solved from its own LTP) is nearest
-        target_delta. OTM rows only — the 18Δ strike is OTM by definition."""
+        ``target_delta`` (defaults to ``self.target_delta``). OTM rows only — the target-Δ
+        strike is OTM by definition."""
+        want = self.target_delta if target_delta is None else target_delta
         best = None
         for k, r in rows.items():
             if (side == "ce" and k <= spot) or (side == "pe" and k >= spot):
                 continue
             leg = r.get(side)
             prem = self._ltp(leg)
-            if prem is None or not self._oi_ok(leg) or t <= 0:
+            if prem is None or not self._oi_ok(leg):
                 continue
             right = "CE" if side == "ce" else "PE"
-            iv = bs.implied_vol(prem, spot, k, t, self.r, right)
-            if iv is None or iv <= 0:
+            d = self._leg_delta(spot, k, t, right, prem)
+            if d is None:
                 continue
-            d = abs(bs.delta(spot, k, t, self.r, iv, right))
-            err = abs(d - self.target_delta)
+            err = abs(d - want)
             if best is None or err < best[0]:
                 best = (err, k, prem)
         return (best[1], best[2]) if best else None
@@ -334,16 +359,25 @@ class DeltaNeutralMonthlyStrategy:
             if self.stop_pct > 0 and pnl <= -self.margin_base * self.stop_pct / 100.0:
                 return self._exit_all(live, "stop")
 
-        if self.phase != "strangle":
-            return []  # straddle already hedged (ironfly) → ride to target/settle
-        if self.last_adjust_at is not None:
-            last = datetime.fromisoformat(self.last_adjust_at)
-            # Normalize tz-ness before subtracting (live=aware, backtest/tests=naive).
-            if (last.tzinfo is None) != (now.tzinfo is None):
-                last = last.replace(tzinfo=now.tzinfo)
-            if (now - last).total_seconds() < self.adjust_cooldown_min * 60:
+        # Iron fly: run the post-formation adjustment when enabled (else ride terminal).
+        if self.phase == "ironfly":
+            if not self.ironfly_adjust or self._in_cooldown(now):
                 return []
+            return self._adjust_ironfly(ctx, live, marks, now)
+        if self.phase != "strangle":
+            return []  # other phases → ride to target/settle
+        if self._in_cooldown(now):
+            return []
         return self._maybe_adjust(ctx, live, marks, now)
+
+    def _in_cooldown(self, now: datetime) -> bool:
+        if self.last_adjust_at is None:
+            return False
+        last = datetime.fromisoformat(self.last_adjust_at)
+        # Normalize tz-ness before subtracting (live=aware, backtest/tests=naive).
+        if (last.tzinfo is None) != (now.tzinfo is None):
+            last = last.replace(tzinfo=now.tzinfo)
+        return (now - last).total_seconds() < self.adjust_cooldown_min * 60
 
     def _maybe_adjust(self, ctx, live: list[dict], marks: dict[str, float],
                       now: datetime) -> list[Signal]:
@@ -430,12 +464,127 @@ class DeltaNeutralMonthlyStrategy:
                 best = (err, k, prem)
         return (best[1], best[2]) if best else None
 
+    # ---------------------------------------------------- post-iron-fly adjustment
+    def set_ironfly_adjust(self, on: bool) -> str:
+        """Live toggle of the post-iron-fly adjustment (persisted via export_state, so it
+        survives a restart)."""
+        self.ironfly_adjust = bool(on)
+        return f"iron-fly adjustment {'ON' if self.ironfly_adjust else 'OFF'}"
+
+    def _ironfly_breakevens(self) -> tuple[float | None, float | None]:
+        """(be_lo, be_hi) of the CORE iron fly = short strike K ± net credit (Σ short entries −
+        Σ long entries, in points). Excludes the active adjustment leg. (None, None) if the
+        core straddle isn't present."""
+        shorts = [leg for leg in self.legs if leg["dir"] < 0 and leg["symbol"] != self.adjust_symbol]
+        longs = [leg for leg in self.legs if leg["dir"] > 0]
+        k_ce = next((float(leg["symbol"].split("|")[2]) for leg in shorts if leg["right"] == "CE"), None)
+        k_pe = next((float(leg["symbol"].split("|")[2]) for leg in shorts if leg["right"] == "PE"), None)
+        if k_ce is None or k_pe is None:
+            return None, None
+        k = (k_ce + k_pe) / 2.0  # equal for a straddle; average is robust
+        net_credit = sum(leg["entry"] for leg in shorts) - sum(leg["entry"] for leg in longs)
+        return k - net_credit, k + net_credit
+
+    def _payoff_max(self, legs: list[dict], spot: float) -> float:
+        """Max P&L-at-expiry over the spot grid for the open ``legs`` PLUS the banked credit
+        from closed adjustment legs. The payoff is piecewise-linear, so its max sits at a leg
+        strike (or a wide endpoint) — evaluating those is exact."""
+        strikes = [float(leg["symbol"].split("|")[2]) for leg in legs]
+        grid = sorted(set(strikes + [0.5 * spot, spot, 1.5 * spot]))
+        best: float | None = None
+        for s in grid:
+            pnl = self.adjust_realized
+            for leg in legs:
+                k = float(leg["symbol"].split("|")[2])
+                pnl += leg["dir"] * (bs.intrinsic(leg["right"], s, k) - leg["entry"]) * leg["units"]
+            if best is None or pnl > best:
+                best = pnl
+        return best if best is not None else self.adjust_realized
+
+    def _open_untested(self, ctx, rows: dict[float, dict], spot: float, t: float,
+                       now: datetime) -> list[Signal]:
+        """Sell one naked ~adjust_target_delta short on the UNTESTED side, but only if a
+        breakeven is breached (else no-op — spot is back inside the fly)."""
+        be_lo, be_hi = self._ironfly_breakevens()
+        if be_lo is None:
+            return []
+        if spot > be_hi:
+            side = "pe"          # call side tested → sell the untested PUT
+        elif spot < be_lo:
+            side = "ce"          # put side tested → sell the untested CALL
+        else:
+            return []
+        pick = self._pick_delta_strike(rows, side, spot, t, self.adjust_target_delta)
+        if pick is None:
+            return []
+        k, ltp = pick
+        right = "CE" if side == "ce" else "PE"
+        units = next((leg["units"] for leg in self.legs if leg["dir"] < 0
+                      and leg["symbol"] != self.adjust_symbol), float(self.lots))
+        per_lot = int(units // self.lots) or 1
+        sym = make(self.underlying, date.fromisoformat(self.cycle_expiry), float(k), right,
+                   lot_size=per_lot, lot_overrides=self.lot_overrides).symbol
+        self.legs.append({"symbol": sym, "right": right, "dir": -1, "units": units, "entry": ltp})
+        self.adjust_symbol = sym
+        self.last_adjust_at = now.isoformat()
+        self.adjust_count += 1
+        self._freeze_margin(ctx, spot)
+        return [Signal(sym, SignalAction.ENTER_SHORT, quantity=int(units), reason="ifm_adjust",
+                       meta={"multiplier": 1})]
+
+    def _adjust_ironfly(self, ctx, live: list[dict], marks: dict[str, float],
+                        now: datetime) -> list[Signal]:
+        """Repair the iron fly once a breakeven is breached: sell a naked ~15-20Δ short on the
+        untested side and harvest/roll it; exit ALL if no expiry outcome stays profitable."""
+        spot_fn = getattr(ctx.market, "index_spot", None)
+        spot = spot_fn(self.underlying) if spot_fn else None
+        if spot is None or bad_close(spot):
+            return []
+        spot = float(spot)
+        # 1. Safety exit (EVERY tick, not cooldown-gated): if the whole expiry payoff is < 0,
+        #    no spot leaves us positive → close everything.
+        if self._payoff_max(self.legs, spot) < 0:
+            return self._exit_all(live, "ironfly_payoff_neg")
+        if self._in_cooldown(now):
+            return []
+        rows = self._chain_rows(ctx, self.cycle_expiry)
+        if rows is None:
+            return []
+        t = self._t_years(date.fromisoformat(self.cycle_expiry), now)
+        # 2. Manage the active untested-side short: roll it once it has decayed.
+        if self.adjust_symbol:
+            leg = next((leg for leg in self.legs if leg["symbol"] == self.adjust_symbol), None)
+            if leg is None:
+                self.adjust_symbol = None
+            else:
+                ltp = marks.get(leg["symbol"])
+                d = (self._leg_delta(spot, float(leg["symbol"].split("|")[2]), t,
+                                     leg["right"], ltp) if ltp is not None else None)
+                decayed = ((d is not None and d <= self.adjust_close_delta)
+                           or (ltp is not None and leg["entry"] > 0
+                               and ltp <= self.adjust_close_prem_frac * leg["entry"]))
+                if not decayed:
+                    return []  # hold the adjustment leg
+                # close it (bank the harvested credit) → re-sell below if still breached
+                self.adjust_realized += (leg["entry"] - (ltp or 0.0)) * leg["units"]
+                self.legs = [leg for leg in self.legs if leg["symbol"] != self.adjust_symbol]
+                self.adjust_symbol = None
+                self.last_adjust_at = now.isoformat()
+                self.adjust_count += 1
+                self._freeze_margin(ctx, spot)
+                close = [Signal(leg["symbol"], SignalAction.EXIT_ALL, reason="ifm_adjust_roll")]
+                return close + self._open_untested(ctx, rows, spot, t, now)
+        # 3. No active adjustment leg → open one if a breakeven is breached.
+        return self._open_untested(ctx, rows, spot, t, now)
+
     def _exit_all(self, live: list[dict], reason: str) -> list[Signal]:
         sigs = [Signal(leg["symbol"], SignalAction.EXIT_ALL, reason=reason) for leg in live]
         self.done_expiry = self.cycle_expiry
         self.legs = []
         self.phase = "idle"
         self.cycle_expiry = None
+        self.adjust_symbol = None
+        self.adjust_realized = 0.0
         return sigs
 
     # ------------------------------------------------------------ snapshot hooks
@@ -453,6 +602,10 @@ class DeltaNeutralMonthlyStrategy:
             rules.append(f"Stop out at −{self.stop_pct:g}% of broker margin")
         rules.append(f"Adjust when |CE−PE| > {self.adjust_threshold_pct:g}% of combined "
                      "(cheap side rolls; straddle max → iron fly)")
+        if self.ironfly_adjust:
+            rules.append("Iron fly: on a breakeven breach, sell ~15-20Δ on the untested side "
+                         "and roll it (≤10Δ / ≤¼ premium); exit all if the payoff turns fully "
+                         "negative")
         return rules
 
     # --------------------------------------------------------------- monitor
@@ -468,6 +621,8 @@ class DeltaNeutralMonthlyStrategy:
             if self.stop_pct > 0 else None,
             "adjust_count": self.adjust_count,
             "cycle_expiry": self.cycle_expiry,
+            "ironfly_adjust": self.ironfly_adjust,
+            "adjust_symbol": self.adjust_symbol,
         }
         try:
             shorts = [leg for leg in self.legs if leg["dir"] < 0]
@@ -493,6 +648,11 @@ class DeltaNeutralMonthlyStrategy:
             "adjust_count": self.adjust_count,
             "entered_day": self.entered_day,
             "force_pending": self.force_pending,
+            # Persist the toggle + adjustment state so a runtime toggle and an in-flight
+            # untested-side short survive a restart/recovery.
+            "ironfly_adjust": self.ironfly_adjust,
+            "adjust_symbol": self.adjust_symbol,
+            "adjust_realized": self.adjust_realized,
         }
 
     def load_state(self, state: dict) -> None:
@@ -508,3 +668,9 @@ class DeltaNeutralMonthlyStrategy:
         self.adjust_count = int(state.get("adjust_count", 0))
         self.entered_day = state.get("entered_day")
         self.force_pending = bool(state.get("force_pending", False))
+        # Overlay the persisted toggle over the constructor default (so a delta_neutral run
+        # the owner turned ON stays ON; a fresh deploy keeps its constructor default).
+        if "ironfly_adjust" in state:
+            self.ironfly_adjust = bool(state.get("ironfly_adjust"))
+        self.adjust_symbol = state.get("adjust_symbol")
+        self.adjust_realized = float(state.get("adjust_realized", 0.0))

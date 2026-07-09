@@ -461,6 +461,9 @@ class LiveSession:
             # Human-readable exit criteria the strategy will act on (spot levels, %-targets,
             # per-leg / calendar exits) — surfaced so the live card shows WHY a run would exit.
             "exit_rules": self._exit_rules(),
+            # None unless the strategy has the iron-fly adjustment (delta_neutral / iron_fly) —
+            # lets the live UI show + toggle it.
+            "ironfly_adjust": getattr(getattr(self, "strategy", None), "ironfly_adjust", None),
         }
 
     def _exit_rules(self) -> list[str]:

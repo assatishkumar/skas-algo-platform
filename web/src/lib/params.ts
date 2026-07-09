@@ -6,6 +6,8 @@ const LABELS: Record<string, string> = {
   target_delta: "Target delta",
   adjust_threshold_pct: "Adjust threshold %",
   adjust_cooldown_min: "Adjust cooldown (min)",
+  ironfly_adjust: "Iron-fly adjustment",
+  adjust_target_delta: "Adjust target delta",
   force_entry: "Force entry",
   width_min: "Spread width min (pts)",
   width_max: "Spread width max (pts)",

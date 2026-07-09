@@ -159,13 +159,29 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   ~11:00 (force_entry deploy flag skips the wait); adjustment rule is the spec's EXAMPLE,
   not its prose — when |CE−PE| > 40% of (CE+PE), the CHEAP side rolls to the strike whose
   LTP matches the rich side, hard-capped at the other strike (straddle max, never
-  crossing); straddle → breakeven hedges (K ± combined) in the SAME decision → ironfly =
-  terminal (adjustments stop). margin_base tracks the BROKER basket
-  margin ONLY (manager `set_broker_margin` push; thresholds WAIT while "pending";
-  re-frozen after every roll/hedge — the margin refresh throttle yields to a changed
-  book); profit 2.5% of it, stop param default OFF; recurring
-  monthly (done_expiry gates same-month re-entry). Deploy-only + broker source required
-  (live-chain delta solve); NO backtest — BANKNIFTY chain history ≈ 2 months in cache.
+  crossing); straddle → breakeven hedges (K ± combined) in the SAME decision → ironfly.
+  margin_base tracks the BROKER basket margin ONLY (manager `set_broker_margin` push;
+  thresholds WAIT while "pending"; re-frozen after every roll/hedge — so once it's an iron fly
+  the 2.5% target is of the fly's much SMALLER margin, not the straddle's); stop param default
+  OFF; recurring monthly (done_expiry gates same-month re-entry). Deploy-only + broker source
+  required (live-chain delta solve); NO backtest — BANKNIFTY chain history ≈ 2 months in cache.
+- **Post-iron-fly adjustment (shared, 2026-07)** — on the BASE class, GATED by `ironfly_adjust`
+  (**default False in delta_neutral_monthly** per §1 — a running deploy is unchanged on recovery;
+  runtime-togglable via `set_ironfly_adjust` → `POST /live/{id}/ironfly-adjust`, persisted in
+  export_state, so it survives a restart). When enabled and phase=="ironfly", `_adjust_ironfly`
+  replaces the old terminal ride: on a breakeven breach (K ± net_credit) it sells a naked
+  ~15-20Δ short on the UNTESTED side (`adjust_target_delta`, reuses `_pick_delta_strike`), rolls
+  it when it decays (≤`adjust_close_delta`=10Δ OR ≤`adjust_close_prem_frac`=¼ of its sold
+  premium; banks the credit in `adjust_realized`), and calls `_exit_all("ironfly_payoff_neg")`
+  when `_payoff_max(legs) < 0` (the whole expiry payoff is below zero — a backend piecewise-linear
+  payoff over `bs.intrinsic`, the only backend payoff util; the frontend one is `web/src/lib/
+  payoff.ts`). The naked adjustment adds an UNCAPPED tail → the optional `stop_loss_pct` is the
+  hard MTM backstop.
+- **iron_fly_monthly** (`strategies/iron_fly_monthly.py`, subclasses DeltaNeutralMonthly): enters
+  the iron fly DIRECTLY (override `_try_enter` = SELL ATM straddle + BUY wings at ATM ± (CE+PE
+  premium), grid-snapped), `ironfly_adjust` defaults **True**. Same monthly cadence + margin/
+  target/exit machinery inherited. Deploy-only (`POST /trade/options/iron-fly/deploy`, broker
+  source required, `_DEPLOY_ONLY`); no backtest.
 - **momentum_theta_gainer_intra** (intraday 15-min SuperTrend(7,3) + daily-pivot ATM weekly
   seller, NIFTY + SENSEX): builds its OWN 15-min candles from live spot ticks (none exist in
   any cache) and carries them in `export_state`; pivots (R1/S1) come from a daily-OHLC provider —

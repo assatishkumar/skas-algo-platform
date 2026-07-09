@@ -47,6 +47,7 @@ import type {
   Universe,
   CpRatioExpiryDeploy,
   DeltaNeutralDeploy,
+  IronFlyDeploy,
   MomentumThetaDeploy,
   MtgBtResult,
   WatchRow,
@@ -208,6 +209,10 @@ export const api = {
     request<LiveRunSnapshot>("/trade/options/donchian/deploy", { method: "POST", body: JSON.stringify(body) }),
   deltaNeutralDeploy: (body: DeltaNeutralDeploy) =>
     request<LiveRunSnapshot>("/trade/options/delta-neutral/deploy", { method: "POST", body: JSON.stringify(body) }),
+  ironFlyDeploy: (body: IronFlyDeploy) =>
+    request<LiveRunSnapshot>("/trade/options/iron-fly/deploy", { method: "POST", body: JSON.stringify(body) }),
+  ironflyAdjust: (runId: number, on: boolean) =>
+    request<{ ironfly_adjust: boolean; note: string }>(`/live/${runId}/ironfly-adjust`, { method: "POST", body: JSON.stringify({ on }) }),
   cpRatioExpiryDeploy: (body: CpRatioExpiryDeploy) =>
     request<LiveRunSnapshot>("/trade/options/cp-ratio-expiry/deploy", { method: "POST", body: JSON.stringify(body) }),
   momentumThetaDeploy: (body: MomentumThetaDeploy) =>

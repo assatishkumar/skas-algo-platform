@@ -130,10 +130,20 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   chain). When |CE−PE| > 40% of the combined premium, roll the *cheap* side to the strike whose
   LTP matches the rich side (capped at the other strike → straddle max); the straddle then buys
   long wings at **K ± (CE+PE premium)** — its two breakevens, snapped to the strike grid, same
-  lots as the shorts → **iron fly is terminal** (adjustments stop). Exit at 2.5% of the **broker**
-  basket margin (optional stop default off); recurring monthly. **Deploy-only, no backtest**
-  (live-chain delta solve; only ~2 months of BANKNIFTY chain history cached). `force_entry`
-  deploy flag skips the entry-day wait.
+  lots as the shorts → **iron fly**. Exit at 2.5% of the **broker** basket margin (re-frozen after
+  each roll/hedge, so the iron fly targets 2.5% of its *reduced* margin; optional stop default off);
+  recurring monthly. **Deploy-only, no backtest** (live-chain delta solve; only ~2 months of
+  BANKNIFTY chain history cached). `force_entry` deploy flag skips the entry-day wait. An optional
+  **post-iron-fly adjustment** (off by default here, on for `iron_fly_monthly`) is togglable on a
+  running deploy — see below.
+- **`iron_fly_monthly` — BANKNIFTY monthly iron fly + active repair.** Enters the iron fly directly
+  (SELL ATM straddle, BUY wings at ATM ± (CE+PE premium)) on the same cadence. Its **adjustment**
+  (default on): when spot breaches a breakeven (K ± net credit), SELL a naked ~15-20Δ short on the
+  UNTESTED side and roll it (close at ≤10Δ or ≤¼ of its sold premium, re-sell); it exits ALL only
+  when the expiry payoff can no longer be positive (max payoff < 0). The naked short adds an
+  uncapped tail → an optional hard MTM stop is the backstop. Togglable live via
+  `POST /live/{id}/ironfly-adjust` (persisted; survives restart). Deploy-only, broker source
+  required, no backtest.
 - **`momentum_theta_gainer_intra` — 15-min SuperTrend + pivot ATM seller.** Builds its OWN
   15-min candles from live spot ticks; on a closed candle, close > SuperTrend(7,3) AND > pivot
   R1 → SELL the ATM PUT of the nearest weekly (0DTE allowed); the mirror → SELL the ATM CALL.

@@ -447,6 +447,7 @@ export interface LiveRunSnapshot {
   quote_error?: string | null; // last live-quote fetch failure (e.g. rejected Zerodha token)
   order_error?: string | null;
   supports_force_entry?: boolean;
+  ironfly_adjust?: boolean | null; // delta_neutral/iron_fly: null unless the strategy has it
   realized_taxes: number;
   positions: LivePosition[];
   net_delta?: number | null; // options: Σ position delta (None for equity)
@@ -829,6 +830,23 @@ export interface DeltaNeutralDeploy {
   target_delta: number;
   force_entry: boolean;
   adjust_threshold_pct: number;
+  adjust_cooldown_min: number;
+  profit_target_pct: number;
+  stop_loss_pct: number;
+  capital: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  auto: boolean;
+}
+
+export interface IronFlyDeploy {
+  name: string;
+  underlying: string;
+  lots: number;
+  force_entry: boolean;
+  ironfly_adjust: boolean;
+  adjust_target_delta: number;
   adjust_cooldown_min: number;
   profit_target_pct: number;
   stop_loss_pct: number;

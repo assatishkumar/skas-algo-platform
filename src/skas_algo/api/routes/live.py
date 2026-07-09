@@ -640,6 +640,24 @@ async def force_entry(run_id: int) -> dict:
     return {"armed": True, "note": note}
 
 
+@router.post("/{run_id}/ironfly-adjust")
+async def ironfly_adjust(run_id: int, body: dict) -> dict:
+    """Turn the post-iron-fly adjustment ON/OFF for a running deploy. Takes effect on the next
+    tick and survives a restart (persisted via export_state). Only strategies exposing
+    set_ironfly_adjust (delta_neutral_monthly / iron_fly_monthly) support it."""
+    live = manager.get(run_id)
+    if live is None:
+        raise HTTPException(status_code=404, detail="run is not active")
+    strategy = getattr(live.session, "strategy", None)
+    fn = getattr(strategy, "set_ironfly_adjust", None)
+    if fn is None:
+        raise HTTPException(status_code=400,
+                            detail="this strategy has no iron-fly adjustment")
+    note = fn(bool(body.get("on", True)))
+    live._persist_state()
+    return {"ironfly_adjust": strategy.ironfly_adjust, "note": note}
+
+
 @router.post("/{run_id}/ack-order-error")
 async def ack_order_error(run_id: int) -> dict:
     """Owner acknowledges a real-order failure: clears the halt so decisions resume.

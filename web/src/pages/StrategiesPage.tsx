@@ -158,19 +158,45 @@ const STRATEGIES: Rule[] = [
       "SELL 1× PE at ~18Δ (monthly expiry)",
       "SELL 1× CE at ~18Δ — deltas solved from each strike's own implied vol off the live chain.",
       "Adjustment: cheap side rolls to the strike whose LTP ≈ the rich side's LTP; strikes never cross (straddle max).",
-      "Iron-fly hedge — the moment both shorts sit at the SAME strike K (a straddle): immediately BUY a long CALL at K + (CE+PE premium) and a long PUT at K − (CE+PE premium), snapped to the strike grid, SAME lots as the shorts. Those two strikes are the short straddle's breakevens, so beyond them the long wings cap the loss ~1:1; the book is now an iron fly and adjustments stop.",
+      "Iron-fly hedge — the moment both shorts sit at the SAME strike K (a straddle): immediately BUY a long CALL at K + (CE+PE premium) and a long PUT at K − (CE+PE premium), snapped to the strike grid, SAME lots as the shorts. Those two strikes are the short straddle's breakevens, so beyond them the long wings cap the loss ~1:1; the book is now an iron fly.",
+      "Optional post-iron-fly adjustment (off by default, togglable on a running deploy): on a breakeven breach, sell a naked ~15-20Δ short on the untested side and roll it — see the Iron Fly Monthly strategy.",
     ],
     entry: [
       "2nd trading day after the previous monthly expiry, between 11:00 and 15:00 (force-entry flag skips the wait on deploy day).",
       "Recurring: re-enters every cycle automatically after an exit.",
     ],
     exit: [
-      "Profit target: +2.5% of margin deployed (frozen at entry, re-frozen after every adjustment).",
+      "Profit target: +2.5% of the broker margin. The margin base RE-FREEZES after each roll/hedge, so once it becomes an iron fly the target is 2.5% of the fly's (much smaller) margin, not the original straddle's.",
       "Optional stop (% of margin, default off). Expiry settlement is the backstop.",
     ],
     risk:
       "A NAKED short strangle until a straddle forms — rolls add credit but tighten the rolled side's breakeven, and a fast one-way month can roll several times before the iron fly caps risk. The 15-min adjustment cooldown limits churn; the model margin figure reads ~2× the real broker requirement until the broker number is available.",
     links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=VYNEvDhcV1k" }],
+  },
+  {
+    id: "iron_fly_monthly",
+    name: "Iron Fly Monthly",
+    kind: "Options",
+    bias: "Neutral · defined-risk monthly income",
+    summary:
+      "Enter the BANKNIFTY monthly IRON FLY directly (two trading days after expiry, ~11:00): sell the ATM straddle, buy the wings at the straddle's breakevens. When spot breaches a breakeven, actively repair it by selling a naked ~15-20Δ short on the untested side and rolling it as it decays — collecting credit to keep the payoff positive — and exit everything only if the payoff can no longer be made positive. Books at 2.5% of margin deployed. Deploy-only, paper-first on real chains.",
+    structure: [
+      "SELL 1× ATM CE + 1× ATM PE — the straddle at strike K (nearest listed strike to spot).",
+      "BUY 1× CE at K + (CE+PE premium) and 1× PE at K − (CE+PE premium) — the straddle breakevens, snapped to the grid → a defined-risk iron fly.",
+      "Adjustment (on breakeven breach): SELL a naked ~15-20Δ short on the UNTESTED side, same lots as the fly's shorts.",
+      "Roll it: when that short decays to ≤10Δ or ≤¼ of its sold premium, close it (bank the credit) and re-sell a fresh ~15-20Δ while the side stays breached.",
+    ],
+    entry: [
+      "2nd trading day after the previous monthly expiry, between 11:00 and 15:00 (force-entry flag skips the wait on deploy day).",
+      "Recurring: re-enters the iron fly every cycle automatically after an exit.",
+    ],
+    exit: [
+      "Profit target: +2.5% of the broker margin (re-frozen after each adjustment).",
+      "Exit ALL when the expiry payoff turns entirely negative — no spot where you'd end positive.",
+      "Optional hard MTM stop (% of margin, default off) — a backstop for the naked untested-side short's uncapped tail.",
+    ],
+    risk:
+      "The core fly is defined-risk, but each untested-side adjustment is a NAKED short → a fast reversal past it is an uncapped loss until the payoff-negative exit (or the optional stop) trips. Best in a range that drifts to one side, not a whipsaw. Deploy-only (live-chain ATM + wings + delta solve); paper-first.",
   },
   {
     id: "hni_weekly",
@@ -439,6 +465,14 @@ const META: Record<string, Meta> = {
             ["Target", "+2.5% of margin"], ["Entry", "Expiry+2d · ~11:00"]],
     deployNote: "Deploy-only, broker quotes required (live-chain delta solve + premium-matched rolls). Paper-first.",
     deployCta: { label: "Deploy Delta neutral", to: "/trade" },
+  },
+  iron_fly_monthly: {
+    group: "Premium selling", biasKind: "neutral",
+    facts: [["Bias", "Neutral · defined-risk"], ["Instrument", "BANKNIFTY monthly"],
+            ["Structure", "ATM straddle + breakeven wings"], ["Adjust", "sell ~15-20Δ untested side"],
+            ["Target", "+2.5% of margin"], ["Entry", "Expiry+2d · ~11:00"]],
+    deployNote: "Deploy-only, broker quotes required (live-chain ATM + wings + delta-based adjustment). Paper-first.",
+    deployCta: { label: "Deploy Iron fly", to: "/trade" },
   },
   hni_weekly: {
     group: "Ratio & income", biasKind: "income",

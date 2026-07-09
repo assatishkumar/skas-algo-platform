@@ -18,6 +18,7 @@ from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
     CpRatioExpiryDeploy,
     DeltaNeutralDeploy,
+    IronFlyDeploy,
     DonchianAnalyzeRequest,
     DonchianDeploy,
     DonchianPortfolioRequest,
@@ -489,6 +490,49 @@ async def delta_neutral_deploy(
     }
     req = LiveStartRequest(
         strategy_id="delta_neutral_monthly",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=body.underlying.upper(),
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/options/iron-fly/deploy")
+async def iron_fly_deploy(
+    body: IronFlyDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the BANKNIFTY monthly iron fly (ATM straddle + breakeven wings) + adjustment."""
+    if body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="the ATM straddle, breakeven wings and delta-based adjustment need the LIVE "
+                   "chain — deploy with a broker quote source (zerodha)",
+        )
+    params = {
+        "underlying": body.underlying.upper(),
+        "lots": body.lots,
+        "entry_time": body.entry_time,
+        "force_entry": body.force_entry,
+        "ironfly_adjust": body.ironfly_adjust,
+        "adjust_target_delta": body.adjust_target_delta,
+        "adjust_cooldown_min": body.adjust_cooldown_min,
+        "profit_target_pct": body.profit_target_pct,
+        "stop_loss_pct": body.stop_loss_pct,
+    }
+    req = LiveStartRequest(
+        strategy_id="iron_fly_monthly",
         name=body.name,
         notes=body.notes,
         instrument_class="DERIV",

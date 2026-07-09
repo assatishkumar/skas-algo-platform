@@ -804,6 +804,19 @@ function RunCard({
                 Force entry
               </button>
             )}
+            {run.ironfly_adjust != null && (
+              <button
+                onClick={async () => {
+                  const on = !run.ironfly_adjust;
+                  const res = await api.ironflyAdjust(run.run_id, on).catch((e) => { alert((e as Error).message); return null; });
+                  if (res) { refresh(); }
+                }}
+                className={`rounded px-3 py-1.5 text-xs text-white ${run.ironfly_adjust ? "bg-emerald-600 hover:bg-emerald-500" : "bg-slate-700 hover:bg-slate-600"}`}
+                title="On a breakeven breach, sell ~15-20Δ on the untested side and roll it; exit-all if the payoff turns fully negative. Takes effect next tick; survives a restart."
+              >
+                Iron-fly adjust: {run.ironfly_adjust ? "ON" : "OFF"}
+              </button>
+            )}
             <Link to={`/analyze?run=${run.run_id}`} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs" title="Round-trips, per-stock charts & P&L for this deployment">Analyze →</Link>
             {!isOptions && (
               <button onClick={() => setShowSignals((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
