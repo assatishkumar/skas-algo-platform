@@ -267,8 +267,8 @@ function CycleSummary({ cycles, points }: { cycles: ReconCycle[]; points: StockS
         <span className="text-xs text-slate-400">avg/cycle <span className={pos(avg)}>{formatInr(avg)}</span></span>
         {pnls.length > 0 && (
           <span className="text-xs text-slate-400">
-            best <span className="text-emerald-600 dark:text-emerald-400">{formatInr(Math.max(...pnls))}</span> ·
-            worst <span className="text-rose-600 dark:text-rose-400">{formatInr(Math.min(...pnls))}</span>
+            best <span className={pos(Math.max(...pnls))}>{formatInr(Math.max(...pnls))}</span> ·
+            worst <span className={pos(Math.min(...pnls))}>{formatInr(Math.min(...pnls))}</span>
           </span>
         )}
       </div>
