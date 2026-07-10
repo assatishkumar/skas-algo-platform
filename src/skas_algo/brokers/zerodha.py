@@ -13,6 +13,7 @@ NotArmedError. Forward-testing uses PaperBroker and never reaches this class.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -20,6 +21,8 @@ from zoneinfo import ZoneInfo
 from skas_algo.db.enums import OrderSide, OrderType
 
 from .base import BrokerOrder, Funds, Session
+
+logger = logging.getLogger(__name__)
 
 _IST = ZoneInfo("Asia/Kolkata")
 
@@ -70,6 +73,7 @@ class ZerodhaAdapter:
         self._nfo_index: dict = {}  # name -> {expiry_iso -> {strike -> {"CE": ts, "PE": ts}}}
         self._nfo_lot: dict = {}    # name -> contract lot size
         self._ts_exchange: dict = {}  # tradingsymbol -> exchange, NFO omitted (the default)
+        self._loaded_exchanges: set[str] = set()  # F&O dumps loaded OK (per exchange, sticky)
 
     # ------------------------------------------------------------------ kite
     def _kite_client(self):
@@ -275,16 +279,27 @@ class ZerodhaAdapter:
         → tradingsymbol map, a name→expiry→strike→{CE,PE} index, and the per-name lot size.
         Loads NFO **and BFO** (SENSEX/BANKEX options list on BSE F&O) into one LUT; the
         exchange travels per-tradingsymbol in ``_ts_exchange`` so quote/chain keys prefix
-        correctly (``NFO:``/``BFO:``)."""
-        if self._nfo_lut is not None:
-            return
-        self._nfo_lut = {}
+        correctly (``NFO:``/``BFO:``).
+
+        Each exchange loads AT MOST ONCE (success is sticky, `_loaded_exchanges`); a FAILED
+        exchange is NOT cached — it's retried on the next call. Critically, a transient BFO
+        failure (e.g. a Kite "Too many requests" during a login/promote storm) must not
+        permanently dead-end SENSEX/BANKEX: the old code set `_nfo_lut` up-front and swallowed
+        the BFO error, so BFO stayed missing for the adapter's whole lifetime while spot (a
+        plain LTP) still worked — a SENSEX options run then silently never entered (2026-07-10)."""
+        if self._nfo_lut is None:
+            self._nfo_lut = {}
         for exchange in ("NFO", "BFO"):
+            if exchange in self._loaded_exchanges:
+                continue
             try:
                 rows = self._kite_client().instruments(exchange)
-            except Exception:  # pragma: no cover - BFO dump hiccup must not kill NFO flows
+            except Exception as exc:  # BFO hiccup must not kill NFO — and must stay retryable
                 if exchange == "NFO":
                     raise
+                logger.warning(
+                    "BFO instruments dump failed (%s) — SENSEX/BANKEX options are unavailable "
+                    "until it reloads; will retry on the next chain/expiry call", exc)
                 continue
             for r in rows:
                 if r.get("instrument_type") not in ("CE", "PE"):
@@ -301,6 +316,7 @@ class ZerodhaAdapter:
                     self._ts_exchange[ts] = exchange
                 if r.get("lot_size"):
                     self._nfo_lot[name] = int(r["lot_size"])
+            self._loaded_exchanges.add(exchange)  # sticky: don't re-fetch a good dump
 
     def _exchange_of(self, tradingsymbol: str) -> str:
         return self._ts_exchange.get(tradingsymbol, "NFO")

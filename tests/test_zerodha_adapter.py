@@ -172,3 +172,45 @@ def test_basket_margin_none_when_nothing_maps():
     assert adapter.basket_margin(
         [{"symbol": "NIFTY|2026-01-13|99000|CE", "direction": -1, "units": 75}]
     ) is None
+
+
+class _NfoBfoKite(_FakeKite):
+    """instruments() serves NFO always, BFO only after ``bfo_ready`` flips — models a
+    transient BFO 'Too many requests' that later clears. Records the call sequence."""
+
+    def __init__(self):
+        super().__init__()
+        self.bfo_ready = False
+        self.calls: list[str] = []
+
+    def instruments(self, exchange):
+        from datetime import date
+        self.calls.append(exchange)
+        if exchange == "NFO":
+            return [{"name": "NIFTY", "expiry": date(2026, 7, 28), "strike": 24000.0,
+                     "instrument_type": "CE", "tradingsymbol": "NIFTY2672824000CE", "lot_size": 65}]
+        if exchange == "BFO":
+            if not self.bfo_ready:
+                raise RuntimeError("Too many requests")
+            return [{"name": "SENSEX", "expiry": date(2026, 7, 30), "strike": 77500.0,
+                     "instrument_type": "CE", "tradingsymbol": "SENSEX2673077500CE",
+                     "lot_size": 20}]
+        return []
+
+
+def test_bfo_failure_is_retried_not_permanently_cached():
+    """A transient BFO dump failure must NOT dead-end SENSEX/BANKEX for the adapter's life:
+    NFO stays usable, and BFO reloads on the next call once Kite recovers (2026-07-10 bug)."""
+    kite = _NfoBfoKite()
+    adapter = ZerodhaAdapter(CREDS, kite=kite)
+
+    # BFO down: NFO works, SENSEX has no expiries yet, only NFO marked loaded.
+    assert adapter.option_expiries("NIFTY") == ["2026-07-28"]
+    assert adapter.option_expiries("SENSEX") == []
+    assert adapter._loaded_exchanges == {"NFO"}
+
+    # Kite recovers → next call retries BFO and SENSEX self-heals; NFO is fetched only once.
+    kite.bfo_ready = True
+    assert adapter.option_expiries("SENSEX") == ["2026-07-30"]
+    assert adapter._loaded_exchanges == {"NFO", "BFO"}
+    assert kite.calls.count("NFO") == 1 and "BFO" in kite.calls
