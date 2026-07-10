@@ -7,6 +7,8 @@ a logged-in account.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -33,6 +35,8 @@ from skas_algo.live.manager import LiveConfig, manager
 from skas_algo.live.quotes import CacheQuoteSource, is_broker_source
 from skas_algo.services import broker as broker_svc
 from skas_algo.services.runs import delete_algo_cascade
+
+logger = logging.getLogger("skas_algo.live")
 
 router = APIRouter(tags=["live"], prefix="/live")
 # The WebSocket lives on its OWN router registered WITHOUT the require_auth dependency: a
@@ -203,8 +207,14 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
         tile["on_cache_fallback"] = False
         tile["quote_error"] = None
         live = manager.get(run.id)
+        snap = None
         if live is not None and st == "active":
-            snap = live.snapshot()
+            try:
+                snap = live.snapshot()
+            except Exception:  # ONE run's snapshot bug must never 500 the whole list → blank page
+                logger.exception("snapshot failed for run %s — showing a degraded tile", run.id)
+                tile["snapshot_error"] = True
+        if snap is not None:
             tile["on_cache_fallback"] = snap.get("on_cache_fallback", False)
             tile["quote_error"] = snap.get("quote_error")
             tile["order_error"] = snap.get("order_error")

@@ -60,3 +60,25 @@ def test_recovery_resumes_live_when_flag_on(monkeypatch):
     # Injection happens on the SAME session the LiveRun is then built from, and BEFORE it,
     # so the run's reconcile_pending reflects the (possibly) real-order broker.
     assert calls["session_at_inject"] is calls["session_at_liverun"]
+
+
+def test_lot_opened_at_round_trips_to_datetime():
+    """export_state stringifies Lot.opened_at; load_state must parse it BACK to a datetime — else
+    a recovered lot (str) plus a lot opened AFTER recovery (datetime) form a mixed set that crashes
+    snapshot()'s min() ("'<' not supported between datetime and str") and 500s the whole /live list
+    → a blank Live page (2026-07-10, an equity FIFO run)."""
+    from datetime import datetime, timezone
+
+    from skas_algo.engine.portfolio import Portfolio
+
+    p = Portfolio(cash=1_000_000)
+    p.buy("RELIANCE", 10, 1500.0, when=datetime(2026, 7, 9, 15, 20, tzinfo=timezone.utc))
+
+    p2 = Portfolio(cash=1_000_000)
+    p2.load_state(p.export_state())
+    assert isinstance(p2.lots("RELIANCE")[0].opened_at, datetime)   # parsed back, not a raw str
+
+    # a lot opened AFTER recovery (a real datetime) must not break min() over the mixed set
+    p2.buy("RELIANCE", 5, 1510.0, when=datetime(2026, 7, 10, 15, 22, tzinfo=timezone.utc))
+    lots = p2.lots("RELIANCE")
+    assert min(lot.opened_at for lot in lots if lot.opened_at is not None)  # no TypeError

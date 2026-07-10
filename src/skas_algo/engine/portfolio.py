@@ -13,6 +13,21 @@ from datetime import date, datetime
 from itertools import count
 
 
+def _parse_opened_at(v):
+    """Recover a Lot.opened_at from persisted state (export_state stores str(dt)). Parse a
+    string back to datetime (or date), pass a real datetime/date through, None on junk — so
+    recovered lots and post-recovery lots share one comparable type."""
+    if not isinstance(v, str):
+        return v
+    try:
+        return datetime.fromisoformat(v)   # 3.11 handles "YYYY-MM-DD HH:MM:SS[.ffffff][+HH:MM]"
+    except ValueError:
+        try:
+            return date.fromisoformat(v[:10])
+        except ValueError:
+            return None
+
+
 @dataclass
 class Lot:
     """One lot of a symbol.
@@ -204,7 +219,12 @@ class Portfolio:
                     symbol=sym,
                     units=lot["units"],
                     price=lot["price"],
-                    opened_at=lot["opened_at"],
+                    # export_state stringifies opened_at (str(dt)); parse it BACK to a datetime.
+                    # Left as a raw string, a recovered lot and a lot opened AFTER recovery
+                    # (a real datetime) were a mixed str/datetime set that crashed snapshot()'s
+                    # min() — "'<' not supported between datetime and str" — blanking /live
+                    # (2026-07-10, an equity FIFO run that opened a lot post-recovery).
+                    opened_at=_parse_opened_at(lot["opened_at"]),
                     direction=lot.get("direction", 1),
                     multiplier=lot.get("multiplier", 1),
                 )
