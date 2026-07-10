@@ -303,8 +303,9 @@ function LoginFlow({ id, broker, onDone }: { id: number; broker: string; onDone:
 
 // ---------------------------------------------------------------- account card
 
-// Index SPOT series (not in any equity universe) — they drive the options backtest calendar,
-// so a refresh must include them or they go stale (the NIFTY-50 lag).
+// Index SPOT series the strategies HARD-require (they sit in no equity universe and drive the
+// options backtest calendar). Kept as a floor on top of the full cached set below, so they're
+// refreshed even on a cold cache.
 const INDEX_SPOTS = ["NIFTY 50", "NIFTY BANK"];
 
 function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
@@ -320,15 +321,22 @@ function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
   const [cacheMsg, setCacheMsg] = useState<string | null>(null);
   const showCache = a.broker === "zerodha" && a.has_session;
 
-  // All equity daily bars — the Nifty 500 stocks PLUS the NIFTY 50 / NIFTY BANK index series
-  // (the index spots sit in no stock universe, so they'd otherwise silently go stale).
+  // All equity + index daily bars: the Nifty-500 universe PLUS every symbol already in the cache
+  // — that's where ALL the index series live (NIFTY 50/BANK, NIFTY 100/200/500, ALPHA 50,
+  // sectorals, INDIA VIX…). Union + dedupe so "indices" means every cached index, not just the
+  // two strategy spots (which used to be the only indices refreshed, so the rest silently lagged).
   async function refreshStocks() {
     setBusy("stocks");
     setCacheMsg(null);
     setProgress(null);
     try {
-      const { symbols: stocks } = await api.universeSymbols("nifty500");
-      const symbols = [...INDEX_SPOTS, ...stocks];
+      const [{ symbols: stocks }, cached] = await Promise.all([
+        api.universeSymbols("nifty500"),
+        api.dataSymbols(),
+      ]);
+      const symbols = Array.from(
+        new Set([...INDEX_SPOTS, ...cached.map((s) => s.symbol), ...stocks]),
+      );
       const CHUNK = 15;
       let ok = 0, errors = 0;
       setProgress({ done: 0, total: symbols.length });
@@ -448,8 +456,8 @@ function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
             <div className="flex items-start gap-2 text-[12.5px] text-[var(--muted)]">
               <Icon d={I.db} size={14} className="mt-0.5 shrink-0" />
               <span>Historical cache shares this Kite session — refresh candles without a second login.
-                <b>Stocks + indices</b> = Nifty 500 + NIFTY 50/NIFTY BANK; <b>Options</b> = ~60 days of
-                NIFTY &amp; BANKNIFTY bhavcopy.</span>
+                <b>Stocks + indices</b> = Nifty 500 + every cached index (NIFTY 50/BANK, sectorals,
+                INDIA VIX…); <b>Options</b> = ~60 days of NIFTY &amp; BANKNIFTY bhavcopy.</span>
             </div>
             <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
               <button onClick={refreshStocks} disabled={!!busy}
