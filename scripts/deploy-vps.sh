@@ -83,6 +83,9 @@ SKAS_AUTH_JWT_SECRET=${JWT}
 SKAS_LIVE_TRADING_ENABLED=false
 # Off-box backup: uncomment + point at your bucket/host ({path}=abs snapshot, {name}=filename).
 # SKAS_BACKUP_REMOTE_CMD=aws s3 cp {path} s3://YOUR_BUCKET/skas-backups/{name}
+# Telegram alerts (arm/halt/order/fill): set BOTH to enable — copy from your Mac's .env.
+# SKAS_TELEGRAM_BOT_TOKEN=
+# SKAS_TELEGRAM_CHAT_ID=
 EOF
   chmod 600 "${ENV_FILE}"
   echo "Wrote ${ENV_FILE} (chmod 600). Back up SKAS_SECRET_ENCRYPTION_KEY somewhere safe."

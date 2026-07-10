@@ -76,6 +76,7 @@ WebSocket upgrades to `wss` automatically.
 | `SKAS_API_HOST=127.0.0.1`, `SKAS_DEBUG=false` | Localhost bind; no `--reload`. |
 | `SKAS_LIVE_TRADING_ENABLED` | **Master real-order switch. Leave `false` until you're ready**, then restart. |
 | `SKAS_BACKUP_REMOTE_CMD` | Off-box nightly backup, e.g. `aws s3 cp {path} s3://bucket/{name}`. Strongly recommended on a VPS. |
+| `SKAS_TELEGRAM_BOT_TOKEN` + `SKAS_TELEGRAM_CHAT_ID` | Alerts (arm/halt/order/fill). **Both** required or it's log-only. Reuse your Mac's bot/chat; alerts are labelled by run name. |
 | `SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY` | Whether a real-order run resumes on the broker (`true`) or as paper (`false`) after a restart. `false` for bring-up, `true` in steady state — see the note below. |
 
 > **Resume-after-restart (`SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY`).** With `false` (default) a restart
