@@ -312,6 +312,12 @@ def test_sensex_contract_specs():
 
 # ---------------------------------------------------------- Zerodha BFO plumbing
 
+# option_expiries() drops expiries before today, so the SENSEX fixture expiry must stay in the
+# FUTURE — a hardcoded date rots the day it passes (it did, on 2026-07-10). Kept relative to today.
+_SENSEX_EXP = date.today() + timedelta(days=60)
+_SENSEX_EXP_ISO = _SENSEX_EXP.isoformat()
+
+
 class _FakeKite:
     def __init__(self):
         self.ltp_calls = []
@@ -324,7 +330,9 @@ class _FakeKite:
             return [{"name": "NIFTY", "instrument_type": "CE", "expiry": date(2026, 7, 7),
                      "strike": 24600.0, "tradingsymbol": "NIFTY26JUL24600CE", "lot_size": 65}]
         if exchange == "BFO":
-            return [{"name": "SENSEX", "instrument_type": "CE", "expiry": date(2026, 7, 9),
+            # tradingsymbol is opaque to the adapter (LUT value / quote key) — it need not encode
+            # _SENSEX_EXP; only the expiry field feeds option_expiries' today-filter.
+            return [{"name": "SENSEX", "instrument_type": "CE", "expiry": _SENSEX_EXP,
                      "strike": 80000.0, "tradingsymbol": "SENSEX2670980000CE", "lot_size": 20}]
         raise AssertionError(exchange)
 
@@ -341,15 +349,15 @@ def _adapter():
 
 def test_bfo_merge_and_exchange_prefixes():
     a = _adapter()
-    q = a.get_quote(["SENSEX", "NIFTY|2026-07-07|24600|CE", "SENSEX|2026-07-09|80000|CE"])
+    q = a.get_quote(["SENSEX", "NIFTY|2026-07-07|24600|CE", f"SENSEX|{_SENSEX_EXP_ISO}|80000|CE"])
     kite = a._kite_client()
     keys = kite.ltp_calls[-1]
     assert "BSE:SENSEX" in keys                    # BSE index series
     assert "NFO:NIFTY26JUL24600CE" in keys         # NSE option
     assert "BFO:SENSEX2670980000CE" in keys        # BSE option via the merged LUT
-    assert q["SENSEX|2026-07-09|80000|CE"] == 100.0
+    assert q[f"SENSEX|{_SENSEX_EXP_ISO}|80000|CE"] == 100.0
     assert a._nfo_lot["SENSEX"] == 20
-    assert a.option_expiries("SENSEX") == ["2026-07-09"]
+    assert a.option_expiries("SENSEX") == [_SENSEX_EXP_ISO]
 
 
 def test_deploy_margin_guard_handles_dict_lots():
