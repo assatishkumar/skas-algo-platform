@@ -72,7 +72,18 @@ WebSocket upgrades to `wss` automatically.
 | `SKAS_API_HOST=127.0.0.1`, `SKAS_DEBUG=false` | Localhost bind; no `--reload`. |
 | `SKAS_LIVE_TRADING_ENABLED` | **Master real-order switch. Leave `false` until you're ready**, then restart. |
 | `SKAS_BACKUP_REMOTE_CMD` | Off-box nightly backup, e.g. `aws s3 cp {path} s3://bucket/{name}`. Strongly recommended on a VPS. |
-| `SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY` | Leave unset/`false`: after a restart, real-order runs resume as **paper** until you re-arm (recommended). |
+| `SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY` | Whether a real-order run resumes on the broker (`true`) or as paper (`false`) after a restart. `false` for bring-up, `true` in steady state — see the note below. |
+
+> **Resume-after-restart (`SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY`).** With `false` (default) a restart
+> brings a real-order run back as *paper*: its exits/rolls are simulated and never reach the broker, so
+> the **real position sits open and unmanaged** until you re-arm — it does NOT flatten on paper. With
+> `true` the run resumes placing real orders — still 4-key gated (armed + flag + valid session + capable
+> adapter) and it **reconciles the broker book before its first decision** (halts on any mismatch).
+> Start **`false`** for the first live cycle or two (watch closely, keep explicit control); switch to
+> **`true`** in steady state, because for a positional Mon→Fri strategy on this dedicated, supervised box
+> an intraday restart that orphans a real position over a weekend is the exact risk you're avoiding. Note
+> it only bites when a valid Kite session exists at recovery — tokens die ~06:00 IST, so a pre-login
+> restart comes back on paper regardless (you re-login in the morning).
 
 ## Going live (your hand, in order)
 
