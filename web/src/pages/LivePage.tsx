@@ -7,6 +7,7 @@ import GreeksPanel from "../components/GreeksPanel";
 import LivePayoffChart from "../components/LivePayoffChart";
 import LiveTradesPanel from "../components/LiveTradesPanel";
 import LiveCyclePanel from "../components/LiveCyclePanel";
+import LivePnlSummary from "../components/LivePnlSummary";
 import LiveEquityTrades from "../components/LiveEquityTrades";
 import OptionMetricsPanel from "../components/OptionMetricsPanel";
 import { formatInr } from "../lib/format";
@@ -678,6 +679,9 @@ function RunCard({
           </button>
         </div>
       )}
+      {/* Layered P&L (prior cycles · this cycle realized · this cycle unrealized · overall) so the
+          realized-vs-unrealized split is unambiguous. Options only (cycle reconstruction). */}
+      {isOptions && <LivePnlSummary runId={run.run_id} version={version} positions={run.positions ?? []} />}
       {/* Options: Sensibull-style position metrics (max P/L, breakevens, POP, margin, …).
           Equity: deployed capital / parts / positions / unrealized P&L. */}
       {isOptions ? (
