@@ -573,3 +573,19 @@ def test_broker_daily_df_none_without_daily_bars():
     span = (date.today() - timedelta(days=5), date.today())
     assert _broker_daily_df(_NoHist(), "NIFTY", *span) is None
     assert _broker_daily_df(None, "NIFTY", *span) is None
+
+
+def test_lot_sets_attr_routes_dict_lot_sizing():
+    """The per-underlying lot-set control must route to the right attribute: momentum_theta names
+    its dict `lots`, call_put_ratio_expiry names it `sets`; scalar-`lots` strategies return None
+    (they use the plain scalar lots control), and equity returns None."""
+    from skas_algo.live.manager import _lot_sets_attr
+    from skas_algo.strategies.call_put_ratio_expiry import CallPutRatioExpiryStrategy
+    from skas_algo.strategies.momentum_theta_intra import MomentumThetaGainerIntra
+
+    mt = MomentumThetaGainerIntra(underlyings=["NIFTY", "SENSEX"], lots={"NIFTY": 2, "SENSEX": 2})
+    cp = CallPutRatioExpiryStrategy(underlyings=["SENSEX"], sets={"SENSEX": 3})
+    assert _lot_sets_attr(mt) == "lots"
+    assert _lot_sets_attr(cp) == "sets"
+    assert _lot_sets_attr(type("Scalar", (), {"lots": 10})()) is None
+    assert _lot_sets_attr(None) is None

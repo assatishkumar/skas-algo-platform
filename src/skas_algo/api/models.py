@@ -404,7 +404,8 @@ class LiveControlsInput(BaseModel):
     ignore_market_hours: bool | None = None
     refresh_seconds: int | None = None
     excluded_symbols: list[str] | None = None  # replaces the no-new-entry blocklist
-    lots: int | None = None  # options: lot-sets for the NEXT entry (doesn't resize open legs)
+    lots: int | None = None  # options: scalar lot-sets for the NEXT entry (no resize of open legs)
+    lot_sets: dict[str, int] | None = None  # per-underlying lot-sets (momentum_theta / cp_ratio)
 
 
 class ManualLegClose(BaseModel):

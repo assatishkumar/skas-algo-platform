@@ -438,7 +438,8 @@ export interface LiveRunSnapshot {
   open_positions: number;
   open_lots: number;
   parts_total: number | null;
-  lots?: number | null; // options: lot-sets (null for equity strategies)
+  lots?: number | null; // options: scalar lot-sets (null for equity / per-underlying strategies)
+  lot_sets?: Record<string, number> | null; // per-underlying lot-sets (momentum_theta / cp_ratio_expiry)
   instrument_class?: string | null;
   underlying?: string | null;
   underlying_spot?: number | null; // live index spot (payoff marker)
@@ -595,6 +596,7 @@ export interface LiveControlsInput {
   refresh_seconds?: number;
   excluded_symbols?: string[];
   lots?: number;
+  lot_sets?: Record<string, number>; // per-underlying lot-sets (momentum_theta / cp_ratio_expiry)
 }
 
 // ---- Donchian Strangle Monthly (basket short-strangle screener) ----

@@ -419,6 +419,7 @@ async def set_controls(run_id: int, body: LiveControlsInput) -> dict:
         refresh_seconds=body.refresh_seconds,
         excluded_symbols=body.excluded_symbols,
         lots=body.lots,
+        lot_sets=body.lot_sets,
     )
     if body.auto is not None:  # journal the meaningful pause/resume toggle
         from skas_algo.services.vault_export import journal_safe

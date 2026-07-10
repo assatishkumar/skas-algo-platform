@@ -237,6 +237,20 @@ class Broadcaster:
                 pass
 
 
+def _lot_sets_attr(strategy) -> str | None:
+    """Name of the strategy's PER-UNDERLYING lot-set dict attribute, or None. Multi-underlying
+    families size differently: momentum_theta uses ``lots`` (a dict), call_put_ratio_expiry uses
+    ``sets``. Returns None for scalar-``lots`` strategies (edited via the plain ``lots`` control)
+    and equity (no lot-sets)."""
+    if strategy is None:
+        return None
+    if isinstance(getattr(strategy, "lots", None), dict):
+        return "lots"
+    if isinstance(getattr(strategy, "sets", None), dict):
+        return "sets"
+    return None
+
+
 class LiveRun:
     def __init__(self, run_id, algo_id, config, session, quote_source, broadcaster):
         self.run_id = run_id
@@ -723,6 +737,11 @@ class LiveRun:
             # Options deployments expose lot-sets (editable live while flat); equity
             # strategies have no `lots` attr → null → the UI hides the control.
             "lots": getattr(getattr(self.session, "strategy", None), "lots", None),
+            # Per-underlying lot-set map for multi-underlying strategies (momentum_theta's `lots`
+            # dict, call_put_ratio_expiry's `sets` dict) → the UI shows a stepper per underlying.
+            "lot_sets": (
+                lambda a: dict(getattr(self.session.strategy, a)) if a else None
+            )(_lot_sets_attr(getattr(self.session, "strategy", None))),
             # Live underlying spot (for the positions payoff diagram), if known.
             "underlying_spot": self._underlying_spot(),
             # Live controls + exclusion editing surface for the UI.
@@ -995,6 +1014,7 @@ class LiveRunManager:
         refresh_seconds: int | None = None,
         excluded_symbols: list[str] | None = None,
         lots: int | None = None,
+        lot_sets: dict | None = None,
     ) -> LiveRun:
         """Mutate a running deployment's loop controls / exclusion list / lot-sets, in place.
 
@@ -1020,6 +1040,17 @@ class LiveRunManager:
                 and not isinstance(live.session.strategy.lots, dict):
             live.session.strategy.lots = max(1, int(lots))
             cfg.params = {**cfg.params, "lots": live.session.strategy.lots}
+        # Per-underlying lot-sets (momentum_theta's `lots` dict / cp_ratio_expiry's `sets` dict):
+        # update the matching KEYS in place (never overwrite the whole dict — that would break
+        # the strategy's per-name lookups). Takes effect on the next entry, like scalar lots.
+        sets_attr = _lot_sets_attr(getattr(live.session, "strategy", None))
+        if lot_sets and sets_attr is not None:
+            tgt = getattr(live.session.strategy, sets_attr)
+            for u, v in lot_sets.items():
+                key = u if u in tgt else (u.upper() if u.upper() in tgt else None)
+                if key is not None:
+                    tgt[key] = max(1, int(v))
+            cfg.params = {**cfg.params, sets_attr: dict(tgt)}
         if auto is not None:
             cfg.auto = auto
             running = run_id in self._tasks and not self._tasks[run_id].done()
@@ -1041,6 +1072,8 @@ class LiveRunManager:
                 if lots is not None and hasattr(live.session.strategy, "lots") \
                         and not isinstance(live.session.strategy.lots, dict):
                     snap["lots"] = live.session.strategy.lots
+                if lot_sets and sets_attr is not None:
+                    snap[sets_attr] = dict(getattr(live.session.strategy, sets_attr))
                 run.params_snapshot = snap
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
         return live

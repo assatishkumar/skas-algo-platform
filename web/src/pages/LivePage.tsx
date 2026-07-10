@@ -1026,9 +1026,13 @@ function DeploymentTile({
   // Options tiles surface the blocked margin (in the header) instead of equity value.
   const marginUsed = snapshot?.margin_used ?? m.margin_used ?? null;
   const realized = snapshot?.realized_pnl ?? m.realized_pnl ?? null;
-  // Deployment lot-set count (the ×N on the strategy's base structure). Scalar only — a per-name
-  // dict (momentum_theta) isn't a single number, so skip the chip there.
+  // Deployment lot-set count (the ×N on the strategy's base structure). Scalar strategies expose a
+  // single number; multi-underlying ones (momentum_theta, cp_ratio_expiry) expose a per-name map.
   const lotSets = typeof snapshot?.lots === "number" ? snapshot.lots : null;
+  const lotSetsMap =
+    snapshot?.lot_sets && typeof snapshot.lot_sets === "object" && Object.keys(snapshot.lot_sets).length > 0
+      ? snapshot.lot_sets
+      : null;
 
   // When a deployment is opened, pull a fresh snapshot so the positions panel populates
   // immediately instead of waiting for the next WebSocket tick.
@@ -1126,6 +1130,11 @@ function DeploymentTile({
             {lotSets != null && (
               <Tag bg="var(--chip)" color="var(--chip-text)" title="Lot-sets deployed (the ×N multiplier on the strategy's base structure)">
                 {lotSets} lot-set{lotSets === 1 ? "" : "s"}
+              </Tag>
+            )}
+            {lotSetsMap && (
+              <Tag bg="var(--chip)" color="var(--chip-text)" title="Lot-sets per underlying">
+                {Object.entries(lotSetsMap).map(([u, n]) => `${u} ${n}`).join(" · ")} lot-sets
               </Tag>
             )}
             <BrokerChip dep={dep} />
@@ -1244,6 +1253,20 @@ function DeploymentTile({
                       className="px-1.5 rounded hover:opacity-60 disabled:opacity-30">+</button>
                   </span>
                 )}
+                {/* Per-underlying lot-sets (momentum_theta, cp_ratio_expiry) — one stepper per name. */}
+                {positions === 0 && lotSetsMap && Object.entries(lotSetsMap).map(([u, n]) => (
+                  <span key={u} className="inline-flex items-center gap-1 rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] px-1.5 py-1"
+                    title={`Increase / decrease ${u} lot-sets for the next entry (only while no positions are open)`}>
+                    <span className="text-[var(--faint)] pl-1 pr-0.5">{u}</span>
+                    <button onClick={() => act(() => api.liveSetControls(dep.run_id, { lot_sets: { [u]: Math.max(1, n - 1) } }))}
+                      disabled={busy || n <= 1} aria-label={`decrease ${u} lot-sets`}
+                      className="px-1.5 rounded hover:opacity-60 disabled:opacity-30">−</button>
+                    <span className="tabular-nums font-semibold min-w-[1.5ch] text-center">{n}</span>
+                    <button onClick={() => act(() => api.liveSetControls(dep.run_id, { lot_sets: { [u]: n + 1 } }))}
+                      disabled={busy} aria-label={`increase ${u} lot-sets`}
+                      className="px-1.5 rounded hover:opacity-60 disabled:opacity-30">+</button>
+                  </span>
+                ))}
               </>
             )}
             {dep.status === "stopped" && (
