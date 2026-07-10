@@ -94,6 +94,24 @@ class LiveSession:
         self.monthly_flush_log: dict = {}
         self._current_month: tuple[int, int] | None = None
 
+    @property
+    def broker(self):
+        """The broker fills go through. The EXECUTOR (which actually places every fill) holds its
+        own broker reference, so assigning here must keep the two in sync — otherwise injecting a
+        LiveBroker after construction (`manager._maybe_inject_live_broker`) would repoint only
+        `session.broker` and leave the executor paper-filling a LIVE run, so real orders silently
+        never reach the broker (the 2026-07-10 'test' order). The setter is the single place that
+        invariant is enforced."""
+        return self._broker
+
+    @broker.setter
+    def broker(self, value) -> None:
+        self._broker = value
+        # `executor` is built AFTER `self.broker` is first set in __init__ — guard its absence.
+        executor = getattr(self, "executor", None)
+        if executor is not None:
+            executor.broker = value
+
     # --------------------------------------------------------- lifecycle
     def warmup(self, history_by_symbol: dict[str, list[float]]) -> None:
         """Seed historical closes (chronological, up to yesterday) per symbol.

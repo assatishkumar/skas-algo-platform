@@ -289,6 +289,29 @@ def test_injection_matrix(monkeypatch):
     assert run("LIVE", True, True, capable=False) == "PAPER-SENTINEL"  # no order surface
 
 
+def test_injection_rewires_the_executor(monkeypatch):
+    """Injecting the LiveBroker must repoint the EXECUTOR too — not just `session.broker`.
+    The executor is what actually places fills; if it stays on the construction-time PaperBroker,
+    a LIVE run paper-fills with no order reaching the broker (the 2026-07-10 'test' order). This
+    is the real path (a genuine LiveSession), which `test_injection_matrix`'s stub session can't
+    exercise — that stub has no executor, which is exactly why the bug slipped through."""
+    from skas_algo.brokers.live_broker import LiveBroker
+    from skas_algo.brokers.sim_broker import PaperBroker
+    from skas_algo.config import get_settings
+    from skas_algo.engine.live import LiveSession
+    from skas_algo.live.manager import manager
+
+    monkeypatch.setattr(get_settings(), "live_trading_enabled", True)
+    session = LiveSession(strategy=object(), initial_capital=100_000)
+    assert isinstance(session.broker, PaperBroker)
+    assert session.executor.broker is session.broker  # bound together at construction
+
+    manager._maybe_inject_live_broker(session, _cfg("LIVE"), _QS(_ExecAdapter(armed=True)))
+
+    assert isinstance(session.broker, LiveBroker)
+    assert session.executor.broker is session.broker  # THE fix: fills now go through LiveBroker
+
+
 def test_reconciliation_aggregates_across_runs():
     """Broker nets per contract across runs — reconciliation must compare the SUM of all
     live-order runs' books, not each run alone."""
