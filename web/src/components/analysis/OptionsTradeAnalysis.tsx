@@ -210,8 +210,10 @@ function CycleCard({ cycle, points, live }: { cycle: ReconCycle; points: StockSe
 
 type SumKey = "entered" | "exited" | "held" | "espot" | "xspot" | "move" | "net" | "pnl" | "legs" | "result";
 
-/** Compact, sortable P&L table across all cycles (one row per weekly/monthly position) + aggregates. */
-function CycleSummary({ cycles, points }: { cycles: ReconCycle[]; points: StockSeriesPoint[] }) {
+/** Compact, sortable P&L table across all cycles (one row per weekly/monthly position) + aggregates.
+ * Exported so the Live page can show the same per-cycle breakdown on a running deployment (pass
+ * points=[] there — the table falls back to each cycle's entry/exit spot captured at trade time). */
+export function CycleSummary({ cycles, points }: { cycles: ReconCycle[]; points: StockSeriesPoint[] }) {
   const [sortKey, setSortKey] = useState<SumKey>("entered");
   const [dir, setDir] = useState<1 | -1>(-1);
   const rows = cycles.map((c) => {

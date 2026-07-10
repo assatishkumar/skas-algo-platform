@@ -6,6 +6,7 @@ import { Badge, timeAgo } from "../components/ui";
 import GreeksPanel from "../components/GreeksPanel";
 import LivePayoffChart from "../components/LivePayoffChart";
 import LiveTradesPanel from "../components/LiveTradesPanel";
+import LiveCyclePanel from "../components/LiveCyclePanel";
 import LiveEquityTrades from "../components/LiveEquityTrades";
 import OptionMetricsPanel from "../components/OptionMetricsPanel";
 import { formatInr } from "../lib/format";
@@ -780,6 +781,7 @@ function RunCard({
       {/* Greeks/P&L history + the trade log stay visible after a cycle closes, so a booked
           position still shows how it evolved, when it exited and the realized P&L. */}
       {isOptions ? <GreeksPanel run={run} /> : null}
+      {isOptions ? <LiveCyclePanel runId={run.run_id} version={version} /> : null}
       {isOptions ? (
         <LiveTradesPanel runId={run.run_id} version={version} />
       ) : (
@@ -1020,6 +1022,9 @@ function DeploymentTile({
   // Options tiles surface the blocked margin (in the header) instead of equity value.
   const marginUsed = snapshot?.margin_used ?? m.margin_used ?? null;
   const realized = snapshot?.realized_pnl ?? m.realized_pnl ?? null;
+  // Deployment lot-set count (the ×N on the strategy's base structure). Scalar only — a per-name
+  // dict (momentum_theta) isn't a single number, so skip the chip there.
+  const lotSets = typeof snapshot?.lots === "number" ? snapshot.lots : null;
 
   // When a deployment is opened, pull a fresh snapshot so the positions panel populates
   // immediately instead of waiting for the next WebSocket tick.
@@ -1114,6 +1119,11 @@ function DeploymentTile({
               {isOptions ? `OPT${underlying ? ` · ${underlying}` : ""}` : "EQ"}
             </Tag>
             <Tag>{dep.strategy_id}</Tag>
+            {lotSets != null && (
+              <Tag bg="var(--chip)" color="var(--chip-text)" title="Lot-sets deployed (the ×N multiplier on the strategy's base structure)">
+                {lotSets} lot-set{lotSets === 1 ? "" : "s"}
+              </Tag>
+            )}
             <BrokerChip dep={dep} />
             {dep.order_error && (
               <Tag bg="var(--danger)" color="#fff" title={dep.order_error}>orders halted</Tag>
