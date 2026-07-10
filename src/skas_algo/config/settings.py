@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     api_port: int = 8080
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
+    # --- Serve the built SPA from the backend (single-origin prod, e.g. the VPS) ---
+    # OFF by default so local dev is unchanged (the Vite dev server on :5173 hosts the UI,
+    # proxying /api → :8080). Set true on a host that has run `npm run build` (web/dist), so
+    # the one uvicorn process serves BOTH the API and the SPA on the same origin — the
+    # frontend uses a relative /api base + window.location WS, so a TLS front (tailscale
+    # serve / a reverse proxy) gives wss with zero config. `webapp_dist` overrides the path
+    # (default: the repo's web/dist, resolved relative to this package).
+    serve_webapp: bool = False              # SKAS_SERVE_WEBAPP
+    webapp_dist: str | None = None          # SKAS_WEBAPP_DIST (absolute path override)
+
     # --- Secrets / encryption ---
     # Fernet key used to encrypt broker credentials & TOTP secrets at rest.
     # Generate with:

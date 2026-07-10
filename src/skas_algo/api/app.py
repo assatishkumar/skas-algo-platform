@@ -94,7 +94,53 @@ def create_app() -> FastAPI:
     app.include_router(research.router, prefix="/api/v1", dependencies=protected)
     app.include_router(trade.router, prefix="/api/v1", dependencies=protected)
 
+    # Serve the built React SPA (prod single-origin) — added LAST so /api/v1/* wins. Opt-in
+    # (SKAS_SERVE_WEBAPP); local dev leaves it off and keeps using the Vite dev server.
+    if settings.serve_webapp:
+        _mount_webapp(app)
+
     return app
+
+
+def _mount_webapp(app: FastAPI) -> None:
+    """Serve web/dist as a single-page app: real files from disk, everything else →
+    index.html so client-side (React Router) deep links resolve. No-op with a clear log if
+    the build is missing. The SPA is intentionally UNAUTHENTICATED at the static layer — the
+    login gate is the JWT on /api/v1 (the app shell is not a secret; the data behind it is)."""
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    settings = get_settings()
+    # Default: <repo>/web/dist — app.py is src/skas_algo/api/app.py → parents[3] is the root.
+    dist = (Path(settings.webapp_dist) if settings.webapp_dist else (
+        Path(__file__).resolve().parents[3] / "web" / "dist"
+    )).resolve()
+    index = dist / "index.html"
+    if not index.is_file():
+        logger.warning("SKAS_SERVE_WEBAPP is on but no SPA build at %s — run `npm run build`; "
+                       "serving API only", dist)
+        return
+
+    # Built assets (hashed JS/CSS/img under /assets, plus favicon etc.) straight off disk.
+    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    async def _spa_root() -> FileResponse:
+        return FileResponse(index)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _spa_fallback(full_path: str) -> FileResponse:
+        # A real top-level file (favicon.ico, manifest, robots.txt, …) → serve it; anything
+        # else is a client-side route → hand back the shell. /api/* never reaches here (the
+        # API routers are registered first and match first).
+        candidate = (dist / full_path).resolve()
+        if dist in candidate.parents and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index)
+
+    logger.info("serving SPA from %s", dist)
 
 
 # Module-level app for `uvicorn skas_algo.api.app:app`
