@@ -103,8 +103,11 @@ WebSocket upgrades to `wss` automatically.
 
 ## Day-2 operations
 
-- **Restart:** `sudo systemctl restart skas-algo`  ·  **Logs:** `journalctl -u skas-algo -f`  ·
-  **Status:** `systemctl status skas-algo` / `curl 127.0.0.1:8080/api/v1/health`.
+- **Server control** — raw systemd, or the wrapper `scripts/skasctl.sh {start|stop|restart|status|logs|tail|health}`:
+    - **Restart:** `sudo systemctl restart skas-algo` (or `./scripts/skasctl.sh restart`)
+    - **Logs:** `journalctl -u skas-algo -f` (or `skasctl.sh logs`) · **Status/health:** `skasctl.sh status` / `skasctl.sh health`
+    - Symlink it onto PATH for a global `skas` command: `sudo ln -sf "$PWD/scripts/skasctl.sh" /usr/local/bin/skas`
+    - `restart` re-reads `.env` and re-recovers runs (real-order runs return as paper unless `SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY=true`).
 - **Update code:** `git pull && cd web && npm run build && cd .. && venv/bin/pip install -e . &&
   sudo systemctl restart skas-algo` (re-run `./scripts/deploy-vps.sh` does the same).
 - **Daily Kite re-login:** Zerodha tokens die ~06:00 IST; log Satish Kite back in each morning
