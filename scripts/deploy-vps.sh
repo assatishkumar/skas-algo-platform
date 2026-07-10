@@ -109,9 +109,11 @@ cat <<EOF
 NEXT STEPS (yours — this script never touches brokers, arming, or orders):
 
   1. Front it with Tailscale (private HTTPS, no public exposure):
-       sudo tailscale up                 # authenticate this VPS to your tailnet
-       sudo tailscale serve --bg https / http://127.0.0.1:8080
-       tailscale serve status            # shows the https://<vps>.<tailnet>.ts.net URL
+       sudo tailscale up                              # authenticate this VPS to your tailnet
+       sudo tailscale serve --bg http://127.0.0.1:8080  # tailnet HTTPS at the root path
+       tailscale serve status                         # shows the https://<vps>.<tailnet>.ts.net URL
+     (serve needs root; or `sudo tailscale set --operator=\$USER` once to drop the sudo. If it
+      errors on HTTPS certs, enable MagicDNS + HTTPS Certificates in the Tailscale admin console.)
 
   2. Open that URL on a device on your tailnet, log in with the password you just set.
 

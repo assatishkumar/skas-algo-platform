@@ -53,9 +53,13 @@ later runs it just rebuilds and restarts. Then it prints the owner-only NEXT STE
 
 ```bash
 sudo tailscale up                                  # authenticate the VPS to your tailnet
-sudo tailscale serve --bg https / http://127.0.0.1:8080
+sudo tailscale serve --bg http://127.0.0.1:8080    # serves it over tailnet HTTPS at the root path
 tailscale serve status                             # → https://<vps>.<tailnet>.ts.net
 ```
+
+`serve` needs root (or run `sudo tailscale set --operator=$USER` once, then drop the sudo). If it
+errors about HTTPS certificates, enable **MagicDNS + HTTPS Certificates** in the Tailscale admin
+console (DNS settings) and re-run. (The older `serve --bg https / <target>` syntax was removed.)
 
 Open that URL from any device on your tailnet and log in. The backend stays bound to `127.0.0.1`
 (`SKAS_API_HOST=127.0.0.1`) — never publicly exposed. The SPA + API share the origin, so the
