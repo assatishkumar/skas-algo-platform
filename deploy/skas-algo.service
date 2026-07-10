@@ -1,0 +1,32 @@
+# skas-algo backend — systemd unit (the Linux analogue of scripts/com.skas.algo.plist.template).
+#
+# @@USER@@ and @@REPO@@ are placeholders. scripts/deploy-vps.sh renders + installs this for you.
+# To do it by hand: substitute both, copy to /etc/systemd/system/skas-algo.service, then
+#   sudo systemctl daemon-reload && sudo systemctl enable --now skas-algo
+#
+# One process hosts the API, the in-process live engine, the WS feed, order/broker reconciliation,
+# the watchdog, and backups — same as on the Mac. There is only ONE backend; never run two.
+
+[Unit]
+Description=skas-algo trading backend (FastAPI + in-process live engine)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@USER@@
+WorkingDirectory=@@REPO@@
+# WorkingDirectory MUST be the repo root: SKAS_DATABASE_URL / backups resolve relative to the CWD
+# unless absolute (the SQLite footgun). The .env should still set an ABSOLUTE SKAS_DATABASE_URL.
+EnvironmentFile=@@REPO@@/.env
+# The console entrypoint starts uvicorn on api_host:api_port. Keep SKAS_DEBUG=false in .env so it
+# runs WITHOUT --reload (a reload child would orphan and hold the port + SQLite lock).
+ExecStart=@@REPO@@/venv/bin/skas-algo
+Restart=always
+RestartSec=15
+# Graceful stop: SIGINT lets uvicorn drain and the lifespan shut down cleanly.
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
