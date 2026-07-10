@@ -164,6 +164,17 @@ def _rebuild(db, run: AlgoRun, loader) -> None:
         except ValueError:
             pass
 
+    # Restore the last broker basket margin so the display holds the real number across a
+    # restart instead of reverting to the model estimate (broker margin only refreshes in
+    # market hours; the next market-open tick recomputes it). See LiveRun.export_state.
+    bm = (run.state or {}).get("broker_margin")
+    if bm is not None:
+        try:
+            live._margin = float(bm)
+            session.set_margin_override(float(bm))
+        except (TypeError, ValueError):
+            pass
+
     manager.register(live)
     if config.auto:
         manager.start_loop(run.id)

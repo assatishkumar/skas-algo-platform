@@ -1225,6 +1225,21 @@ function DeploymentTile({
                 <button onClick={refreshNow} disabled={refreshing}
                   title="Refresh now — re-price positions and act on any profit-target / stop-loss"
                   className="rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] hover:opacity-80 px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"><RefreshIcon spinning={refreshing} />Refresh</button>
+                {/* Resize lot-sets — only while FLAT (applies to the NEXT entry; margin-sized
+                    strategies refit to equity at entry, so the manual value is a fallback there). */}
+                {positions === 0 && lotSets != null && (
+                  <span className="inline-flex items-center gap-1 rounded-[10px] bg-[var(--chip)] text-[var(--chip-text)] px-1.5 py-1"
+                    title="Increase / decrease lot-sets for the next entry (only while no positions are open)">
+                    <span className="text-[var(--faint)] pl-1 pr-0.5">Lot-sets</span>
+                    <button onClick={() => act(() => api.liveSetControls(dep.run_id, { lots: Math.max(1, lotSets - 1) }))}
+                      disabled={busy || lotSets <= 1} aria-label="decrease lot-sets"
+                      className="px-1.5 rounded hover:opacity-60 disabled:opacity-30">−</button>
+                    <span className="tabular-nums font-semibold min-w-[1.5ch] text-center">{lotSets}</span>
+                    <button onClick={() => act(() => api.liveSetControls(dep.run_id, { lots: lotSets + 1 }))}
+                      disabled={busy} aria-label="increase lot-sets"
+                      className="px-1.5 rounded hover:opacity-60 disabled:opacity-30">+</button>
+                  </span>
+                )}
               </>
             )}
             {dep.status === "stopped" && (

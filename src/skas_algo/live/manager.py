@@ -763,6 +763,12 @@ class LiveRun:
             "last_decision_day": (
                 self.last_decision_day.isoformat() if self.last_decision_day else None
             ),
+            # Persist the last real broker basket margin. Broker margin is refreshed MARKET
+            # HOURS ONLY (the batman-exit footgun in _maybe_refresh_margin), and off-hours a
+            # non-restarted run just HOLDS its last in-session value — but a restart used to
+            # lose it, dropping the display to the ≈2×-inflated model estimate until 09:15 next
+            # day. Persisting + restoring it keeps the broker number across restarts (2026-07-10).
+            "broker_margin": self._margin,
         }
 
     def _persist_state(self) -> None:
