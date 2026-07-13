@@ -324,6 +324,32 @@ class CpRatioExpiryDeploy(BaseModel):
     auto: bool = True
 
 
+class IntradayStraddleDeploy(BaseModel):
+    """Deploy intraday_straddle: a daily intraday short straddle on the nearest weekly. Sell ATM
+    CE+PE at entry_time, exit at exit_time, with a fixed %-of-margin stop and a trailing stop
+    (ratchet / below_peak). Live-chain-driven → broker quote source required; no backtest."""
+
+    name: str
+    notes: str | None = None
+    underlying: str = "NIFTY"           # NIFTY or BANKNIFTY, one per deployment
+    lots: int = 1
+    strike_delta: float = 0.0           # 0 = ATM straddle; e.g. 0.6 = slight-ITM (by BS delta)
+    entry_time: str = "09:18"
+    entry_window_end: str = "15:00"
+    exit_time: str = "15:25"
+    stop_loss_pct: float = 2.0          # fixed SL, % of broker margin
+    trail_trigger_pct: float = 1.0      # every this much peak profit moves the stop
+    trail_step_pct: float = 0.5         # ...by this much (0 on either disables trailing)
+    trail_mode: str = "ratchet"         # "ratchet" | "below_peak"
+    capital: float = 1_000_000
+    refresh_seconds: int = 20
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class MomentumThetaDeploy(BaseModel):
     """Deploy momentum_theta_gainer_intra: intraday 15-min SuperTrend(7,3) + daily-pivot
     ATM weekly option seller on index underlyings (NIFTY, SENSEX). SENSEX is live-only and

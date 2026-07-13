@@ -14,6 +14,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   momentum_theta_gainer_intra: "Momentum Theta Intra (options)",
   "21_ema_momentum": "21 EMA Momentum (credit spreads)",
   call_put_ratio_expiry: "CP Ratio Expiry (options)",
+  intraday_straddle: "Intraday Straddle (options)",
   delta_neutral_monthly: "Delta Neutral Monthly (options)",
   iron_fly_monthly: "Iron Fly Monthly (options)",
   call_ratio_monthly: "Call Ratio Monthly (options)",

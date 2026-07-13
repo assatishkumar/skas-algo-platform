@@ -46,6 +46,7 @@ import type {
   Trade,
   Universe,
   CpRatioExpiryDeploy,
+  IntradayStraddleDeploy,
   DeltaNeutralDeploy,
   IronFlyDeploy,
   MomentumThetaDeploy,
@@ -215,6 +216,8 @@ export const api = {
     request<{ ironfly_adjust: boolean; note: string }>(`/live/${runId}/ironfly-adjust`, { method: "POST", body: JSON.stringify({ on }) }),
   cpRatioExpiryDeploy: (body: CpRatioExpiryDeploy) =>
     request<LiveRunSnapshot>("/trade/options/cp-ratio-expiry/deploy", { method: "POST", body: JSON.stringify(body) }),
+  intradayStraddleDeploy: (body: IntradayStraddleDeploy) =>
+    request<LiveRunSnapshot>("/trade/options/intraday-straddle/deploy", { method: "POST", body: JSON.stringify(body) }),
   momentumThetaDeploy: (body: MomentumThetaDeploy) =>
     request<LiveRunSnapshot>("/trade/options/momentum-theta/deploy", { method: "POST", body: JSON.stringify(body) }),
   deployEquityTrade: (body: EquityTradeDeploy) =>

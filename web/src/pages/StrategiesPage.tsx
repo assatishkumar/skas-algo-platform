@@ -121,6 +121,30 @@ const STRATEGIES: Rule[] = [
     links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=iorriHcOpdU" }],
   },
   {
+    id: "intraday_straddle",
+    name: "Intraday Straddle (9xx)",
+    kind: "Options",
+    bias: "Neutral intraday · theta harvest",
+    summary:
+      "A daily intraday short straddle on the nearest weekly (0DTE on expiry day): sell an ATM CE+PE at ~09:18 and exit at ~15:25. Defended by a fixed stop at a % of the broker margin plus a trailing stop that only tightens as profit grows. Deploy-only — strike selection needs the live chain, so there is no backtest (paper-first).",
+    structure: [
+      "SELL 1× ATM CE + 1× ATM PE at the strike nearest spot (or ~0.6Δ slightly-ITM legs — configurable).",
+      "One entry per day; a stopped-out day does not re-enter.",
+    ],
+    entry: [
+      "At entry_time (default 09:18 IST), once per day, within the entry window; strikes read off the LIVE chain.",
+      "Margin deployed is frozen at entry (real broker basket margin) — the stop % derives from it.",
+    ],
+    exit: [
+      "Fixed stop: −2% of broker margin (configurable).",
+      "Trailing stop: ratchet (+0.5% stop per +1% profit) OR 0.5%-below-peak — configurable.",
+      "Hard exit 15:25 — never carried.",
+    ],
+    risk:
+      "A naked short straddle has UNCAPPED tails on both sides — the stop is the only guard, and a fast trend or gap can slip through it. Intraday gamma is the risk; size small and paper-first.",
+    links: [],
+  },
+  {
     id: "momentum_theta_gainer_intra",
     name: "Momentum Theta Gainer (Intraday)",
     kind: "Options",
@@ -450,6 +474,13 @@ const META: Record<string, Meta> = {
             ["Entry", "09:20–09:27 IST"], ["Exits", "+1.1% / −1% of margin"], ["Flat by", "15:20 — always"]],
     deployNote: "Deploy-only, broker quotes required (⅓-premium strikes come off the LIVE chain). Paper-first.",
     deployCta: { label: "Deploy CP ratio expiry", to: "/trade" },
+  },
+  intraday_straddle: {
+    group: "Intraday options", biasKind: "neutral",
+    facts: [["Bias", "Neutral · intraday"], ["Underlying", "NIFTY / BANKNIFTY"], ["Structure", "ATM short straddle"],
+            ["Entry", "~09:18 (configurable)"], ["Stops", "−2% + trailing"], ["Flat by", "15:25 — always"]],
+    deployNote: "Deploy-only, broker quotes required (live-chain ATM/delta strikes). No backtest — paper-first.",
+    deployCta: { label: "Deploy Straddle", to: "/trade" },
   },
   momentum_theta_gainer_intra: {
     group: "Intraday options", biasKind: "neutral",

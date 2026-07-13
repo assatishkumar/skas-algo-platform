@@ -859,6 +859,27 @@ export interface IronFlyDeploy {
   auto: boolean;
 }
 
+export interface IntradayStraddleDeploy {
+  name: string;
+  underlying: string;
+  lots: number;
+  strike_delta: number;
+  entry_time: string;
+  entry_window_end: string;
+  exit_time: string;
+  stop_loss_pct: number;
+  trail_trigger_pct: number;
+  trail_step_pct: number;
+  trail_mode: string;
+  capital: number;
+  refresh_seconds: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  ignore_market_hours: boolean;
+  auto: boolean;
+}
+
 export interface CpRatioExpiryDeploy {
   name: string;
   underlyings: string[];

@@ -49,7 +49,7 @@ _TRADE_COLUMNS = [
 # Strategies that are only ever deployed live/paper from the Trade UI (a user-built or
 # screener-resolved position) — they have no backtest config form, so keep them out of the
 # New-backtest dropdown. ``donchian_strangle_monthly`` additionally has no backtest path at all.
-_DEPLOY_ONLY = {"custom_options", "call_put_ratio_expiry", "delta_neutral_monthly", "iron_fly_monthly", "momentum_theta_gainer_intra", "custom_equity", "donchian_strangle_monthly"}
+_DEPLOY_ONLY = {"custom_options", "call_put_ratio_expiry", "delta_neutral_monthly", "iron_fly_monthly", "momentum_theta_gainer_intra", "custom_equity", "donchian_strangle_monthly", "intraday_straddle"}
 
 
 @router.get("/strategies")
