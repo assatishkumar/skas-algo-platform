@@ -155,6 +155,18 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   broker). Net short 2 lots/side beyond the ⅓ strikes — open-ended risk, stop is the only
   guard. Deploy-only + broker quote source REQUIRED (strike selection needs live premiums;
   no backtest by design — flat-vol BS would misplace the smile-driven ⅓ strikes).
+- **intraday_straddle** (`strategies/intraday_straddle.py`, NIFTY / BANKNIFTY): a DAILY
+  intraday short straddle on the nearest weekly. Sell ATM CE+PE (or ~0.6Δ ITM via
+  `strike_delta`, which relaxes the OTM filter) at `entry_time` (default 09:18, once/day
+  `entered_day` latch), exit `exit_time` (15:25, checked FIRST — never waits on margin).
+  Two configurable stops off the FROZEN broker `margin_base` (pending → waits for the manager's
+  `set_broker_margin` push, never the model): a fixed `-stop_loss_pct` (2%) AND a trailing stop
+  that only ratchets UP (`_stop_level`) — `trail_mode="ratchet"` (each `trail_trigger_pct` of
+  PEAK profit lifts the stop `trail_step_pct`) or `"below_peak"` (peak − `trail_step_pct`);
+  trailing off when a trail pct is 0. No fixed profit target (the trail is the upside). Uncapped
+  short-straddle tails → the stop is the only guard. Deploy-only + broker source required (live
+  chain for ATM/delta); NO backtest (EOD-slice can't model intraday SL/trailing). `peak_pct`
+  persists in export_state for the trail; one entry/day (a stopped-out day doesn't re-enter).
 - **delta_neutral_monthly** (18Δ BANKNIFTY monthly strangle): entry expiry+2 TRADING days
   ~11:00 (force_entry deploy flag skips the wait); adjustment rule is the spec's EXAMPLE,
   not its prose — when |CE−PE| > 40% of (CE+PE), the CHEAP side rolls to the strike whose
