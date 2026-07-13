@@ -175,7 +175,7 @@ class LiveBroker:
             fill = Fill(order.symbol, order.side, st["filled_quantity"] or order.quantity,
                         st["average_price"], broker_order_id=broker_id)
             self._notify(AlertLevel.INFO, "Filled",
-                         f"{order.side.value} {fill.quantity} {order.symbol} @ ₹{fill.price}")
+                         f"{order.side.value} {fill.quantity} {order.symbol} @ ₹{fill.price:.2f}")
             return fill
 
         filled = int(st.get("filled_quantity") or 0)
@@ -191,7 +191,7 @@ class LiveBroker:
         if filled > 0:
             self._notify(AlertLevel.WARNING, "Partial fill",
                          f"{order.side.value} {filled}/{order.quantity} {order.symbol} "
-                         f"@ ₹{st['average_price']} — remainder cancelled")
+                         f"@ ₹{st['average_price']:.2f} — remainder cancelled")
             return Fill(order.symbol, order.side, filled, st["average_price"],
                         broker_order_id=broker_id)
         detail = st.get("status_message") or st["status"]

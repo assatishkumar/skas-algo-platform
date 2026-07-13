@@ -237,6 +237,19 @@ class Broadcaster:
                 pass
 
 
+def _fmt_recon(detail: dict) -> str:
+    """Concise 'platform vs broker' per-contract listing for the reconciliation alert."""
+    ours = detail.get("ours", {}) or {}
+    broker = detail.get("broker", {}) or {}
+    syms = sorted(set(ours) | set(broker))
+    if not syms:
+        return "  (both flat)"
+    return "\n".join(
+        f"  {ts}: platform {ours.get(ts, 0):+.0f} / broker {broker.get(ts, 0):+.0f}"
+        for ts in syms
+    )
+
+
 def _lot_sets_attr(strategy) -> str | None:
     """Name of the strategy's PER-UNDERLYING lot-set dict attribute, or None. Multi-underlying
     families size differently: momentum_theta uses ``lots`` (a dict), call_put_ratio_expiry uses
@@ -496,8 +509,10 @@ class LiveRun:
         adapter = getattr(self.quote_source, "adapter", None)
         if adapter is None or self.config.broker_account_id is None:
             return  # can't reconcile → stay pending, retry next tick (throttle NOT armed)
+        detail: dict = {}
         try:
-            problem = manager.reconcile_account_book(self.config.broker_account_id, adapter)
+            problem = manager.reconcile_account_book(
+                self.config.broker_account_id, adapter, detail)
         except Exception:  # pragma: no cover - reconciliation must never kill the loop
             logger.exception("reconciliation failed for run %s", self.run_id)
             return  # transient → stay pending, retry (throttle NOT armed)
@@ -508,13 +523,38 @@ class LiveRun:
         if problem and not self.order_error:
             self.order_error = f"book mismatch: {problem}"
             logger.error("run %s halted on reconciliation: %s", self.run_id, problem)
-            try:
-                from skas_algo.notify import Alert, AlertLevel, build_notifier
+            self._notify_recon("ERROR", f"BOOK MISMATCH: {self.config.name}",
+                               problem + "\n\nbroker vs strategy:\n" + _fmt_recon(detail))
+        elif not problem:
+            self._alert_reconciled_ok(detail, now)
 
-                build_notifier().send(Alert(
-                    f"BOOK MISMATCH: {self.config.name}", problem, AlertLevel.ERROR))
-            except Exception:  # pragma: no cover
-                pass
+    def _alert_reconciled_ok(self, detail: dict, now: datetime) -> None:
+        """Publish a 'broker book matches strategy' confirmation to Telegram. Reconciliation
+        runs hourly, so to stay useful-not-spammy we alert only when the book CHANGED since the
+        last confirmation OR once per new day (a heartbeat) — and never when both are flat."""
+        ours = detail.get("ours", {}) or {}
+        if not ours:  # flat → nothing meaningful to reconcile; silence is fine
+            return
+        sig = "|".join(f"{ts}:{q:+.0f}" for ts, q in sorted(ours.items()))
+        day = now.date()
+        if sig == getattr(self, "_last_recon_sig", None) \
+                and day == getattr(self, "_last_recon_day", None):
+            return  # unchanged book, already confirmed today → skip the hourly repeat
+        self._last_recon_sig = sig
+        self._last_recon_day = day
+        n = sum(abs(q) for q in ours.values())
+        self._notify_recon(
+            "INFO", f"Reconciled: {self.config.name}",
+            f"Broker book matches strategy — {len(ours)} contract(s), {n:.0f} qty.\n"
+            + _fmt_recon(detail))
+
+    def _notify_recon(self, level: str, title: str, body: str) -> None:
+        try:
+            from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+            build_notifier().send(Alert(title, body, getattr(AlertLevel, level)))
+        except Exception:  # pragma: no cover - alerts are best-effort
+            pass
 
     def _maybe_refresh_margin(self) -> None:
         """Throttled (~1/min) real Zerodha basket margin, built from our own legs. Falls
@@ -861,11 +901,13 @@ class LiveRunManager:
         logger.warning("REAL-ORDER broker injected for %s (account %s)",
                        config.name, config.broker_account_id)
 
-    def reconcile_account_book(self, account_id: int, adapter) -> str | None:
+    def reconcile_account_book(self, account_id: int, adapter, details: dict | None = None) -> str | None:
         """Compare the broker's NET positions against the AGGREGATE book of all LIVE-mode
         real-order runs on this account (the broker nets per contract across runs — a
         per-run comparison would false-alarm whenever two strategies share a strike).
-        Returns a human mismatch description, or None when consistent."""
+        Returns a human mismatch description, or None when consistent. If ``details`` is
+        passed it's populated with ``{"ours": {...}, "broker": {...}}`` (per-tradingsymbol net
+        qty) for the reconciliation Telegram alert."""
         from skas_algo.brokers.live_broker import LiveBroker
         from skas_algo.engine.options.instrument import parse
 
@@ -889,6 +931,9 @@ class LiveRunManager:
                           for p in adapter.positions()}
         except Exception as exc:  # pragma: no cover - can't reconcile → say so
             return f"positions fetch failed: {exc}"
+        if details is not None:
+            details["ours"] = dict(ours)
+            details["broker"] = {ts: q for ts, q in broker_net.items() if abs(q) > 1e-6}
         problems = []
         for ts, qty in ours.items():
             b = broker_net.get(ts, 0.0)

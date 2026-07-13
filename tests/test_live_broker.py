@@ -373,11 +373,15 @@ def test_reconcile_gate_pending_lifecycle(monkeypatch):
             config=SimpleNamespace(broker_account_id=1, name="t"),
             run_id=1, order_error=None, reconcile_pending=pending,
             _last_reconcile_at=None,
+            # the alert helpers are exercised by their own test; stub them here (this test is
+            # about the pending/halt lifecycle, not Telegram).
+            _alert_reconciled_ok=lambda detail, now: None,
+            _notify_recon=lambda level, title, body: None,
         )
 
     outcomes = {"problem": None}
     monkeypatch.setattr(manager, "reconcile_account_book",
-                        lambda acc, adapter: outcomes["problem"])
+                        lambda acc, adapter, details=None: outcomes["problem"])
 
     # Clean book → pending lifted, throttle armed, no halt.
     s = make(adapter=object())
@@ -399,7 +403,7 @@ def test_reconcile_gate_pending_lifecycle(monkeypatch):
     # Paper broker → the whole method is a no-op (no real book to reconcile).
     called = {"n": 0}
     monkeypatch.setattr(manager, "reconcile_account_book",
-                        lambda acc, adapter: called.__setitem__("n", called["n"] + 1))
+                        lambda acc, adapter, details=None: called.__setitem__("n", called["n"] + 1))
     s = make(adapter=object(), pending=False, broker="PAPER")
     LiveRun._maybe_reconcile(s)
     assert called["n"] == 0
@@ -414,3 +418,33 @@ def test_injected_livebroker_run_starts_reconcile_pending():
     paper = "PAPER-SENTINEL"
     assert isinstance(injected, LiveBroker)          # → reconcile_pending True at init
     assert not isinstance(paper, LiveBroker)         # → reconcile_pending False at init
+
+
+def test_reconcile_ok_alert_throttles():
+    """The 'broker book matches strategy' Telegram confirmation fires on the first/changed book
+    and once per new day (a heartbeat), but NOT on the hourly repeat of an unchanged book, and
+    never when the book is flat."""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from skas_algo.live.manager import LiveRun
+
+    sent = []
+    s = SimpleNamespace(
+        config=SimpleNamespace(name="t"),
+        _notify_recon=lambda level, title, body: sent.append((level, title, body)),
+    )
+    book = {"ours": {"X": 195}, "broker": {"X": 195}}
+    d1 = datetime(2026, 7, 13, 10, 0)
+
+    LiveRun._alert_reconciled_ok(s, {"ours": {}}, d1)   # flat → silence
+    assert sent == []
+    LiveRun._alert_reconciled_ok(s, book, d1)           # first confirmation
+    assert len(sent) == 1 and sent[-1][0] == "INFO"
+    LiveRun._alert_reconciled_ok(s, book, d1)           # same book, same day → throttled
+    assert len(sent) == 1
+    LiveRun._alert_reconciled_ok(s, book, datetime(2026, 7, 14, 10, 0))  # new day heartbeat
+    assert len(sent) == 2
+    LiveRun._alert_reconciled_ok(s, {"ours": {"X": 390}, "broker": {"X": 390}},
+                                 datetime(2026, 7, 14, 11, 0))            # book changed
+    assert len(sent) == 3
