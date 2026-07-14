@@ -35,13 +35,16 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 
 from skas_algo.engine.options import black_scholes as bs
-from skas_algo.engine.options.contract_specs import lot_size_for
+from skas_algo.engine.options.contract_specs import lot_size_for, selection_step
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
 from ._options_common import bad_close
 
-_STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": 50, "SENSEX": 100}
+# Grid used to SNAP the iron-fly wing/breakeven-hedge strikes (round((K±credit)/step)*step). NIFTY
+# routes through selection_step → 100 (owner rule: NIFTY trades round 100s only), so the snapped
+# wings land on 100-multiples present in the 100-only-filtered chain (the lookup finds them).
+_STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": selection_step("NIFTY", 50), "SENSEX": 100}
 _EXPIRY_CUTOFF = time(15, 30)
 
 

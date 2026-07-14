@@ -89,6 +89,44 @@ def known_underlyings() -> list[str]:
     return sorted(_LOT_SIZES)
 
 
+# --------------------------------------------------------- strike selection granularity
+# The strike step the platform will SELECT for an underlying — which may be COARSER than the
+# exchange's true LISTING step. NIFTY lists 50-point strikes, but the owner's rule (2026-07) is that
+# automated strategies trade only round 100-multiples for NIFTY (better liquidity / round strikes;
+# matches ``ema21_momentum``'s long-standing "50s not allowed"). It is enforced CENTRALLY at the
+# chain-candidate choke points (OptionChainView / LiveChainView / LiveOptionsMarketView.live_chain)
+# and the arithmetic ATM/wing steps (delta_neutral / momentum_theta), so no automated NIFTY strike
+# can be a 50 — in backtest, paper AND live alike (parity). BANKNIFTY/SENSEX already list 100s
+# (no-op). The MANUAL Option builder is deliberately NOT bound by this (it uses the data routes, a
+# separate path). Table is extensible — add an underlying to coarsen its selection.
+_SELECTION_STEP: dict[str, int] = {"NIFTY": 100}
+
+
+def selection_step(underlying: str, listing_step: int | None = None) -> int | None:
+    """Strike granularity to SELECT for ``underlying`` (100 for NIFTY), else ``listing_step``."""
+    return _SELECTION_STEP.get(underlying.upper(), listing_step)
+
+
+def strike_allowed(underlying: str, strike: float) -> bool:
+    """True unless ``underlying`` has a selection step and ``strike`` isn't a multiple of it."""
+    step = _SELECTION_STEP.get(underlying.upper())
+    return step is None or round(strike) % step == 0
+
+
+def eligible_strikes(underlying: str, strikes) -> list[float]:
+    """Filter ``strikes`` to the underlying's selection-step multiples (NIFTY → 100s only).
+
+    Identity for underlyings without a selection step. **Safety net:** if filtering would drop every
+    strike (a chain somehow carrying no 100-multiples), returns the original list unchanged so a
+    strategy never faces an empty chain and silently stops trading.
+    """
+    step = _SELECTION_STEP.get(underlying.upper())
+    if step is None:
+        return list(strikes)
+    keep = [s for s in strikes if round(s) % step == 0]
+    return keep or list(strikes)
+
+
 # --------------------------------------------------------------- expiry calendar
 # Expiry WEEKDAY history per underlying (Mon=0 … Sun=6; None = product discontinued).
 # Monthly expiry = the last such weekday of the month. User-confirmed 2026-06:

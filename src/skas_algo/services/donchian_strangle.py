@@ -24,7 +24,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from skas_algo.engine.options.contract_specs import expected_monthly_expiry
+from skas_algo.engine.options.contract_specs import eligible_strikes, expected_monthly_expiry
 from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.engine.options.realized_vol import realized_vol_series
 from skas_algo.services.fibret import spread_pct  # reuse the bid-ask liquidity gauge
@@ -384,7 +384,9 @@ def portfolio_panel(
         ce_target = nifty_spot * (1 + params.hedge_otm_pct / 100.0)
         pe_target = nifty_spot * (1 - params.hedge_otm_pct / 100.0)
         rows = (nifty_chain or {}).get("rows") or []
-        strikes = [float(r["strike"]) for r in rows]
+        # NIFTY hedge trades round 100-strikes only (owner rule): filter candidates before picking,
+        # so the hedge legs land on 100-multiples. `_leg` still finds them in the full `rows`.
+        strikes = eligible_strikes("NIFTY", [float(r["strike"]) for r in rows])
         ce_strike = pick_strike(strikes, ce_target, "CE", round_out=True)
         pe_strike = pick_strike(strikes, pe_target, "PE", round_out=True)
         ce = _leg(rows, ce_strike, "CE") or {}

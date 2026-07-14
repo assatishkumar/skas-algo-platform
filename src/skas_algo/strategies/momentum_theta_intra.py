@@ -34,14 +34,16 @@ from datetime import date, datetime, time, timedelta
 import pandas as pd
 
 from skas_algo.engine.indicators.supertrend import _supertrend_bars
-from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size_for
+from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size_for, selection_step
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
 from ._options_common import bad_close
 
-# ATM strike rounding step per index.
-_STRIKE_STEP = {"NIFTY": 50, "SENSEX": 100, "BANKNIFTY": 100}
+# ATM rounding step per index (strike = round(spot/step)*step). This strategy computes the ATM
+# arithmetically and never enumerates a chain, so this is the ONLY place NIFTY's step is enforced.
+# NIFTY routes through selection_step → 100 (owner rule: NIFTY trades round 100s only).
+_STRIKE_STEP = {"NIFTY": selection_step("NIFTY", 50), "SENSEX": 100, "BANKNIFTY": 100}
 _MARKET_OPEN = time(9, 15)
 
 

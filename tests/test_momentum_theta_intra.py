@@ -126,7 +126,7 @@ def test_flip_exits_and_only_later_candle_reenters():
     for _ in range(8):
         cur = cur + timedelta(minutes=15)
         px -= 120
-        atm = round(px / 50) * 50
+        atm = round(px / 100) * 100  # NIFTY trades round 100-strikes (owner rule)
         ctx.prices[f"NIFTY|2026-07-07|{int(atm)}|CE"] = 150.0
         for s in tick(st, ctx, cur, px):
             (flip_sigs if s.reason == "st_flip" else reenter_sigs).append(s)

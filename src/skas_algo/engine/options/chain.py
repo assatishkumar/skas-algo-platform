@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
+from .contract_specs import strike_allowed
 from .instrument import make
 
 ChainProvider = Callable[[str, date], "object"]   # -> pandas DataFrame
@@ -86,7 +87,12 @@ class OptionChainView:
                 settle=float(r.get("settle_price") or r["close"] or 0.0),
                 oi=int(r.get("open_interest") or 0), symbol=inst.symbol,
             ))
-        return rows
+        # Enforce the platform's strike-selection granularity (NIFTY → 100-multiples only) at this
+        # single candidate choke point, so strikes()/atm_strike() and every strategy that picks off
+        # this chain can never select a NIFTY 50-strike. No-op for other underlyings; keeps the full
+        # set if the rule would empty the chain (safety — see contract_specs.eligible_strikes).
+        allowed = [row for row in rows if strike_allowed(underlying.upper(), row.strike)]
+        return allowed or rows
 
     def strikes(self, underlying: str, on_date: date, expiry: date) -> list[float]:
         return sorted({row.strike for row in self.chain(underlying, on_date, expiry)})

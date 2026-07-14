@@ -17,7 +17,32 @@ import time
 from datetime import date, datetime, timedelta
 
 from skas_algo.db.enums import OrderSide
+from skas_algo.engine.options.contract_specs import eligible_strikes
 from skas_algo.engine.options.instrument import is_option_symbol, parse
+
+
+def _coarsen_chain(underlying: str, chain: dict) -> dict:
+    """Restrict a live-chain dict (``{rows, atm_strike, spot, lot_size}``) to the platform's
+    selection-step strikes — NIFTY → 100-multiples only (owner rule). This is the Path-B choke
+    point: the four deploy-only intraday strategies pick strikes off ``ctx.market.live_chain(...)``
+    (not the OptionChainView), so without this they'd still see 50s. Returns a SHALLOW COPY (never
+    mutates the cached adapter dict). ``atm_strike`` is RECOMPUTED to the nearest surviving strike —
+    the adapter precomputes it over 50s and ``call_put_ratio_expiry`` reads ``chain["atm_strike"]``
+    then does ``rows.get(atm)``; without the recompute the ATM stays a now-gone 50 → the lookup
+    returns None → the strategy silently no-ops. No-op for underlyings without a selection rule."""
+    rows = chain.get("rows") or []
+    strikes = [float(r["strike"]) for r in rows if r.get("strike") is not None]
+    keep = set(eligible_strikes(underlying, strikes))
+    if len(keep) == len(strikes):
+        return chain  # nothing dropped (non-NIFTY, or the chain is already all 100s)
+    new_rows = [r for r in rows if float(r["strike"]) in keep]
+    out = dict(chain)
+    out["rows"] = new_rows
+    spot = chain.get("spot")
+    if spot is not None and new_rows:
+        ks = [float(r["strike"]) for r in new_rows]
+        out["atm_strike"] = min(ks, key=lambda k: abs(k - float(spot)))
+    return out
 
 
 class LiveOptionsMarketView:
@@ -68,6 +93,7 @@ class LiveOptionsMarketView:
         except Exception:  # pragma: no cover - network hiccup → caller falls back
             return None
         if chain is not None:
+            chain = _coarsen_chain(underlying, chain)  # NIFTY → 100-strikes only (owner rule)
             self._chain_cache[key] = (chain, time.monotonic())
         return chain
 

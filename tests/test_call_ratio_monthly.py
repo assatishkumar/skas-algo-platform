@@ -420,8 +420,9 @@ def test_tail_hedge_put_side_only_on_batman():
 
 
 def test_tail_hedge_snaps_to_last_listed_strike():
-    """A tail beyond the listed chain (offset 6000 → 27000 > max 25950) snaps to the
-    farthest listed strike rather than skipping the month."""
+    """A tail beyond the listed chain (offset 6000 → 27000 > the eligible max) snaps to the
+    farthest ELIGIBLE strike rather than skipping the month. NIFTY trades round 100s only (owner
+    rule), so the farthest strike is 25900 (the listed 25950 is filtered out), not 25950."""
     strat = CallRatioMonthlyStrategy(
         universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
         tail_hedge_offset=6000,
@@ -429,7 +430,7 @@ def test_tail_hedge_snaps_to_last_listed_strike():
     result = _run(strat)
     buys = [t for t in result.transactions if t["action"] == "BUY"]
     strikes = sorted(int(t["ticker"].split("|")[2]) for t in buys)
-    assert strikes == [21300, 22600, 25950], strikes
+    assert strikes == [21300, 22600, 25900], strikes
 
 
 def test_batman_defaults_to_half_put_tail():

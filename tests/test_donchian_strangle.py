@@ -188,7 +188,9 @@ def test_portfolio_panel_hedge_and_stop():
     assert panel["portfolio_sl_amount"] == 40_000      # 2% of notional
     h = panel["hedge"]
     assert h["nifty_lots"] == 2                          # round(2e6 / (25000×50))
-    assert h["ce_strike"] == 26150 and h["pe_strike"] == 23850  # ~4.5% OTM, rounded out
+    # ~4.5% OTM, rounded out to the nearest ELIGIBLE strike — NIFTY trades round 100s only (owner
+    # rule), so the 50-step targets (26125/23875) snap to 26200/23800, not the listed 26150/23850.
+    assert h["ce_strike"] == 26200 and h["pe_strike"] == 23800
 
 
 def test_strike_step():

@@ -13,6 +13,7 @@ import time as _time
 from datetime import date, datetime
 
 from .chain import ChainRow, OptionChainView
+from .contract_specs import strike_allowed
 from .instrument import make
 
 
@@ -106,7 +107,11 @@ class LiveChainView:
                            lot_overrides=self._lot_overrides).symbol
                 out.append(ChainRow(self._u, expiry, strike, right, float(close), float(close),
                                     int(leg.get("oi") or 0), sym))
-        return out
+        # Coarsen NIFTY candidates to 100-multiples (owner rule) at this live choke point too, so
+        # LIVE selection matches the cached/backtest path (parity). No-op for other underlyings;
+        # falls back to the full set if the rule would empty the chain.
+        allowed = [row for row in out if strike_allowed(self._u, row.strike)]
+        return allowed or out
 
     def strikes(self, underlying: str, on_date: date, expiry: date) -> list[float]:
         return sorted({row.strike for row in self.chain(underlying, on_date, expiry)})

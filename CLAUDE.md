@@ -86,6 +86,17 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 
 ## 8. Conventions
 - New strategies onboard via `strategies/registry.py`, **not** engine edits.
+- **NIFTY strikes = 100-multiples only** (owner rule, 2026-07): NIFTY lists 50s but automated
+  strategies must never SELECT one. Enforced centrally via `contract_specs.selection_step` /
+  `eligible_strikes` (`_SELECTION_STEP={"NIFTY":100}`, extensible) at THREE candidate choke points —
+  `OptionChainView.chain()` (cached/backtest), `LiveChainView._build_live_chain()` (live-adapter),
+  and `LiveOptionsMarketView.live_chain()` (Path B — the deploy-only intraday strategies read
+  `ctx.market.live_chain()`, NOT the chain view; it also RECOMPUTES `atm_strike` to the nearest
+  surviving strike or `call_put_ratio_expiry`'s `rows.get(atm)` no-ops) — plus the two computed-step
+  strategies route `_STRIKE_STEP["NIFTY"]` through `selection_step` (→100) and the donchian NIFTY
+  hedge filters via `eligible_strikes`. Same filter on backtest + live keeps parity. The MANUAL
+  Option builder (`custom_options`, data-route chain) is deliberately UNFILTERED. `ema21_momentum`
+  predates this (its own `strike_step=100`). Coverage: `tests/test_nifty_strike_rule.py`.
 - Feature branches; `main` is default. Commit/push only when asked.
 - ruff + black + mypy, line-length 100. `pytest` runs with coverage (see `pyproject.toml`).
 - Active frontier: the **Donchian basket strangle** (`donchian_strangle_monthly`) — note it has **no
