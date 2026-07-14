@@ -565,11 +565,19 @@ class LiveSession:
             return None
 
     def _enrich_greeks(self, positions: list[dict]) -> tuple[float | None, float | None]:
-        """Attach per-leg IV/delta to option positions and return (net_delta, net_iv).
+        """Attach per-leg IV + full greeks to option positions and return (net_delta, net_iv).
 
         Greeks are backed out of the live mark (LTP) using the live index spot and the
         contract's days-to-expiry — the same Black-Scholes inversion Sensibull uses (Kite
         exposes no greeks field). No-op for equity runs (no index spot) → returns (None,None).
+
+        Each leg carries **per-share, position-signed** greeks (the convention the detail UI
+        binds to): ``delta``/``gamma``/``theta``/``vega`` are ``direction × raw`` so a SHORT
+        leg reads Θ positive (decay earned) and Γ/Vega negative (short gamma/vega), a short
+        put's Δ positive and a short call's Δ negative. Θ is per-CALENDAR-DAY (raw ÷365) and
+        Vega is per-1%-IV (raw ÷100) so the tiles read in the units the labels promise. The UI
+        derives every net (and Δ-cash = netΔ×spot) by summing the visible per-share×units — the
+        only value stored/returned here is ``net_delta`` (the tile chip) + weighted ``net_iv``.
         """
         market = self.market
         if not hasattr(market, "index_spot"):
@@ -594,11 +602,16 @@ class LiveSession:
             iv = bs.implied_vol(ltp, spot, inst.strike, t, r, inst.right)
             if iv is None:
                 continue
+            dr = p["direction"]
             d = bs.delta(spot, inst.strike, t, r, iv, inst.right)
-            pos_delta = p["direction"] * d * p["units"]
+            pos_delta = dr * d * p["units"]
             p["iv"] = iv
-            p["delta"] = d
+            p["delta"] = dr * d  # per-share, position-signed (short-call −, short-put +)
             p["pos_delta"] = pos_delta
+            # Position-signed per-share Γ (short → −), Θ/day (short → +), Vega/1%-IV (short → −).
+            p["gamma"] = dr * bs.gamma(spot, inst.strike, t, r, iv)
+            p["theta"] = dr * bs.theta(spot, inst.strike, t, r, iv, inst.right) / 365.0
+            p["vega"] = dr * bs.vega(spot, inst.strike, t, r, iv) / 100.0
             net_delta += pos_delta
             iv_num += iv * p["units"]
             iv_den += p["units"]

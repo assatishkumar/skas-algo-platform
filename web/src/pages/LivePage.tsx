@@ -10,6 +10,12 @@ import LiveCyclePanel from "../components/LiveCyclePanel";
 import LivePnlSummary from "../components/LivePnlSummary";
 import LiveEquityTrades from "../components/LiveEquityTrades";
 import OptionMetricsPanel from "../components/OptionMetricsPanel";
+// Redesigned options deployment-detail (design handoff): grouped KPI band, exit callout,
+// full-greeks positions table, and a 3-panel history — for single-underlying option books.
+import OptionKpiBand from "../components/OptionKpiBand";
+import ExitCriteriaCallout from "../components/ExitCriteriaCallout";
+import PositionsGreeksTable from "../components/PositionsGreeksTable";
+import GreeksHistoryCard from "../components/GreeksHistoryCard";
 import { formatInr } from "../lib/format";
 import { isOptionsStrategy } from "../lib/params";
 import { LIVE_CATEGORIES, liveCategoryOf } from "../lib/strategyMeta";
@@ -619,6 +625,10 @@ function RunCard({
   // A donchian basket shows ONE combined per-name table (DonchianBasketPanel) instead of the raw
   // per-leg positions table — the basket view clubs CE+PE and carries the same leg economics.
   const isDonchian = run.strategy_id === "donchian_strangle_monthly";
+  // The redesigned deployment detail (KPI band + greeks table + payoff + history) is for a
+  // SINGLE-underlying option book — every options strategy except the multi-underlying donchian
+  // basket, which keeps its dedicated basket monitor. Equity keeps the plain positions table.
+  const useNewOptionDetail = isOptions && !isDonchian;
   // Sortable positions table — click a header to sort by that column.
   type PosKey = "symbol" | "entry_date" | "units" | "avg_price" | "ltp" | "pos_delta" | "iv" | "unrealized_pnl";
   // Options runs default to strike order (Symbol asc); equity to biggest P&L first.
@@ -679,6 +689,27 @@ function RunCard({
           </button>
         </div>
       )}
+      {useNewOptionDetail ? (
+        /* Redesigned single-underlying option book (design handoff): grouped KPI band, exit
+           callout, full-greeks positions table (per-share / per-position), payoff + breakevens,
+           3-panel history. Cycle P&L (LiveCyclePanel) + Trades (LiveTradesPanel) retained. */
+        <>
+          <OptionKpiBand run={run} version={version} />
+          <ExitCriteriaCallout run={run} />
+          {run.positions?.length ? (
+            <PositionsGreeksTable run={run} />
+          ) : (
+            <div className="text-[var(--muted)] text-sm mt-3">No open positions.</div>
+          )}
+          {run.positions?.length ? (
+            <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
+          ) : null}
+          <GreeksHistoryCard run={run} />
+          <LiveCyclePanel runId={run.run_id} version={version} />
+          <LiveTradesPanel runId={run.run_id} version={version} />
+        </>
+      ) : (
+        <>
       {/* Layered P&L (prior cycles · this cycle realized · this cycle unrealized · overall) so the
           realized-vs-unrealized split is unambiguous. Options only (cycle reconstruction). */}
       {isOptions && <LivePnlSummary runId={run.run_id} version={version} positions={run.positions ?? []} />}
@@ -790,6 +821,8 @@ function RunCard({
         <LiveTradesPanel runId={run.run_id} version={version} />
       ) : (
         <LiveEquityTrades runId={run.run_id} version={version} />
+      )}
+        </>
       )}
 
       {!stopped && (

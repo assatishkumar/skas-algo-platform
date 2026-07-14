@@ -135,9 +135,21 @@ def test_live_snapshot_includes_greeks():
     sess.run_decision(datetime(2026, 1, 5, 9, 50))
     sess.update_quotes({leg["symbol"]: leg["entry"] for leg in strat.legs})
     snap = sess.snapshot()
-    # Net greeks present, and every (priceable) leg carries an IV + delta.
+    # Net greeks present, and every (priceable) leg carries an IV + the full greek set.
     assert snap["net_delta"] is not None and snap["net_iv"] is not None
-    assert all("iv" in p and "delta" in p and "pos_delta" in p for p in snap["positions"])
+    assert all(
+        all(k in p for k in ("iv", "delta", "pos_delta", "gamma", "theta", "vega"))
+        for p in snap["positions"]
+    )
+    # Position-signed greeks: Γ/Vega carry the leg's direction (long +, short −); Θ is opposite
+    # (a long option bleeds decay, a short one earns it) → Γ·dir≥0, Vega·dir≥0, Θ·dir≤0.
+    priced = [p for p in snap["positions"] if p.get("gamma") is not None]
+    assert priced and all(
+        p["gamma"] * p["direction"] >= 0
+        and p["vega"] * p["direction"] >= 0
+        and p["theta"] * p["direction"] <= 0
+        for p in priced
+    )
 
 
 def test_live_snapshot_includes_target_stop_and_realized():

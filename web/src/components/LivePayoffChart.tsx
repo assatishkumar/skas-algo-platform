@@ -3,6 +3,7 @@ import {
   Area,
   ComposedChart,
   Line,
+  ReferenceDot,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -10,11 +11,30 @@ import {
   YAxis,
 } from "recharts";
 import { formatInr } from "../lib/format";
-import { buildLivePayoff, type LiveLeg } from "../lib/payoff";
+import { buildLivePayoff, computeMetrics, type LiveLeg } from "../lib/payoff";
 import type { LivePosition } from "../types";
 
 const CE_COLOR = "#8b5cf6"; // violet — CE strikes
 const PE_COLOR = "#f59e0b"; // amber — PE strikes
+const BE_COLOR = "var(--accent-deep)"; // breakeven markers
+
+/** Breakeven pill dropped into the lower chart region, connected to its ringed zero-crossing dot by
+ *  a dashed stem — recharts uses a normal SVG viewBox (no preserveAspectRatio distortion) so SVG
+ *  text is safe here. viewBox is the reference LINE's box ({x, y=top, height}). */
+function BeLabel({ viewBox, text }: { viewBox?: { x: number; y: number; height: number }; text: string }) {
+  if (!viewBox) return null;
+  const { x, y, height } = viewBox;
+  const py = y + height * 0.66; // pill in the lower third, clear of the zero-line curve
+  const w = text.length * 6.2 + 12;
+  return (
+    <g style={{ pointerEvents: "none" }}>
+      {/* short callout stem up from the pill (a full-height line would read as a gridline) */}
+      <line x1={x} y1={py - 24} x2={x} y2={py} stroke={BE_COLOR} strokeWidth={1} strokeDasharray="3 3" opacity={0.8} />
+      <rect x={x - w / 2} y={py} width={w} height={17} rx={5} fill="var(--card)" stroke={BE_COLOR} strokeWidth={1} />
+      <text x={x} y={py + 12} textAnchor="middle" fontSize={10} fontWeight={700} fill={BE_COLOR}>{text}</text>
+    </g>
+  );
+}
 
 /** Vertical strike label rendered along its reference line, reading bottom→top so several close
  *  strikes stay legible without overlapping. A light halo keeps it readable over the P&L fill. */
@@ -58,7 +78,7 @@ export default function LivePayoffChart({
   spotLabel?: string; // label on the vertical spot line
 }) {
   const [zoomIdx, setZoomIdx] = useState(0);
-  const pf = useMemo(() => {
+  const { legs, expiry } = useMemo(() => {
     const legs: LiveLeg[] = [];
     let expiry = "";
     for (const p of positions) {
@@ -74,9 +94,17 @@ export default function LivePayoffChart({
         ltp: p.ltp,
       });
     }
-    if (!legs.length || !spot || !expiry) return null;
-    return buildLivePayoff(legs, spot, expiry, asOf, ZOOMS[zoomIdx]);
-  }, [positions, spot, asOf, zoomIdx]);
+    return { legs, expiry };
+  }, [positions]);
+  const pf = useMemo(
+    () => (legs.length && spot && expiry ? buildLivePayoff(legs, spot, expiry, asOf, ZOOMS[zoomIdx]) : null),
+    [legs, spot, expiry, asOf, zoomIdx],
+  );
+  // Breakevens = zero-crossings of the expiry payoff; mark the ones inside the visible x-window.
+  const bes = useMemo(
+    () => (legs.length && spot && expiry ? computeMetrics(legs, spot, expiry, asOf)?.breakevens ?? [] : []),
+    [legs, spot, expiry, asOf],
+  );
 
   // Unique CE/PE strikes to mark on the chart (a strangle → one CE + one PE line; dedup exact dupes).
   const strikes = useMemo(() => {
@@ -187,6 +215,20 @@ export default function LivePayoffChart({
             fill="url(#livePayoff)" name="expiry" />
           <Line type="monotone" dataKey="now" stroke="#60a5fa" strokeWidth={1.5}
             strokeDasharray="4 3" dot={false} name="now" />
+          {/* Breakevens: a dashed stem + pill (BeLabel via the ReferenceLine) and a ringed dot on the
+              zero line. Only those within the visible x-window are shown (zoom can crop them out). */}
+          {bes
+            .filter((be) => !pf.data.length || (be >= pf.data[0].spot && be <= pf.data[pf.data.length - 1].spot))
+            .map((be) => (
+              <ReferenceLine key={`be-${be}`} x={be} stroke="transparent"
+                label={<BeLabel text={`BE ${Math.round(be).toLocaleString("en-IN")}`} />} />
+            ))}
+          {bes
+            .filter((be) => !pf.data.length || (be >= pf.data[0].spot && be <= pf.data[pf.data.length - 1].spot))
+            .map((be) => (
+              <ReferenceDot key={`bed-${be}`} x={be} y={0} r={4} fill={BE_COLOR}
+                stroke="var(--card)" strokeWidth={2} isFront />
+            ))}
         </ComposedChart>
       </ResponsiveContainer>
     </div>

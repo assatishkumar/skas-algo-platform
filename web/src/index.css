@@ -84,6 +84,8 @@ input[type="number"] {
   --ft: #0d6b4f; --golive: #13a05a;
   --ok-bg: #e6f6ef; --ok-text: #0f9d63; --warn-bg: #fdf3df; --warn-text: #b07d10;
   --opt-bg: #efebfd; --opt-text: #6a4fd0; --atm: #f3ece1;
+  /* Deployment-detail redesign (design handoff): payoff / breakeven-bar area fills. */
+  --pos-fill: rgba(15,157,99,.14); --neg-fill: rgba(217,84,74,.12);
   --track: #edf1f0; --ghost: #ffffff; --overlay: rgba(15,30,27,.42);
   /* Brokers redesign (design handoff): focus/armed rings + deep danger. */
   --accent-ring: rgba(18,179,164,.16); --danger-ring: rgba(217,84,74,.12); --danger-deep: #b23d34;
@@ -100,6 +102,7 @@ input[type="number"] {
   --ft: #12916b; --golive: #16b364;
   --ok-bg: rgba(52,211,153,.16); --ok-text: #34d399; --warn-bg: rgba(240,189,94,.16); --warn-text: #f0bd5e;
   --opt-bg: rgba(139,108,240,.20); --opt-text: #b39cf5; --atm: #26352b;
+  --pos-fill: rgba(52,211,153,.18); --neg-fill: rgba(240,118,106,.16);
   --track: #1c322e; --ghost: #142926; --overlay: rgba(0,0,0,.58);
   --accent-ring: rgba(21,194,178,.22); --danger-ring: rgba(240,118,106,.18); --danger-deep: #f0766a;
   --doc: #b39cf5; --doc-bg: rgba(139,108,240,.18); --doc-border: #3a3466; --doc-ring: rgba(139,108,240,.28);

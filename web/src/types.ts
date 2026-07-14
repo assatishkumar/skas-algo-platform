@@ -407,9 +407,14 @@ export interface LivePosition {
   unrealized_pnl: number;
   entry_date?: string | null; // earliest lot's open date (YYYY-MM-DD)
   // Live greeks (options only; derived from live LTP + index spot + DTE).
+  // δ/γ/θ/vega are PER-SHARE, POSITION-SIGNED (short leg → Θ+, Γ/Vega−; short-put Δ+, short-call Δ−).
+  // Θ is per-calendar-day, Vega per-1%-IV. Multiply by `units` for per-position values.
   iv?: number | null; // implied vol (decimal, e.g. 0.14)
-  delta?: number | null; // per-contract delta (signed by right)
-  pos_delta?: number | null; // position delta = direction · delta · units
+  delta?: number | null; // per-share, position-signed delta
+  pos_delta?: number | null; // position delta = direction · delta_raw · units (= delta · units)
+  gamma?: number | null; // per-share, position-signed gamma
+  theta?: number | null; // per-share, position-signed theta (per calendar day)
+  vega?: number | null; // per-share, position-signed vega (per 1% IV)
 }
 
 export interface GreeksHistoryPoint {
