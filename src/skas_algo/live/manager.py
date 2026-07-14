@@ -37,6 +37,11 @@ from .quotes import IST, QuoteSource, is_broker_source, is_market_open, warmup_h
 logger = logging.getLogger("skas_algo.live")
 
 
+class ReconcileUnavailable(Exception):
+    """Raised when the broker book can't be READ (expired token / API blip) — distinct from a
+    genuine book mismatch. The caller treats it as transient (retry next tick), NEVER a halt."""
+
+
 # Deploy/backtest bookkeeping that lives in a run's persisted params but is NOT a strategy
 # constructor arg (universe/capital are passed explicitly). Stripped before building a strategy.
 _BOOKKEEPING_PARAM_KEYS = {
@@ -501,6 +506,13 @@ class LiveRun:
 
         if not isinstance(getattr(self.session, "broker", None), LiveBroker):
             return
+        # Reconciliation needs a LIVE, fetchable broker book — only meaningful during market hours.
+        # Off-hours the Kite token is routinely expired (Kite kills it each morning), and running it
+        # then only produced false "BOOK MISMATCH" halts (the ~4:50 AM alarm). Decisions are
+        # market-hours-only anyway, and a reconcile_pending run reconciles at the first market-hours
+        # tick before its first decision, so overnight manual trades are still caught.
+        if not is_market_open():
+            return
         now = datetime.now(IST)
         last = getattr(self, "_last_reconcile_at", None)
         throttled = last is not None and (now - last).total_seconds() < 3600
@@ -513,6 +525,11 @@ class LiveRun:
         try:
             problem = manager.reconcile_account_book(
                 self.config.broker_account_id, adapter, detail)
+        except ReconcileUnavailable as exc:
+            # Broker book temporarily UNREADABLE (expired token / API blip) — NOT a mismatch. Stay
+            # pending (throttle NOT armed) and retry next tick; never halt on a failed read.
+            logger.warning("run %s: broker book unreadable, skip reconcile: %s", self.run_id, exc)
+            return
         except Exception:  # pragma: no cover - reconciliation must never kill the loop
             logger.exception("reconciliation failed for run %s", self.run_id)
             return  # transient → stay pending, retry (throttle NOT armed)
@@ -929,8 +946,11 @@ class LiveRunManager:
         try:
             broker_net = {p["tradingsymbol"]: float(p.get("quantity") or 0)
                           for p in adapter.positions()}
-        except Exception as exc:  # pragma: no cover - can't reconcile → say so
-            return f"positions fetch failed: {exc}"
+        except Exception as exc:
+            # Couldn't READ the broker book (expired overnight Kite token / API blip). This is NOT a
+            # mismatch — raise a distinct transient signal so the caller retries instead of HALTING
+            # the run on a phantom mismatch (the ~4:50 AM false-alarm bug, 2026-07).
+            raise ReconcileUnavailable(f"positions fetch failed: {exc}") from exc
         if details is not None:
             details["ours"] = dict(ours)
             details["broker"] = {ts: q for ts, q in broker_net.items() if abs(q) > 1e-6}

@@ -31,6 +31,11 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   acknowledges (POST /live/{id}/ack-order-error; banner + tile chip). Reconciliation compares the
   broker's NET book against the AGGREGATE of all live-order runs on the account (broker nets per
   contract across runs; manual trades in the same account will trip it — dedicate an account).
+  Reconciliation runs **market-hours only** (`is_market_open` gate in `_maybe_reconcile`), and a
+  failed broker-book *read* (expired overnight token / API blip) raises `ReconcileUnavailable` →
+  treated as **transient** (stay reconcile-pending, retry next tick), NOT a halt — only a genuine
+  quantity mismatch halts. (Pre-2026-07 a token-expiry read failure off-hours fired a false
+  ~4:50 AM "BOOK MISMATCH" halt.)
 - Do **not** run ad-hoc scripts that could place/modify/cancel orders. Be deliberate around anything
   in `live/` and order placement. When in doubt, ask.
 - Tests use simulated brokers and an isolated DB — they never touch the broker or dev data.

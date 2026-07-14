@@ -353,6 +353,17 @@ def test_reconciliation_aggregates_across_runs():
     msg = mgr.reconcile_account_book(1, _WrongAdapter())
     assert msg and "platform +65" in msg and "broker +130" in msg
 
+    # A failed READ (expired token) is NOT a mismatch → raises ReconcileUnavailable so the caller
+    # retries instead of halting the run on a phantom mismatch (the 4:50 AM false-alarm fix).
+    from skas_algo.live.manager import ReconcileUnavailable
+
+    class _FailAdapter(_RecAdapter):
+        def positions(self):
+            raise RuntimeError("Incorrect `api_key` or `access_token`.")
+
+    with pytest.raises(ReconcileUnavailable):
+        mgr.reconcile_account_book(1, _FailAdapter())
+
 
 def test_reconcile_gate_pending_lifecycle(monkeypatch):
     """Reconcile-before-first-decision gate (the double-fill safety net): a pending run
@@ -362,7 +373,10 @@ def test_reconcile_gate_pending_lifecycle(monkeypatch):
     from types import SimpleNamespace
 
     from skas_algo.brokers.live_broker import LiveBroker
-    from skas_algo.live.manager import LiveRun, manager
+    from skas_algo.live.manager import LiveRun, ReconcileUnavailable, manager
+
+    # Reconciliation only runs during market hours (off-hours the token is routinely expired).
+    monkeypatch.setattr("skas_algo.live.manager.is_market_open", lambda: True)
 
     lb = LiveBroker.__new__(LiveBroker)  # a LiveBroker instance without wiring
 
@@ -399,6 +413,25 @@ def test_reconcile_gate_pending_lifecycle(monkeypatch):
     s = make(adapter=None)
     LiveRun._maybe_reconcile(s)
     assert s.reconcile_pending is True and s._last_reconcile_at is None
+
+    # Broker book UNREADABLE (expired token) → ReconcileUnavailable → STAYS pending, NO halt, NO
+    # throttle (retries next tick). This is the 4:50 AM false-alarm fix: a failed read never halts.
+    def _unreadable(acc, adapter, details=None):
+        raise ReconcileUnavailable("positions fetch failed: Incorrect `api_key` or `access_token`.")
+    monkeypatch.setattr(manager, "reconcile_account_book", _unreadable)
+    s = make(adapter=object())
+    LiveRun._maybe_reconcile(s)
+    assert s.order_error is None and s.reconcile_pending is True and s._last_reconcile_at is None
+
+    # Market CLOSED → reconciliation doesn't run at all (no off-hours token-expiry false alarms).
+    monkeypatch.setattr("skas_algo.live.manager.is_market_open", lambda: False)
+    calls = {"n": 0}
+    monkeypatch.setattr(manager, "reconcile_account_book",
+                        lambda acc, adapter, details=None: calls.__setitem__("n", calls["n"] + 1))
+    s = make(adapter=object())
+    LiveRun._maybe_reconcile(s)
+    assert calls["n"] == 0 and s.order_error is None and s.reconcile_pending is True
+    monkeypatch.setattr("skas_algo.live.manager.is_market_open", lambda: True)  # restore
 
     # Paper broker → the whole method is a no-op (no real book to reconcile).
     called = {"n": 0}
