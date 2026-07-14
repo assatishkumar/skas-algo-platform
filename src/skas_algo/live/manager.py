@@ -12,7 +12,7 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 
 from skas_algo.db.base import session_scope
 from skas_algo.db.models import AlgoRun
@@ -632,10 +632,21 @@ class LiveRun:
                     logger.exception("set_broker_margin failed for run %s", self.run_id)
 
     def _maybe_record_greeks(self, db, snap: dict) -> None:
-        """Sample the deployment's live greeks to history at most once a minute."""
-        if snap.get("net_delta") is None:
-            return  # equity run / no priceable option legs
-        now = datetime.now(IST)
+        """Sample the deployment's P&L + greeks to history at most once a minute.
+
+        Records whenever the book holds OPTION legs — NOT gated on greeks existing. The P&L
+        (Σ mark−entry) is always computable, so a 0-DTE / expiry-day cycle (where t≈0 → no IV/greeks
+        can be backed out) still logs its P&L trace with null greeks, instead of the whole cycle
+        being dropped from history (the intraday straddle's expiry-day cycle was invisible)."""
+        positions = snap.get("positions") or []
+        has_opt = any(
+            isinstance(p.get("symbol"), str) and p["symbol"].count("|") == 3 for p in positions
+        )
+        if not has_opt:
+            return  # equity run / flat book — nothing to sample
+        # Stamp UTC — consistent with every other persisted timestamp (started_at/opened_at/…).
+        # A naive IST stamp gets mislabelled +00:00 by iso_utc, shifting the history chart +5:30.
+        now = datetime.now(UTC)
         if self._last_greeks_at and (now - self._last_greeks_at).total_seconds() < 60:
             return
         self._last_greeks_at = now

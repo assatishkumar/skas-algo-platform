@@ -39,6 +39,7 @@ const dayKey = (ms: number) => _dayIST.format(new Date(ms));
 const DANGER = "var(--danger)";
 const OPT = "var(--opt-text)";
 const WARN = "var(--warn-text)";
+const POS = "var(--pos)";
 
 /** History for an options deployment as three synced single-axis small-multiples (P&L, Net Δ, IV) —
  *  replacing the old dual-axis overlay (two y-scales on one plot is unreadable + a charting
@@ -52,14 +53,27 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
     refetchInterval: 30000,
   });
 
-  const { rows, breaks, nowLabel } = useMemo(() => {
-    const entryDates = (run.positions ?? []).map((p) => p.entry_date).filter((d): d is string => !!d);
-    const cycleStartMs = entryDates.length
-      ? Math.min(...entryDates.map((d) => new Date(`${d}T00:00:00+05:30`).getTime()))
-      : 0;
-    const all = (data?.points ?? [])
+  const { rows, breaks, edgeLabel, cycleLabel } = useMemo(() => {
+    const hasOpen = (run.positions ?? []).length > 0;
+    const pts = (data?.points ?? [])
       .map((p) => ({ t: p.ts ? new Date(p.ts).getTime() : 0, delta: p.net_delta, iv: p.net_iv != null ? p.net_iv * 100 : null, pnl: p.pnl }))
-      .filter((r) => r.t && r.t >= cycleStartMs);
+      .filter((r) => r.t)
+      .sort((a, b) => a.t - b.t);
+    // Scope to ONE cycle so the panels aren't a concatenation of every past cycle: an OPEN book →
+    // samples since the earliest open leg's entry day ("this cycle"); a FLAT book → the last
+    // contiguous session (samples after the last >30-min gap → the most recent closed cycle).
+    let scopeStart = 0;
+    if (hasOpen) {
+      const eds = (run.positions ?? []).map((p) => p.entry_date).filter((d): d is string => !!d);
+      const ms = eds.map((d) => new Date(`${d}T00:00:00+05:30`).getTime());
+      scopeStart = ms.length ? Math.min(...ms) : 0;
+    } else if (pts.length) {
+      scopeStart = pts[0].t;
+      for (let k = pts.length - 1; k > 0; k--) {
+        if (pts[k].t - pts[k - 1].t > 30 * 60 * 1000) { scopeStart = pts[k].t; break; }
+      }
+    }
+    const all = pts.filter((r) => r.t >= scopeStart);
     const mh = all.filter((r) => marketHourIST(r.t));
     const src = mh.length > 1 ? mh : all;
     const rows = src.map((r, i) => ({ ...r, i }));
@@ -69,14 +83,21 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
       if (dayKey(rows[k].t) !== dayKey(rows[k - 1].t)) breaks.push({ i: rows[k].i, label: dayKey(rows[k].t) });
     }
     if (rows.length) breaks.unshift({ i: 0, label: dayKey(rows[0].t) });
-    const nowLabel = rows.length ? `now · ${_timeIST.format(new Date(rows[rows.length - 1].t))}` : "";
-    return { rows, breaks, nowLabel };
+    // Right-edge label: "now" for a live book, "last" for a flat one (the samples are historical).
+    const edgeLabel = rows.length
+      ? `${hasOpen ? "now" : "last"} · ${_timeIST.format(new Date(rows[rows.length - 1].t))}`
+      : "";
+    return { rows, breaks, edgeLabel, cycleLabel: hasOpen ? "this cycle" : "last cycle" };
   }, [data, run.positions]);
 
   const netDelta = run.net_delta;
   const netIv = run.net_iv;
   const livePnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
   const last = rows.length ? rows[rows.length - 1] : null;
+  // P&L series colour tracks its SIGN (green in profit, red in loss) — not a fixed "P&L = red"
+  // series identity, which mislabels a winning cycle as a loss. Δ/IV keep their identity hues.
+  const pnlVal = last?.pnl ?? livePnl;
+  const PNL = pnlVal >= 0 ? POS : DANGER;
 
   const xDomain: [number, number] = [0, Math.max(0, rows.length - 1)];
   const xLabel = (i: number) => (rows[Math.round(i)] ? new Date(rows[Math.round(i)].t).toLocaleString("en-IN") : "");
@@ -91,10 +112,11 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
 
   // One panel = a single-axis small-multiple. `kind` picks line vs filled area.
   const Panel = ({
-    height, corner, dataKey, color, area, fmt, zeroLine, yFmt,
+    height, corner, dataKey, color, area, fill, fmt, zeroLine, yFmt,
   }: {
     height: number; corner: string; dataKey: "pnl" | "delta" | "iv"; color: string;
-    area?: boolean; fmt: (v: number) => string; zeroLine?: boolean; yFmt: (v: number) => string;
+    area?: boolean; fill?: string; fmt: (v: number) => string;
+    zeroLine?: boolean; yFmt: (v: number) => string;
   }) => (
     <div className="relative">
       <div className="absolute left-2 top-1 z-10 text-[9.5px] uppercase tracking-wide text-[var(--faint)] pointer-events-none">{corner}</div>
@@ -111,7 +133,7 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
             contentStyle={{ background: "var(--menu)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--strong)", fontSize: 12 }}
             labelFormatter={xLabel} formatter={(v: number) => [fmt(v), corner]} />
           {area ? (
-            <Area type="monotone" dataKey={dataKey} stroke={color} strokeWidth={1.6} fill="var(--neg-fill)" isAnimationActive={false} dot={false} />
+            <Area type="monotone" dataKey={dataKey} stroke={color} strokeWidth={1.6} fill={fill ?? "var(--neg-fill)"} isAnimationActive={false} dot={false} />
           ) : (
             <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={1.6} dot={false} isAnimationActive={false} />
           )}
@@ -127,8 +149,8 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
     <div className="mt-3 rounded-[18px] border border-[var(--border)] bg-[var(--card)] p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <span className="font-['Space_Grotesk'] font-bold text-[14px] text-[var(--strong)]">History · this cycle</span>
-          <Chip color={DANGER} label="P&L" value={formatInr(last?.pnl ?? livePnl)} />
+          <span className="font-['Space_Grotesk'] font-bold text-[14px] text-[var(--strong)]">History · {cycleLabel}</span>
+          <Chip color={PNL} label="P&L" value={formatInr(pnlVal)} />
           <Chip color={OPT} label="Net Δ" value={netDelta != null ? netDelta.toFixed(1) : "—"} />
           <Chip color={WARN} label="IV" value={netIv != null ? `${(netIv * 100).toFixed(1)}%` : "—"} />
         </div>
@@ -136,7 +158,8 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
       </div>
       {rows.length > 1 ? (
         <div className="mt-2 space-y-1">
-          <Panel height={110} corner="P&L" dataKey="pnl" color={DANGER} area
+          <Panel height={110} corner="P&L" dataKey="pnl" color={PNL} area
+            fill={pnlVal >= 0 ? "var(--pos-fill)" : "var(--neg-fill)"}
             fmt={(v) => formatInr(v)} yFmt={(v) => `${(v / 1000).toFixed(0)}k`} />
           <Panel height={96} corner="Net Δ · position" dataKey="delta" color={OPT} zeroLine
             fmt={(v) => v.toFixed(1)} yFmt={(v) => v.toFixed(0)} />
@@ -149,7 +172,7 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
                 {b.label}
               </span>
             ))}
-            <span className="absolute right-0 text-[var(--faint)]">{nowLabel}</span>
+            <span className="absolute right-0 text-[var(--faint)]">{edgeLabel}</span>
           </div>
         </div>
       ) : (

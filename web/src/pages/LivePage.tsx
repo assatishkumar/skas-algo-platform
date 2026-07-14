@@ -1245,11 +1245,13 @@ function DeploymentTile({
         </div>
       </div>
 
-      {/* Overall-P&L sparkline */}
+      {/* Overall-P&L sparkline. Colour tracks the SIGN of the live overall P&L (realized +
+          unrealized) — green = in profit, red = losing — so it agrees with the numbers above; a
+          window trend (last≥first) would paint a still-deep loss green just because it narrowed. */}
       {dep.status === "active" && pnlSeries.length > 1 && (
         <div className="mt-3">
           <div className="text-[10px] uppercase tracking-wide text-[var(--faint)] mb-1">Overall P&L</div>
-          <Sparkline values={pnlSeries} up={pnlSeries[pnlSeries.length - 1] >= pnlSeries[0]} height={40} />
+          <Sparkline values={pnlSeries} up={(realized ?? 0) + (upnl ?? 0) >= 0} height={40} />
         </div>
       )}
 
