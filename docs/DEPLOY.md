@@ -108,8 +108,22 @@ WebSocket upgrades to `wss` automatically.
     - **Logs:** `journalctl -u skas-algo -f` (or `skasctl.sh logs`) · **Status/health:** `skasctl.sh status` / `skasctl.sh health`
     - Symlink it onto PATH for a global `skas` command: `sudo ln -sf "$PWD/scripts/skasctl.sh" /usr/local/bin/skas`
     - `restart` re-reads `.env` and re-recovers runs (real-order runs return as paper unless `SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY=true`).
-- **Update code:** `git pull && cd web && npm run build && cd .. && venv/bin/pip install -e . &&
-  sudo systemctl restart skas-algo` (re-run `./scripts/deploy-vps.sh` does the same).
+- **Update code:** pull the backend, but **do NOT `npm run build` on the VPS** — the Vite/tsc build
+  OOM-kills a small Lightsail box AND competes with the live loop for RAM. Instead **build on the Mac
+  and rsync the prebuilt `web/dist`** (the backend serves it via StaticFiles; `web/dist` is
+  gitignored so `git pull` never clobbers it):
+  ```bash
+  # On the Mac:
+  (cd web && npm run build)
+  rsync -avz --delete web/dist/ algo:git/skas-algo-platform/web/dist/
+  # On the VPS:
+  cd ~/git/skas-algo-platform && git pull && venv/bin/pip install -e . \
+    && sudo systemctl restart skas-algo
+  ```
+  Confirm the branch first — the VPS must be on the branch you pushed to
+  (`git branch --show-current`; `git log --oneline -3` should show the commits). A browser showing
+  the OLD UI after a correct deploy is usually the **PWA service worker** cache — hard-refresh
+  (Cmd/Ctrl+Shift+R) or unregister the SW in DevTools → Application.
 - **Daily Kite re-login:** Zerodha tokens die ~06:00 IST; log Satish Kite back in each morning
   before market open (the run self-heals to real quotes on a valid session).
 - **Backups:** startup + nightly (~16:30 IST) SQLite `VACUUM INTO` snapshots to `backups/`
