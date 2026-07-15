@@ -138,6 +138,62 @@ def test_daily_bars_empty_on_error():
     assert ZerodhaAdapter(CREDS, kite=_BadHist()).daily_bars("NIFTY") == []
 
 
+class _OptHistKite(_FakeKite):
+    """instruments() carries instrument_token; historical_data() → 5-min OPTION candles WITH
+    volume. Records whether ltp() was called (option bars must resolve the token from the dump,
+    NOT via an extra ltp() round-trip like the spot intraday_bars does)."""
+
+    def __init__(self):
+        super().__init__()
+        self.ltp_called = False
+
+    def instruments(self, exchange):
+        from datetime import date
+        if exchange == "NFO":
+            return [{"name": "NIFTY", "expiry": date(2026, 7, 21), "strike": 24000.0,
+                     "instrument_type": "CE", "tradingsymbol": "NIFTY2672124000CE",
+                     "lot_size": 65, "instrument_token": 111111}]
+        return []  # BFO: none
+
+    def ltp(self, keys):
+        self.ltp_called = True
+        return {}
+
+    def historical_data(self, token, start, end, interval):
+        from datetime import datetime as _dt
+        assert token == 111111 and interval == "5minute"
+        return [
+            {"date": _dt(2026, 7, 20, 9, 15), "open": 100, "high": 105, "low": 98,
+             "close": 102, "volume": 1200},
+            {"date": _dt(2026, 7, 20, 9, 20), "open": 102, "high": 106, "low": 101,
+             "close": 104, "volume": 800},
+        ]
+
+
+def test_option_intraday_bars_keeps_volume_and_resolves_token_without_ltp():
+    from datetime import datetime as _dt
+    kite = _OptHistKite()
+    adapter = ZerodhaAdapter(CREDS, kite=kite)
+    bars = adapter.option_intraday_bars(
+        "NIFTY", "2026-07-21", 24000.0, "CE",
+        _dt(2026, 7, 20, 9, 15), _dt(2026, 7, 20, 15, 30), minutes=5)
+    assert bars == [
+        {"start": "2026-07-20T09:15:00", "o": 100.0, "h": 105.0, "l": 98.0, "c": 102.0,
+         "volume": 1200.0},
+        {"start": "2026-07-20T09:20:00", "o": 102.0, "h": 106.0, "l": 101.0, "c": 104.0,
+         "volume": 800.0},
+    ]
+    assert kite.ltp_called is False  # token came from the instruments dump — no extra ltp()
+
+
+def test_option_intraday_bars_empty_for_unlisted_contract():
+    from datetime import datetime as _dt
+    adapter = ZerodhaAdapter(CREDS, kite=_OptHistKite())
+    assert adapter.option_intraday_bars(
+        "NIFTY", "2026-07-21", 99000.0, "CE",
+        _dt(2026, 7, 20, 9, 15), _dt(2026, 7, 20, 15, 30)) == []
+
+
 class _MarginKite(_QuoteKite):
     """Adds basket_margins() so basket-margin building can be tested."""
 

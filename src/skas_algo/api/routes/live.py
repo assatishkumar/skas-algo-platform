@@ -218,6 +218,7 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             tile["on_cache_fallback"] = snap.get("on_cache_fallback", False)
             tile["quote_error"] = snap.get("quote_error")
             tile["order_error"] = snap.get("order_error")
+            tile["strategy_alert"] = snap.get("strategy_alert")
             tile["underlying_spot"] = snap.get("underlying_spot")  # live spot for the tile subline
             upnl = sum(p["unrealized_pnl"] for p in snap.get("positions", []))
             tile["metrics"] = {
@@ -316,6 +317,8 @@ def live_summary() -> dict:
         "sharpe_30d": sharpe,
         # Last successful daily historical-cache refresh (for the quiet "Data ✓ HH:MM" chip).
         "last_cache_refresh": manager.last_cache_refresh,
+        # Last daily option-bar capture (the self-built GFD store; SKAS_OPTION_BARS_*).
+        "last_option_capture": manager.last_option_capture,
     }
 
 

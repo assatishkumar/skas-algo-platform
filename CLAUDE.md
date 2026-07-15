@@ -183,6 +183,30 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   short-straddle tails → the stop is the only guard. Deploy-only + broker source required (live
   chain for ATM/delta); NO backtest (EOD-slice can't model intraday SL/trailing). `peak_pct`
   persists in export_state for the trail; one entry/day (a stopped-out day doesn't re-enter).
+- **weekly_intraday_straddle** (`strategies/weekly_intraday_straddle.py`, NIFTY; ref video
+  https://www.youtube.com/watch?v=kYahbSjbubQ): a WEEKLY-CYCLE intraday SHORT straddle. A cycle
+  spans one weekly expiry; the ATM strike (nearest 100 — the live chain coarsens it) is LOCKED
+  once at 09:20 on the first trading day after the prior weekly expiry (a mid-cycle deploy
+  auto force-starts at the current ATM; re-anchors at each expiry+1, detected off the chain's
+  nearest weekly), then traded EVERY day of the week on that FIXED strike. Daily, on the last
+  CLOSED 5-min bar of the combined premium: SELL when `x` (=CE.close+PE.close) < `y` (the prior
+  day's intraday combined-premium LOW) AND `x` < VWAP (sum of per-leg volume-weighted VWAPs);
+  exit when `x` closes back ABOVE VWAP, or 15:25 (hard, never waits on margin); optional
+  `stop_loss_pct` (% broker margin, default 0=OFF — uncapped short tails). Up to
+  `max_entries_per_day` (3) re-entries; intraday only (squared off daily). **The NEW capability
+  it needs**: option-contract 5-min bars WITH volume — the platform previously fetched Kite
+  historical for the index SPOT only (volume dropped). `ZerodhaAdapter.option_intraday_bars`
+  resolves the option instrument_token from the cached NFO/BFO dump (`_nfo_token`, no extra
+  `ltp()`) and keeps volume; wired into the strategy by `manager._wire_quote_source` via
+  `set_option_bars_fn` (None on a cache source → entries gate off, safe). `on_slice` runs the
+  15:25 exit + optional stop BEFORE the (try/except-wrapped) bar fetch so a broker hiccup can't
+  swallow the square-off. **Unfetchable bars = a surfaced ERROR, not a silent no-op** (owner
+  rule 2026-07-15): the strategy sets `strategy_alert` (no source / no today-bars past the
+  first close / no prior-day bars / fetch raised), the manager snapshot + `/live/summary` tile
+  carry it (amber banner + "data ⚠" chip), and ALL entries — **including the force button** —
+  stay disabled while set (a forced book would have no working VWAP exit); exits still run.
+  Deploy-only + broker source required; NO backtest yet (GFF intraday option data will seed
+  one later). Coverage: `tests/test_weekly_intraday_straddle.py`.
 - **delta_neutral_monthly** (18Δ BANKNIFTY monthly strangle): entry expiry+2 TRADING days
   ~11:00 (force_entry deploy flag skips the wait); adjustment rule is the spec's EXAMPLE,
   not its prose — when |CE−PE| > 40% of (CE+PE), the CHEAP side rolls to the strike whose
@@ -314,6 +338,29 @@ WS event + surfaces `manager.last_cache_refresh` on `GET /live/summary` → the 
 "Data ✓ HH:MM" chip. NSE holidays close the market like weekends (`live/holidays.py`; festival dates
 PROVISIONAL, env-correctable via `NSE_HOLIDAYS_ADD`/`NSE_HOLIDAYS_REMOVE`;
 `previous_trading_day(d)` is the adjacency helper the pivot stale-guard uses).
+
+**Option intraday-bar store (the self-built GFD replacement, 2026-07):**
+`data/option_intraday_store.py` → one **Parquet** file per trading day under
+`~/.skas_data/option_intraday/1min/` (written/read via **duckdb** — the venv has NO pyarrow;
+in-memory connections, no locking) with `symbol,start,open,high,low,close,volume,oi` (internal
+option symbols, minute-START, sparse = traded minutes only). Filled two ways: (1)
+`manager._maybe_daily_option_capture` — once/trading-day ≥15:45 IST (`SKAS_OPTION_BARS_*`,
+**default OFF; enabled on ONE box only** — the Mac data box), one Kite `historical_data(...,
+oi=True)` per in-universe contract (NIFTY/BANKNIFTY/SENSEX, expiries ≤40d, strikes ±10% of spot,
+~0.35s throttle), read-only/arm-independent, + a `days_back=3` sweep for missed days; (2)
+`skas-algo import-gfd <csv…>` — purchased GlobalDataFeeds 1-min files (13MB CSV → ~2MB parquet;
+futures `NIFTY-I` rows skipped; existing captured rows win merges). **Footguns:** an expired
+weekly VANISHES from the instruments dump — expiry-day bars are unrecoverable if the capture
+misses that day (the sweep can't help); an all-errors day (dead historical subscription) writes
+NO file so the sweep retries, but the day-latch still stops same-day hammering. The store keeps
+ALL listed strikes (incl. NIFTY 50s) — the 100s rule is a TRADING rule, not a data rule. Readers:
+`load_contract_bars(u, expiry, strike, right, d1, d2, minutes=1|5)` aggregates on the fly.
+**Off-box backup:** `SKAS_OPTION_BARS_BACKUP_DIR` (a Google Drive for Desktop folder) →
+`mirror_store` runs after every capture + `import-gfd` — COPY new/changed day-files only,
+NEVER deletes (a local mistake can't propagate to the backup). Data-page panel:
+`GET /data/options/intraday-store` → the Data → Options "Intraday 1-min bars" card
+(freshness, per-day history, stale-⚠ badge). Coverage: `tests/test_option_intraday_store.py`,
+`tests/test_gfd_import.py`.
 
 **Supervision (optional but recommended for real-money):** `./scripts/install-supervisor.sh`
 puts the backend under a launchd LaunchAgent (auto-start + auto-restart on any exit);

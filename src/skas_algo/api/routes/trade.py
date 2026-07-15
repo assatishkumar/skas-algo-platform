@@ -28,6 +28,7 @@ from skas_algo.api.models import (
     MomentumThetaDeploy,
     OptionsTradeDeploy,
     OptionTradeLeg,
+    WeeklyIntradayStraddleDeploy,
 )
 from skas_algo.api.routes.data import _live_adapter
 from skas_algo.api.routes.live import start_deployment
@@ -578,6 +579,48 @@ async def intraday_straddle_deploy(
     }
     req = LiveStartRequest(
         strategy_id="intraday_straddle",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=body.underlying.upper(),
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/options/weekly-intraday-straddle/deploy")
+async def weekly_intraday_straddle_deploy(
+    body: WeeklyIntradayStraddleDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the weekly-cycle intraday short straddle (VWAP + prior-day-low gated)."""
+    if body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="strike selection needs the LIVE chain and the VWAP/prior-day low need Kite "
+                   "option bars — deploy with a broker quote source (zerodha)",
+        )
+    params = {
+        "underlying": body.underlying.upper(),
+        "lots": body.lots,
+        "entry_start": body.entry_start,
+        "entry_cutoff": body.entry_cutoff,
+        "eod_exit": body.eod_exit,
+        "candle_minutes": body.candle_minutes,
+        "max_entries_per_day": body.max_entries_per_day,
+        "stop_loss_pct": body.stop_loss_pct,
+    }
+    req = LiveStartRequest(
+        strategy_id="weekly_intraday_straddle",
         name=body.name,
         notes=body.notes,
         instrument_class="DERIV",

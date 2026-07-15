@@ -6,6 +6,7 @@ import CpRatioExpiryBuilder from "../components/trade/CpRatioExpiryBuilder";
 import DeltaNeutralBuilder from "../components/trade/DeltaNeutralBuilder";
 import IronFlyBuilder from "../components/trade/IronFlyBuilder";
 import IntradayStraddleBuilder from "../components/trade/IntradayStraddleBuilder";
+import WeeklyIntradayStraddleBuilder from "../components/trade/WeeklyIntradayStraddleBuilder";
 import MomentumThetaBuilder from "../components/trade/MomentumThetaBuilder";
 import FibRetPage from "./FibRetPage";
 import DonchianStranglePage from "./DonchianStranglePage";
@@ -27,7 +28,7 @@ export default function TradePage() {
     else p.delete("tab");
     setParams(p, { replace: true });
   };
-  const [builderTab, setBuilderTab] = useState<"option" | "equity" | "intraday" | "cpre" | "dnm" | "ifly" | "straddle">("option");
+  const [builderTab, setBuilderTab] = useState<"option" | "equity" | "intraday" | "cpre" | "dnm" | "ifly" | "straddle" | "wstraddle">("option");
   const [screener, setScreener] = useState("fibret");
 
   return (
@@ -41,12 +42,12 @@ export default function TradePage() {
         {top === "builder" ? (
           <div className="space-y-3">
             <div className="flex items-center gap-3 flex-wrap">
-              <Segmented value={builderTab} onChange={setBuilderTab} options={[{ value: "option", label: "Option" }, { value: "equity", label: "Equity" }, { value: "intraday", label: "Intraday theta" }, { value: "cpre", label: "CP ratio expiry" }, { value: "dnm", label: "Delta neutral" }, { value: "ifly", label: "Iron fly" }, { value: "straddle", label: "Straddle" }]} />
+              <Segmented value={builderTab} onChange={setBuilderTab} options={[{ value: "option", label: "Option" }, { value: "equity", label: "Equity" }, { value: "intraday", label: "Intraday theta" }, { value: "cpre", label: "CP ratio expiry" }, { value: "dnm", label: "Delta neutral" }, { value: "ifly", label: "Iron fly" }, { value: "straddle", label: "Straddle" }, { value: "wstraddle", label: "Weekly straddle" }]} />
               <span className="text-sm text-[var(--muted)]">
                 Build a position, set target / stop-loss, and deploy it live (paper or real). It runs and reports like any deployment on the Live page.
               </span>
             </div>
-            {builderTab === "option" ? <OptionTradeBuilder /> : builderTab === "equity" ? <EquityTradeBuilder /> : builderTab === "intraday" ? <MomentumThetaBuilder /> : builderTab === "cpre" ? <CpRatioExpiryBuilder /> : builderTab === "dnm" ? <DeltaNeutralBuilder /> : builderTab === "ifly" ? <IronFlyBuilder /> : <IntradayStraddleBuilder />}
+            {builderTab === "option" ? <OptionTradeBuilder /> : builderTab === "equity" ? <EquityTradeBuilder /> : builderTab === "intraday" ? <MomentumThetaBuilder /> : builderTab === "cpre" ? <CpRatioExpiryBuilder /> : builderTab === "dnm" ? <DeltaNeutralBuilder /> : builderTab === "ifly" ? <IronFlyBuilder /> : builderTab === "straddle" ? <IntradayStraddleBuilder /> : <WeeklyIntradayStraddleBuilder />}
           </div>
         ) : (
           <div className="space-y-4">

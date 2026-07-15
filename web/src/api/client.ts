@@ -17,6 +17,7 @@ import type {
   Deployment,
   LiveSummary,
   DerivCoverage,
+  OptionBarsStore,
   EquityTradeDeploy,
   DonchianAnalyzeRequest,
   DonchianDeploy,
@@ -52,6 +53,7 @@ import type {
   MomentumThetaDeploy,
   MtgBtResult,
   WatchRow,
+  WeeklyIntradayStraddleDeploy,
 } from "../types";
 
 import { clearToken, getToken } from "../lib/auth";
@@ -170,6 +172,11 @@ export const api = {
 
   // --- options & futures data (no broker session needed) ---
   optionsUnderlyings: () => request<UnderlyingList>("/data/options/underlyings"),
+  optionBarsStore: (days = 30) =>
+    request<OptionBarsStore>(`/data/options/intraday-store?days=${days}`),
+  optionBarsCaptureNow: () =>
+    request<{ started: boolean; target_day?: string; reason?: string }>(
+      "/data/options/intraday-store/capture", { method: "POST" }),
   optionsCoverage: (u: string) =>
     request<DerivCoverage>(`/data/options/${encodeURIComponent(u)}/coverage`),
   optionsExpiries: (u: string, date?: string) =>
@@ -218,6 +225,8 @@ export const api = {
     request<LiveRunSnapshot>("/trade/options/cp-ratio-expiry/deploy", { method: "POST", body: JSON.stringify(body) }),
   intradayStraddleDeploy: (body: IntradayStraddleDeploy) =>
     request<LiveRunSnapshot>("/trade/options/intraday-straddle/deploy", { method: "POST", body: JSON.stringify(body) }),
+  weeklyIntradayStraddleDeploy: (body: WeeklyIntradayStraddleDeploy) =>
+    request<LiveRunSnapshot>("/trade/options/weekly-intraday-straddle/deploy", { method: "POST", body: JSON.stringify(body) }),
   momentumThetaDeploy: (body: MomentumThetaDeploy) =>
     request<LiveRunSnapshot>("/trade/options/momentum-theta/deploy", { method: "POST", body: JSON.stringify(body) }),
   deployEquityTrade: (body: EquityTradeDeploy) =>

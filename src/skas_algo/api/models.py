@@ -350,6 +350,33 @@ class IntradayStraddleDeploy(BaseModel):
     auto: bool = True
 
 
+class WeeklyIntradayStraddleDeploy(BaseModel):
+    """Deploy weekly_intraday_straddle: a weekly-cycle intraday SHORT straddle (NIFTY). The ATM
+    strike is locked once per weekly expiry cycle (09:20 on expiry+1, nearest 100) and traded
+    every day: SELL when the combined premium closes below both its VWAP and the prior day's
+    intraday low; exit on a VWAP cross-up or 15:25; up to max_entries_per_day. Optional MTM stop
+    (% of broker margin), default off. Live-chain + Kite option bars → broker source; no backtest."""
+
+    name: str
+    notes: str | None = None
+    underlying: str = "NIFTY"           # NIFTY only for v1
+    lots: int = 1
+    entry_start: str = "09:20"          # cycle lock time + daily entry-window open
+    entry_cutoff: str = "15:20"         # no fresh entries after this
+    eod_exit: str = "15:25"             # hard intraday square-off
+    candle_minutes: int = 5
+    max_entries_per_day: int = 3
+    stop_loss_pct: float = 0.0          # optional MTM stop, % of broker margin; 0 = OFF
+    capital: float = 1_000_000
+    # 15s ticks so a 5-min candle close is evaluated promptly (loop clamps to ≥5s).
+    refresh_seconds: int = 15
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class MomentumThetaDeploy(BaseModel):
     """Deploy momentum_theta_gainer_intra: intraday 15-min SuperTrend(7,3) + daily-pivot
     ATM weekly option seller on index underlyings (NIFTY, SENSEX). SENSEX is live-only and

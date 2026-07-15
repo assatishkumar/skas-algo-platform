@@ -426,6 +426,185 @@ function GoldRefreshControl({ onDone }: { onDone: () => void }) {
   );
 }
 
+// ------------------------------------------------- self-captured 1-min bar store
+const _mb = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${(b / 1e6).toFixed(1)} MB`);
+const _dt = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+  hour12: false,
+});
+const _hhmm = (iso?: string | null) => (iso ? String(iso).slice(11, 16) : "—");
+
+/** The self-captured 1-min option-bar store (the GFD replacement): freshness, capture
+ * config, and a per-day history. Data comes from local Parquet files — no broker needed. */
+function IntradayBarsCard() {
+  const [captureMsg, setCaptureMsg] = useState<string | null>(null);
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["option-bars-store"],
+    queryFn: () => api.optionBarsStore(30),
+    // Poll fast while a capture runs so the row appears as soon as it lands.
+    refetchInterval: (q) => (q.state.data?.capture_running ? 5_000 : 60_000),
+    retry: false,
+  });
+
+  async function captureNow() {
+    setCaptureBusy(true);
+    setCaptureMsg(null);
+    try {
+      const out = await api.optionBarsCaptureNow();
+      setCaptureMsg(out.started
+        ? `Started — capturing ${out.target_day} (+ recent gaps) then backing up…`
+        : out.reason ?? "not started");
+      refetch();
+    } catch (e) {
+      setCaptureMsg((e as Error).message); // e.g. 409: capture opens at 15:45 IST
+    } finally {
+      setCaptureBusy(false);
+    }
+  }
+
+  if (isLoading || !data) return <Card><Spinner /></Card>;
+
+  const unders = ["NIFTY", "BANKNIFTY", "SENSEX"].filter((u) =>
+    data.days.some((d) => d.underlyings[u] != null));
+  // Freshness: with capture ON, the newest day going >3 days stale means the EOD job
+  // isn't landing (session missing at 15:45 / subscription issue) — flag it.
+  const staleDays = data.last_day
+    ? Math.round((Date.now() - new Date(`${data.last_day}T15:30:00+05:30`).getTime()) / 86_400_000)
+    : null;
+  const stale = data.capture.enabled && (staleDays == null || staleDays > 3);
+
+  const Tile = ({ label, value, title }: { label: string; value: string; title?: string }) => (
+    <div className="rounded-md bg-slate-800/40 px-3 py-2" title={title}>
+      <div className="text-slate-400 text-xs">{label}</div>
+      <div className="text-sm font-medium tabular-nums">{value}</div>
+    </div>
+  );
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div className="text-sm font-medium text-slate-300">
+          Intraday 1-min bars · self-captured store
+          <span className="ml-2 text-xs text-slate-500">EOD Kite capture + GFD imports</span>
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          <button
+            onClick={captureNow}
+            disabled={captureBusy || data.capture_running}
+            title={`Capture any missing days (allowed after ${data.capture.after} IST on a trading day; anytime on weekends) + mirror to the backup. Already-captured days are skipped.`}
+            className="rounded-md bg-brand hover:bg-brand-light px-2.5 py-1 text-xs font-medium disabled:opacity-50"
+          >
+            {data.capture_running ? "Capturing…" : captureBusy ? "Starting…" : "Capture & backup now"}
+          </button>
+          {data.capture.enabled ? (
+            <span className="rounded px-2 py-0.5 bg-emerald-950/50 text-emerald-400 border border-emerald-800">
+              capture ON · daily ≥ {data.capture.after} IST
+            </span>
+          ) : (
+            <span className="rounded px-2 py-0.5 bg-slate-800 text-slate-400 border border-slate-700"
+              title="Set SKAS_OPTION_BARS_CAPTURE_ENABLED=true on the data box to capture daily">
+              capture OFF
+            </span>
+          )}
+          {stale && !data.capture_running && (
+            <span className="rounded px-2 py-0.5 bg-amber-950/50 text-amber-400 border border-amber-800"
+              title="Capture is enabled but the newest stored day is old — check the backend log / Kite session">
+              stale ⚠
+            </span>
+          )}
+        </div>
+      </div>
+
+      {data.capture_running && data.capture_progress && (
+        <div className="mb-2">
+          <div className="text-xs text-slate-400 mb-1 tabular-nums">
+            Capturing {data.capture_progress.day} · {data.capture_progress.done.toLocaleString("en-IN")}
+            /{data.capture_progress.total.toLocaleString("en-IN")} contracts
+            · day {data.capture_progress.day_index}/{data.capture_progress.days_total}
+            {data.capture_progress.total > 0 &&
+              ` · ${Math.round((data.capture_progress.done / data.capture_progress.total) * 100)}%`}
+          </div>
+          <div className="h-1.5 rounded bg-slate-800 overflow-hidden">
+            <div className="h-full bg-brand transition-all"
+              style={{ width: `${data.capture_progress.total > 0 ? (data.capture_progress.done / data.capture_progress.total) * 100 : 0}%` }} />
+          </div>
+        </div>
+      )}
+      {captureMsg && <div className="mb-2 text-xs text-slate-400">{captureMsg}</div>}
+      {(() => {
+        // A capture that fetched nothing must LOOK broken, not done (the 2026-07-15
+        // "1minute"-interval bug ran 100 minutes of silent failures).
+        const ds = data.last_capture?.days ?? [];
+        const errs = ds.reduce((s, d) => s + (d.errors ?? 0), 0);
+        const got = ds.reduce((s, d) => s + (d.with_data ?? 0), 0);
+        if (!ds.length || errs === 0) return null;
+        return (
+          <div className={`mb-2 text-xs ${got === 0 ? "text-rose-400" : "text-amber-400"}`}>
+            {got === 0
+              ? `⚠ Last capture FAILED — all ${errs.toLocaleString("en-IN")} contract fetches errored (no data stored). Check the historical-data subscription / backend log, then hit Capture & backup now.`
+              : `⚠ Last capture had ${errs.toLocaleString("en-IN")} failed fetches (${got.toLocaleString("en-IN")} contracts stored).`}
+          </div>
+        );
+      })()}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm mb-3">
+        <Tile label="Days stored" value={String(data.days_total)}
+          title={data.first_day ? `${data.first_day} → ${data.last_day}` : undefined} />
+        <Tile label="Rows (1-min bars)" value={data.rows_total.toLocaleString("en-IN")} />
+        <Tile label="Disk" value={_mb(data.bytes_total)} title={data.path} />
+        <Tile label="Latest day" value={data.last_day ?? "—"} />
+        <Tile label="Last capture run"
+          value={data.last_capture?.at ? _dt.format(new Date(data.last_capture.at)) : "— (none yet)"}
+          title={data.last_capture?.account ? `via ${data.last_capture.account}` : undefined} />
+      </div>
+
+      {data.days.length ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-slate-400 text-left">
+              <tr>
+                <th className="py-1 pr-4">Day</th>
+                <th className="py-1 pr-4 text-right">Rows</th>
+                <th className="py-1 pr-4 text-right">Contracts</th>
+                {unders.map((u) => <th key={u} className="py-1 pr-4 text-right">{u}</th>)}
+                <th className="py-1 pr-4">Bars</th>
+                <th className="py-1 pr-4 text-right">Size</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-300">
+              {data.days.map((d) => (
+                <tr key={d.day} className="border-t border-slate-800 tabular-nums">
+                  <td className="py-1 pr-4">{d.day}</td>
+                  <td className="py-1 pr-4 text-right">{d.rows.toLocaleString("en-IN")}</td>
+                  <td className="py-1 pr-4 text-right">{d.contracts}</td>
+                  {unders.map((u) => (
+                    <td key={u} className="py-1 pr-4 text-right">{d.underlyings[u] ?? "—"}</td>
+                  ))}
+                  <td className="py-1 pr-4">{_hhmm(d.first_bar)} → {_hhmm(d.last_bar)}</td>
+                  <td className="py-1 pr-4 text-right">{_mb(d.bytes)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-2 text-[11px] text-slate-500">
+            Universe: {data.capture.underlyings} · expiries ≤ {data.capture.expiry_days}d ·
+            strikes ±{data.capture.strike_pct}% of spot · volume + OI captured · showing the
+            latest {data.days.length} day{data.days.length === 1 ? "" : "s"} · {data.path}
+            {data.capture.backup_dir
+              ? <> · backup → {data.capture.backup_dir.includes("CloudStorage/GoogleDrive") ? "Google Drive" : data.capture.backup_dir}</>
+              : <> · <span className="text-amber-500/80">no off-box backup configured (SKAS_OPTION_BARS_BACKUP_DIR)</span></>}
+          </div>
+        </div>
+      ) : (
+        <div className="text-sm text-slate-500">
+          No days stored yet — the first capture lands after {data.capture.after} IST on a
+          trading day (or import purchased files: <code>skas-algo import-gfd &lt;csv…&gt;</code>).
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function OptionsDataSection() {
   const [underlying, setUnderlying] = useState("NIFTY");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -437,6 +616,7 @@ export function OptionsDataSection() {
   });
   return (
     <div className="space-y-4">
+      <IntradayBarsCard />
       <UnderlyingSelector value={underlying} onChange={setUnderlying} items={OPT_UNDERLYINGS} />
       {isGold && (
         <div className="text-[11px] text-amber-700 dark:text-amber-300/90">

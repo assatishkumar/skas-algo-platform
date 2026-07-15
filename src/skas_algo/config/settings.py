@@ -101,6 +101,22 @@ class Settings(BaseSettings):
     ws_feed_enabled: bool = True
     ws_feed_stale_s: float = 10.0        # in-market: a mark older than this → REST fallback
 
+    # --- Option intraday-bar capture (the self-built GFD replacement) ---
+    # Once per trading day after close, fetch 1-min bars (+volume+OI) for the in-universe
+    # option contracts via Kite historical and persist them to the local Parquet store
+    # (~/.skas_data/option_intraday/1min/). Read-only / arm-independent. Default OFF —
+    # the owner enables it on ONE box (the Mac data box) to avoid duplicate capture.
+    option_bars_capture_enabled: bool = False    # SKAS_OPTION_BARS_CAPTURE_ENABLED
+    option_bars_underlyings: str = "NIFTY,BANKNIFTY,SENSEX"  # SKAS_OPTION_BARS_UNDERLYINGS
+    option_bars_expiry_days: int = 40            # capture expiries within this many days
+    option_bars_strike_pct: float = 10.0         # strikes within ±this % of spot
+    option_bars_capture_after: str = "15:45"     # IST; bars are final after the close
+    option_bars_days_back: int = 3               # sweep this many prior trading days for gaps
+    # Off-box durability: a local dir the store is MIRRORED into after every capture/import
+    # (copy new/changed day-files, never delete). Point it at a Google Drive for Desktop
+    # folder and the Drive app ships it to the cloud. Unset → local-only.
+    option_bars_backup_dir: str | None = None    # SKAS_OPTION_BARS_BACKUP_DIR
+
     # --- Backups ---
     db_backup_keep: int = 7              # rolling on-box snapshots of the sqlite DB to retain
     # OFF-BOX durability: a shell command run AFTER the nightly snapshot to ship it off the

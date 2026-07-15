@@ -145,6 +145,30 @@ const STRATEGIES: Rule[] = [
     links: [],
   },
   {
+    id: "weekly_intraday_straddle",
+    name: "Weekly Intraday Straddle",
+    kind: "Options",
+    bias: "Neutral intraday · theta · VWAP-gated",
+    summary:
+      "A weekly-cycle intraday short straddle on NIFTY. The ATM strike (nearest 100) is LOCKED once per weekly expiry cycle — at 09:20 on the first day after expiry — and traded every day of the week: SELL the CE+PE when the combined premium closes below BOTH its VWAP and the prior day's intraday low; exit on a VWAP cross-up or 15:25. Deploy-only — strike selection + the VWAP/prior-low need the live chain and Kite 5-min option bars, so there is no backtest yet (paper-first).",
+    structure: [
+      "Lock the ATM straddle strike at 09:20 on expiry+1 (nearest 100); hold that strike + expiry all week.",
+      "SELL 1× CE + 1× PE at the locked strike on each qualifying 5-min close; up to 3 entries/day; intraday only.",
+    ],
+    entry: [
+      "On a closed 5-min candle, when flat: combined premium x < the prior day's intraday low AND x < the session VWAP (sum of per-leg VWAPs).",
+      "A mid-cycle deploy force-starts at the current ATM; margin is frozen at entry (real broker basket margin).",
+    ],
+    exit: [
+      "Exit when the combined premium closes back ABOVE VWAP (cross-up).",
+      "Optional MTM stop: −X% of broker margin (default OFF).",
+      "Hard square-off 15:25 — never carried.",
+    ],
+    risk:
+      "A naked short straddle has UNCAPPED tails — the VWAP cross-up and 15:25 exits are the only automatic guards, and a fast trend or gap can slip through. Turn the optional MTM stop on for a hard backstop; size small and paper-first.",
+    links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=kYahbSjbubQ" }],
+  },
+  {
     id: "momentum_theta_gainer_intra",
     name: "Momentum Theta Gainer (Intraday)",
     kind: "Options",
@@ -481,6 +505,13 @@ const META: Record<string, Meta> = {
             ["Entry", "~09:18 (configurable)"], ["Stops", "−2% + trailing"], ["Flat by", "15:25 — always"]],
     deployNote: "Deploy-only, broker quotes required (live-chain ATM/delta strikes). No backtest — paper-first.",
     deployCta: { label: "Deploy Straddle", to: "/trade" },
+  },
+  weekly_intraday_straddle: {
+    group: "Intraday options", biasKind: "neutral",
+    facts: [["Bias", "Neutral · intraday"], ["Underlying", "NIFTY"], ["Structure", "ATM short straddle (weekly-locked)"],
+            ["Entry", "x < prior-low & < VWAP"], ["Stop", "optional (off)"], ["Flat by", "15:25 — always"]],
+    deployNote: "Deploy-only, broker quotes required (live chain + Kite 5-min option bars). No backtest — paper-first.",
+    deployCta: { label: "Deploy Weekly straddle", to: "/trade" },
   },
   momentum_theta_gainer_intra: {
     group: "Intraday options", biasKind: "neutral",

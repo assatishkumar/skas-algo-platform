@@ -125,6 +125,22 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   Net short 2 lots/side beyond the ⅓ strikes → open-ended risk, the stop is the only guard.
   **Deploy-only, no backtest** (smile-driven strike selection needs the live chain; flat-vol BS
   would misplace the ⅓ strikes). Broker quote source required.
+- **`weekly_intraday_straddle` — weekly-cycle intraday short straddle (NIFTY).** A cycle spans one
+  weekly expiry; the ATM strike (nearest 100) is **locked once at 09:20 on the first trading day
+  after the prior weekly expiry** and traded every day of the week on that fixed strike (a mid-cycle
+  deploy force-starts at the current ATM). Each day, on the last **closed** 5-min bar of the combined
+  premium: **SELL** the CE+PE when `x` (=CE.close+PE.close) is below **both** the prior day's intraday
+  combined-premium **low** and the session **VWAP** (sum of per-leg volume-weighted VWAPs); **exit**
+  when `x` closes back above VWAP, or at 15:25 (hard, never waits on margin); an optional MTM stop
+  (% of broker margin) is **off by default** — a naked short straddle has uncapped tails. Up to 3
+  entries/day; intraday only. This is the "short straddle with a VWAP stop" (video ref:
+  https://www.youtube.com/watch?v=kYahbSjbubQ). It required a **new capability** — Kite intraday bars
+  for an *option contract* with **volume** (`ZerodhaAdapter.option_intraday_bars`; the spot-only
+  `intraday_bars` dropped volume) — for its VWAP and prior-day low. If those bars can't be fetched
+  (no historical-data subscription / broker outage) the run shows an **amber data error** on the
+  Live page and refuses **all** entries — even a forced one — until bars flow again (exits still
+  run). **Deploy-only, broker source required, no backtest yet** (Global Financial Feeds
+  intraday-option data will seed one later).
 - **`delta_neutral_monthly` — 18Δ BANKNIFTY strangle → iron fly.** Enter 2 trading days after
   the prior monthly expiry ~11:00: SELL the ~18-delta PE and CE (delta solved from the live
   chain). When |CE−PE| > 40% of the combined premium, roll the *cheap* side to the strike whose
@@ -295,6 +311,21 @@ LIVE mode fills via the simulated broker until every gate is deliberately turned
   selection-time, not per-tick). Broker basket margins refresh ~1/min per run.
 - **Intraday bars store** (`data/intraday_bars.py`, `~/.skas_data/intraday/`): Kite-fetched
   15-min bars in csv.gz, used to warm up and backtest the intraday strategies.
+- **Option intraday-bar store — the self-built GFD replacement**
+  (`data/option_intraday_store.py`, `~/.skas_data/option_intraday/1min/`): the platform builds
+  its OWN 1-minute option dataset. Every trading day after close (~15:45), a background task
+  fetches each in-universe contract's full-day 1-min bars **with volume and open interest**
+  from Kite historical (NIFTY + BANKNIFTY + SENSEX; expiries within ~40 days; strikes within
+  ±10% of spot — all configurable via `SKAS_OPTION_BARS_*`, default off) and writes one
+  Parquet file per day (~1-2 MB, via DuckDB). Purchased GlobalDataFeeds 1-min CSVs import
+  into the same store with `skas-algo import-gfd`, so bought history and self-captured days
+  form one continuous dataset. Readers serve any timeframe (5-min etc.) by aggregation —
+  this is the future backtest feed for the intraday options strategies (weekly straddle).
+  One hard rule: capture must run ON the trading day — an expired weekly's contracts vanish
+  from the broker's instrument list, so a missed expiry day cannot be backfilled. The store
+  auto-mirrors into a Google Drive folder after every capture/import (`SKAS_OPTION_BARS_BACKUP_DIR`;
+  copy-only, never deletes), and the Data → Options page shows the store's freshness + per-day
+  history (rows, contracts per underlying, bar window, size) with a stale-capture warning badge.
 - **Contract specs** (`contract_specs.py`): F&O lot sizes (a flat 2026-07 Kite snapshot for
   stocks), monthly/weekly expiry calendars, index-vs-exchange routing (SENSEX→BSE/BFO).
 

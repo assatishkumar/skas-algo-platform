@@ -251,6 +251,48 @@ def _coverage_payload(cov: dict) -> dict:
     }
 
 
+@router.get("/options/intraday-store")
+def options_intraday_store(days: int = 30) -> dict:
+    """The self-captured 1-min option-bar store (the GFD replacement): totals, per-day
+    history (rows/contracts/underlyings/bar window/size), the last capture run, and the
+    capture config — the Data → Options freshness panel. Local files only, no broker."""
+    from skas_algo.config import get_settings
+    from skas_algo.data.option_intraday_store import OPTION_INTRADAY_DIR, store_summary
+    from skas_algo.live.manager import manager
+
+    settings = get_settings()
+    return {
+        **store_summary(days_limit=max(1, min(int(days), 120))),
+        "last_capture": manager.last_option_capture,
+        "capture_running": bool(manager.option_capture_running),
+        "capture_progress": manager.option_capture_progress,
+        "capture": {
+            "enabled": settings.option_bars_capture_enabled,
+            "underlyings": settings.option_bars_underlyings,
+            "expiry_days": settings.option_bars_expiry_days,
+            "strike_pct": settings.option_bars_strike_pct,
+            "after": settings.option_bars_capture_after,
+            "days_back": settings.option_bars_days_back,
+            "backup_dir": settings.option_bars_backup_dir,
+        },
+        "path": str(OPTION_INTRADAY_DIR),
+    }
+
+
+@router.post("/options/intraday-store/capture")
+async def options_intraday_capture() -> dict:
+    """Data-page manual trigger: capture whatever day-files are missing (today after
+    15:45 IST, or the last trading day on a weekend/holiday) + mirror to the backup dir.
+    Idempotent — already-captured days are skipped; no session → backup-only. The work
+    runs in the background; poll GET /data/options/intraday-store (capture_running)."""
+    from skas_algo.live.manager import manager
+
+    try:
+        return await manager.run_option_capture_now()
+    except ValueError as exc:  # before the 15:45 gate on a trading day
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/options/underlyings")
 def options_underlyings(cache=Depends(get_data_cache)) -> dict:
     try:

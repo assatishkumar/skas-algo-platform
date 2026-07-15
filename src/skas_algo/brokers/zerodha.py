@@ -70,6 +70,7 @@ class ZerodhaAdapter:
         self._kite = kite  # injectable KiteConnect (lazily built if None)
         self.access_token: str | None = None
         self._nfo_lut: dict | None = None  # (name, expiry, strike, CE/PE) -> tradingsymbol
+        self._nfo_token: dict = {}  # (name, expiry, strike, CE/PE) -> Kite instrument_token
         self._nfo_index: dict = {}  # name -> {expiry_iso -> {strike -> {"CE": ts, "PE": ts}}}
         self._nfo_lot: dict = {}    # name -> contract lot size
         self._ts_exchange: dict = {}  # tradingsymbol -> exchange, NFO omitted (the default)
@@ -310,6 +311,8 @@ class ZerodhaAdapter:
                 strike = float(r["strike"])
                 ts = r["tradingsymbol"]
                 self._nfo_lut[(name, exp_iso, strike, it)] = ts
+                if r.get("instrument_token"):  # kept for option historical bars (weekly straddle)
+                    self._nfo_token[(name, exp_iso, strike, it)] = int(r["instrument_token"])
                 by_strike = self._nfo_index.setdefault(name, {}).setdefault(exp_iso, {})
                 by_strike.setdefault(strike, {})[it] = ts
                 if exchange != "NFO":
@@ -325,6 +328,13 @@ class ZerodhaAdapter:
         """Resolve an option instrument to its Kite NFO tradingsymbol via the instruments dump."""
         self._build_nfo()
         return self._nfo_lut.get(
+            (inst.underlying, inst.expiry.isoformat(), float(inst.strike), inst.right)
+        )
+
+    def _option_token(self, inst) -> int | None:
+        """Resolve an option instrument to its Kite instrument_token (for historical bars)."""
+        self._build_nfo()
+        return self._nfo_token.get(
             (inst.underlying, inst.expiry.isoformat(), float(inst.strike), inst.right)
         )
 
@@ -458,4 +468,36 @@ class ZerodhaAdapter:
             d = ts.date().isoformat() if hasattr(ts, "date") else str(ts)[:10]
             out.append({"date": d, "open": float(b["open"]), "high": float(b["high"]),
                         "low": float(b["low"]), "close": float(b["close"])})
+        return out
+
+    # ------------------------------------------------- option intraday bars
+    def option_intraday_bars(self, underlying: str, expiry, strike: float, right: str,
+                             from_dt, to_dt, minutes: int = 5) -> list[dict]:
+        """Intraday OHLCV candles for a single OPTION contract via Kite historical data —
+        the source for the weekly-straddle VWAP + prior-day combined-premium low.
+
+        Unlike ``intraday_bars`` (spot only, volume dropped), this resolves the OPTION
+        instrument token straight from the cached NFO/BFO dump — **no extra ``ltp()`` call**
+        — and KEEPS volume (options trade real volume; a true VWAP needs it). ``expiry`` is a
+        date or ISO string; ``from_dt``/``to_dt`` are IST-naive datetimes (as Kite expects).
+        Returns [{start, o, h, l, c, volume}, ...] oldest-first with ``start`` tz-stripped;
+        [] on any failure or an unlisted contract (best-effort, like ``intraday_bars``)."""
+        self._build_nfo()
+        exp_iso = expiry.isoformat() if hasattr(expiry, "isoformat") else str(expiry)[:10]
+        token = self._nfo_token.get((underlying.upper(), exp_iso, float(strike), right.upper()))
+        if not token:
+            return []
+        try:
+            # Kite's 1-min interval is named "minute" (not "1minute").
+            interval = "minute" if minutes == 1 else f"{minutes}minute"
+            bars = self._kite_client().historical_data(token, from_dt, to_dt, interval)
+        except Exception:  # pragma: no cover - network/permission hiccup → caller skips
+            return []
+        out = []
+        for b in bars:
+            ts = b.get("date")
+            start = ts.replace(tzinfo=None).isoformat() if hasattr(ts, "isoformat") else str(ts)
+            out.append({"start": start, "o": float(b["open"]), "h": float(b["high"]),
+                        "l": float(b["low"]), "c": float(b["close"]),
+                        "volume": float(b.get("volume") or 0.0)})
         return out

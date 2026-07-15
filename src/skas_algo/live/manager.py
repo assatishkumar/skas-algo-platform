@@ -439,6 +439,13 @@ class LiveRun:
                 seed_fn(bars_fn)
             except Exception:  # pragma: no cover - warmup must never block a deploy
                 logger.exception("intraday warmup seed failed for run %s", self.run_id)
+        # weekly_intraday_straddle: option-contract intraday bars (with volume) for its VWAP +
+        # prior-day combined-premium low. None on a cache source (no adapter) → the strategy
+        # gates all entries off (safe cold-start), the deploy-only twin of the 422 cache reject.
+        opt_bars_hook = getattr(strategy, "set_option_bars_fn", None)
+        if opt_bars_hook is not None:
+            adapter = getattr(self.quote_source, "adapter", None)
+            opt_bars_hook(getattr(adapter, "option_intraday_bars", None))
 
     # ----------------------------------------------------------- actions
     def _quote_symbols(self) -> list[str]:
@@ -801,6 +808,10 @@ class LiveRun:
             "supports_force_entry": hasattr(
                 getattr(self.session, "strategy", None), "request_force_entry"),
             "quote_error": self.quote_error,
+            # Strategy-surfaced data-health alert (e.g. weekly straddle: Kite option bars
+            # unfetchable → entries self-gated) — amber banner on the run card + a tile chip.
+            "strategy_alert": getattr(
+                getattr(self.session, "strategy", None), "strategy_alert", None),
             "parts_total": self.config.params.get("capital_parts"),
             # Options deployments expose lot-sets (editable live while flat); equity
             # strategies have no `lots` attr → null → the UI hides the control.
@@ -882,6 +893,14 @@ class LiveRunManager:
         self._last_cache_refresh_day: date | None = None
         # Last successful daily cache refresh, surfaced to the UI (quiet "Data ✓ HH:MM" chip).
         self.last_cache_refresh: dict | None = None
+        self._last_option_capture_day: date | None = None
+        # Last daily option-bar capture (the self-built GFD store), surfaced on /live/summary.
+        self.last_option_capture: dict | None = None
+        # Single-flight guard shared by the auto task and the Data-page manual trigger.
+        self.option_capture_running: bool = False
+        # Live progress of the in-flight capture ({day, done, total, day_index, days_total});
+        # None when idle. Read by GET /data/options/intraday-store → the Data-page indicator.
+        self.option_capture_progress: dict | None = None
 
     def _maybe_inject_live_broker(self, session, config: "LiveConfig", quote_source) -> None:
         """THE real-order gate. Replace the session's PaperBroker with a LiveBroker ONLY
@@ -1291,6 +1310,7 @@ class LiveRunManager:
                 await asyncio.sleep(300)
                 self._watchdog_scan()
                 await self._maybe_daily_cache_refresh()
+                await self._maybe_daily_option_capture()
                 await self._maybe_daily_backup()
             except asyncio.CancelledError:  # pragma: no cover
                 return
@@ -1360,33 +1380,177 @@ class LiveRunManager:
         logger.info("daily cache refresh: %s symbols (%s ok, %s errors)",
                     len(result), ok, len(result) - ok)
 
+    def _data_account(self, db):
+        """A Zerodha account with a valid session for READ-ONLY historical work (cache
+        refresh / option-bar capture) — prefers one backing a running run. None when no
+        session exists yet. Arming is irrelevant; nothing here can place an order."""
+        from skas_algo.db.models import BrokerAccount
+        from skas_algo.services import broker as broker_svc
+
+        seen: set[int] = set()
+        for live in list(self.runs.values()):  # prefer an account backing a running run
+            aid = live.config.broker_account_id
+            if not aid or aid in seen:
+                continue
+            seen.add(aid)
+            acct = db.get(BrokerAccount, aid)
+            if acct and acct.broker == "zerodha" and broker_svc.has_valid_session(acct):
+                return acct
+        for acct in broker_svc.list_accounts(db):  # else any zerodha account with a session
+            if acct.broker == "zerodha" and broker_svc.has_valid_session(acct):
+                return acct
+        return None
+
     def _run_cache_refresh(self, symbols: list[str]) -> dict | None:
         """Worker-thread body: pick a valid Zerodha account and refresh_cache. Returns the
         per-symbol result, or None if no valid session yet (caller retries next tick). Arming
         is irrelevant — refresh_cache → make_data_session is historical/read-only."""
-        from skas_algo.db.models import BrokerAccount
-        from skas_algo.services import broker as broker_svc
         from skas_algo.services.market_data import refresh_cache
 
         with session_scope() as db:
-            account, seen = None, set()
-            for live in list(self.runs.values()):  # prefer an account backing a running run
-                aid = live.config.broker_account_id
-                if not aid or aid in seen:
-                    continue
-                seen.add(aid)
-                acct = db.get(BrokerAccount, aid)
-                if acct and acct.broker == "zerodha" and broker_svc.has_valid_session(acct):
-                    account = acct
-                    break
-            if account is None:  # else any zerodha account with a live session
-                for acct in broker_svc.list_accounts(db):
-                    if acct.broker == "zerodha" and broker_svc.has_valid_session(acct):
-                        account = acct
-                        break
+            account = self._data_account(db)
             if account is None:
                 return None
             return refresh_cache(account, symbols) if symbols else {}
+
+    async def _maybe_daily_option_capture(self) -> None:
+        """Capture the day's option 1-min bars (the self-built GFD store) ONCE per trading
+        day, after the close (settings.option_bars_capture_after, ~15:45 IST). Read-only /
+        arm-independent, runs off-loop. The day-latch is set once a session existed and the
+        capture ran — even an all-errors day (no file written) latches, so a dead historical
+        subscription can't hammer Kite every 5 minutes; the next day's sweep retries the gap.
+        Expiry-day data is UNRECOVERABLE if missed (expired contracts leave the instruments
+        dump) — which is why this runs on the trading day itself."""
+        from skas_algo.config import get_settings
+        from skas_algo.live.holidays import is_nse_holiday
+
+        settings = get_settings()
+        if not settings.option_bars_capture_enabled:
+            return
+        try:
+            hh, mm = str(settings.option_bars_capture_after).split(":")
+            after = time(int(hh), int(mm))
+        except Exception:
+            after = time(15, 45)
+        now = datetime.now(IST)
+        if (now.weekday() >= 5 or is_nse_holiday(now.date()) or now.time() < after
+                or self._last_option_capture_day == now.date()
+                or self.option_capture_running):
+            return
+        self.option_capture_running = True
+        try:
+            result = await asyncio.to_thread(self._run_option_capture, now.date())
+        finally:
+            self.option_capture_running = False
+        if result is None:
+            return  # no valid Zerodha session yet → retry next 5-min tick
+        self._last_option_capture_day = now.date()
+        self.last_option_capture = {"at": now.isoformat(), "trigger": "auto", **result}
+        self.broadcaster.publish({"type": "option_bars_captured", **self.last_option_capture})
+        logger.info("daily option-bar capture: %s", result)
+
+    async def run_option_capture_now(self) -> dict:
+        """Data-page 'Capture & backup now' button. Same worker as the daily task —
+        capture_day skips existing day-files and the mirror runs at the end, so this is
+        idempotent ('do whatever isn't done yet'). Gates: refused BEFORE capture_after
+        (~15:45 IST) on a trading day (bars aren't final until the close); on a
+        weekend/holiday it runs anytime and targets the LAST trading day. No broker
+        session → backup-only (mirror the existing store). Work runs in the background;
+        the summary endpoint's ``capture_running`` tracks it. Raises ValueError on the
+        time gate (route maps it to 409)."""
+        from skas_algo.config import get_settings
+        from skas_algo.live.holidays import is_nse_holiday, previous_trading_day
+
+        settings = get_settings()
+        now = datetime.now(IST)
+        trading = now.weekday() < 5 and not is_nse_holiday(now.date())
+        try:
+            hh, mm = str(settings.option_bars_capture_after).split(":")
+            after = time(int(hh), int(mm))
+        except Exception:
+            after = time(15, 45)
+        if trading and now.time() < after:
+            raise ValueError(
+                f"capture opens at {after.strftime('%H:%M')} IST — today's bars aren't "
+                f"final until the market closes")
+        if self.option_capture_running:
+            return {"started": False, "reason": "a capture is already running"}
+        target = now.date() if trading else previous_trading_day(now.date())
+        self.option_capture_running = True
+
+        async def _bg() -> None:
+            try:
+                result = await asyncio.to_thread(self._run_option_capture, target)
+                if result is None and settings.option_bars_backup_dir:
+                    # No broker session → still honor the BACKUP half of the button.
+                    from skas_algo.data.option_intraday_store import mirror_store
+
+                    b = await asyncio.to_thread(mirror_store, settings.option_bars_backup_dir)
+                    result = {"account": None, "days": [], "backup": b,
+                              "note": "no broker session — mirrored the existing store only"}
+                if result is not None:
+                    self._last_option_capture_day = datetime.now(IST).date()
+                    self.last_option_capture = {
+                        "at": datetime.now(IST).isoformat(), "trigger": "manual", **result}
+                    self.broadcaster.publish(
+                        {"type": "option_bars_captured", **self.last_option_capture})
+                    logger.info("manual option-bar capture: %s", result)
+            except Exception:  # pragma: no cover - background task must never die silently
+                logger.exception("manual option-bar capture failed")
+            finally:
+                self.option_capture_running = False
+
+        asyncio.create_task(_bg())
+        return {"started": True, "target_day": target.isoformat()}
+
+    def _run_option_capture(self, today: date) -> dict | None:
+        """Worker-thread body: capture today's bars + sweep recent missing days (only
+        still-listed contracts are recoverable). None when no valid session (caller retries)."""
+        from skas_algo.config import get_settings
+        from skas_algo.data.option_intraday_store import capture_day, day_path, mirror_store
+        from skas_algo.live.holidays import previous_trading_day
+        from skas_algo.services import broker as broker_svc
+
+        settings = get_settings()
+        with session_scope() as db:
+            account = self._data_account(db)
+            if account is None:
+                return None
+            adapter = broker_svc.make_adapter(account)
+            label = account.label
+        unders = [u.strip().upper()
+                  for u in settings.option_bars_underlyings.split(",") if u.strip()]
+        days = [today]
+        d = today
+        for _ in range(max(0, int(settings.option_bars_days_back))):
+            d = previous_trading_day(d)
+            days.append(d)
+        # Already-captured days drop out here (today via the latch, prior via the sweep).
+        todo = [day for day in days if not day_path(day).exists()]
+        summaries = []
+        for i, day in enumerate(todo, 1):
+            def _progress(done: int, total: int, _d=day.isoformat(), _i=i, _n=len(todo)):
+                self.option_capture_progress = {"day": _d, "done": done, "total": total,
+                                                "day_index": _i, "days_total": _n}
+            try:
+                summaries.append(capture_day(
+                    adapter, day, underlyings=unders,
+                    expiry_days=int(settings.option_bars_expiry_days),
+                    strike_pct=float(settings.option_bars_strike_pct),
+                    progress=_progress))
+            except Exception:  # pragma: no cover - one day's failure never kills the rest
+                logger.exception("option-bar capture failed for %s", day)
+        self.option_capture_progress = None
+        out = {"account": label, "days": summaries}
+        # Off-box durability: mirror the whole store into the backup dir (Google Drive
+        # folder) after every run — copy-only, never deletes; best-effort.
+        if settings.option_bars_backup_dir:
+            try:
+                out["backup"] = mirror_store(settings.option_bars_backup_dir)
+            except Exception:  # pragma: no cover - backup failure must not fail capture
+                logger.exception("option-bar store mirror failed")
+                out["backup"] = {"error": "mirror failed — see log"}
+        return out
 
     def _daily_refresh_symbols(self) -> list[str]:
         """The daily series strategies read: the index spots (NIFTY 50 / NIFTY BANK) + the

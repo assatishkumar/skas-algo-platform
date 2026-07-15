@@ -40,6 +40,24 @@ def _export_vault(args) -> None:
         print(f"exported {n} run-cards to {vault_root()}")
 
 
+def _import_gfd(args) -> None:
+    """`skas-algo import-gfd <files/dirs…>` — load purchased GlobalDataFeeds 1-min CSVs
+    into the option-intraday Parquet store (same layout the daily capture writes)."""
+    from skas_algo.data.gfd_import import import_gfd
+
+    summary = import_gfd(args.paths)
+    print(f"imported {summary['files']} file(s) → {summary['rows']} rows "
+          f"({summary['skipped_tickers']} non-option tickers skipped)")
+    for day, rows in sorted(summary["days"].items()):
+        print(f"  {day}: {rows} rows in store")
+    backup_dir = get_settings().option_bars_backup_dir
+    if backup_dir:
+        from skas_algo.data.option_intraday_store import mirror_store
+
+        b = mirror_store(backup_dir)
+        print(f"mirrored to backup: {b['copied']} copied, {b['skipped']} unchanged → {b['dir']}")
+
+
 def main() -> None:
     """CLI entry point (``skas-algo``): run the API server, or export the Obsidian vault."""
     import argparse
@@ -50,6 +68,9 @@ def main() -> None:
     ev.add_argument("--backfill", action="store_true", help="write a run-card for every existing run")
     ev.add_argument("--scaffold", action="store_true", help="write the vault dashboards/templates")
     sub.add_parser("hash-password", help="Hash an operator password for SKAS_AUTH_PASSWORD_HASH")
+    ig = sub.add_parser("import-gfd",
+                        help="Import GlobalDataFeeds 1-min CSVs into the option-bar store")
+    ig.add_argument("paths", nargs="+", help="GFD csv files and/or directories of them")
     args = parser.parse_args()
 
     if args.cmd == "hash-password":
@@ -60,6 +81,9 @@ def main() -> None:
     configure_logging(settings.log_level)
     if args.cmd == "export-vault":
         _export_vault(args)
+        return
+    if args.cmd == "import-gfd":
+        _import_gfd(args)
         return
     uvicorn.run(
         "skas_algo.api.app:app",

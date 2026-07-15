@@ -31,6 +31,7 @@ from .sst_lifo import SSTLifoStrategy
 from .sst_weekly import SSTWeeklyFifoStrategy, SSTWeeklyStrategy
 from .staggered_covered_call import StaggeredCoveredCallStrategy
 from .supertrend_momentum import SuperTrendMomentumStrategy
+from .weekly_intraday_straddle import WeeklyIntradayStraddle
 
 # strategy_id -> factory(universe, **params) -> strategy instance
 _REGISTRY: dict[str, Callable[..., Any]] = {
@@ -52,6 +53,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     Ema21MomentumStrategy.strategy_id: Ema21MomentumStrategy,
     MomentumThetaGainerIntra.strategy_id: MomentumThetaGainerIntra,
     IntradayStraddleStrategy.strategy_id: IntradayStraddleStrategy,
+    WeeklyIntradayStraddle.strategy_id: WeeklyIntradayStraddle,
     CustomOptionsStrategy.strategy_id: CustomOptionsStrategy,
     CustomEquityStrategy.strategy_id: CustomEquityStrategy,
     DonchianStrangleMonthlyStrategy.strategy_id: DonchianStrangleMonthlyStrategy,

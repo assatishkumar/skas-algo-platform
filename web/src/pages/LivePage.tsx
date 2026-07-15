@@ -16,6 +16,7 @@ import OptionKpiBand from "../components/OptionKpiBand";
 import ExitCriteriaCallout from "../components/ExitCriteriaCallout";
 import PositionsGreeksTable from "../components/PositionsGreeksTable";
 import GreeksHistoryCard from "../components/GreeksHistoryCard";
+import WeeklyStraddlePanel from "../components/WeeklyStraddlePanel";
 import { formatInr } from "../lib/format";
 import { isOptionsStrategy } from "../lib/params";
 import { LIVE_CATEGORIES, liveCategoryOf } from "../lib/strategyMeta";
@@ -689,6 +690,13 @@ function RunCard({
           </button>
         </div>
       )}
+      {run.strategy_alert && (
+        /* Strategy data-health error (e.g. weekly straddle: Kite option bars unfetchable).
+           Entries are self-gated strategy-side while this is set; exits still run. */
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 px-3 py-2 text-sm">
+          <span>⚠ {run.strategy_alert}</span>
+        </div>
+      )}
       {useNewOptionDetail ? (
         /* Redesigned single-underlying option book (design handoff): grouped KPI band, exit
            callout, full-greeks positions table (per-share / per-position), payoff + breakevens,
@@ -696,6 +704,9 @@ function RunCard({
         <>
           <OptionKpiBand run={run} version={version} />
           <ExitCriteriaCallout run={run} />
+          {/* weekly_intraday_straddle: signal monitor — today's combined premium vs its VWAP,
+              prior-day low/close reference levels (the entry gate), per-leg VWAP chips. */}
+          {run.strategy_id === "weekly_intraday_straddle" && <WeeklyStraddlePanel run={run} />}
           {run.positions?.length ? (
             <PositionsGreeksTable run={run} />
           ) : (
@@ -1173,6 +1184,9 @@ function DeploymentTile({
             <BrokerChip dep={dep} />
             {dep.order_error && (
               <Tag bg="var(--danger)" color="#fff" title={dep.order_error}>orders halted</Tag>
+            )}
+            {dep.strategy_alert && (
+              <Tag bg="var(--warn-bg)" color="var(--warn-text)" title={dep.strategy_alert}>data ⚠</Tag>
             )}
             <span className="text-[var(--faint)]">#{dep.run_id}</span>
           </div>

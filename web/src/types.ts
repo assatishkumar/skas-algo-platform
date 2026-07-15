@@ -452,6 +452,7 @@ export interface LiveRunSnapshot {
   on_cache_fallback?: boolean;
   quote_error?: string | null; // last live-quote fetch failure (e.g. rejected Zerodha token)
   order_error?: string | null;
+  strategy_alert?: string | null; // strategy data-health error (e.g. option bars unfetchable)
   supports_force_entry?: boolean;
   ironfly_adjust?: boolean | null; // delta_neutral/iron_fly: null unless the strategy has it
   realized_taxes: number;
@@ -885,6 +886,25 @@ export interface IntradayStraddleDeploy {
   auto: boolean;
 }
 
+export interface WeeklyIntradayStraddleDeploy {
+  name: string;
+  underlying: string;
+  lots: number;
+  entry_start: string;
+  entry_cutoff: string;
+  eod_exit: string;
+  candle_minutes: number;
+  max_entries_per_day: number;
+  stop_loss_pct: number;
+  capital: number;
+  refresh_seconds: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  ignore_market_hours: boolean;
+  auto: boolean;
+}
+
 export interface CpRatioExpiryDeploy {
   name: string;
   underlyings: string[];
@@ -1039,7 +1059,47 @@ export interface Deployment {
   on_cache_fallback?: boolean; // zerodha run currently falling back to cache quotes
   quote_error?: string | null; // last live-quote fetch failure (rejected token, etc.)
   order_error?: string | null; // real-order failure/book-mismatch halt (ack to resume)
+  strategy_alert?: string | null; // strategy data-health error (e.g. option bars unfetchable)
   underlying_spot?: number | null; // live underlying spot (tile subline)
+}
+
+export interface OptionBarsDay {
+  day: string;
+  rows: number;
+  contracts: number;
+  underlyings: Record<string, number>; // per-underlying distinct contracts
+  first_bar: string | null;
+  last_bar: string | null;
+  bytes: number;
+}
+
+export interface OptionBarsStore {
+  days_total: number;
+  rows_total: number;
+  bytes_total: number;
+  first_day: string | null;
+  last_day: string | null;
+  days: OptionBarsDay[]; // most recent first
+  last_capture?: {
+    at?: string; account?: string | null; trigger?: string; note?: string;
+    days?: { day?: string; contracts?: number; with_data?: number; rows?: number;
+             errors?: number; skipped?: string }[];
+    backup?: { dir?: string; copied?: number; skipped?: number };
+  } | null;
+  capture_running?: boolean;
+  capture_progress?: {
+    day: string; done: number; total: number; day_index: number; days_total: number;
+  } | null;
+  capture: {
+    enabled: boolean;
+    underlyings: string;
+    expiry_days: number;
+    strike_pct: number;
+    after: string;
+    days_back: number;
+    backup_dir?: string | null;
+  };
+  path: string;
 }
 
 export interface DataSummary {
