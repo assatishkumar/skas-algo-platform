@@ -53,3 +53,8 @@ web/.vite/
 
 # launchd supervisor logs
 /logs/
+
+# mobile app (web-mobile workspace + iOS shell build artifacts)
+web-mobile/dist/
+web-mobile/ios/App/App/public/
+web-mobile/ios/DerivedData/

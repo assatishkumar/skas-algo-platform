@@ -177,6 +177,24 @@ export function buildLivePayoff(
   return { data, spot, expiryDate };
 }
 
+/** A spot that is SANE for this leg set. A multi-underlying run's `underlying_spot` is the
+ *  PRIMARY underlying's (e.g. NIFTY ~24k) — pairing it with another book's strikes (SENSEX
+ *  ~77k) produced a 21k→85k unreadable payoff axis (2026-07-16). Prefer the provided spot
+ *  only when it's plausibly the same underlying as the strikes; else derive it by put-call
+ *  parity from a same-strike CE/PE pair (F ≈ K + CE − PE); else the median strike. */
+export function effectiveSpot(legs: LiveLeg[], provided?: number | null): number | null {
+  if (!legs.length) return provided ?? null;
+  const strikes = legs.map((l) => l.strike).sort((a, b) => a - b);
+  const mid = strikes[Math.floor(strikes.length / 2)];
+  if (provided && provided > mid * 0.7 && provided < mid * 1.3) return provided;
+  for (const ce of legs) {
+    if (ce.right !== "CE" || ce.ltp == null) continue;
+    const pe = legs.find((l) => l.right === "PE" && l.strike === ce.strike && l.ltp != null);
+    if (pe) return ce.strike + ce.ltp - (pe.ltp as number);
+  }
+  return mid;
+}
+
 // ---- Sensibull-style position metrics --------------------------------------------
 export interface PositionMetrics {
   maxProfit: number; // +Infinity if unbounded

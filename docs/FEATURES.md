@@ -193,6 +193,15 @@ BS delta/IV helpers) · engine services: `black_scholes.py` (IV/delta), `contrac
 
 ## 4. Backtesting
 
+- **One backtest page, two data bases.** The New-backtest form starts with a basis selector:
+  **EOD (daily cache)** runs the engine below; **Intraday (1-min store)** replays the
+  self-captured option store minute-by-minute through the ACTUAL deploy-only strategy classes
+  (`services/intraday_replay.py`) — intraday straddle, weekly VWAP straddle, CP ratio expiry,
+  delta-neutral, iron fly (monthly ones warn that a full cycle needs ~2 months of capture),
+  plus momentum-theta via its BS service. Real premiums, volume-weighted signals, F&O charges
+  per fill, parity-derived spot, expiry settlement. Both bases produce ordinary runs — same
+  Runs list, run detail, and Compare; intraday runs carry `data_basis: intraday` in params.
+  The intraday window grows automatically with every day the store captures.
 - **Engine backtest** (`engine/runner.py` + `services/backtest.py`): replays cached daily data
   through the shared `SliceExecutor` — one slice per trading day. Options runs
   (`build_options_run`) attach the real cached option chain, a margin model, and an expiry

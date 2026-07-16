@@ -12,7 +12,7 @@ from skas_algo import __version__
 from skas_algo.config import get_settings
 
 from .deps import require_auth
-from .routes import auth, backtest, brokers, data, health, live, research, trade
+from .routes import alerts, auth, backtest, brokers, data, health, live, research, trade
 
 logger = logging.getLogger("skas_algo")
 
@@ -87,6 +87,7 @@ def create_app() -> FastAPI:
     # PROTECTED routes: require a valid JWT bearer token when auth is configured (fail-open
     # otherwise — see deps.require_auth). One dependency, applied per router.
     protected = [Depends(require_auth)]
+    app.include_router(alerts.router, prefix="/api/v1", dependencies=protected)
     app.include_router(backtest.router, prefix="/api/v1", dependencies=protected)
     app.include_router(brokers.router, prefix="/api/v1", dependencies=protected)
     app.include_router(data.router, prefix="/api/v1", dependencies=protected)

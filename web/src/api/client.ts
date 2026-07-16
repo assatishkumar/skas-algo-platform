@@ -60,6 +60,25 @@ import { clearToken, getToken } from "../lib/auth";
 
 const BASE = "/api/v1";
 
+// Absolute backend origin for NON-same-origin shells (the Capacitor mobile app, whose
+// webview origin is capacitor://localhost). "" = same-origin — the web app is unchanged.
+let apiOrigin = "";
+// 401 handler override: web keeps the /login redirect below; the mobile shell registers
+// its own (unlock screen) because window.location.assign is meaningless in the webview.
+let onUnauthorized: (() => void) | null = null;
+
+export function setApiOrigin(origin: string): void {
+  apiOrigin = origin.replace(/\/+$/, "");
+}
+
+export function getApiOrigin(): string {
+  return apiOrigin;
+}
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+
 /** Build request headers: JSON + the Authorization bearer token (if we have one), without
  *  clobbering any per-call headers a caller passes. */
 function authHeaders(extra?: HeadersInit): HeadersInit {
@@ -72,13 +91,16 @@ function authHeaders(extra?: HeadersInit): HeadersInit {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, {
+  const resp = await fetch(`${apiOrigin}${BASE}${path}`, {
     ...init,
     headers: authHeaders(init?.headers),
   });
   if (!resp.ok) {
     // Session expired / no token but the server now enforces auth → back to the login gate.
-    if (resp.status === 401 && window.location.pathname !== "/login") {
+    if (resp.status === 401 && onUnauthorized) {
+      clearToken();
+      onUnauthorized();
+    } else if (resp.status === 401 && window.location.pathname !== "/login") {
       clearToken();
       window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`);
     }
@@ -99,7 +121,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ password }),
     }),
-  strategies: () => request<{ strategies: string[] }>("/strategies"),
+  strategies: (basis: "eod" | "intraday" = "eod") =>
+    request<{ strategies: string[] }>(`/strategies?basis=${basis}`),
+  backtestIntraday: (body: BacktestRequest) =>
+    request<BacktestResponse>("/backtest/intraday", { method: "POST", body: JSON.stringify(body) }),
   universes: () => request<Universe[]>("/universes"),
   universeSymbols: (name: string) =>
     request<{ name: string; symbols: string[] }>(`/universes/${encodeURIComponent(name)}/symbols`),
@@ -259,6 +284,7 @@ export const api = {
 
   // --- live / paper ---
   liveList: () => request<LiveRunSnapshot[]>("/live"),
+  liveGet: (id: number) => request<LiveRunSnapshot>(`/live/${id}`),
   liveStart: (body: StartLiveRequest) =>
     request<LiveRunSnapshot>("/live/start", { method: "POST", body: JSON.stringify(body) }),
   liveRefresh: (id: number, decide = false) =>
@@ -305,6 +331,11 @@ export const api = {
   liveDeployments: (status?: string) =>
     request<Deployment[]>(`/live/deployments${status ? `?status=${status}` : ""}`),
   liveSummary: () => request<LiveSummary>("/live/summary"),
+  // In-app alerts feed (mobile Alerts screen + bell badge; rows from notify/in_app).
+  alertsList: (limit = 100) =>
+    request<{ unread: number; alerts: { id: number; ts: string | null; title: string;
+      message: string; level: string; read: boolean }[] }>(`/alerts?limit=${limit}`),
+  alertsMarkRead: () => request<{ marked: number }>("/alerts/mark-read", { method: "POST" }),
   liveForceEntry: (id: number) =>
     request<{ armed: boolean; note: string }>(`/live/${id}/force-entry`, { method: "POST" }),
   liveAckOrderError: (id: number) =>
@@ -368,8 +399,13 @@ async function downloadCsv(path: string, filename: string): Promise<void> {
 /** WebSocket URL for the live feed, proxied through the dev server / same origin.
  *  A WS can't send an Authorization header, so the token rides as a query param. */
 export function liveWsUrl(): string {
-  const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const token = getToken();
   const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  if (apiOrigin) {
+    // Mobile shell: derive ws(s):// from the configured backend origin — the webview's
+    // window.location is capacitor://localhost, not the backend.
+    return `${apiOrigin.replace(/^http/, "ws")}${BASE}/live/ws${q}`;
+  }
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
   return `${proto}://${window.location.host}${BASE}/live/ws${q}`;
 }

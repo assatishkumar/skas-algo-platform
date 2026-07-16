@@ -52,8 +52,17 @@ _TRADE_COLUMNS = [
 _DEPLOY_ONLY = {"custom_options", "call_put_ratio_expiry", "delta_neutral_monthly", "iron_fly_monthly", "momentum_theta_gainer_intra", "custom_equity", "donchian_strangle_monthly", "intraday_straddle", "weekly_intraday_straddle"}
 
 
+# The intraday-basis list of the unified backtest page: deploy-only options strategies the
+# replay harness (services/intraday_replay.py) drives over the 1-min option store, plus
+# momentum_theta (its dedicated BS service, adapted). Order = display order.
+_INTRADAY_REPLAY = ["intraday_straddle", "weekly_intraday_straddle", "call_put_ratio_expiry",
+                    "delta_neutral_monthly", "iron_fly_monthly", "momentum_theta_gainer_intra"]
+
+
 @router.get("/strategies")
-def list_strategies() -> dict:
+def list_strategies(basis: str = "eod") -> dict:
+    if basis == "intraday":
+        return {"strategies": list(_INTRADAY_REPLAY)}
     return {"strategies": [s for s in available() if s not in _DEPLOY_ONLY]}
 
 
@@ -121,6 +130,48 @@ def post_backtest(
     except KeyError as exc:  # unknown strategy_id
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return BacktestResponse(**result)
+
+
+@router.post("/backtest/intraday", response_model=BacktestResponse)
+def post_backtest_intraday(req: BacktestRequest, db: Session = Depends(get_db)) -> BacktestResponse:
+    """The unified page's INTRADAY basis: replay a deploy-only options strategy over the
+    self-captured 1-min option store (services/intraday_replay), or dispatch momentum_theta
+    to its BS service — emitting the SAME run contract as POST /backtest, so preview/save/
+    Runs/Compare all work unchanged. Sync in-request (a few seconds per stored week)."""
+    from datetime import date as _date
+
+    from skas_algo.services.intraday_replay import (
+        REPLAYABLE,
+        run_intraday_backtest,
+        run_mtg_backtest,
+    )
+
+    underlying = (req.underlying or (req.symbols[0] if req.symbols else None) or "NIFTY").upper()
+    req.underlying = underlying
+    req.symbols = req.symbols or [underlying]
+    req.instrument_class = "DERIV"
+    req.end_date = req.end_date or _date.today()
+    req.params["data_basis"] = "intraday"   # run tag (ParametersCard shows it; no migration)
+    # Strategy params only — the tags aren't constructor args (harmless via **_ignored, but
+    # keep the replay's param surface clean).
+    sparams = {k: v for k, v in req.params.items()
+               if k not in ("data_basis", "premium_source")}
+    try:
+        if req.strategy_id == "momentum_theta_gainer_intra":
+            req.params["premium_source"] = "black_scholes"  # labeled: NOT real store premiums
+            result = run_mtg_backtest(req.start_date, req.end_date, req.capital, sparams)
+        elif req.strategy_id in REPLAYABLE:
+            result = run_intraday_backtest(req.strategy_id, underlying, req.start_date,
+                                           req.end_date, req.capital, sparams)
+        else:
+            raise HTTPException(status_code=404,
+                                detail=f"{req.strategy_id} has no intraday replay")
+    except ValueError as exc:  # no store coverage / service-reported error
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if req.persist:
+        return BacktestResponse(**persist_backtest(db, req, result["report"], result["trades"]))
+    return BacktestResponse(run_id=None, algo_id=None, strategy_id=req.strategy_id,
+                            report=result["report"], trades=result["trades"])
 
 
 @router.post("/backtest/save", response_model=BacktestResponse)

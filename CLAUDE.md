@@ -264,6 +264,20 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   same /research calibration). Endpoint: POST /research/momentum-theta-bt + panel on
   /research. First finding (2025-26, defaults): EOD exits profit, ST-flip buybacks lose
   ~2× that — the spec as given is net-negative on NIFTY; tune via the panel before deploying.
+- **Unified backtest page (2026-07):** the New-backtest form has a **data basis** —
+  `EOD (daily cache)` = the engine path, untouched; `Intraday (1-min store)` = minute-replays
+  over the self-captured option store via `services/intraday_replay.py` (`POST
+  /backtest/intraday`, `GET /strategies?basis=intraday`). The harness replays the ACTUAL
+  strategy classes (all six deploy-only options strategies; momentum_theta dispatches to its
+  BS service, labeled `premium_source=black_scholes`) with parity spot (F≈K+CE−PE), the
+  NIFTY-100 coarsening, model-margin pushes (~1.5-2× broker — %-of-margin stops are wider in
+  ₹ than live), F&O charges per fill, and expiry settlement to intrinsic. **Runs are ordinary
+  `AlgoRun`s** — the replay emits the standard report contract (`metrics` keys +
+  `equity_curve` + Trade-shaped `trade_log`; exit rows SELL/COVER/SETTLE) so Runs/RunDetail/
+  Compare render unchanged; tagged `params["data_basis"]="intraday"` (no schema change).
+  FOOTGUN: never set `report["options"]` unless the FULL options sub-report is built —
+  its mere presence flips ReportView into a layout that dereferences
+  `options.summary.total_charges`. Coverage: `tests/test_intraday_replay.py`.
 - **Donchian flip default:** new deploys roll a breached name **intraday** (`breach_basis="touch"`),
   **once per name per day** (`last_flip_day` guard), up to `max_flips=3` (two rolls, then close the
   name on the next breach). Defaults live in the deploy layer (`api/models.py:DonchianDeploy`); the
@@ -271,6 +285,18 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   (CLAUDE.md §1). To change a **running** deploy's config, edit its `params_snapshot` in the DB and
   restart — `live/recovery.py` rebuilds the strategy from it (persisted `flip_count`/`last_flip_day`
   are preserved via `state`). There's no in-place param-edit endpoint.
+
+## 8b. Mobile app (`web-mobile/` + its `ios/` Capacitor shell)
+A dedicated 7-screen iPhone companion (see `docs/MOBILE.md`) that monitors + acts on the
+VPS's runs over Tailscale HTTPS. Key invariants: it imports `web/src/{api,lib,types}` via
+the `@shared` alias — **keep those layers pure** (no window/DOM coupling beyond client.ts's
+guarded seam). `client.ts` grew `setApiOrigin()`/origin-aware `liveWsUrl()`/
+`setUnauthorizedHandler()` — all default to same-origin, so the desktop app is unchanged;
+don't regress that. The backend's mobile surface: `GET/POST /alerts*` (fed by
+`notify/in_app.InAppNotifier` → the `alert` table; WS `{"type":"alert"}`), and
+`snapshot["mode"]` (PAPER/LIVE — the app's paper/real toggle). Real-money actions in the
+app are typed-confirmation-gated (ARM, LIVE deploy) on top of the unchanged §1 gates —
+the app is the OWNER's hand, never Claude's.
 
 ## 9. Frontend (`web/`) gotchas
 - **Router state vs legacy redirects:** several old paths are `<Navigate to=... replace />` redirects in

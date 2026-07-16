@@ -590,7 +590,8 @@ function MomentumThetaBtSection() {
           <div className="text-xs text-[var(--muted)]">
             Real 15-min bars through the live strategy code; premiums are <b>synthetic BS</b>
             {" "}(HV20 × multiplier — no smile, no event crush). SENSEX has no history and is
-            live-only.
+            live-only. Also on the <Link to="/backtest?tab=new" className="underline">Backtest
+            page</Link> (Intraday basis) — runs there persist to the Runs list.
           </div>
         </div>
       </div>

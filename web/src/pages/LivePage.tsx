@@ -1142,7 +1142,7 @@ function DeploymentTile({
           ];
 
   return (
-    <div className={`flex flex-col rounded-[16px] border border-[var(--border)] bg-[var(--card)] p-5 ${expanded ? "md:col-span-2" : ""}`}>
+    <div className={`flex flex-col rounded-[16px] border border-[var(--border)] bg-[var(--card)] p-5 ${expanded ? "md:col-span-2" : ""} ${dep.status !== "active" ? "opacity-70" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           {editing ? (
@@ -1159,8 +1159,22 @@ function DeploymentTile({
               paused
                 ? <Tag bg="var(--warn-bg)" color="var(--warn-text)">paused</Tag>
                 : <Tag bg="var(--ok-bg)" color="var(--ok-text)">active</Tag>
+            ) : dep.status === "stopped" ? (
+              <Tag bg="var(--danger-bg)" color="var(--danger)">stopped</Tag>
             ) : (
               <Tag>{dep.status}</Tag>
+            )}
+            {/* In-position vs flat at a glance: an ACTIVE run holding legs is a different
+                animal from one waiting for its next signal. */}
+            {dep.status === "active" && (
+              positions > 0 ? (
+                <Tag bg="var(--pos)" color="#fff"
+                  title={`${positions} open position${positions === 1 ? "" : "s"}`}>
+                  ● {positions} open
+                </Tag>
+              ) : (
+                <Tag title="No open positions — waiting for the next signal">flat</Tag>
+              )
             )}
             {dep.status === "active" && <LivePulse flash={flash} label={dep.mode === "LIVE" ? "live" : "paper"} />}
             <Tag

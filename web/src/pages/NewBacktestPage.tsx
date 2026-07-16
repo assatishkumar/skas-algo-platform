@@ -71,9 +71,43 @@ type ClonePrefill = {
   params: Record<string, unknown>;
 };
 
+// Per-strategy defaults for the INTRADAY basis (keys = constructor params; rendered as a
+// generic grid). Values must match the strategies' own defaults so a blank run == a deploy.
+const INTRADAY_DEFAULTS: Record<string, Record<string, number | string | boolean>> = {
+  intraday_straddle: { lots: 1, strike_delta: 0, entry_time: "09:18", exit_time: "15:25",
+    stop_loss_pct: 2, trail_trigger_pct: 1, trail_step_pct: 0.5, trail_mode: "ratchet" },
+  weekly_intraday_straddle: { lots: 1, entry_start: "09:20", entry_cutoff: "15:20",
+    eod_exit: "15:25", max_entries_per_day: 3, stop_loss_pct: 0 },
+  call_put_ratio_expiry: { sets: 1, profit_target_pct: 1.1, stop_loss_pct: 1,
+    ratio_tolerance_pct: 30, sell_lots_per_set: 3 },
+  delta_neutral_monthly: { lots: 1, target_delta: 0.18, profit_target_pct: 2.5,
+    stop_loss_pct: 0, force_entry: true, ironfly_adjust: false },
+  iron_fly_monthly: { lots: 1, profit_target_pct: 2.5, stop_loss_pct: 0, force_entry: true },
+  momentum_theta_gainer_intra: { lots: 1, st_period: 7, st_multiplier: 3,
+    max_trades_per_day: 3, vol_multiplier: 1.1 },
+};
+// Enum-valued intraday params render as dropdowns (free-text invites typos the strategy
+// would silently fall back from).
+const INTRADAY_ENUMS: Record<string, string[]> = {
+  trail_mode: ["ratchet", "below_peak"],
+};
+// These need the NIFTY chain specifically (weekly straddle is NIFTY-v1; MTG's BS service
+// replays NIFTY spot bars).
+const INTRADAY_NIFTY_ONLY = new Set(["weekly_intraday_straddle", "momentum_theta_gainer_intra"]);
+const INTRADAY_MONTHLY = new Set(["delta_neutral_monthly", "iron_fly_monthly"]);
+
 export default function NewBacktestPage({ embedded = false }: { embedded?: boolean } = {}) {
-  const { data: strategyData } = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
-  const strategies = strategyData?.strategies ?? ["sst_lifo"];
+  const [basis, setBasis] = useState<"eod" | "intraday">("eod");
+  const isIntraday = basis === "intraday";
+  // ONE strategy dropdown over the union of both bases; the Data dropdown enables only the
+  // bases a strategy supports (no basis-switch race can ever submit an invalid combo).
+  const { data: eodData } = useQuery({
+    queryKey: ["strategies", "eod"], queryFn: () => api.strategies("eod") });
+  const { data: intradayData } = useQuery({
+    queryKey: ["strategies", "intraday"], queryFn: () => api.strategies("intraday") });
+  const eodList = eodData?.strategies ?? ["sst_lifo"];
+  const intradayList = intradayData?.strategies ?? [];
+  const strategies = [...eodList, ...intradayList.filter((s) => !eodList.includes(s))];
 
   const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
   const universes = universeData ?? [];
@@ -88,6 +122,44 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
   // Once the user hand-edits a date, stop auto-prefilling from cached coverage.
   const [datesTouched, setDatesTouched] = useState(false);
   const [capital, setCapital] = useState(2500000);
+  // INTRADAY basis: generic per-strategy params + the option store's coverage for date hints.
+  const [iparams, setIparams] = useState<Record<string, number | string | boolean>>(
+    INTRADAY_DEFAULTS.intraday_straddle);
+  const { data: barStore } = useQuery({
+    queryKey: ["option-bars-store"], queryFn: () => api.optionBarsStore(120),
+    enabled: isIntraday, retry: false });
+  // A strategy dictates which bases it supports — auto-select a supported basis when the
+  // strategy changes (the Data dropdown disables the unsupported one).
+  const supportsIntraday = intradayList.includes(strategyId);
+  const supportsEod = eodList.includes(strategyId);
+  useEffect(() => {
+    if (isIntraday && !supportsIntraday && supportsEod) setBasis("eod");
+    else if (!isIntraday && !supportsEod && supportsIntraday) setBasis("intraday");
+  }, [strategyId, isIntraday, supportsIntraday, supportsEod]);
+  useEffect(() => {
+    if (!isIntraday) return;
+    setIparams(INTRADAY_DEFAULTS[strategyId] ?? {});
+    if (INTRADAY_NIFTY_ONLY.has(strategyId)) setUnderlying("NIFTY");
+  }, [isIntraday, strategyId]);
+  // Basis transitions re-anchor the date window (intraday → the store's coverage; EOD → the
+  // long-history defaults) — stale windows from the other basis were confusing.
+  const prevBasis = useRef(basis);
+  useEffect(() => {
+    if (prevBasis.current === basis) return;
+    prevBasis.current = basis;
+    setDatesTouched(false);
+    if (!isIntraday) {
+      setStartDate("2015-01-01");
+      setEndDate("2026-06-01");
+    }
+  }, [basis, isIntraday]);
+  useEffect(() => {
+    // Intraday: default the window to the store's coverage (until hand-edited).
+    if (isIntraday && barStore?.first_day && barStore?.last_day && !datesTouched) {
+      setStartDate(barStore.first_day);
+      setEndDate(barStore.last_day);
+    }
+  }, [isIntraday, barStore, datesTouched]);
   const [parts, setParts] = useState(50);
   const [target, setTarget] = useState(6);
   // SST-FIFO tiered targets (tighten as lots accumulate): 1 / 2 / 3+ lots.
@@ -513,7 +585,12 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
   }, [dbBasketSyms, dbExclude, dbInclude]);
 
   const mutation = useMutation({
-    mutationFn: (body: BacktestRequest) => api.backtest(body),
+    // The body itself says which engine computes it (data_basis rides in params), so the
+    // Save flow — which echoes mutation.variables — stays engine-agnostic.
+    mutationFn: (body: BacktestRequest) =>
+      (body.params as Record<string, unknown>)?.data_basis === "intraday"
+        ? api.backtestIntraday(body)
+        : api.backtest(body),
   });
   // Persist a previewed result (no recompute); jump to the saved run on success.
   const saveMutation = useMutation({
@@ -712,14 +789,41 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
     };
   }
 
+  function buildIntradayBody(): BacktestRequest {
+    // The INTRADAY basis: one underlying's replay over the 1-min option store (or the MTG
+    // BS service). data_basis tags the run AND routes the mutation to /backtest/intraday.
+    return {
+      strategy_id: strategyId,
+      name: name.trim() || undefined,
+      notes: notes.trim() || undefined,
+      universe: null,
+      symbols: [underlying],
+      instrument_class: "DERIV",
+      underlying,
+      start_date: startDate,
+      end_date: endDate,
+      capital,
+      params: {
+        ...iparams,
+        data_basis: "intraday",
+        ...(strategyId === "momentum_theta_gainer_intra"
+          ? { premium_source: "black_scholes" } : {}),
+      },
+      tax_rate: 0,
+      withdrawal_rate: 0,
+      lookback,
+      overrides: [],
+    };
+  }
+
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (sweepMode) {
+    if (sweepMode && !isIntraday) {
       runSweep();
       return;
     }
     // Single run is a PREVIEW — computed but not persisted until the user clicks "Save backtest".
-    mutation.mutate({ ...buildBody(), persist: false });
+    mutation.mutate({ ...(isIntraday ? buildIntradayBody() : buildBody()), persist: false });
   }
 
   async function runSweep() {
@@ -809,7 +913,42 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
                 ))}
               </select>
             </Field>
-            {isDonchianBt ? (
+            <Field label="Data">
+              {/* Which candles drive the run. A strategy enables only the bases it supports —
+                  today's options strategies are one-or-the-other (EOD engine vs 1-min replay). */}
+              <select
+                className={inputClass}
+                value={basis}
+                onChange={(e) => setBasis(e.target.value as "eod" | "intraday")}
+              >
+                <option value="eod" disabled={!supportsEod}>
+                  EOD daily cache{supportsEod ? "" : " — not supported by this strategy"}
+                </option>
+                <option value="intraday" disabled={!supportsIntraday}>
+                  Intraday 1-min store{supportsIntraday
+                    ? barStore?.days_total ? ` (${barStore.days_total} days captured)` : ""
+                    : " — not supported by this strategy"}
+                </option>
+              </select>
+            </Field>
+            {isIntraday ? (
+              <Field label="Underlying">
+                <select
+                  className={inputClass}
+                  value={underlying}
+                  disabled={INTRADAY_NIFTY_ONLY.has(strategyId)}
+                  onChange={(e) => setUnderlying(e.target.value)}
+                >
+                  <option value="NIFTY">NIFTY</option>
+                  {!INTRADAY_NIFTY_ONLY.has(strategyId) && (
+                    <>
+                      <option value="BANKNIFTY">BANKNIFTY</option>
+                      <option value="SENSEX">SENSEX</option>
+                    </>
+                  )}
+                </select>
+              </Field>
+            ) : isDonchianBt ? (
               <Field label="Basket">
                 <select className={inputClass} value={dbUniverse} onChange={(e) => setDbUniverse(e.target.value)}>
                   <option value="nifty50">Nifty 50 (full basket)</option>
@@ -864,6 +1003,62 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
             </Field>
           </div>
 
+          {/* ---- INTRADAY basis: generic per-strategy params off INTRADAY_DEFAULTS ---- */}
+          {isIntraday && (
+            <>
+              {INTRADAY_MONTHLY.has(strategyId) && (
+                <div className="text-[11px] text-amber-700 dark:text-amber-300/90">
+                  Monthly-cycle strategy: a full entry→expiry cycle needs ~2 months of captured
+                  days — with a short store window, results are truncated cycles.
+                  <b> force_entry</b> makes it enter on the first replayed day.
+                </div>
+              )}
+              {strategyId === "momentum_theta_gainer_intra" && (
+                <div className="text-[11px] text-amber-700 dark:text-amber-300/90">
+                  Premiums are <b>synthetic Black-Scholes</b> off real 15-min NIFTY spot bars
+                  (long history OK — this does not use the 1-min option store). Calibrate
+                  vol_multiplier on /research.
+                </div>
+              )}
+              <div className="grid md:grid-cols-4 gap-4">
+                <Field label="Capital (₹)">
+                  <NumberInput className={inputClass} value={capital} onChange={setCapital} />
+                </Field>
+                {Object.entries(iparams).map(([k, v]) => (
+                  <Field key={k} label={k.split("_").join(" ")}>
+                    {typeof v === "boolean" ? (
+                      <label className={`${inputClass} flex items-center gap-2 cursor-pointer`}>
+                        <input type="checkbox" checked={v}
+                          onChange={(e) => setIparams((p) => ({ ...p, [k]: e.target.checked }))} />
+                        <span className="text-xs text-[var(--muted)]">{v ? "on" : "off"}</span>
+                      </label>
+                    ) : typeof v === "number" ? (
+                      <NumberInput step="any" className={inputClass} value={v}
+                        onChange={(n) => setIparams((p) => ({ ...p, [k]: n }))} />
+                    ) : INTRADAY_ENUMS[k] ? (
+                      <select className={inputClass} value={String(v)}
+                        onChange={(e) => setIparams((p) => ({ ...p, [k]: e.target.value }))}>
+                        {INTRADAY_ENUMS[k].map((opt) => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input className={inputClass} value={String(v)}
+                        onChange={(e) => setIparams((p) => ({ ...p, [k]: e.target.value }))} />
+                    )}
+                  </Field>
+                ))}
+              </div>
+              <div className="text-[11px] text-[var(--faint)]">
+                Replays the ACTUAL strategy class over real 1-min premiums (volume+OI) from the
+                self-captured store — fills at minute closes, F&O charges applied, %-of-margin
+                stops use the MODEL margin (reads ~1.5-2× broker: rupee stops are wider than
+                the same settings live). Every new captured day extends the window.
+              </div>
+            </>
+          )}
+
+          {!isIntraday && (<>
           {isDonchianBt ? (
             <div key="db-params" className="grid md:grid-cols-3 gap-4">
               <div className="md:col-span-3 text-[11px] text-amber-700 dark:text-amber-300/90">
@@ -1470,6 +1665,7 @@ export default function NewBacktestPage({ embedded = false }: { embedded?: boole
               </div>
             )}
           </div>
+          </>)}
 
           <button
             type="submit"

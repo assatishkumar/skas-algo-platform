@@ -1,0 +1,221 @@
+/* Design tokens — VERBATIM from design_handoff_mobile_app/README.md (high-fidelity spec).
+   Fonts: Space Grotesk (display/numbers/names) + Manrope (UI text); tabular numerals. */
+
+:root {
+  --page: #f6f8f8;
+  --card: #ffffff;
+  --border: #eaeeed;
+  --strong: #0f2723;
+  --muted: #5c6f6b;
+  --faint: #9aa8a4;
+  --chip: #f1f5f4;
+  --chip-text: #5c6f6b;
+  --seg: #eef2f1;
+  --divider: #eef2f1;
+  --pos: #0f9d63;
+  --danger: #d9544a;
+  --accent: #12b3a4;
+  --accent-deep: #0d8a7e;
+  --ok-bg: #e6f6ef;
+  --ok-text: #0f9d63;
+  --warn-bg: #fdf3df;
+  --warn-text: #b07d10;
+  --opt-bg: #efebfd;
+  --opt-text: #6a4fd0;
+  --field: #ffffff;
+  --field-border: #e2e8e6;
+  --danger-bg: #fdeceb;
+  --atm: #fdf3df;
+  --tab: rgba(255, 255, 255, 0.87);
+  --zerodha: #e8551f;
+  --zerodha-bg: #fdece7;
+  --dhan: #2f6bd6;
+  --dhan-bg: #e7f0fd;
+}
+
+:root[data-theme="dark"] {
+  --page: #0c1a18;
+  --card: #142926;
+  --border: #24403b;
+  --strong: #f1f6f5;
+  --muted: #92aaa4;
+  --faint: #6f8782;
+  --chip: #1c322e;
+  --chip-text: #bcd3cd;
+  --seg: #16302b;
+  --divider: #23413c;
+  --pos: #2fce8f;
+  --danger: #f07a70;
+  --accent: #17c9b8;
+  --accent-deep: #12b3a4;
+  --ok-bg: #123f30;
+  --ok-text: #2fce8f;
+  --warn-bg: #3c3014;
+  --warn-text: #e2b25a;
+  --opt-bg: #2b2450;
+  --opt-text: #a893f0;
+  --field: #10231f;
+  --field-border: #2a4741;
+  --danger-bg: #42201d;
+  --atm: #3a3014;
+  --tab: rgba(20, 41, 38, 0.87);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--page);
+  color: var(--strong);
+  font-family: "Manrope", system-ui, -apple-system, sans-serif;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+.sg {
+  font-family: "Space Grotesk", "Manrope", sans-serif;
+}
+
+button {
+  font-family: inherit;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+input,
+select {
+  font-family: inherit;
+}
+
+/* ---- shared primitives (scale per README: cards r20-22, buttons r13-16, 44px targets) */
+.screen {
+  padding: 14px 20px calc(84px + env(safe-area-inset-bottom));
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 17px 18px;
+}
+
+.page-title {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+  font-size: 32px;
+}
+
+.label {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 7px;
+  padding: 3px 7px;
+  font-size: 10.5px;
+  font-weight: 800;
+  background: var(--chip);
+  color: var(--chip-text);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.chip.ok { background: var(--ok-bg); color: var(--ok-text); }
+.chip.warn { background: var(--warn-bg); color: var(--warn-text); }
+.chip.danger { background: var(--danger-bg); color: var(--danger); }
+
+.pos { color: var(--pos); }
+.neg { color: var(--danger); }
+
+.seg-track {
+  display: flex;
+  background: var(--seg);
+  border-radius: 14px;
+  padding: 4px;
+}
+
+.seg-item {
+  flex: 1;
+  text-align: center;
+  padding: 9px 0;
+  border-radius: 11px;
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--muted);
+  min-height: 38px;
+}
+
+.seg-item.active {
+  background: var(--card);
+  color: var(--strong);
+  box-shadow: 0 1px 4px rgba(15, 39, 35, 0.12);
+}
+
+.btn-primary {
+  width: 100%;
+  background: var(--accent-deep);
+  border-radius: 16px;
+  padding: 17px;
+  color: #fff;
+  font-weight: 700;
+  font-size: 17px;
+  min-height: 44px;
+}
+
+.btn-primary:disabled { opacity: 0.5; }
+
+.divider { height: 1px; background: var(--divider); }
+
+/* ---- tab bar (blurred, 3 items, safe-area) */
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  background: var(--tab);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+  z-index: 40;
+}
+
+.tabbar a {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 9px 0 7px;
+  text-decoration: none;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 800;
+  min-height: 44px;
+}
+
+.tabbar a.active { color: var(--accent-deep); }
+.tabbar svg { width: 24px; height: 24px; }

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { formatInr } from "../lib/format";
 import { reconstructCycles } from "../lib/optionCycles";
-import { computeMetrics, type LiveLeg, type PositionMetrics } from "../lib/payoff";
+import { computeMetrics, effectiveSpot, type LiveLeg, type PositionMetrics } from "../lib/payoff";
 import { parseOptionSymbol } from "../lib/symbol";
 import type { LiveRunSnapshot, Trade } from "../types";
 
@@ -78,17 +78,26 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
   });
   const trades: Trade[] = data?.trades ?? [];
 
-  const metrics: PositionMetrics | null = useMemo(() => {
-    const legs: LiveLeg[] = [];
-    let expiry = "";
+  const { metrics, bandSpot } = useMemo((): {
+    metrics: PositionMetrics | null; bandSpot: number | null;
+  } => {
+    // Dominant-underlying book only — a mixed run (cp_ratio NIFTY+SENSEX) can't share one
+    // spot axis; effectiveSpot also swaps in a parity-derived spot when `underlying_spot`
+    // belongs to the OTHER index (it's the primary underlying's).
+    const groups = new Map<string, { legs: LiveLeg[]; expiry: string }>();
     for (const p of run.positions ?? []) {
       const o = parseOptionSymbol(p.symbol);
       if (!o) continue;
-      expiry = o.expiry;
-      legs.push({ strike: o.strike, right: o.right, direction: p.direction ?? 1, units: p.units, entry: p.avg_price, ltp: p.ltp });
+      const g = groups.get(o.underlying) ?? { legs: [], expiry: "" };
+      g.expiry = o.expiry;
+      g.legs.push({ strike: o.strike, right: o.right, direction: p.direction ?? 1, units: p.units, entry: p.avg_price, ltp: p.ltp });
+      groups.set(o.underlying, g);
     }
-    if (!legs.length || !spot || !expiry) return null;
-    return computeMetrics(legs, spot, expiry, undefined, run.net_iv);
+    const [top] = [...groups.values()].sort((a, b) => b.legs.length - a.legs.length);
+    if (!top || !top.legs.length || !top.expiry) return { metrics: null, bandSpot: null };
+    const s = effectiveSpot(top.legs, spot);
+    if (!s) return { metrics: null, bandSpot: null };
+    return { metrics: computeMetrics(top.legs, s, top.expiry, undefined, run.net_iv), bandSpot: s };
   }, [run.positions, spot, run.net_iv]);
 
   // Layered P&L: prior cycles (excl. current) + this cycle realized + this cycle unrealized.
@@ -110,10 +119,10 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
 
   // Near-breakeven warning: how close is spot to the nearest BE (short-vol → the danger edge).
   let nearWarn: string | null = null;
-  if (metrics && spot && metrics.breakevens.length) {
-    const nearest = metrics.breakevens.reduce((best, be) => (Math.abs(be - spot) < Math.abs(best - spot) ? be : best));
-    const pts = Math.round(Math.abs(nearest - spot));
-    if (pts <= spot * 0.01) nearWarn = `spot ${pts} pts ${nearest >= spot ? "under upper" : "over lower"} BE`;
+  if (metrics && bandSpot && metrics.breakevens.length) {
+    const nearest = metrics.breakevens.reduce((best, be) => (Math.abs(be - bandSpot) < Math.abs(best - bandSpot) ? be : best));
+    const pts = Math.round(Math.abs(nearest - bandSpot));
+    if (pts <= bandSpot * 0.01) nearWarn = `spot ${pts} pts ${nearest >= bandSpot ? "under upper" : "over lower"} BE`;
   }
 
   return (
@@ -139,9 +148,9 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
         title="Risk envelope · at expiry"
         right={metrics?.pop != null ? <span className="text-[11px] text-[var(--muted)]">POP <span className="font-semibold text-[var(--strong)] tabular-nums">{(metrics.pop * 100).toFixed(0)}%</span></span> : undefined}
       >
-        {metrics && spot ? (
+        {metrics && bandSpot ? (
           <>
-            <BreakevenBar bes={metrics.breakevens} spot={spot} />
+            <BreakevenBar bes={metrics.breakevens} spot={bandSpot} />
             <div className="mt-2 pt-2 border-t border-[var(--divider)] flex items-center justify-between gap-2 text-[11.5px]">
               <span className="text-[var(--muted)]">max profit <span className={`font-semibold tabular-nums ${sign(metrics.maxProfit)}`}>{metrics.maxProfitUnlimited ? "Unlimited" : money(metrics.maxProfit)}</span></span>
               <span className="text-[var(--muted)]">max loss <span className="font-semibold tabular-nums text-[var(--danger)]">{metrics.maxLossUnlimited ? "Unlimited" : money(metrics.maxLoss)}</span></span>

@@ -14,7 +14,7 @@ uses, replaying history through a LiveSession reproduces the backtest trade-for-
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from skas_algo.brokers.sim_broker import PaperBroker
 from skas_algo.engine.context import AlgoContext
@@ -582,12 +582,24 @@ class LiveSession:
         market = self.market
         if not hasattr(market, "index_spot"):
             return None, None  # equity run
-        underlying = getattr(self.strategy, "underlying", None)
-        spot = market.index_spot(underlying) if underlying else None
-        if spot is None:
-            return None, None
+        # Spot per LEG underlying (parsed from its own symbol) — a multi-underlying run
+        # (call_put_ratio_expiry NIFTY+SENSEX, momentum_theta) has no single
+        # ``strategy.underlying``, which used to blank ALL its greeks (2026-07-16).
+        spot_cache: dict[str, float | None] = {}
+
+        def _spot(u: str) -> float | None:
+            if u not in spot_cache:
+                try:
+                    spot_cache[u] = market.index_spot(u)
+                except Exception:  # pragma: no cover - a bad spot fetch skips the leg
+                    spot_cache[u] = None
+            return spot_cache[u]
+
         r = float(getattr(self.strategy, "r", 0.065))
-        today = getattr(market, "current_date", None) or date.today()
+        # Time-to-expiry includes the intraday fraction to the 15:30 cutoff — whole days
+        # read 0 on the expiry morning and blanked 0-DTE greeks exactly when gamma matters
+        # most. Floor ~2 minutes keeps the BS inversion sane at the close.
+        now = getattr(market, "current_datetime", None) or datetime.now()
         net_delta = 0.0
         iv_num = iv_den = 0.0
         have = False
@@ -596,9 +608,13 @@ class LiveSession:
             ltp = p.get("ltp")
             if inst is None or ltp is None or ltp <= 0:
                 continue
-            t = max((inst.expiry - today).days, 0) / 365.0
-            if t <= 0:
+            spot = _spot(inst.underlying)
+            if spot is None:
                 continue
+            exp_dt = datetime.combine(inst.expiry, time(15, 30))
+            if now.tzinfo is not None:
+                exp_dt = exp_dt.replace(tzinfo=now.tzinfo)
+            t = max((exp_dt - now).total_seconds(), 120.0) / (365.0 * 24 * 3600)
             iv = bs.implied_vol(ltp, spot, inst.strike, t, r, inst.right)
             if iv is None:
                 continue

@@ -15,7 +15,7 @@ export default function DeployPage() {
   const location = useLocation();
   const pf = (location.state as { prefill?: ForwardTestPrefill } | null)?.prefill;
 
-  const { data: strategyData } = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
+  const { data: strategyData } = useQuery({ queryKey: ["strategies"], queryFn: () => api.strategies() });
   const { data: universeData } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
   const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
 

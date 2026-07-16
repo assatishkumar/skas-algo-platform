@@ -11,7 +11,7 @@ import {
   YAxis,
 } from "recharts";
 import { formatInr } from "../lib/format";
-import { buildLivePayoff, computeMetrics, type LiveLeg } from "../lib/payoff";
+import { buildLivePayoff, computeMetrics, effectiveSpot, type LiveLeg } from "../lib/payoff";
 import type { LivePosition } from "../types";
 
 const CE_COLOR = "#8b5cf6"; // violet — CE strikes
@@ -78,14 +78,16 @@ export default function LivePayoffChart({
   spotLabel?: string; // label on the vertical spot line
 }) {
   const [zoomIdx, setZoomIdx] = useState(0);
-  const { legs, expiry } = useMemo(() => {
-    const legs: LiveLeg[] = [];
-    let expiry = "";
+  const { legs, expiry, chartUnderlying, skipped } = useMemo(() => {
+    // Group legs by UNDERLYING and chart the dominant book — one spot axis can't hold
+    // NIFTY and SENSEX strikes at once (a mixed cp_ratio run rendered a 21k→85k mess).
+    const groups = new Map<string, { legs: LiveLeg[]; expiry: string }>();
     for (const p of positions) {
       const parts = p.symbol.split("|"); // UNDERLYING|EXPIRY|STRIKE|RIGHT
       if (parts.length !== 4) continue;
-      expiry = parts[1];
-      legs.push({
+      const g = groups.get(parts[0]) ?? { legs: [], expiry: "" };
+      g.expiry = parts[1];
+      g.legs.push({
         strike: Number(parts[2]),
         right: parts[3],
         direction: p.direction ?? 1,
@@ -93,17 +95,28 @@ export default function LivePayoffChart({
         entry: p.avg_price,
         ltp: p.ltp,
       });
+      groups.set(parts[0], g);
     }
-    return { legs, expiry };
+    const [top] = [...groups.entries()].sort((a, b) => b[1].legs.length - a[1].legs.length);
+    if (!top) return { legs: [] as LiveLeg[], expiry: "", chartUnderlying: "", skipped: 0 };
+    return {
+      legs: top[1].legs,
+      expiry: top[1].expiry,
+      chartUnderlying: top[0],
+      skipped: positions.length - top[1].legs.length,
+    };
   }, [positions]);
+  // The run's underlying_spot is the PRIMARY underlying's — swap in a spot that matches
+  // the charted book (parity-derived when the provided one is another index's).
+  const chartSpot = useMemo(() => effectiveSpot(legs, spot), [legs, spot]);
   const pf = useMemo(
-    () => (legs.length && spot && expiry ? buildLivePayoff(legs, spot, expiry, asOf, ZOOMS[zoomIdx]) : null),
-    [legs, spot, expiry, asOf, zoomIdx],
+    () => (legs.length && chartSpot && expiry ? buildLivePayoff(legs, chartSpot, expiry, asOf, ZOOMS[zoomIdx]) : null),
+    [legs, chartSpot, expiry, asOf, zoomIdx],
   );
   // Breakevens = zero-crossings of the expiry payoff; mark the ones inside the visible x-window.
   const bes = useMemo(
-    () => (legs.length && spot && expiry ? computeMetrics(legs, spot, expiry, asOf)?.breakevens ?? [] : []),
-    [legs, spot, expiry, asOf],
+    () => (legs.length && chartSpot && expiry ? computeMetrics(legs, chartSpot, expiry, asOf)?.breakevens ?? [] : []),
+    [legs, chartSpot, expiry, asOf],
   );
 
   // Unique CE/PE strikes to mark on the chart (a strangle → one CE + one PE line; dedup exact dupes).
@@ -149,7 +162,12 @@ export default function LivePayoffChart({
       <div className="text-xs text-slate-400 mb-1">
         {caption ?? (
           <>
-            Payoff at expiry {pf.expiryDate}{" "}
+            Payoff at expiry {pf.expiryDate}
+            {(skipped > 0 || chartUnderlying) && (
+              <span className="font-bold text-[var(--strong)]"> · {chartUnderlying} book
+                {skipped > 0 ? ` (${skipped} other-underlying leg${skipped > 1 ? "s" : ""} not shown)` : ""}
+              </span>
+            )}{" "}
             <span className="text-slate-500">— green/red = P&L if held to expiry; dashed = current value;{" "}</span>
             <span className="font-bold" style={{ color: "var(--strong)" }}>▍spot</span>
             <span className="text-slate-500"> · </span>
@@ -184,7 +202,7 @@ export default function LivePayoffChart({
             contentStyle={{ background: "rgb(var(--slate-900))", border: "1px solid rgb(var(--slate-700))", color: "rgb(var(--slate-100))" }}
             formatter={(v: number, n: string) => [formatInr(v), n === "expiry" ? "At expiry" : "Current"]}
             labelFormatter={(v: number) => {
-              const chg = spot ? ((v - spot) / spot) * 100 : null;
+              const chg = chartSpot ? ((v - chartSpot) / chartSpot) * 100 : null;
               return chg == null ? `Spot ${Math.round(v)}` : `Spot ${Math.round(v)} (${chg >= 0 ? "+" : ""}${chg.toFixed(1)}% vs spot)`;
             }}
           />
@@ -205,11 +223,11 @@ export default function LivePayoffChart({
               />
             );
           })}
-          {spot != null && (
+          {chartSpot != null && (
             // Owner request: spot is THE reference — a thick solid high-contrast vertical
             // (var(--strong) = black on light, white on dark) so it never hides among strikes.
-            <ReferenceLine x={spot} stroke="var(--strong)" strokeWidth={3}
-              label={{ value: `${spotLabel} ${Math.round(spot)}`, fill: "var(--strong)", fontSize: 11, fontWeight: 800, position: "top" }} />
+            <ReferenceLine x={chartSpot} stroke="var(--strong)" strokeWidth={3}
+              label={{ value: `${spotLabel} ${Math.round(chartSpot)}`, fill: "var(--strong)", fontSize: 11, fontWeight: 800, position: "top" }} />
           )}
           <Area type="monotone" dataKey="expiry" stroke="#94a3b8" strokeWidth={1.5}
             fill="url(#livePayoff)" name="expiry" />

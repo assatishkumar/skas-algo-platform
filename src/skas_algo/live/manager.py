@@ -798,6 +798,9 @@ class LiveRun:
             "run_id": self.run_id,
             "status": self.status,
             "name": self.config.name,
+            # PAPER/LIVE on the WS-fed snapshot too (was only on GET /live/deployments) —
+            # the mobile app's paper/real toggle keys off it. Additive; web unaffected.
+            "mode": self.config.mode,
             "strategy_id": self.config.strategy_id,
             "instrument_class": self.config.instrument_class,
             "underlying": self.config.underlying,
