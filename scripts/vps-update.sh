@@ -35,6 +35,14 @@ start_backend() {
 trap start_backend EXIT
 
 git pull --ff-only
+# The skas-data sibling (editable install) must move WITH the platform — a platform that
+# calls a newer skas-data API against a stale clone 500s at runtime (options_coverage,
+# 2026-07-17: the Data→Options page broke on the VPS while everything else looked green).
+if [ -d ../skas-data/.git ]; then
+  echo "▶ updating ../skas-data …"
+  git -C ../skas-data pull --ff-only
+  venv/bin/pip install -e ../skas-data --quiet
+fi
 echo "▶ pip install -e . …"
 venv/bin/pip install -e . --quiet
 
