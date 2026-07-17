@@ -278,6 +278,19 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   FOOTGUN: never set `report["options"]` unless the FULL options sub-report is built —
   its mere presence flips ReportView into a layout that dereferences
   `options.summary.total_charges`. Coverage: `tests/test_intraday_replay.py`.
+- **broker_smoke_test** (Brokers-page card, 2026-07-18): the end-to-end REAL-order probe —
+  BUY 1 lot of a cheap OTM weekly (premium band ₹5–20, nearest ₹10, OI floor) or 1 share of
+  a stock (default ITC), hold ~60s, SELL, then the run **stops itself** (`stop_requested` →
+  `manager._maybe_self_stop`, honored on the EVENT LOOP side only — `manager.stop` cancels
+  the loop task — and hard-guarded on a FLAT book: a run holding positions never self-stops).
+  One cycle exercises place → poll → LIMIT-at-touch→MARKET escalation (the wide OTM spread
+  triggers it naturally) → fill → book-sync → reconcile (+ the per-recon Telegram) → exit.
+  Sizes are hard-coded 1 lot / 1 share (not params). Deploy-only, no backtest (paper fills
+  always "work"); `POST /trade/smoke-test/deploy`; one class, two deploy modes (DERIV option
+  leg / STOCK share leg — `intraday=True` keeps the STOCK run tick-driven). UI gates LIVE
+  behind a typed "REAL" confirm; all §1 keys still apply — a LIVE deploy on a disarmed
+  account paper-fills and wears the "orders PAPER" chip (a useful negative test). Per §1
+  Claude never deploys it LIVE. Coverage: `tests/test_broker_smoke_test.py`.
 - **Donchian flip default:** new deploys roll a breached name **intraday** (`breach_basis="touch"`),
   **once per name per day** (`last_flip_day` guard), up to `max_flips=3` (two rolls, then close the
   name on the next breach). Defaults live in the deploy layer (`api/models.py:DonchianDeploy`); the

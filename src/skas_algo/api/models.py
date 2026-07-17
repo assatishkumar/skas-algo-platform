@@ -300,6 +300,29 @@ class IronFlyDeploy(BaseModel):
     auto: bool = True
 
 
+class SmokeTestDeploy(BaseModel):
+    """Deploy broker_smoke_test: buy 1 lot of a cheap OTM weekly option OR 1 share of a
+    stock, hold ~60s, sell, then the run stops itself — a deliberate end-to-end probe of
+    the REAL order path (place → poll → escalate → fill → reconcile → exit). Sizes are
+    hard-coded to 1 lot / 1 share in the strategy; mode=LIVE is the whole point but the
+    §1 gates (armed ∧ flag ∧ adapter) still decide whether orders are real."""
+
+    leg: str = "option"                 # "option" | "stock"
+    name: str | None = None
+    underlying: str = "NIFTY"           # option leg
+    right: str = "CE"                   # option leg: CE | PE
+    symbol: str = "ITC"                 # stock leg
+    hold_seconds: int = Field(60, ge=15, le=600)
+    target_premium: float = 10.0        # option leg: strike trading nearest this…
+    premium_min: float = 5.0            # …within this band
+    premium_max: float = 20.0
+    capital: float = 50_000
+    refresh_seconds: int = Field(10, ge=5)  # fast ticks so the 60s hold is honored ±10s
+    mode: str = "PAPER"                 # UI requires a typed confirmation for LIVE
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+
+
 class CpRatioExpiryDeploy(BaseModel):
     """Deploy call_put_ratio_expiry: expiry-day-only 1:3 premium-ratio seller (buy ATM
     straddle, sell 3× at the ⅓-premium strikes). Needs a live chain for strike selection,

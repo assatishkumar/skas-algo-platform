@@ -28,6 +28,7 @@ from skas_algo.api.models import (
     MomentumThetaDeploy,
     OptionsTradeDeploy,
     OptionTradeLeg,
+    SmokeTestDeploy,
     WeeklyIntradayStraddleDeploy,
 )
 from skas_algo.api.routes.data import _live_adapter
@@ -547,6 +548,55 @@ async def iron_fly_deploy(
         refresh_seconds=max(5, int(body.refresh_seconds)),
         ignore_market_hours=body.ignore_market_hours,
         auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/smoke-test/deploy")
+async def smoke_test_deploy(
+    body: SmokeTestDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the broker smoke test: 1 lot OTM option OR 1 share of a stock, buy → ~60s →
+    sell → the run stops itself. An end-to-end order-path probe (Brokers page card).
+    The §1 gates fully apply — a LIVE deploy on a disarmed account paper-fills and wears
+    the "orders PAPER" chip, which is itself a useful negative test."""
+    leg = body.leg if body.leg in ("option", "stock") else "option"
+    if leg == "option" and body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="the OTM strike pick needs the LIVE chain — deploy with a broker "
+                   "quote source (zerodha)")
+    if body.premium_min <= 0 or body.premium_max < body.premium_min:
+        raise HTTPException(status_code=422, detail="premium band must satisfy 0 < min ≤ max")
+    is_option = leg == "option"
+    params = {
+        "leg": leg,
+        "underlying": body.underlying.upper(),
+        "symbol": body.symbol.upper(),
+        "right": body.right.upper(),
+        "hold_seconds": body.hold_seconds,
+        "target_premium": body.target_premium,
+        "premium_min": body.premium_min,
+        "premium_max": body.premium_max,
+    }
+    req = LiveStartRequest(
+        strategy_id="broker_smoke_test",
+        name=body.name or f"smoke_{'opt_' + body.underlying.lower() if is_option else 'eq_' + body.symbol.lower()}",
+        instrument_class="DERIV" if is_option else "STOCK",
+        underlying=body.underlying.upper() if is_option else None,
+        symbols=[] if is_option else [body.symbol.upper()],
+        capital=body.capital,
+        params=params,
+        tax_rate=0.0,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
+        ignore_market_hours=False,  # a smoke test outside market hours proves nothing
+        auto=True,                  # the whole point is that it runs immediately
     )
     return start_deployment(req, db, loader, avail).snapshot()
 

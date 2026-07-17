@@ -1639,6 +1639,21 @@ class LiveRunManager:
                 live.end_day()
                 live.last_decision_day = now.date()
 
+    def _maybe_self_stop(self, live: LiveRun) -> bool:
+        """A strategy whose lifecycle is COMPLETE (broker_smoke_test after its one
+        buy→hold→sell cycle) sets ``stop_requested``; the loop then stops the run cleanly.
+        Guarded on a FLAT book no matter what the strategy claims — a run holding real
+        positions must never stop itself (stopping ends all management of the book)."""
+        strategy = getattr(live.session, "strategy", None)
+        if not getattr(strategy, "stop_requested", False):
+            return False
+        if live.session.portfolio.lot_symbols():
+            return False  # still holding — never abandon a live book
+        logger.info("run %s (%s) completed its lifecycle — stopping itself",
+                    live.run_id, live.config.name)
+        self.stop(live.run_id)
+        return True
+
     async def _loop(self, live: LiveRun) -> None:
         try:
             loop = asyncio.get_running_loop()
@@ -1682,6 +1697,11 @@ class LiveRunManager:
                             self._tick_pool, self._tick, live, tick_driven, decide_at)
                     except Exception:  # pragma: no cover - keep the loop alive
                         logger.exception("live loop tick failed for run %s", live.run_id)
+                    # Self-stop seam (broker_smoke_test): honored HERE, on the event loop —
+                    # manager.stop() cancels this very task, which is only safe from the loop
+                    # thread, never from inside the tick worker.
+                    if self._maybe_self_stop(live):
+                        return
                 await asyncio.sleep(live.config.refresh_seconds)
         except asyncio.CancelledError:  # pragma: no cover
             pass

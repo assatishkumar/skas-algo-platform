@@ -308,6 +308,108 @@ function LoginFlow({ id, broker, onDone }: { id: number; broker: string; onDone:
 // refreshed even on a cold cache.
 const INDEX_SPOTS = ["NIFTY 50", "NIFTY BANK"];
 
+/** One-tap end-to-end order-path probe: 1 lot cheap OTM option or 1 share of a stock,
+ *  buy → ~60s → sell → the run stops itself. Lives HERE because it answers the Brokers
+ *  page's question — "will real orders actually work right now?" — and the §1 gates
+ *  fully apply (LIVE on a disarmed account paper-fills and wears the "orders PAPER"
+ *  chip, a useful negative test in itself). */
+function SmokeTestCard({ accounts, onAction }: {
+  accounts: BrokerAccount[];
+  onAction: (fn: () => Promise<unknown>, ok: string) => void;
+}) {
+  const sessioned = accounts.filter((a) => a.has_session && a.broker === "zerodha");
+  const [leg, setLeg] = useState<"option" | "stock">("option");
+  const [underlying, setUnderlying] = useState("NIFTY");
+  const [right, setRight] = useState<"CE" | "PE">("CE");
+  const [symbol, setSymbol] = useState("ITC");
+  const [mode, setMode] = useState("PAPER");
+  const [accountId, setAccountId] = useState<number | null>(null);
+  const acct = accountId ?? sessioned[0]?.id ?? null;
+  const field = "w-full rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-2.5 py-1.5 text-[13px] text-[var(--strong)]";
+
+  function deploy() {
+    if (mode === "LIVE") {
+      const typed = window.prompt(
+        "LIVE smoke test: if this account is ARMED and the server flag is on, this places a REAL " +
+        "buy and a REAL sell at the broker (1 " + (leg === "option" ? "lot" : "share") + ").\n\nType REAL to continue.");
+      if (typed !== "REAL") return;
+    }
+    onAction(
+      () => api.smokeTestDeploy({
+        leg, mode, broker_account_id: acct, quote_source: "zerodha",
+        ...(leg === "option" ? { underlying, right } : { symbol: symbol.trim().toUpperCase() }),
+      }),
+      `Smoke test deployed (${mode}) — watch the Live page: buy → 60s → sell, then the run stops itself. ` +
+      "Expect Telegram: reconcile OK before entry, and again after exit.",
+    );
+  }
+
+  return (
+    <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] px-[22px] py-5">
+      <div className="font-['Space_Grotesk'] font-bold text-[16px] text-[var(--strong)]">Broker smoke test</div>
+      <p className="mt-1 text-[12.5px] leading-relaxed text-[var(--muted)]">
+        Buys the smallest possible position ({leg === "option" ? "1 lot of a ₹5–20 OTM weekly option" : "1 share"}),
+        holds ~60s, sells, and stops itself — proving login → order → fill → reconcile → exit end to end.
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <label className="text-[11px] font-semibold text-[var(--faint)] col-span-2">
+          What to trade
+          <div className="mt-1 grid grid-cols-2 gap-1.5">
+            {(["option", "stock"] as const).map((v) => (
+              <button key={v} onClick={() => setLeg(v)}
+                className={`rounded-[10px] px-2 py-1.5 text-[12.5px] font-semibold border ${leg === v
+                  ? "border-transparent bg-[var(--accent,#0f766e)] text-white"
+                  : "border-[var(--field-border)] bg-[var(--field)] text-[var(--muted)]"}`}>
+                {v === "option" ? "OTM option · 1 lot" : "Stock · 1 share"}
+              </button>
+            ))}
+          </div>
+        </label>
+        {leg === "option" ? (
+          <>
+            <label className="text-[11px] font-semibold text-[var(--faint)]">
+              Underlying
+              <select className={field} value={underlying} onChange={(e) => setUnderlying(e.target.value)}>
+                {["NIFTY", "BANKNIFTY", "SENSEX"].map((u) => <option key={u}>{u}</option>)}
+              </select>
+            </label>
+            <label className="text-[11px] font-semibold text-[var(--faint)]">
+              Right
+              <select className={field} value={right} onChange={(e) => setRight(e.target.value as "CE" | "PE")}>
+                <option>CE</option><option>PE</option>
+              </select>
+            </label>
+          </>
+        ) : (
+          <label className="text-[11px] font-semibold text-[var(--faint)] col-span-2">
+            Symbol
+            <input className={field} value={symbol} onChange={(e) => setSymbol(e.target.value)} />
+          </label>
+        )}
+        <label className="text-[11px] font-semibold text-[var(--faint)]">
+          Account
+          <select className={field} value={acct ?? ""} onChange={(e) => setAccountId(Number(e.target.value))}>
+            {sessioned.length === 0 && <option value="">No logged-in session</option>}
+            {sessioned.map((a) => <option key={a.id} value={a.id}>{a.label}{a.armed ? " · ARMED" : ""}</option>)}
+          </select>
+        </label>
+        <label className="text-[11px] font-semibold text-[var(--faint)]">
+          Mode
+          <select className={field} value={mode} onChange={(e) => setMode(e.target.value)}>
+            <option>PAPER</option><option>LIVE</option>
+          </select>
+        </label>
+      </div>
+      <button onClick={deploy} disabled={acct == null}
+        title={acct == null ? "Needs a logged-in Zerodha session" : undefined}
+        className={`mt-3 w-full rounded-[11px] px-3 py-2 text-[13px] font-bold disabled:opacity-50 ${mode === "LIVE"
+          ? "bg-[var(--danger)] text-white" : "bg-[var(--chip)] text-[var(--chip-text)]"}`}>
+        {mode === "LIVE" ? "Deploy LIVE smoke test" : "Deploy paper smoke test"}
+      </button>
+    </div>
+  );
+}
+
 function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
   a: BrokerAccount;
   loginOpen: boolean;
@@ -587,6 +689,7 @@ export default function BrokersPage() {
         <div className="mt-5 grid items-start gap-[22px] lg:grid-cols-[428px_1fr]">
           <div className="space-y-4 lg:sticky lg:top-[92px]">
             <ConnectCard onDone={onConnected} />
+            <SmokeTestCard accounts={accounts} onAction={onAction} />
             <SecurityCard />
           </div>
 

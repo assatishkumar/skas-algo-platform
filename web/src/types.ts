@@ -851,6 +851,17 @@ export interface DeltaNeutralDeploy {
   auto: boolean;
 }
 
+export interface SmokeTestDeploy {
+  leg: "option" | "stock";
+  underlying?: string; // option leg (default NIFTY)
+  right?: "CE" | "PE"; // option leg
+  symbol?: string; // stock leg (default ITC)
+  hold_seconds?: number;
+  mode: string; // PAPER | LIVE (UI gates LIVE behind a typed confirmation)
+  quote_source?: string;
+  broker_account_id: number | null;
+}
+
 export interface IronFlyDeploy {
   name: string;
   underlying: string;
