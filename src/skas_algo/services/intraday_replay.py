@@ -58,8 +58,9 @@ REPLAYABLE = {"intraday_straddle", "weekly_intraday_straddle", "call_put_ratio_e
 class _Market:
     """ctx.market for the replay: per-day forward-filled marks + store-built chains."""
 
-    def __init__(self, underlying: str):
+    def __init__(self, underlying: str, lot_overrides: dict | None = None):
         self.underlying = underlying
+        self.lot_overrides = lot_overrides   # params["contract_specs"] — parity w/ engine
         self.quotes: dict[str, tuple[float, float]] = {}   # symbol -> (close, oi)
         # expiry_iso -> strike -> {"CE": sym, "PE": sym}; rebuilt per day from stored symbols.
         self.chains: dict[str, dict[float, dict[str, str]]] = {}
@@ -98,11 +99,27 @@ class _Market:
                 best = (diff, k + ce[0] - pe[0])
         return best[1] if best else None
 
+    # Put-call parity yields the FUTURES-implied level (cash + cost-of-carry). The
+    # strategies compare "spot" against CASH-index strikes, and the ~20-pt carry bias
+    # flipped the 2026-07-16 ATM pick to 24200 while live (real index spot) picked 24100
+    # — a 100-pt strike miss that decided the day. Discount at the same flat r the
+    # strategies price with; dividends ignored (residual bias is a few points, not ~20).
+    _CARRY_R = 0.065
+
+    def _decarry(self, f: float, expiry_iso: str) -> float:
+        try:
+            t_days = (date.fromisoformat(str(expiry_iso)[:10]) - self.current_date).days
+        except (TypeError, ValueError):  # pragma: no cover - malformed expiry → leave as-is
+            return f
+        if t_days <= 0:
+            return f  # expiry day: F ≈ S (also keeps settlement intrinsic exact)
+        return f / (1.0 + self._CARRY_R * t_days / 365.0)
+
     def index_spot(self, _u: str) -> float | None:
         for e in sorted(self.chains):   # nearest stored expiry that has a parity pair
             spot = self._parity(e)
             if spot is not None:
-                return spot
+                return self._decarry(spot, e)
         return None
 
     def live_chain(self, _u: str, expiry_iso: str) -> dict | None:
@@ -120,12 +137,15 @@ class _Market:
 
             legs = strikes[k]
             rows.append({"strike": k, "ce": info(legs.get("CE")), "pe": info(legs.get("PE"))})
-        spot = self._parity(str(expiry_iso)[:10]) or self.index_spot(self.underlying)
+        own = self._parity(str(expiry_iso)[:10])
+        spot = (self._decarry(own, expiry_iso) if own is not None
+                else self.index_spot(self.underlying))
         if not rows or spot is None:
             return None
         atm = min((r["strike"] for r in rows), key=lambda s: abs(s - spot))
         try:
-            lot = lot_size_for(self.underlying, date.fromisoformat(str(expiry_iso)[:10]))
+            lot = lot_size_for(self.underlying, date.fromisoformat(str(expiry_iso)[:10]),
+                               overrides=self.lot_overrides)
         except KeyError:
             lot = 0
         return {"spot": spot, "atm_strike": atm, "lot_size": lot, "rows": rows}
@@ -183,27 +203,106 @@ def _intrinsic(spot: float, strike: float, right: str) -> float:
     return max(spot - strike, 0.0) if right == "CE" else max(strike - spot, 0.0)
 
 
+# SHORT-leg lot-multiples per lot-set of each strategy's structure — the margin push sums
+# over short legs, so a user-keyed "margin per lot-set" must be spread across them
+# (straddle: CE+PE short = 2; cpre: 3 short lots per side x 2 sides = 6; the fly/strangle
+# families keep 2 shorts through their adjustments).
+_SHORT_UNITS_PER_SET = {"intraday_straddle": 2, "weekly_intraday_straddle": 2,
+                        "delta_neutral_monthly": 2, "iron_fly_monthly": 2,
+                        "call_put_ratio_expiry": 6}
+
+
+def _nearest_expiry_lot(u: str, day: date, expiries: list[date],
+                        lot_overrides: dict | None) -> int:
+    """Lot size of the CONTRACT actually traded that day (lot revisions bind to new
+    contracts, so the era key is the nearest EXPIRY, not the trade date — sizing off the
+    trade date under-/over-counts units across a revision boundary)."""
+    exp = min((e for e in expiries if e >= day), default=(expiries[0] if expiries else day))
+    return lot_size_for(u, exp, overrides=lot_overrides)
+
+
+def _ref_spot(u: str, days_pool: list[date],
+              lot_overrides: dict | None) -> tuple[float, date, int] | None:
+    """(parity spot, day, nearest-expiry lot) near the open of the LATEST store day with
+    ``u`` bars — the reference notional for the user-keyed margin ("TODAY'S broker margin
+    per lot"). Walks back a few days so a data-hole tail can't void the run."""
+    for day in list(reversed(days_pool))[:10]:
+        df = load_day(day)
+        df = df[df["symbol"].str.startswith(f"{u}|")]
+        if df.empty:
+            continue
+        m = _Market(u)
+        m.start_day(day, list(df["symbol"].unique()))
+        expiries = sorted({date.fromisoformat(s.split("|")[1])
+                           for s in df["symbol"].unique()})
+        minutes = pd.to_datetime(df["start"]).dt.strftime("%Y-%m-%dT%H:%M")
+        by_min: dict[str, list] = {}
+        for sym, minute, close_px, oi in zip(df["symbol"], minutes, df["close"], df["oi"],
+                                             strict=True):
+            by_min.setdefault(minute, []).append((sym, float(close_px), float(oi)))
+        for mk in sorted(by_min):
+            for sym, c, oi in by_min[mk]:
+                m.feed(sym, c, oi)
+            spot = m.index_spot(u)
+            if spot:
+                return float(spot), day, _nearest_expiry_lot(u, day, expiries, lot_overrides)
+    return None
+
+
 def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: date,
-                          capital: float, params: dict | None = None) -> dict:
+                          capital: float, params: dict | None = None,
+                          progress=None) -> dict:
     """Replay ``strategy_id`` over the store days in [start, end]. Returns
-    {"report", "trades"} in the standard run contract (see module docstring)."""
+    {"report", "trades"} in the standard run contract (see module docstring).
+    ``progress(done, total, day_iso)`` is called at the top of each day (job UI)."""
     if strategy_id not in REPLAYABLE:
         raise ValueError(f"{strategy_id} is not intraday-replayable (supported: "
                          f"{sorted(REPLAYABLE)})")
     p = dict(params or {})
     mp = MarginParams.from_dict(p.pop("margin", None))
     u = underlying.upper()
-    days = [date.fromisoformat(d) for d in captured_days()
-            if start.isoformat() <= d <= end.isoformat()]
+    all_days = [date.fromisoformat(d) for d in captured_days()]
+    days = [d for d in all_days if start <= d <= end]
     if not days:
         raise ValueError("the option store has no captured days in this window — "
                          "see Data → Options for coverage")
+
+    # ---- owner-keyed margin + capital sizing (2026-07-17; defaults preserve old behavior)
+    # margin_per_lot = TODAY'S broker margin for one lot-set of THIS strategy's structure
+    # (straddle pair ~Rs2L, spread ~Rs50k). Converted to a % of notional against the
+    # LATEST store day and applied era-true: 2021 margins shrink with 2021 spots and lot
+    # sizes automatically. 0 = keep the (span+exposure)% model margin.
+    margin_per_lot = float(p.pop("margin_per_lot", 0) or 0)
+    sizing = str(p.pop("sizing", "fixed") or "fixed")
+    buffer_pct = float(p.pop("sizing_buffer_pct", 10) or 0)
+    lot_overrides = p.get("contract_specs")   # same override surface as the engine paths
+    short_per_set = _SHORT_UNITS_PER_SET.get(strategy_id, 2)
+    margin_pct: float | None = None
+    sizing_echo: dict | None = None
+    if margin_per_lot > 0:
+        ref = _ref_spot(u, all_days, lot_overrides)
+        if ref is None:
+            raise ValueError(f"cannot derive a reference spot for {u} from the store — "
+                             "margin_per_lot needs at least one stored day with bars")
+        ref_spot, ref_day, ref_lot = ref
+        # Spread the lot-SET margin across the structure's short legs: the per-minute push
+        # sums short_option_margin over shorts, so one lot-set pushes exactly
+        # margin_per_lot x (spot/ref_spot) x (lot_size/ref_lot).
+        margin_pct = margin_per_lot / (ref_spot * ref_lot * short_per_set)
+        mp = MarginParams(span_pct=margin_pct, exposure_pct=0.0)
+        sizing_echo = {"margin_per_lot": margin_per_lot, "margin_pct": round(margin_pct, 6),
+                       "ref_spot": round(ref_spot, 2), "ref_day": ref_day.isoformat(),
+                       "ref_lot_size": ref_lot, "sizing": sizing,
+                       "sizing_buffer_pct": buffer_pct}
+    if sizing == "capital" and margin_pct is None:
+        raise ValueError("capital-based sizing needs margin_per_lot — key in today's "
+                         "broker margin for one lot-set of this strategy")
 
     factory = get_strategy(strategy_id)
     if strategy_id == "call_put_ratio_expiry":
         p.setdefault("underlyings", [u])   # cpre ignores ``universe`` — takes underlyings
     strategy = factory(universe=[u], initial_capital=capital, **p)
-    market = _Market(u)
+    market = _Market(u, lot_overrides=lot_overrides)
     chain = _Chain()
     ctx = _Ctx(market, chain)
     if hasattr(strategy, "set_option_bars_fn"):
@@ -268,7 +367,7 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                            "tag": sig.reason})
             _u, e_iso, strike_s, right = sym.split("|")
             try:
-                per_lot = lot_size_for(_u, date.fromisoformat(e_iso))
+                per_lot = lot_size_for(_u, date.fromisoformat(e_iso), overrides=lot_overrides)
             except KeyError:
                 per_lot = 0
             leg = {"symbol": sym, "underlying": _u, "strike": float(strike_s),
@@ -302,7 +401,10 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                     })
                     episode = None
 
-    for day in days:
+    sizing_skipped_days = 0
+    for day_i, day in enumerate(days):
+        if progress is not None:
+            progress(day_i, len(days), day.isoformat())
         df = load_day(day)
         df = df[df["symbol"].str.startswith(f"{u}|")]
         if df.empty:
@@ -317,6 +419,14 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                                              strict=True):
             feed.setdefault(minute, []).append((sym, float(close_px), float(oi)))
 
+        # Capital-based sizing: refit lots to CURRENT equity on FLAT days only (an open
+        # multi-day book is never resized). Sized at the first minute with a parity spot;
+        # equity < one buffered lot-set => the day's entries are skipped, never 0-unit
+        # orders. Strategies read self.lots/self.sets fresh at entry, so this takes
+        # effect the same day.
+        day_sized = sizing != "capital" or bool(ctx.positions)
+        day_blocked = False
+
         cur = datetime.combine(day, _OPEN)
         end_dt = datetime.combine(day, _CLOSE)
         while cur <= end_dt:
@@ -325,6 +435,24 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                 market.feed(sym, close_px, oi)
             ctx._now = cur
             market.now = cur
+            if not day_sized:
+                spot = market.index_spot(u)
+                if spot:
+                    day_sized = True
+                    lot_t = _nearest_expiry_lot(u, day, chain.days, lot_overrides)
+                    mpl_t = margin_pct * spot * lot_t * short_per_set  # era-true Rs/lot-set
+                    equity = equity_curve[-1]["equity"] if equity_curve else capital
+                    n = int(equity // (mpl_t * (1 + buffer_pct / 100.0))) if mpl_t > 0 else 0
+                    if n < 1:
+                        day_blocked = True
+                        sizing_skipped_days += 1
+                    elif strategy_id == "call_put_ratio_expiry":
+                        strategy.sets = {k: n for k in strategy.sets}
+                    elif hasattr(strategy, "lots"):
+                        strategy.lots = n
+            if day_blocked and not ctx.positions:
+                cur += timedelta(minutes=1)
+                continue  # equity can't fund one lot-set — no entries today
             try:
                 signals = strategy.on_slice(ctx)
             except Exception:  # a bad minute must not void the whole range
@@ -373,6 +501,13 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                               realized)
     report = _to_report(equity_curve, trades, capital, charges_bd["total"], days_with_bars,
                         cycles=cycles, options=options)
+    if sizing_echo is not None:
+        # Additive key (ReportView ignores unknowns): records the margin actually used —
+        # keyed rupees, derived notional %, reference day, and days skipped for equity.
+        sizing_echo["sizing_skipped_days"] = sizing_skipped_days
+        report["sizing"] = sizing_echo
+    if progress is not None:
+        progress(len(days), len(days), days[-1].isoformat())
     return {"report": report, "trades": trades}
 
 
@@ -518,6 +653,57 @@ def _to_report(curve: list[dict], trades: list[dict], capital: float,
     if cagr is not None:   # a 4-day window annualized is noise — only emit on ≥3 months
         metrics["CAGR %"] = round(cagr, 2)
     report: dict = {"metrics": metrics, "equity_curve": curve}
+    yearly, monthly_profit, monthly_equity = _periodic_breakdowns(curve, capital)
+    if yearly:
+        # Same contract keys the EOD engine emits — ReportView's existing Yearly table +
+        # Monthly P&L grid light up with no frontend change (owner ask, 2026-07-17).
+        report["yearly"] = yearly
+        report["monthly_profit"] = monthly_profit
+        report["monthly_equity"] = monthly_equity
     if options is not None:
         report["options"] = options
     return report
+
+
+def _periodic_breakdowns(curve: list[dict], capital: float):
+    """yearly / monthly_profit / monthly_equity derived from the daily equity curve.
+    Monthly P&L = month-end equity − previous period-end equity (chained from the initial
+    capital); per-year Max DD resets its high-water mark at the year boundary (matching
+    the EOD report's YearlyTable semantics). Taxes are 0 — the replay charges F&O costs
+    per fill instead."""
+    if not curve:
+        return {}, {}, {}
+    monthly_profit: dict[str, dict[str, int | float]] = {}
+    monthly_equity: dict[str, dict[str, int | float]] = {}
+    yearly: dict[str, dict] = {}
+    last_by_month: dict[tuple[str, str], float] = {}
+    order: list[tuple[str, str]] = []
+    for pt in curve:
+        y, mo = pt["date"][:4], str(int(pt["date"][5:7]))
+        if (y, mo) not in last_by_month:
+            order.append((y, mo))
+        last_by_month[(y, mo)] = pt["equity"]
+    prev = capital
+    for y, mo in order:
+        eq = last_by_month[(y, mo)]
+        monthly_profit.setdefault(y, {})[mo] = round(eq - prev, 2)
+        monthly_equity.setdefault(y, {})[mo] = round(eq, 2)
+        prev = eq
+    year_start = capital
+    for y in sorted({y for y, _ in order}):
+        pts = [pt for pt in curve if pt["date"][:4] == y]
+        eoy = pts[-1]["equity"]
+        peak, dd = -1e18, 0.0   # high-water mark resets each calendar year
+        for pt in pts:
+            peak = max(peak, pt["equity"])
+            if peak > 0:
+                dd = max(dd, 100.0 * (peak - pt["equity"]) / peak)
+        yearly[y] = {
+            "Return (Abs)": round(eoy - year_start, 2),
+            "Return (%)": round(100.0 * (eoy - year_start) / year_start, 2) if year_start else 0.0,
+            "Portfolio Value": round(eoy, 2),
+            "Taxes": 0.0,
+            "Max Drawdown (%)": round(dd, 2),
+        }
+        year_start = eoy
+    return yearly, monthly_profit, monthly_equity

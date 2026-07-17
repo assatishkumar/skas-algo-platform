@@ -1,6 +1,7 @@
 import type {
   BacktestRequest,
   BacktestResponse,
+  ReplayJobSnapshot,
   BenchmarkPoint,
   LoginResponse,
   BrokerAccount,
@@ -124,8 +125,11 @@ export const api = {
     }),
   strategies: (basis: "eod" | "intraday" = "eod") =>
     request<{ strategies: string[] }>(`/strategies?basis=${basis}`),
+  // INTRADAY replays run as a background job: POST returns {job_id}, poll progress for
+  // {done,total,day} and the full BacktestResponse-shaped result once status=="done".
   backtestIntraday: (body: BacktestRequest) =>
-    request<BacktestResponse>("/backtest/intraday", { method: "POST", body: JSON.stringify(body) }),
+    request<{ job_id: string }>("/backtest/intraday", { method: "POST", body: JSON.stringify(body) }),
+  backtestIntradayProgress: () => request<ReplayJobSnapshot>("/backtest/intraday/progress"),
   universes: () => request<Universe[]>("/universes"),
   universeSymbols: (name: string) =>
     request<{ name: string; symbols: string[] }>(`/universes/${encodeURIComponent(name)}/symbols`),

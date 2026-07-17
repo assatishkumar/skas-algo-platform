@@ -373,6 +373,18 @@ export interface BacktestResponse {
   trades: Trade[];
 }
 
+/** The intraday replay's background-job snapshot (GET /backtest/intraday/progress). */
+export interface ReplayJobSnapshot {
+  status: "idle" | "running" | "done" | "error";
+  id?: string;
+  done: number;
+  total: number;
+  day?: string | null; // the day currently replaying (ISO)
+  error?: string | null;
+  result?: BacktestResponse | null; // present once status=="done"
+  started_at?: string;
+}
+
 export interface OverrideInput {
   scope: string;
   target: string | null;

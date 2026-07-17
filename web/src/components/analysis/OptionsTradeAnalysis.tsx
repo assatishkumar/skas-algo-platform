@@ -92,7 +92,14 @@ function LegsTable({ legs }: { legs: CycleLeg[] }) {
   );
 }
 
-function CycleCard({ cycle, points, live }: { cycle: ReconCycle; points: StockSeriesPoint[]; live?: LiveRunSnapshot | null }) {
+function CycleCard({ cycle, points, live, defaultOpen = false }: {
+  cycle: ReconCycle; points: StockSeriesPoint[]; live?: LiveRunSnapshot | null;
+  defaultOpen?: boolean;
+}) {
+  // COLLAPSED by default: an intraday run has 500+ cycles, and mounting 2-3 payoff SVGs
+  // per cycle froze the whole Analyze page (owner, 2026-07-17). The legs table + charts
+  // mount only when a cycle is expanded — the header/summary row stays cheap.
+  const [expanded, setExpanded] = useState(defaultOpen);
   // Prefer the spot captured AT TRADE TIME (immune to a lagging bhavcopy cache); then, for an open
   // cycle, the broker's live spot; finally the cached index close on that date.
   const entrySpot = cycle.entry_spot ?? (cycle.open ? live?.underlying_spot ?? null : null) ?? spotOn(points, cycle.entry_date);
@@ -117,42 +124,55 @@ function CycleCard({ cycle, points, live }: { cycle: ReconCycle; points: StockSe
 
   return (
     <Card className="space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <div>
-          <span className="font-medium text-slate-200">
-            {cycle.underlying} · {cycle.legs.length} legs · exp {cycle.expiry}
-          </span>
-          <span
-            className={`ml-2 rounded px-1.5 py-0.5 text-[11px] ${
-              cycle.open
-                ? "bg-sky-900/50 text-sky-300"
-                : "bg-slate-800 text-slate-400"
-            }`}
-          >
-            {cycle.open ? "OPEN" : "CLOSED"}
-          </span>
-        </div>
-        <div className="text-xs text-slate-400">
-          Entered {cycle.entry_date}
-          {cycle.exit_date ? ` · exited ${cycle.exit_date} (${cycle.holding_days}d)` : ""}
-          {cycle.exit_reason ? ` · ${cycle.exit_reason}` : ""}
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-x-8 gap-y-1 text-sm">
-        <div>
-          <span className="text-slate-400 text-xs mr-2">Net {net >= 0 ? "credit" : "debit"}</span>
-          <span className="tabular-nums font-medium">{formatInr(Math.abs(net))}</span>
-        </div>
-        {!cycle.open && (
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full text-left cursor-pointer"
+        title={expanded ? "Collapse" : "Expand — legs + entry/exit payoff charts"}
+      >
+        <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
           <div>
-            <span className="text-slate-400 text-xs mr-2">Realized P&L</span>
-            <span className={`tabular-nums font-medium ${cycle.realized_pnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
-              {formatInr(cycle.realized_pnl)}
+            <span className="text-slate-500 mr-1.5 text-xs">{expanded ? "▾" : "▸"}</span>
+            <span className="font-medium text-slate-200">
+              {cycle.underlying} · {cycle.legs.length} legs · exp {cycle.expiry}
+            </span>
+            <span
+              className={`ml-2 rounded px-1.5 py-0.5 text-[11px] ${
+                cycle.open
+                  ? "bg-sky-900/50 text-sky-300"
+                  : "bg-slate-800 text-slate-400"
+              }`}
+            >
+              {cycle.open ? "OPEN" : "CLOSED"}
             </span>
           </div>
-        )}
-      </div>
+          <div className="text-xs text-slate-400">
+            Entered {cycle.entry_date}
+            {cycle.exit_date ? ` · exited ${cycle.exit_date} (${cycle.holding_days}d)` : ""}
+            {cycle.exit_reason ? ` · ${cycle.exit_reason}` : ""}
+          </div>
+        </div>
+
+        <div className="mt-2 flex flex-wrap gap-x-8 gap-y-1 text-sm">
+          <div>
+            <span className="text-slate-400 text-xs mr-2">Net {net >= 0 ? "credit" : "debit"}</span>
+            <span className="tabular-nums font-medium">{formatInr(Math.abs(net))}</span>
+          </div>
+          {!cycle.open && (
+            <div>
+              <span className="text-slate-400 text-xs mr-2">Realized P&L</span>
+              <span className={`tabular-nums font-medium ${cycle.realized_pnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                {formatInr(cycle.realized_pnl)}
+              </span>
+            </div>
+          )}
+          {!expanded && (
+            <span className="text-xs text-slate-500 self-center">click for legs + payoff charts</span>
+          )}
+        </div>
+      </button>
+
+      {!expanded ? null : <>
 
       <LegsTable legs={cycle.legs} />
 
@@ -204,6 +224,7 @@ function CycleCard({ cycle, points, live }: { cycle: ReconCycle; points: StockSe
           />
         </div>
       )}
+      </>}
     </Card>
   );
 }
@@ -369,12 +390,16 @@ export default function OptionsTradeAnalysis({ analysis }: { analysis: RunAnalys
       <div className="text-sm text-slate-400">
         {cycles.length} option {cycles.length === 1 ? "cycle" : "cycles"}
         {open ? ` · ${open} open` : ""}
-        {closed ? ` · ${closed} closed` : ""} — each shows all legs and the payoff at entry
-        {closed ? " and at exit" : ""}.
+        {closed ? ` · ${closed} closed` : ""} — click a cycle to expand its legs and the
+        entry{closed ? "/exit" : ""} payoff charts.
       </div>
       <CycleSummary cycles={cycles} points={points} />
       {cycles.map((c) => (
-        <CycleCard key={`${c.expiry}-${c.entry_date}`} cycle={c} points={points} live={c.open ? live : null} />
+        <CycleCard key={`${c.expiry}-${c.entry_date}`} cycle={c} points={points}
+          live={c.open ? live : null}
+          // Open cycles (the ones being watched) and tiny runs auto-expand; a 500-cycle
+          // intraday run starts fully collapsed — that page froze mounting 1,000+ SVGs.
+          defaultOpen={c.open || cycles.length <= 2} />
       ))}
     </div>
   );

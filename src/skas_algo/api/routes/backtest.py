@@ -132,14 +132,21 @@ def post_backtest(
     return BacktestResponse(**result)
 
 
-@router.post("/backtest/intraday", response_model=BacktestResponse)
-def post_backtest_intraday(req: BacktestRequest, db: Session = Depends(get_db)) -> BacktestResponse:
+@router.post("/backtest/intraday")
+def post_backtest_intraday(req: BacktestRequest) -> dict:
     """The unified page's INTRADAY basis: replay a deploy-only options strategy over the
     self-captured 1-min option store (services/intraday_replay), or dispatch momentum_theta
-    to its BS service — emitting the SAME run contract as POST /backtest, so preview/save/
-    Runs/Compare all work unchanged. Sync in-request (a few seconds per stored week)."""
+    to its BS service — emitting the SAME run contract as POST /backtest.
+
+    Runs as a BACKGROUND JOB (a 5-year window is minutes of replay — one blocking request
+    had no progress and its preview died with the page, 2026-07-17): returns {job_id}
+    immediately; poll GET /backtest/intraday/progress for {done,total,day} and, when
+    status=="done", the full {report,trades} result (feed it to POST /backtest/save to
+    persist — unchanged). Cheap validation stays synchronous (404/422/409 up front)."""
     from datetime import date as _date
 
+    from skas_algo.data.option_intraday_store import captured_days
+    from skas_algo.services import replay_jobs
     from skas_algo.services.intraday_replay import (
         REPLAYABLE,
         run_intraday_backtest,
@@ -152,26 +159,57 @@ def post_backtest_intraday(req: BacktestRequest, db: Session = Depends(get_db)) 
     req.instrument_class = "DERIV"
     req.end_date = req.end_date or _date.today()
     req.params["data_basis"] = "intraday"   # run tag (ParametersCard shows it; no migration)
+    is_mtg = req.strategy_id == "momentum_theta_gainer_intra"
+    if not is_mtg and req.strategy_id not in REPLAYABLE:
+        raise HTTPException(status_code=404,
+                            detail=f"{req.strategy_id} has no intraday replay")
+    if not is_mtg and not any(
+            req.start_date.isoformat() <= d <= req.end_date.isoformat()
+            for d in captured_days()):
+        raise HTTPException(status_code=422,
+                            detail="the option store has no captured days in this window — "
+                                   "see Data → Options for coverage")
     # Strategy params only — the tags aren't constructor args (harmless via **_ignored, but
     # keep the replay's param surface clean).
     sparams = {k: v for k, v in req.params.items()
                if k not in ("data_basis", "premium_source")}
-    try:
-        if req.strategy_id == "momentum_theta_gainer_intra":
-            req.params["premium_source"] = "black_scholes"  # labeled: NOT real store premiums
+    if is_mtg:
+        req.params["premium_source"] = "black_scholes"  # labeled: NOT real store premiums
+
+    def work(progress):
+        if is_mtg:
             result = run_mtg_backtest(req.start_date, req.end_date, req.capital, sparams)
-        elif req.strategy_id in REPLAYABLE:
-            result = run_intraday_backtest(req.strategy_id, underlying, req.start_date,
-                                           req.end_date, req.capital, sparams)
         else:
-            raise HTTPException(status_code=404,
-                                detail=f"{req.strategy_id} has no intraday replay")
-    except ValueError as exc:  # no store coverage / service-reported error
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if req.persist:
-        return BacktestResponse(**persist_backtest(db, req, result["report"], result["trades"]))
-    return BacktestResponse(run_id=None, algo_id=None, strategy_id=req.strategy_id,
-                            report=result["report"], trades=result["trades"])
+            result = run_intraday_backtest(req.strategy_id, underlying, req.start_date,
+                                           req.end_date, req.capital, sparams,
+                                           progress=progress)
+        out = {"run_id": None, "algo_id": None, "strategy_id": req.strategy_id,
+               "report": result["report"], "trades": result["trades"]}
+        if req.persist:
+            # The job thread outlives the request — persist on its OWN session.
+            from skas_algo.db.base import session_scope
+
+            with session_scope() as db:
+                out.update({k: v for k, v in
+                            persist_backtest(db, req, result["report"],
+                                             result["trades"]).items()
+                            if k in ("run_id", "algo_id")})
+        return out
+
+    try:
+        return {"job_id": replay_jobs.start(work)}
+    except RuntimeError as exc:   # single-flight: one replay at a time
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/backtest/intraday/progress")
+def get_backtest_intraday_progress() -> dict:
+    """Snapshot of the (single-flight) replay job: status running|done|error|idle, the
+    day counter for the bar, and the full result once done — retained until the next job
+    starts, so a page revisit simply re-attaches."""
+    from skas_algo.services import replay_jobs
+
+    return replay_jobs.snapshot()
 
 
 @router.post("/backtest/save", response_model=BacktestResponse)

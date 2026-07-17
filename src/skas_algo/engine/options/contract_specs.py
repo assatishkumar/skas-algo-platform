@@ -25,8 +25,21 @@ _LOT_SIZES: dict[str, list[tuple[date, int]]] = {
         (date(2024, 11, 20), 75),
         (date(2026, 1, 1), 65),
     ],
+    # BANKNIFTY history (backfilled 2026-07-17 for the 5-year GFD intraday backtests;
+    # keyed by EXPIRY date like NIFTY above — revisions apply to new contracts, so the
+    # boundary is the first expiry that carried the new lot):
+    #   …→2023-06-30: 25   (long-standing)
+    #   2023-07-01→: 15    (NSE circular 56233, 2023-03-31 — July-2023 expiry onward)
+    #   2024-11-20→: 30    (SEBI ₹15L minimum contract value revision)
+    #   2026-01-01→: 35    (Oct/Dec-2025 periodic revision — same boundary convention
+    #                       as NIFTY's 65 above; front contracts carried 30 until then)
+    "BANKNIFTY": [
+        (date(2000, 1, 1), 25),
+        (date(2023, 7, 1), 15),
+        (date(2024, 11, 20), 30),
+        (date(2026, 1, 1), 35),
+    ],
     # Others seeded with current sizes — historical revisions NEEDS-CONFIRM vs NSE circulars.
-    "BANKNIFTY": [(date(2000, 1, 1), 35)],
     "FINNIFTY": [(date(2000, 1, 1), 65)],
     "MIDCPNIFTY": [(date(2000, 1, 1), 140)],
     # GOLD (MCX, synthetic) models GOLDM: 100 g quoted ₹/10g → multiplier 10 (verified

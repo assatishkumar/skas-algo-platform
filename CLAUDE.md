@@ -278,6 +278,25 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   FOOTGUN: never set `report["options"]` unless the FULL options sub-report is built —
   its mere presence flips ReportView into a layout that dereferences
   `options.summary.total_charges`. Coverage: `tests/test_intraday_replay.py`.
+  **Intraday replays run as a BACKGROUND JOB (2026-07-17):** POST /backtest/intraday
+  returns `{job_id}` (409 while one runs — single-flight, `services/replay_jobs.py`);
+  GET /backtest/intraday/progress carries {done,total,day} + the full result when done
+  (the form polls it — a page revisit re-attaches). Sizing params (default-off, harness-
+  only — zero strategy-class edits): `margin_per_lot` = TODAY'S broker margin ₹ for one
+  lot-set of the strategy's structure, converted to a %-of-notional against the latest
+  store day and applied ERA-TRUE (old years scale down with spot × era lot size; the era
+  key is the nearest EXPIRY — revisions bind to contracts, not trade dates);
+  `sizing="capital"` + `sizing_buffer_pct` refit lots per FLAT day from CURRENT equity
+  (floor(equity/(era-margin×(1+buffer))); 0 lots ⇒ the day's entries are skipped, never
+  0-unit orders). `_LOT_SIZES` now carries BANKNIFTY eras (25→15 2023-07→30 2024-11-20→35
+  2026-01-01) alongside NIFTY's; `params["contract_specs"]` overrides thread into the
+  replay's lot lookups. **Replay spot is DE-CARRIED to cash** (`_Market._decarry`: parity
+  F/(1+0.065·t)) — raw parity is the FUTURES level, and its ~20-pt carry bias picked the
+  24200 straddle on 2026-07-16 while live (cash index spot) picked 24100, flipping that
+  day's P&L sign; no-op on expiry day so settlement intrinsic stays exact. `_to_report`
+  also emits `yearly`/`monthly_profit`/`monthly_equity` from the equity curve (the EOD
+  contract keys → ReportView's existing tables just render; runs saved before 2026-07-17
+  lack them — re-run).
 - **broker_smoke_test** (Brokers-page card, 2026-07-18): the end-to-end REAL-order probe —
   BUY 1 lot of a cheap OTM weekly (premium band ₹5–20, nearest ₹10, OI floor) or 1 share of
   a stock (default ITC), hold ~60s, SELL, then the run **stops itself** (`stop_requested` →
