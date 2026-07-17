@@ -1196,6 +1196,20 @@ function DeploymentTile({
               </Tag>
             )}
             <BrokerChip dep={dep} />
+            {/* A LIVE-mode run whose ORDERS fill on paper (restart demotion) is the most
+                dangerous silent state this platform has had — chip it loudly. */}
+            {dep.mode === "LIVE" && dep.status === "active" && dep.order_broker != null && (
+              dep.order_broker === "live" ? (
+                <Tag bg="var(--ok-bg)" color="var(--ok-text)" title="A real-order broker is installed — exits and entries place actual Zerodha orders.">orders LIVE</Tag>
+              ) : (
+                <Tag bg="var(--danger)" color="#fff"
+                  title={dep.resume_orders_pending
+                    ? "Restart demoted this run to simulated fills. Real orders re-arm automatically at the next broker login (book reconciled first). Until then the broker book is NOT managed."
+                    : "This LIVE run's orders fill on PAPER (restart demotion) — exits do NOT touch the broker book. Enable SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY or redeploy to re-arm."}>
+                  orders PAPER{dep.resume_orders_pending ? " · re-arms on login" : ""}
+                </Tag>
+              )
+            )}
             {dep.order_error && (
               <Tag bg="var(--danger)" color="#fff" title={dep.order_error}>orders halted</Tag>
             )}

@@ -42,7 +42,7 @@ from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 from skas_algo.live.holidays import previous_trading_day
 
-from ._options_common import bad_close
+from ._options_common import bad_close, legs_mtm_pnl
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +150,10 @@ class WeeklyIntradayStraddle:
     def set_broker_margin(self, value: float) -> None:
         if value and value > 0:
             self._broker_margin = float(value)
+
+    def strategy_pnl(self, closes: dict) -> float | None:
+        """The MTM measure the stop check compares (decision-entry basis)."""
+        return legs_mtm_pnl(self.legs, closes)
 
     def set_option_bars_fn(self, fn) -> None:
         """Manager wiring: fn(underlying, expiry_iso, strike, right, from_dt, to_dt, minutes)
@@ -505,9 +509,9 @@ class WeeklyIntradayStraddle:
         return None, None  # no fixed target; the VWAP cross-up is the exit
 
     def exit_rules(self) -> list[str]:
-        rules = ["Exit when the combined premium closes back above VWAP"]
+        rules = ["Exit when the combined premium closes back above VWAP (checked per closed 5-min bar)"]
         if self.stop_loss_pct > 0:
-            rules.append(f"Stop out at −{self.stop_loss_pct:g}% of broker margin")
+            rules.append(f"Stop out at −{self.stop_loss_pct:g}% of broker margin (checked every tick)")
         rules.append(f"Hard square-off {self.eod_exit.strftime('%H:%M')} — never carried")
         return rules
 

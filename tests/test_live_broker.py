@@ -453,10 +453,12 @@ def test_injected_livebroker_run_starts_reconcile_pending():
     assert not isinstance(paper, LiveBroker)         # → reconcile_pending False at init
 
 
-def test_reconcile_ok_alert_throttles():
-    """The 'broker book matches strategy' Telegram confirmation fires on the first/changed book
-    and once per new day (a heartbeat), but NOT on the hourly repeat of an unchanged book, and
-    never when the book is flat."""
+def test_reconcile_ok_alerts_every_completed_run():
+    """EVERY completed reconciliation confirms to Telegram — owner request 2026-07-17: a
+    positive hourly heartbeat that broker and strategy agree, not only mismatch alarms
+    (silence had read as 'fine' while a demoted run's real book sat unmanaged). Repeats of
+    an unchanged book alert too (that IS the heartbeat), and a flat-flat book confirms
+    with its own wording. Frequency stays bounded by the hourly reconcile throttle."""
     from datetime import datetime
     from types import SimpleNamespace
 
@@ -470,14 +472,9 @@ def test_reconcile_ok_alert_throttles():
     book = {"ours": {"X": 195}, "broker": {"X": 195}}
     d1 = datetime(2026, 7, 13, 10, 0)
 
-    LiveRun._alert_reconciled_ok(s, {"ours": {}}, d1)   # flat → silence
-    assert sent == []
-    LiveRun._alert_reconciled_ok(s, book, d1)           # first confirmation
-    assert len(sent) == 1 and sent[-1][0] == "INFO"
-    LiveRun._alert_reconciled_ok(s, book, d1)           # same book, same day → throttled
-    assert len(sent) == 1
-    LiveRun._alert_reconciled_ok(s, book, datetime(2026, 7, 14, 10, 0))  # new day heartbeat
-    assert len(sent) == 2
-    LiveRun._alert_reconciled_ok(s, {"ours": {"X": 390}, "broker": {"X": 390}},
-                                 datetime(2026, 7, 14, 11, 0))            # book changed
+    LiveRun._alert_reconciled_ok(s, {"ours": {}}, d1)   # flat-flat → still a confirmation
+    assert len(sent) == 1 and "both flat" in sent[-1][2]
+    LiveRun._alert_reconciled_ok(s, book, d1)           # book present → detail included
+    assert len(sent) == 2 and sent[-1][0] == "INFO" and "195" in sent[-1][2]
+    LiveRun._alert_reconciled_ok(s, book, d1)           # same book, same hour → alerts again
     assert len(sent) == 3

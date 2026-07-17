@@ -32,6 +32,7 @@ from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.engine.types import Signal, SignalAction
 
 from ._options_common import bad_close as _bad
+from ._options_common import legs_mtm_pnl
 from ._options_common import next_monthly_expiry
 
 
@@ -238,6 +239,10 @@ class CallRatioMonthlyStrategy:
         if value and value > 0 and self.legs and self._frozen_margin is None:
             self._frozen_margin = float(value)
 
+    def strategy_pnl(self, closes: dict) -> float | None:
+        """The MTM measure _manage compares against the target/stop (decision-entry basis)."""
+        return legs_mtm_pnl(self.legs, closes)
+
     def _risk_base(self, ctx=None) -> float:
         """Rupee base the profit-target/stop percentages apply to. LIVE: the broker basket
         margin FROZEN at entry (set_broker_margin) — stable, never floats. BACKTEST / the
@@ -289,6 +294,33 @@ class CallRatioMonthlyStrategy:
             return now.time() >= time.fromisoformat(self.entry_time)
         except (ValueError, TypeError):
             return True
+
+    # ------------------------------------------------- exit-rule display
+    def _cadence_phrase(self, kind: str) -> str:
+        """Human wording for how often the ``kind`` exit is SAMPLED — surfaced in the UI
+        so the owner can see the check is periodic, not on-touch (run-7 2026-07-17: the
+        15-min profit samples landed on P&L dips either side of a 19-min target breach)."""
+        cadence = getattr(self, f"{kind}_check", "eod")
+        if cadence == "eod":
+            return f"checked at EOD {self.eod_time}"
+        if cadence == "tick":
+            return "checked every tick"
+        return f"checked every {cadence.replace('min', ' min')}"
+
+    def exit_rules(self) -> list[str]:
+        rules = [
+            f"Book profit at +{self.profit_target_pct * 100:g}% of margin "
+            f"({self._cadence_phrase('profit')})",
+            f"Stop out at −{self.stop_loss_pct * 100:g}% ({self._cadence_phrase('stop')})",
+        ]
+        ew = getattr(self, "exit_weekday", None)
+        if ew is not None:  # the weekly variants (HNI)
+            days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            rules.append(f"Calendar exit from {days[int(ew) % 7]} ({self._cadence_phrase('time')})")
+        else:
+            rules.append(
+                f"Time exit after {self.max_holding_days}d ({self._cadence_phrase('time')})")
+        return rules
 
     # ------------------------------------------------------------------ helpers
     def _next_monthly_expiry(self, chain, today: date) -> date | None:

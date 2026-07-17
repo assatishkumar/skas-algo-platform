@@ -14,6 +14,25 @@ def snap(strikes: list[float], target: float) -> float | None:
     return min(strikes, key=lambda k: abs(k - target)) if strikes else None
 
 
+def legs_mtm_pnl(legs, closes: dict) -> float | None:
+    """The DECISION-basis MTM the %-of-margin exit checks compare: Σ dir × (mark − entry)
+    × units over the strategy's OWN legs. Leg entries are the decision-time premiums, not
+    the actual fills, so live this can differ from the book P&L by the fill slippage
+    (run-7 2026-07-17: ~₹276 on the short leg — the UI said "target achieved" while the
+    strategy's own measure was still below it). Surfaced in the snapshot as
+    ``strategy_pnl`` so the screen shows the number the strategy ACTS on. None when flat
+    or any leg lacks a mark (matching the strategies' own bail-outs on missing prints)."""
+    if not legs:
+        return None
+    total = 0.0
+    for leg in legs:
+        cur = closes.get(leg["symbol"])
+        if cur is None:
+            return None
+        total += (float(cur) - float(leg["entry"])) * leg["units"] * leg["dir"]
+    return total
+
+
 def next_monthly_expiry(chain, underlying: str, today: date, min_dte: int,
                         right: str = "CE") -> date | None:
     """The nearest monthly expiry at least ``min_dte`` out.

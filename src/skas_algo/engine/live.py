@@ -476,6 +476,11 @@ class LiveSession:
             # show "Target +₹X / Stop −₹Y"). None for strategies without %-based exits.
             "profit_target_amt": target_amt,
             "stop_loss_amt": stop_amt,
+            # The strategy's OWN P&L measure — what its exit checks actually compare.
+            # Decision-entry basis, so live it can sit ₹100s away from the book P&L above
+            # (fill slippage); showing both is what makes "target achieved but no exit"
+            # explainable at a glance (run-7, 2026-07-17).
+            "strategy_pnl": self._strategy_pnl(closes),
             # Human-readable exit criteria the strategy will act on (spot levels, %-targets,
             # per-leg / calendar exits) — surfaced so the live card shows WHY a run would exit.
             "exit_rules": self._exit_rules(),
@@ -483,6 +488,17 @@ class LiveSession:
             # lets the live UI show + toggle it.
             "ironfly_adjust": getattr(getattr(self, "strategy", None), "ironfly_adjust", None),
         }
+
+    def _strategy_pnl(self, closes: dict) -> float | None:
+        """Ask the strategy for the P&L measure its exit checks use (None when it has no
+        such measure — equity strategies, or a flat/unmarked book)."""
+        fn = getattr(self.strategy, "strategy_pnl", None)
+        if fn is None:
+            return None
+        try:
+            return fn(closes)
+        except Exception:  # pragma: no cover - display-only, never break the snapshot
+            return None
 
     def _exit_rules(self) -> list[str]:
         """Short, human-readable summary of the strategy's exit triggers (best-effort

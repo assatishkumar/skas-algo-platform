@@ -52,7 +52,11 @@ export default function DeployPage() {
   const [underlying, setUnderlying] = useState(String(ps.underlying ?? "NIFTY"));
   const [optLots, setOptLots] = useState(Number(ps.lots) || 1);
   const [entryTime, setEntryTime] = useState(String(ps.entry_time ?? "09:45"));
-  const [profitCheck, setProfitCheck] = useState(String(ps.profit_check ?? "15min"));
+  // Owner default (2026-07-17): sample the profit target every minute. The HNI deck's
+  // 15-min cadence let a target-crossing slip between samples while the P&L oscillated
+  // around the threshold; 1min keeps the deck's "sampled, not touched" semantics but
+  // makes a miss window immaterial. Prefill from a forward-tested backtest still wins.
+  const [profitCheck, setProfitCheck] = useState(String(ps.profit_check ?? "1min"));
   const [stopCheck, setStopCheck] = useState(String(ps.stop_check ?? "eod"));
   const [timeCheck, setTimeCheck] = useState(String(ps.time_check ?? "eod"));
   const [eodTime, setEodTime] = useState(String(ps.eod_time ?? "15:15"));

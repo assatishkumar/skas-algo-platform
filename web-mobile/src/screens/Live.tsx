@@ -148,6 +148,13 @@ export default function LiveScreen() {
                 <span className={`chip ${paused ? "warn" : "ok"}`}>
                   {paused ? "PAUSED" : "RUNNING"}
                 </span>
+                {/* LIVE run demoted to simulated fills after a restart — exits will NOT
+                    touch the real broker book. The single most important chip here. */}
+                {mode === "real" && r.order_broker === "paper" && (
+                  <span className="chip" style={{ background: "var(--danger)", color: "#fff" }}>
+                    ⚠ PAPER ORDERS
+                  </span>
+                )}
                 {(r.positions?.length ?? 0) > 0 ? (
                   <span className="chip" style={{ background: "var(--pos)", color: "#fff" }}>
                     ● {r.positions!.length} OPEN

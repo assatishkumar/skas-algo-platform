@@ -154,6 +154,20 @@ export default function DeploymentDetailScreen() {
         {run.strategy_alert && <span className="chip warn">DATA ⚠</span>}
       </div>
 
+      {/* LIVE run whose orders fill on paper (restart demotion): Square-off below would
+          NOT touch the real broker book — say so before the owner taps it. */}
+      {mode === "LIVE" && run.order_broker === "paper" && (
+        <div className="card" style={{
+          marginTop: 10, border: "1px solid var(--danger)", color: "var(--danger)",
+          fontSize: 13.5, fontWeight: 600,
+        }}>
+          ⚠ Orders are PAPER after a restart — exits (including Square-off) will NOT close
+          positions at the broker.{run.resume_orders_pending
+            ? " Real orders re-arm automatically at the next broker login."
+            : " Re-arm via SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY or redeploy."}
+        </div>
+      )}
+
       <Section>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div className="sg" style={{ fontWeight: 700, fontSize: 33, ...sign(overall) }}>
@@ -165,6 +179,16 @@ export default function DeploymentDetailScreen() {
             </span>
           )}
         </div>
+        {/* The measure the strategy's exit checks actually compare (decision-entry basis). */}
+        {run.strategy_pnl != null && (
+          <div style={{ marginTop: 4, fontSize: 12, color: "var(--muted)" }}>
+            strategy sees{" "}
+            <span className="sg" style={{ fontWeight: 700, ...sign(run.strategy_pnl) }}>
+              {formatInr(run.strategy_pnl)}
+            </span>
+            {run.stop_loss_amt != null && <> · stop −{formatInr(Math.abs(run.stop_loss_amt))}</>}
+          </div>
+        )}
         <div style={{ marginTop: 14 }}>
           <Grid2 items={[
             ["Realized", <span key="r" style={sign(realized)}>{formatInr(realized)}</span>],

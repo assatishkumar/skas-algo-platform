@@ -396,7 +396,17 @@ gui/$(id -u)/com.skas.algo`, not a bare `pkill` (which just triggers a respawn).
 LIVE-order run keeps PaperBroker by default (recovery re-injects LiveBroker ONLY when
 `live_resume_orders_on_recovery` is on — still behind the 4-key gate); a LiveBroker run —
 fresh deploy or resumed — reconciles its broker book before its first decision
-(`reconcile_pending`, ARCHITECTURE §3).
+(`reconcile_pending`, ARCHITECTURE §3). **The demotion is surfaced (2026-07-17):** snapshot
+`order_broker` ("live"/"paper") → a red "orders PAPER" chip on LIVE runs (web tile + mobile)
++ a WARNING alert on recovery — that morning a manual flatten filled on PAPER while the real
+Zerodha book stayed open, with "live" on the tile. With the resume flag on but NO session at
+restart (the daily VPS pattern: restart ~08:30, Kite login ~08:35) recovery can't inject —
+the run is marked `resume_orders_pending` and the login promotion (`_maybe_resume_orders`)
+finishes the injection through the same gate, reconcile-first. Options snapshots also carry
+`strategy_pnl` — the DECISION-entry-basis MTM the exit checks actually compare (live it sits
+fill-slippage away from the book P&L; the UI shows both), and `exit_rules` now state each
+check's sampling cadence ("checked every 15 min"); the deploy form defaults `profit_check`
+to **1min** (constructor defaults unchanged — §1).
 
 **Footguns when launching:**
 - **Relative SQLite path.** `SKAS_DATABASE_URL=sqlite:///./skas_algo.db` is relative to the CWD —

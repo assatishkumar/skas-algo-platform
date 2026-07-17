@@ -135,6 +135,16 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
           <span className={sign(thisUnrealized)}>{formatInr(thisUnrealized)}</span> unrealized ·{" "}
           <span className={sign(prior)}>{formatInr(prior)}</span> prior cycles
         </div>
+        {/* The number the strategy's exit checks ACTUALLY compare (decision-entry basis —
+            fill slippage puts it ₹100s from the book P&L above; run-7 2026-07-17 the book
+            said "target achieved" while this measure was still below the target). */}
+        {run.strategy_pnl != null && (
+          <div className="mt-1 text-[11.5px] text-[var(--muted)] tabular-nums"
+            title="The strategy marks its legs from its decision-time entry premiums, not the actual fills — this is the P&L its target/stop checks compare.">
+            strategy sees <span className={`font-semibold ${sign(run.strategy_pnl)}`}>{formatInr(run.strategy_pnl)}</span>
+            {target != null ? <> vs target <span className="font-semibold text-[var(--pos)]">+{formatInr(target)}</span></> : null}
+          </div>
+        )}
         {target != null && (
           <div className="mt-2 pt-2 border-t border-[var(--divider)] text-[11.5px] text-[var(--muted)]">
             profit target <span className="font-semibold text-[var(--pos)]">+{formatInr(target)}</span>

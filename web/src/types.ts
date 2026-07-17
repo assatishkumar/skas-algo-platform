@@ -452,6 +452,8 @@ export interface LiveRunSnapshot {
   on_cache_fallback?: boolean;
   quote_error?: string | null; // last live-quote fetch failure (e.g. rejected Zerodha token)
   order_error?: string | null;
+  order_broker?: "live" | "paper"; // what fills orders NOW — "paper" on a LIVE run = restart demotion
+  resume_orders_pending?: boolean; // real orders re-arm automatically at the next broker login
   strategy_alert?: string | null; // strategy data-health error (e.g. option bars unfetchable)
   supports_force_entry?: boolean;
   ironfly_adjust?: boolean | null; // delta_neutral/iron_fly: null unless the strategy has it
@@ -465,6 +467,7 @@ export interface LiveRunSnapshot {
   realized_pnl?: number | null; // booked P&L so far (incl. a backtest seed's trades)
   profit_target_amt?: number | null; // ₹ profit target the strategy will act on
   stop_loss_amt?: number | null; // ₹ stop-loss the strategy will act on
+  strategy_pnl?: number | null; // the P&L measure the strategy's exit checks compare (decision-entry basis)
   exit_rules?: string[] | null; // human-readable exit triggers (spot levels, %-targets, …)
   // live controls + exclusion editing
   auto: boolean;
@@ -1059,6 +1062,8 @@ export interface Deployment {
   on_cache_fallback?: boolean; // zerodha run currently falling back to cache quotes
   quote_error?: string | null; // last live-quote fetch failure (rejected token, etc.)
   order_error?: string | null; // real-order failure/book-mismatch halt (ack to resume)
+  order_broker?: "live" | "paper"; // what fills orders NOW — "paper" on a LIVE run = restart demotion
+  resume_orders_pending?: boolean; // real orders re-arm automatically at the next broker login
   strategy_alert?: string | null; // strategy data-health error (e.g. option bars unfetchable)
   underlying_spot?: number | null; // live underlying spot (tile subline)
 }

@@ -32,7 +32,7 @@ from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import bad_close
+from ._options_common import bad_close, legs_mtm_pnl
 
 
 def _hhmm(s: str, fallback: time) -> time:
@@ -99,6 +99,10 @@ class IntradayStraddleStrategy:
     def set_broker_margin(self, value: float) -> None:
         if value and value > 0:
             self._broker_margin = float(value)
+
+    def strategy_pnl(self, closes: dict) -> float | None:
+        """The MTM measure the stop/trail compares (decision-entry basis)."""
+        return legs_mtm_pnl(self.legs, closes)
 
     def request_force_entry(self) -> str:
         """Live-page 'Force entry now': the next tick sells the ATM straddle even outside the
@@ -306,7 +310,7 @@ class IntradayStraddleStrategy:
         return None, base * self.stop_loss_pct / 100.0  # no fixed target; trailing is the upside
 
     def exit_rules(self) -> list[str]:
-        rules = [f"Stop out at −{self.stop_loss_pct:g}% of broker margin"]
+        rules = [f"Stop out at −{self.stop_loss_pct:g}% of broker margin (checked every tick)"]
         if self.trail_trigger_pct > 0 and self.trail_step_pct > 0:
             if self.trail_mode == "below_peak":
                 rules.append(f"Trail: once +{self.trail_trigger_pct:g}% up, stop = peak − {self.trail_step_pct:g}%")

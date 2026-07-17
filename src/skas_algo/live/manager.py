@@ -294,6 +294,11 @@ class LiveRun:
         # live orders are disabled — the safety net that must exist BEFORE the first order.
         from skas_algo.brokers.live_broker import LiveBroker
         self.reconcile_pending: bool = isinstance(getattr(session, "broker", None), LiveBroker)
+        # A LIVE run recovery WANTED to re-arm real orders (SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY)
+        # but couldn't — the restart happened before the morning broker login, so there was no
+        # adapter to inject. The login-promotion path re-attempts the injection (same 4-key
+        # gate) and clears this. Surfaced in the snapshot so the UI can say "resumes on login".
+        self.resume_orders_pending: bool = False
         # Last self-heal retry of a stuck (quote_error'd) zerodha run — throttles the loop's
         # rebuild-and-repoll to ~once a minute so it doesn't hammer a rate-limited/dead token.
         self._last_quote_retry: datetime | None = None
@@ -553,19 +558,19 @@ class LiveRun:
             self._alert_reconciled_ok(detail, now)
 
     def _alert_reconciled_ok(self, detail: dict, now: datetime) -> None:
-        """Publish a 'broker book matches strategy' confirmation to Telegram. Reconciliation
-        runs hourly, so to stay useful-not-spammy we alert only when the book CHANGED since the
-        last confirmation OR once per new day (a heartbeat) — and never when both are flat."""
+        """Publish the 'broker book matches strategy' confirmation after EVERY completed
+        reconciliation (owner request 2026-07-17: a positive heartbeat that both sides
+        agree, not only mismatch alarms — the paper-flatten incident showed silence reads
+        as 'fine' when it isn't). Reconciliation is hourly in market hours, so this is
+        ~7 alerts/trading day per real-order run — bounded by design. A flat-flat book
+        still confirms (that agreement IS the result); an UNREADABLE broker book stays
+        silent because it retries every tick (alerting there would spam), and a mismatch
+        alerts + halts on its own path above."""
         ours = detail.get("ours", {}) or {}
-        if not ours:  # flat → nothing meaningful to reconcile; silence is fine
+        if not ours:
+            self._notify_recon("INFO", f"Reconciled: {self.config.name}",
+                               "Broker book matches strategy — both flat.")
             return
-        sig = "|".join(f"{ts}:{q:+.0f}" for ts, q in sorted(ours.items()))
-        day = now.date()
-        if sig == getattr(self, "_last_recon_sig", None) \
-                and day == getattr(self, "_last_recon_day", None):
-            return  # unchanged book, already confirmed today → skip the hourly repeat
-        self._last_recon_sig = sig
-        self._last_recon_day = day
         n = sum(abs(q) for q in ours.values())
         self._notify_recon(
             "INFO", f"Reconciled: {self.config.name}",
@@ -793,6 +798,17 @@ class LiveRun:
                 )
         self.broadcaster.publish({"type": "stopped", "run_id": self.run_id})
 
+    def order_broker(self) -> str:
+        """Which broker actually fills this run's orders RIGHT NOW: "live" only when a
+        LiveBroker is installed (real Zerodha orders), else "paper" (simulated fills).
+        A LIVE-mode run can legitimately be "paper" — most commonly after a restart
+        (recovery keeps PaperBroker unless SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY) — and
+        the UI must SAY so: on 2026-07-17 a manual flatten filled on paper while the
+        real book stayed open at Zerodha, with nothing on screen hinting at it."""
+        from skas_algo.brokers.live_broker import LiveBroker
+
+        return "live" if isinstance(getattr(self.session, "broker", None), LiveBroker) else "paper"
+
     def snapshot(self) -> dict:
         snap = {
             "run_id": self.run_id,
@@ -801,6 +817,10 @@ class LiveRun:
             # PAPER/LIVE on the WS-fed snapshot too (was only on GET /live/deployments) —
             # the mobile app's paper/real toggle keys off it. Additive; web unaffected.
             "mode": self.config.mode,
+            # "live" = a LiveBroker fills orders (real money); "paper" = simulated fills.
+            # The UI chips LIVE-mode runs whose orders are paper (restart demotion).
+            "order_broker": self.order_broker(),
+            "resume_orders_pending": self.resume_orders_pending,
             "strategy_id": self.config.strategy_id,
             "instrument_class": self.config.instrument_class,
             "underlying": self.config.underlying,
@@ -1201,6 +1221,7 @@ class LiveRunManager:
         live.quote_error = None
         live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter
         live._last_offhours_refresh = None  # re-price immediately (next tick) — even off-hours
+        self._maybe_resume_orders(live)
         return True
 
     def promote_quote_source(self, run_id: int, db, adapter=None) -> bool:
@@ -1228,8 +1249,39 @@ class LiveRunManager:
         live.quote_error = None
         live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter
         live._last_offhours_refresh = None  # the loop re-prices on the next tick — even off-hours
+        self._maybe_resume_orders(live)
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
         return True
+
+    def _maybe_resume_orders(self, live: "LiveRun") -> None:
+        """Finish a recovery-time real-order resume that had NO adapter to inject into.
+
+        The daily VPS reality: the backend restarts ~08:30, the Kite login happens ~08:35 —
+        so at recovery time the quote source is cache and ``_maybe_inject_live_broker`` has
+        no adapter, even with SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY on. Recovery marks such a
+        run ``resume_orders_pending``; the first login promotion lands here and re-attempts
+        the injection through the SAME 4-key gate (mode/flag/armed/adapter — nothing is
+        widened). On success the run starts ``reconcile_pending`` — its broker book is
+        verified BEFORE the first decision, exactly like a recovery-time injection
+        (2026-07-17: without this, every pre-login restart silently demoted the HNI live
+        run to paper fills and a manual flatten left the real Zerodha book open)."""
+        if not live.resume_orders_pending or live.order_broker() == "live":
+            return
+        self._maybe_inject_live_broker(live.session, live.config, live.quote_source)
+        if live.order_broker() != "live":
+            return  # gate said no (disarmed/flag off) — stay pending; a later promotion retries
+        live.resume_orders_pending = False
+        live.reconcile_pending = True
+        try:
+            from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+            build_notifier().send(Alert(
+                f"Real orders RESUMED: {live.config.name}",
+                "The broker login re-armed this LIVE run's real-order broker after a restart. "
+                "Its broker book will be reconciled before the first decision.",
+                AlertLevel.WARNING))
+        except Exception:  # pragma: no cover - alert is best-effort
+            logger.exception("resume-orders alert failed for run %s", live.run_id)
 
     def promote_account_runs(self, account_id: int, db) -> list[int]:
         """Promote every cache-fallback run on this account (called after a login).

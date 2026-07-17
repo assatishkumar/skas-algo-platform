@@ -39,7 +39,7 @@ from skas_algo.engine.options.contract_specs import lot_size_for, selection_step
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import bad_close
+from ._options_common import bad_close, legs_mtm_pnl
 
 # Grid used to SNAP the iron-fly wing/breakeven-hedge strikes (round((K±credit)/step)*step). NIFTY
 # routes through selection_step → 100 (owner rule: NIFTY trades round 100s only), so the snapped
@@ -138,6 +138,12 @@ class DeltaNeutralMonthlyStrategy:
         """Manager push: the real broker basket margin for OUR current legs."""
         if value and value > 0:
             self._broker_margin = float(value)
+
+    def strategy_pnl(self, closes: dict) -> float | None:
+        """The MTM measure _manage compares against the target/stop: CURRENT legs only,
+        decision-entry basis — the banked adjustment credit (adjust_realized) is NOT part
+        of the threshold check, so it isn't part of this display either."""
+        return legs_mtm_pnl(self.legs, closes)
 
     def request_force_entry(self) -> str:
         """Live-page 'Force entry now': next tick sells the 18Δ strangle into the current
@@ -600,9 +606,9 @@ class DeltaNeutralMonthlyStrategy:
         return target, stop
 
     def exit_rules(self) -> list[str]:
-        rules = [f"Book profit at +{self.target_pct:g}% of broker margin"]
+        rules = [f"Book profit at +{self.target_pct:g}% of broker margin (checked every tick)"]
         if self.stop_pct > 0:
-            rules.append(f"Stop out at −{self.stop_pct:g}% of broker margin")
+            rules.append(f"Stop out at −{self.stop_pct:g}% of broker margin (checked every tick)")
         rules.append(f"Adjust when |CE−PE| > {self.adjust_threshold_pct:g}% of combined "
                      "(cheap side rolls; straddle max → iron fly)")
         if self.ironfly_adjust:

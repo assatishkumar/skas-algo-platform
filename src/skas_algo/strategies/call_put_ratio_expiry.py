@@ -34,7 +34,7 @@ from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import bad_close
+from ._options_common import bad_close, legs_mtm_pnl
 
 
 def _hhmm(s: str, fallback: time) -> time:
@@ -109,6 +109,13 @@ class CallPutRatioExpiryStrategy:
         """Manager push: the real broker basket margin for our current legs."""
         if value and value > 0:
             self._broker_margin = float(value)
+
+    def strategy_pnl(self, closes: dict) -> float | None:
+        """The MTM measure _manage compares against the target/stop (decision-entry basis),
+        across BOTH underlyings' legs (the thresholds are per-underlying, but one combined
+        number is what the owner sanity-checks against the book P&L)."""
+        legs = [leg for u in self.underlyings for leg in self.legs.get(u, [])]
+        return legs_mtm_pnl(legs, closes)
 
     def request_force_entry(self) -> str:
         """Live-page 'Force entry now': next tick enters flat underlyings regardless of
@@ -307,8 +314,8 @@ class CallPutRatioExpiryStrategy:
 
     def exit_rules(self) -> list[str]:
         return [
-            f"Book profit at +{self.target_pct:g}% of broker margin",
-            f"Stop out at −{self.stop_pct:g}% of broker margin",
+            f"Book profit at +{self.target_pct:g}% of broker margin (checked every tick)",
+            f"Stop out at −{self.stop_pct:g}% of broker margin (checked every tick)",
             f"Hard exit {self.eod_exit.strftime('%H:%M')} — never carried",
         ]
 

@@ -218,6 +218,9 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             tile["on_cache_fallback"] = snap.get("on_cache_fallback", False)
             tile["quote_error"] = snap.get("quote_error")
             tile["order_error"] = snap.get("order_error")
+            # "paper" on a LIVE-mode run = restart demotion — the tile chips it loudly.
+            tile["order_broker"] = snap.get("order_broker")
+            tile["resume_orders_pending"] = snap.get("resume_orders_pending")
             tile["strategy_alert"] = snap.get("strategy_alert")
             tile["underlying_spot"] = snap.get("underlying_spot")  # live spot for the tile subline
             upnl = sum(p["unrealized_pnl"] for p in snap.get("positions", []))

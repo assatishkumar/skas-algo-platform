@@ -102,6 +102,25 @@ def reactivate(run_id: int) -> None:
         _rebuild(db, run, loader)
 
 
+def _alert_paper_orders(name: str, resume_wanted: bool) -> None:
+    """WARNING alert: a LIVE run came back from a restart with simulated fills."""
+    try:
+        from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+        if resume_wanted:
+            detail = ("No broker session at restart — real orders re-arm automatically at the "
+                      "next broker login (the book is reconciled before the first decision). "
+                      "Until then, exits fill on PAPER and the broker book is NOT managed.")
+        else:
+            detail = ("SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY is off — every exit/entry fills on "
+                      "PAPER and the broker book is NOT managed until you redeploy or enable "
+                      "the resume flag and restart.")
+        build_notifier().send(Alert(
+            f"LIVE run recovered with PAPER orders: {name}", detail, AlertLevel.WARNING))
+    except Exception:  # pragma: no cover - alert is best-effort
+        logger.exception("paper-orders recovery alert failed for %s", name)
+
+
 def _rebuild(db, run: AlgoRun, loader) -> None:
     from skas_algo.live.manager import _build_session
 
@@ -152,10 +171,18 @@ def _rebuild(db, run: AlgoRun, loader) -> None:
     # its reconcile_pending flag reflects the real-order broker.
     from skas_algo.config import get_settings
 
-    if get_settings().live_resume_orders_on_recovery:
+    resume_wanted = get_settings().live_resume_orders_on_recovery
+    if resume_wanted:
         manager._maybe_inject_live_broker(session, config, quote_source)
     live = LiveRun(run.id, run.algo_id, config, session, quote_source, manager.broadcaster)
     live.on_cache_fallback = on_cache_fallback
+    # A LIVE-mode run whose orders are now PAPER (restart demotion) must be LOUD about it:
+    # the tile chips it, and an alert fires — on 2026-07-17 the silent demotion let a manual
+    # flatten fill on paper while the real Zerodha book stayed open. If the resume flag is on
+    # the run is marked pending and the morning login promotion re-injects (same 4-key gate).
+    if config.mode.upper() == "LIVE" and live.order_broker() != "live":
+        live.resume_orders_pending = resume_wanted
+        _alert_paper_orders(config.name, resume_wanted)
 
     last = (run.state or {}).get("last_decision_day")
     if last:
