@@ -108,18 +108,20 @@ WebSocket upgrades to `wss` automatically.
     - **Logs:** `journalctl -u skas-algo -f` (or `skasctl.sh logs`) · **Status/health:** `skasctl.sh status` / `skasctl.sh health`
     - Symlink it onto PATH for a global `skas` command: `sudo ln -sf "$PWD/scripts/skasctl.sh" /usr/local/bin/skas`
     - `restart` re-reads `.env` and re-recovers runs (real-order runs return as paper unless `SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY=true`).
-- **Update code:** pull the backend, but **do NOT `npm run build` on the VPS** — the Vite/tsc build
-  OOM-kills a small Lightsail box AND competes with the live loop for RAM. Instead **build on the Mac
-  and rsync the prebuilt `web/dist`** (the backend serves it via StaticFiles; `web/dist` is
-  gitignored so `git pull` never clobbers it):
+- **Update code:** one command, off-hours:
   ```bash
-  # On the Mac:
-  (cd web && npm run build)
-  rsync -avz --delete web/dist/ algo:git/skas-algo-platform/web/dist/
   # On the VPS:
-  cd ~/git/skas-algo-platform && git pull && venv/bin/pip install -e . \
-    && sudo systemctl restart skas-algo
+  ~/git/skas-algo-platform/scripts/vps-update.sh
   ```
+  It stops the backend, pulls, `pip install -e .`, builds `web/` **and** `web-mobile/`, then
+  daemon-reloads + starts + health-checks. Builds on the VPS are fine **only while the backend
+  is STOPPED** — Vite/tsc OOM-fights the live loop for RAM on a small Lightsail box, but runs
+  clean on a stopped one (owner-verified 2026-07-18); the script enforces that ordering and
+  ALWAYS restarts the backend even if a build fails. (`web*/dist` are gitignored, so `git pull`
+  never clobbers a built bundle.)
+- **Mobile webapp:** the backend serves `web-mobile/dist` at **`/mobile/`** on the same Tailscale
+  origin — open `https://<vps>.<tailnet>.ts.net/mobile/` in the phone's browser (leave the
+  Backend URL field blank there: blank = same origin). Same bundle the iPhone shell wraps.
   Confirm the branch first — the VPS must be on the branch you pushed to
   (`git branch --show-current`; `git log --oneline -3` should show the commits). A browser showing
   the OLD UI after a correct deploy is usually the **PWA service worker** cache — hard-refresh

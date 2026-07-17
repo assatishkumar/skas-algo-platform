@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     # (default: the repo's web/dist, resolved relative to this package).
     serve_webapp: bool = False              # SKAS_SERVE_WEBAPP
     webapp_dist: str | None = None          # SKAS_WEBAPP_DIST (absolute path override)
+    mobile_dist: str | None = None          # SKAS_MOBILE_DIST (web-mobile/dist override)
 
     # --- Secrets / encryption ---
     # Fernet key used to encrypt broker credentials & TOTP secrets at rest.

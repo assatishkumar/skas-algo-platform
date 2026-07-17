@@ -127,6 +127,29 @@ def _mount_webapp(app: FastAPI) -> None:
     # Built assets (hashed JS/CSS/img under /assets, plus favicon etc.) straight off disk.
     app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
+    # The mobile companion webapp at /mobile/ — the SAME bundle the iPhone shell wraps,
+    # served over the same Tailscale origin so a phone BROWSER works without Xcode.
+    # Built with base "./" (relative assets) so it nests under a sub-path; HashRouter →
+    # no deep-link fallback needed (StaticFiles(html=True) serves its index at /mobile/).
+    # Registered BEFORE the desktop catch-all below, so /mobile/* never falls through to
+    # the desktop shell. Missing build → quiet skip (the desktop SPA is unaffected).
+    mobile_dist = (Path(settings.mobile_dist) if settings.mobile_dist else (
+        Path(__file__).resolve().parents[3] / "web-mobile" / "dist"
+    )).resolve()
+    if (mobile_dist / "index.html").is_file():
+        from fastapi.responses import RedirectResponse
+
+        app.mount("/mobile", StaticFiles(directory=mobile_dist, html=True), name="mobile")
+
+        # Bare /mobile: the desktop catch-all below FULL-matches it, beating the Mount's
+        # own slash-redirect — and serving the index HERE would break its RELATIVE asset
+        # URLs (./assets → the desktop's /assets). Redirect to the canonical /mobile/.
+        @app.get("/mobile", include_in_schema=False)
+        async def _mobile_redirect() -> RedirectResponse:
+            return RedirectResponse("/mobile/")
+
+        logger.info("serving mobile webapp from %s", mobile_dist)
+
     @app.get("/", include_in_schema=False)
     async def _spa_root() -> FileResponse:
         return FileResponse(index)

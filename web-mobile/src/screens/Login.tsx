@@ -22,8 +22,15 @@ export default function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
     setError(null);
     try {
       const origin = backend.trim().replace(/\/+$/, "");
-      if (!/^https?:\/\//.test(origin)) {
+      // Served from the backend itself (the /mobile mount, an http(s) page): an empty URL
+      // means same-origin — exactly like the desktop app. The native shell (capacitor://)
+      // has no meaningful same-origin, so there the URL stays required.
+      const inBrowser = /^https?:$/.test(window.location.protocol);
+      if (origin && !/^https?:\/\//.test(origin)) {
         throw new Error("Backend URL must start with https:// (the VPS tailnet address)");
+      }
+      if (!origin && !inBrowser) {
+        throw new Error("Backend URL is required in the app (the VPS tailnet address)");
       }
       setApiOrigin(origin);
       await setSetting(KEYS.backendUrl, origin);
@@ -75,7 +82,7 @@ export default function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
           <span className="label">Backend URL</span>
           <input
             style={fieldInput}
-            placeholder="https://vps.tailnet.ts.net"
+            placeholder="https://vps.tailnet.ts.net — blank = this site"
             autoCapitalize="none"
             autoCorrect="off"
             inputMode="url"

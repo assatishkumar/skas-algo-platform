@@ -7,6 +7,10 @@ import { defineConfig } from "vite";
 // Deliberately NO vite-plugin-pwa: Capacitor is the shell; a second service worker inside
 // the webview only causes stale-asset grief.
 export default defineConfig({
+  // Relative asset URLs: the SAME dist works inside the Capacitor shell (served at its
+  // own root) AND nested under the backend's /mobile/ mount — an absolute "/assets/…"
+  // would collide with the DESKTOP SPA's /assets there.
+  base: "./",
   plugins: [react()],
   resolve: {
     alias: {
