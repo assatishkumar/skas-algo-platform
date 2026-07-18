@@ -326,11 +326,13 @@ function CycleRow({ c }: { c: OptionCycle }) {
 }
 
 function CycleMtmTable({ c }: { c: OptionCycle }) {
-  // EOD marks while the cycle was open, closed off by the exit itself (net, incl.
-  // charges) — so a same-day stop still shows its one final column.
+  // The cycle's cumulative MTM at each day's close while it was open, finished by the
+  // exit itself (net, incl. charges) — so a same-day stop still shows its one final
+  // column. Old EOD-engine runs have neither daily marks nor intraday timestamps
+  // (the exit_date-has-time check): render nothing rather than a lone dateless "exit".
   const marks = [
     ...(c.daily_pnl ?? []).map((d) => ({ key: d.date, label: d.date.slice(5), pnl: d.pnl })),
-    ...(c.exit_date && c.net_pnl != null
+    ...(c.exit_date && c.exit_date.length > 10 && c.net_pnl != null
       ? [{ key: "exit", label: `exit ${c.exit_date.slice(11)}`, pnl: c.net_pnl }]
       : []),
   ];
@@ -340,13 +342,13 @@ function CycleMtmTable({ c }: { c: OptionCycle }) {
       <table className="text-xs">
         <tbody>
           <tr className="text-slate-500">
-            <td className="pr-3 py-0.5">EOD P&L</td>
+            <td className="pr-3 py-0.5" />
             {marks.map((m) => (
               <td key={m.key} className="px-2 py-0.5 text-right whitespace-nowrap">{m.label}</td>
             ))}
           </tr>
           <tr>
-            <td className="pr-3 py-0.5 text-slate-500">cycle MTM</td>
+            <td className="pr-3 py-0.5 text-slate-500 whitespace-nowrap">EOD MTM</td>
             {marks.map((m) => (
               <td key={m.key} className={`px-2 py-0.5 text-right tabular-nums ${pnlClass(m.pnl)}`}>
                 {formatInr(m.pnl)}
