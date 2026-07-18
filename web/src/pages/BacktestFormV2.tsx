@@ -246,7 +246,8 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
     : underlyings.length > 1 ? "single underlying only" : null;
 
   return (
-    <div className="grid items-start gap-[22px] lg:grid-cols-[minmax(0,1fr)_372px]">
+    <div>
+      <div className="grid items-start gap-[22px] lg:grid-cols-[minmax(0,1fr)_372px]">
       <div>
         <BasicsSection
           name={name} notes={notes} onName={setName} onNotes={setNotes}
@@ -275,9 +276,14 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
             onField={setSweepField} values={sweepValues} onValues={setSweepValues}
             options={sweepOptions} disabledReason={sweepDisabled} />
         } />
+      </div>
 
+      {/* Results live OUTSIDE the form grid: the rail is sticky within that grid, and
+          keeping the report as a grid row let the pinned rail float over the tables
+          (2026-07-18). As a sibling, the rail's travel ends with the form — by the time
+          the report is on screen the whole grid has scrolled away. */}
       {result && (
-        <div className="space-y-3 lg:col-span-2">
+        <div className="mt-[22px] space-y-3">
           <div className="flex items-center gap-3 flex-wrap">
             <h2 className="font-['Space_Grotesk'] font-bold text-[16px] text-[var(--strong)]">Result</h2>
             {result.run_id != null ? (
