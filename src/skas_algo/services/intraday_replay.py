@@ -472,7 +472,10 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
             day_key = minute[:10]
             premium_by_day[day_key] = premium_by_day.get(day_key, 0.0) + d * -1 * px * units
             if episode is None:
-                episode = {"entry_minute": minute, "closed": [], "premium": 0.0}
+                episode = {"entry_minute": minute, "closed": [], "premium": 0.0,
+                           # minute-accurate parity spot — the cycles table's
+                           # Spot(entry→exit) and the payoff chart's entry marker
+                           "entry_spot": market.index_spot(u)}
             if d < 0:
                 episode["premium"] += px * units
             trades.append({"date": minute, "ticker": sym,
@@ -508,6 +511,8 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
             if episode is not None:
                 episode["closed"].append(leg)
                 if not ctx.positions:   # back to flat → the cycle is complete
+                    exit_spot = market.index_spot(u)
+                    e_spot = episode.get("entry_spot")
                     legs = episode["closed"]
                     ce = next((x for x in legs if x["right"] == "CE"), None)
                     pe = next((x for x in legs if x["right"] == "PE"), None)
@@ -520,6 +525,11 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                         "realized_pnl": round(sum(x["pnl"] for x in legs), 2),
                         "net_pnl": round(sum(x["pnl"] for x in legs), 2),
                         "holding_days": _holding_days(episode["entry_minute"], minute),
+                        "exit_date": minute,
+                        "underlying_entry": e_spot,
+                        "underlying_exit": exit_spot,
+                        "underlying_pct": (100.0 * (exit_spot - e_spot) / e_spot
+                                           if e_spot and exit_spot else None),
                         "exit_reason": sig.reason or "",
                         "ce": ce if len(legs) == 2 else None,
                         "pe": pe if len(legs) == 2 else None,
@@ -630,6 +640,23 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
 
     options = _options_report(cycles, positions, charges_bd, margin_by_day, premium_by_day,
                               realized)
+    # Spot/VIX context for the cycles table + payoff markers. enrich_with_market fills
+    # DATE-based spots (cache daily closes) + India VIX for cycles AND positions — then
+    # the cycles' spots are overwritten with the replay's own MINUTE-accurate parity
+    # values captured at the fills (recorded above; enrich would clobber them).
+    minute_spots = {id(c): (c.get("underlying_entry"), c.get("underlying_exit"),
+                            c.get("underlying_pct")) for c in cycles}
+    try:
+        from skas_algo.data.options_provider import enrich_with_market
+        from skas_algo.data.provider import get_data_cache
+
+        enrich_with_market(get_data_cache(), options, u)
+    except Exception:  # pragma: no cover - display-only enrichment must never kill a run
+        logger.exception("spot/VIX enrichment failed (display-only)")
+    for c in cycles:
+        ue, ux, upct = minute_spots.get(id(c), (None, None, None))
+        if ue is not None:
+            c["underlying_entry"], c["underlying_exit"], c["underlying_pct"] = ue, ux, upct
     report = _to_report(equity_curve, trades, capital, charges_bd["total"], days_with_bars,
                         cycles=cycles, options=options)
     if sizing_echo is not None:
