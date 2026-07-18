@@ -95,6 +95,17 @@ export interface Report {
   monthly_equity?: Record<string, Record<string, number>>;
   equity_curve?: EquityPoint[];
   options?: OptionsReportData; // present only for DERIV (options) runs
+  /** Intraday replays with a keyed margin: what the sizing actually did. */
+  sizing?: {
+    margin_per_lot: number;
+    margin_pct: number;
+    ref_spot: number;
+    ref_day: string;
+    ref_lot_size: number;
+    sizing: string;
+    sizing_buffer_pct: number;
+    sizing_skipped_days?: number; // days entries were skipped — equity < one buffered lot-set
+  };
 }
 
 export interface Trade {

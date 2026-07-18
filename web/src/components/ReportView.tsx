@@ -343,8 +343,22 @@ export default function ReportView({
   const rodLifetime = m["Return on Deployed Capital %"];
   const deployedPerYr =
     m["Deployed Return %/yr"] ?? (rodLifetime != null && spanYears > 0 ? rodLifetime / spanYears : undefined);
+  const skipped = report.sizing?.sizing_skipped_days ?? 0;
   return (
     <div className="space-y-4">
+      {/* Capital-sizing lockout: the single most confusing "why so few trades?" cause —
+          equity below one BUFFERED lot-set skips the day's entries entirely, and past
+          eras can cost MORE than today (NIFTY lot 75 pre-2026, higher spots). Run #222
+          (2026-07-18) skipped 236/248 days with only this JSON field as a witness. */}
+      {skipped > 0 && (
+        <div className="rounded-[12px] px-4 py-3 text-[13px] leading-relaxed"
+          style={{ background: "var(--warn-bg)", color: "var(--warn-text)" }}>
+          <b>{skipped} replayed day{skipped === 1 ? "" : "s"} entered nothing</b> — equity was
+          below one buffered lot-set (margin/lot × (1 + buffer%)). Era-true margins can exceed
+          today's (bigger lot sizes / higher spots in past years), so a capital that funds 1 lot
+          now may fund 0 lots then. Raise capital, lower margin/lot, or trim the buffer.
+        </div>
+      )}
       {report.options ? (
         // Options runs: a curated headline row (the equity-style grid below is replaced by
         // the options-specific tiles in <OptionsReport/>).
