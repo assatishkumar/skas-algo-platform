@@ -85,6 +85,12 @@ const TIME = (param: string, label: string, def: string, hint?: string): FieldSp
 // for the positional family's. Hard time exits are never cadence-gated.
 const CADENCE_OPTS = ["tick", "1min", "5min", "15min", "30min", "60min", "eod"]
   .map((v) => ({ value: v, label: v }));
+// BACKTEST-ONLY harness escape hatch: lift the NIFTY 100-multiples rule so a replay can
+// mirror pre-2026-07-14 live history (which traded 50s) or probe 50-strike variants.
+// Never reaches the strategy or any LIVE path — the harness pops it.
+const FIFTY = f("allow_fifty_strikes", "ALLOW 50-STRIKES", "toggle", false,
+  { hint: "backtest-only: lift the NIFTY 100s rule (pre-Jul-2026 live behavior)" });
+
 const cadenceFields = (profitDef: string, stopDef: string, eodDef: string): FieldSpec[] => [
   f("profit_check", "PROFIT/ADJUST CHECK", "select", profitDef,
     { options: CADENCE_OPTS, hint: "how often the profit/adjust decision samples" }),
@@ -119,7 +125,10 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
       trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode" },
     },
-    extras: [f("min_leg_oi", "MIN LEG OI", "number", 1)],
+    extras: [
+      FIFTY,
+      f("min_leg_oi", "MIN LEG OI", "number", 1),
+    ],
   },
 
   weekly_intraday_straddle: {
@@ -150,6 +159,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     extras: [
+      FIFTY,
       f("max_entries_per_day", "MAX ENTRIES / DAY", "number", 3),
       f("candle_minutes", "CANDLE MINUTES", "number", 5, { hint: "the bar the signal reads" }),
       f("min_leg_oi", "MIN LEG OI", "number", 1),
@@ -182,6 +192,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     extras: [
+      FIFTY,
       f("ratio_divisor", "RATIO DIVISOR", "number", 3, { step: "any", hint: "sell strike ≈ ATM premium ÷ this" }),
       f("ratio_tolerance_pct", "RATIO TOLERANCE %", "number", 30, { step: "any", hint: "worse → skip the day" }),
       f("sets", "SETS", "number", 1, { hint: "1 set = buy 1 + sell 3 per side" }),
@@ -223,6 +234,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     extras: [
+      FIFTY,
       f("adjust_threshold_pct", "ADJUST THRESHOLD %", "number", 40, { step: "any", hint: "|CE−PE| vs (CE+PE)" }),
       f("adjust_cooldown_min", "ADJUST COOLDOWN (MIN)", "number", 15),
       f("ironfly_adjust", "IRON-FLY ADJUSTMENT", "toggle", false,
@@ -263,6 +275,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     extras: [
+      FIFTY,
       f("adjust_target_delta", "ADJUST Δ TARGET", "number", 0.175, { step: "any" }),
       f("adjust_close_delta", "ADJUST CLOSE Δ", "number", 0.1, { step: "any" }),
       f("adjust_cooldown_min", "ADJUST COOLDOWN (MIN)", "number", 15),
@@ -292,6 +305,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       emptyNote: "This strategy exits on its own signal (SuperTrend flip or pivot) and at the "
         + "EOD time — it has no percentage target or stop.",
     },
+    // no FIFTY: mtg's backtest is the BS service (computed strikes) — the harness flag can't reach it
     extras: [
       f("st_period", "ST PERIOD", "number", 7),
       f("st_multiplier", "ST MULTIPLIER", "number", 3, { step: "any" }),
@@ -331,6 +345,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         + "signal fires, and rolled before expiry.",
     },
     extras: [
+      FIFTY,
       f("ema_period", "EMA PERIOD", "number", 21, { hint: "high/low channel" }),
       f("width_min", "SPREAD WIDTH MIN (PTS)", "number", 300),
       f("width_max", "SPREAD WIDTH MAX (PTS)", "number", 500),
@@ -398,6 +413,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     extras: [
+      FIFTY,
       f("credit_debit_limit_pct", "MAX CREDIT %", "number", 1, { step: "any", unit: "fraction" }),
       f("min_credit_pct", "MIN CREDIT %", "number", 0, { step: "any", unit: "fraction", hint: "negative allows a debit" }),
       f("min_vix", "MIN ENTRY IV %", "number", 0, { step: "any", hint: "≈VIX; 0 = off" }),
@@ -463,6 +479,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     extras: [
+      FIFTY,
       f("credit_debit_limit_pct", "MAX CREDIT %", "number", 1, { step: "any", unit: "fraction" }),
       f("min_credit_pct", "MIN CREDIT %", "number", 0, { step: "any", unit: "fraction", hint: "negative allows a debit" }),
       f("min_vix", "MIN ENTRY IV %", "number", 0, { step: "any", hint: "≈VIX; 0 = off" }),
@@ -528,6 +545,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     extras: [
+      FIFTY,
       f("credit_debit_limit_pct", "MAX CREDIT % / WING", "number", 1, { step: "any", unit: "fraction" }),
       f("combined_credit_limit_pct", "MAX COMBINED CREDIT %", "number", 2, { step: "any", unit: "fraction" }),
       f("min_credit_pct", "MIN CREDIT %", "number", 0, { step: "any", unit: "fraction", hint: "negative allows a debit" }),
@@ -585,6 +603,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     extras: [
+      FIFTY,
       f("buy_lots", "BUY RATIO × (NEAR)", "number", 1),
       f("sell_lots", "SELL RATIO × (BODY)", "number", 3),
       f("hedge_lots", "HEDGE RATIO × (FAR)", "number", 2),

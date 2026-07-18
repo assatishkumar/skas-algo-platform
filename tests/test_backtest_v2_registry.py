@@ -28,7 +28,7 @@ REGISTRY_TS = Path(__file__).resolve().parents[1] / "web" / "src" / "lib" / "bac
 
 # Params the form legitimately sends that are NOT strategy kwargs.
 _HARNESS = {"margin_per_lot", "sizing", "sizing_buffer_pct", "lots", "capital_utilization_pct",
-            "margin_per_lotset"}                       # replay-harness / ratio-family sizing
+            "margin_per_lotset", "allow_fifty_strikes"}                       # replay-harness / ratio-family sizing
 _SERVICE_ONLY = {"momentum_theta_gainer_intra": {"vol_multiplier", "slippage_bps", "r", "capital"}}
 
 # Defaults that intentionally differ from the constructor — THE single guarded place

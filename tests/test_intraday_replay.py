@@ -128,6 +128,64 @@ def test_unsupported_strategy_and_empty_window_raise():
         run_intraday_backtest("intraday_straddle", "NIFTY", D1, D2, 1_000_000, {})
 
 
+def _fifty_day(day, exp=EXP):
+    """Three strikes incl. a 50-multiple, parity-consistent (K + CE − PE = 24070 at every
+    strike) so the de-carried spot ≈ 24040 whichever strikes are visible — nearest 24050
+    when 50s show, 24000 when the 100s rule hides them."""
+    minutes = [(9, m) for m in range(15, 60, 5)] + \
+              [(h, m) for h in (10, 11, 12, 13, 14) for m in range(0, 60, 5)] + \
+              [(15, m) for m in range(0, 30, 5)]
+    rows = []
+    for hh, mm in minutes:
+        for strike, ce, pe in ((24000, 120.0, 50.0), (24050, 90.0, 70.0), (24100, 60.0, 90.0)):
+            rows += _leg_rows(day, strike, "CE", {(hh, mm): ce}, exp)
+            rows += _leg_rows(day, strike, "PE", {(hh, mm): pe}, exp)
+    return pd.DataFrame(rows, columns=store.COLUMNS)
+
+
+def test_allow_fifty_strikes_is_a_harness_escape_hatch():
+    """The NIFTY 100s rule holds on BOTH replay chain surfaces by default (parity with
+    live); allow_fifty_strikes=True lifts it for that run only — mirroring pre-2026-07-14
+    live history, which legitimately traded 50s. The harness pops the param (it is never
+    a strategy kwarg) and no LIVE path reads it."""
+    from skas_algo.services.intraday_replay import _Chain, _Market
+
+    store.write_day(D1, _fifty_day(D1))
+
+    def entry_strikes(params):
+        out = run_intraday_backtest("intraday_straddle", "NIFTY", D1, D1, 1_000_000, params)
+        return {t["ticker"].split("|")[2] for t in out["trades"] if t["action"] == "SHORT"}
+
+    assert entry_strikes({}) == {"24000"}
+    assert entry_strikes({"allow_fifty_strikes": True}) == {"24050"}
+
+    # The positional family's cached-chain adapter obeys the same flag.
+    df = store.load_day(D1)
+    for flag, expect in ((False, {24000.0, 24100.0}), (True, {24000.0, 24050.0, 24100.0})):
+        market = _Market("NIFTY", allow_fifty_strikes=flag)
+        market.start_day(D1, sorted(df["symbol"].unique()))
+        for r in df[df["start"] == df["start"].min()].itertuples():
+            market.feed(r.symbol, r.close, r.oi)
+        rows = _Chain(market).chain("NIFTY", D1, date.fromisoformat(EXP))
+        assert {r.strike for r in rows} == expect
+
+
+def test_cycle_rows_carry_entry_exit_context():
+    """Owner ask 2026-07-18: expanded cycle details need full entry/exit timestamps, the
+    spot journey (+%), VIX, and per-EOD MTM marks. Pin the replay-side fields (spot from
+    the minute-accurate parity scan; daily_pnl only accrues on days the cycle stays open
+    past the close — an intraday cycle's final mark is its exit row)."""
+    store.write_day(D1, _fifty_day(D1))
+    out = run_intraday_backtest("intraday_straddle", "NIFTY", D1, D1, 1_000_000, {})
+    c = out["report"]["options"]["cycles"][0]
+    assert c["entry_date"].startswith(D1.isoformat()) and len(c["entry_date"]) == 16  # +HH:MM
+    assert c["exit_date"].startswith(D1.isoformat()) and c["exit_date"] > c["entry_date"]
+    assert c["underlying_entry"] == pytest.approx(24040, abs=1)   # de-carried parity spot
+    assert c["underlying_exit"] == pytest.approx(24040, abs=1)    # flat premiums all day
+    assert c["underlying_pct"] == pytest.approx(0, abs=0.01)
+    assert c["daily_pnl"] == []            # closed intraday → no EOD mark while open
+
+
 # ------------------------------------------------------------------- routes
 @pytest.fixture
 def api_client():

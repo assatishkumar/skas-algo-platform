@@ -228,6 +228,7 @@ export interface MarketContext {
 export interface OptionCycle extends MarketContext {
   underlying: string;
   entry_date: string;
+  exit_date?: string; // replay: minute-stamped ("YYYY-MM-DD HH:MM")
   expiry: string;
   legs: string[];
   legs_detail?: OptionPosition[]; // all legs (for multi-leg structures); ce/pe kept for straddles
@@ -239,6 +240,7 @@ export interface OptionCycle extends MarketContext {
   exit_reason: string;
   ce: OptionPosition | null;
   pe: OptionPosition | null;
+  daily_pnl?: { date: string; pnl: number }[]; // replay: cycle MTM at each EOD while open
 }
 
 // Covered-leg (equity) tranche buy + round-trip — the ETF bought against a sold call.

@@ -62,9 +62,14 @@ REPLAYABLE = {"intraday_straddle", "weekly_intraday_straddle", "call_put_ratio_e
 class _Market:
     """ctx.market for the replay: per-day forward-filled marks + store-built chains."""
 
-    def __init__(self, underlying: str, lot_overrides: dict | None = None):
+    def __init__(self, underlying: str, lot_overrides: dict | None = None,
+                 allow_fifty_strikes: bool = False):
         self.underlying = underlying
         self.lot_overrides = lot_overrides   # params["contract_specs"] — parity w/ engine
+        # BACKTEST-ONLY escape hatch: lift the NIFTY 100-multiples rule so a replay can
+        # mirror pre-2026-07-14 live history (which legitimately traded 50s) or probe
+        # 50-strike variants. A harness param — strategies and LIVE paths never see it.
+        self.allow_fifty_strikes = allow_fifty_strikes
         self.quotes: dict[str, tuple[float, float]] = {}   # symbol -> (close, oi)
         # expiry_iso -> strike -> {"CE": sym, "PE": sym}; rebuilt per day from stored symbols.
         self.chains: dict[str, dict[float, dict[str, str]]] = {}
@@ -149,7 +154,7 @@ class _Market:
             return None
         rows = []
         for k in sorted(strikes):
-            if not strike_allowed(self.underlying, k):
+            if not self.allow_fifty_strikes and not strike_allowed(self.underlying, k):
                 continue  # same NIFTY-100 coarsening the LIVE chain applies
 
             def info(sym: str | None) -> dict | None:
@@ -223,7 +228,7 @@ class _Chain:
         e_iso = expiry.isoformat() if hasattr(expiry, "isoformat") else str(expiry)[:10]
         rows: list[_ChainRow] = []
         for strike, legs in sorted((self.market.chains.get(e_iso) or {}).items()):
-            if not strike_allowed(u, strike):
+            if not self.market.allow_fifty_strikes and not strike_allowed(u, strike):
                 continue   # same NIFTY-100 coarsening as live_chain and the EOD view
             for right, sym in legs.items():
                 q = self.market.quotes.get(sym)
@@ -379,6 +384,7 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
     margin_per_lot = float(p.pop("margin_per_lot", 0) or 0)
     sizing = str(p.pop("sizing", "fixed") or "fixed")
     buffer_pct = float(p.pop("sizing_buffer_pct", 10) or 0)
+    allow_fifty = bool(p.pop("allow_fifty_strikes", False))
     lot_overrides = p.get("contract_specs")   # same override surface as the engine paths
 
     # Strategy FIRST: the margin math below reads the instance's real leg ratios.
@@ -390,7 +396,7 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
     if strategy_id == "call_put_ratio_expiry":
         p.setdefault("underlyings", [u])   # cpre ignores ``universe`` — takes underlyings
     strategy = factory(universe=[u], initial_capital=capital, **p)
-    market = _Market(u, lot_overrides=lot_overrides)
+    market = _Market(u, lot_overrides=lot_overrides, allow_fifty_strikes=allow_fifty)
     chain = _Chain(market)
     ctx = _Ctx(market, chain)
     if hasattr(strategy, "set_option_bars_fn"):
@@ -526,6 +532,7 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                         "net_pnl": round(sum(x["pnl"] for x in legs), 2),
                         "holding_days": _holding_days(episode["entry_minute"], minute),
                         "exit_date": minute,
+                        "daily_pnl": episode.get("daily", []),
                         "underlying_entry": e_spot,
                         "underlying_exit": exit_spot,
                         "underlying_pct": (100.0 * (exit_spot - e_spot) / e_spot
@@ -635,6 +642,12 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                 unreal += (market.close(sym) - pos["entry"]) * pos["units"] * pos["dir"]
             except KeyError:
                 pass  # never printed today — carry at entry (flat contribution)
+        if episode is not None:
+            # The open cycle's MTM at this close (owner ask: per-cycle EOD P&L) —
+            # legs already closed within the episode + the open book's unreal.
+            closed_pnl = sum(x["pnl"] for x in episode["closed"])
+            episode.setdefault("daily", []).append(
+                {"date": day.isoformat(), "pnl": round(closed_pnl + unreal, 2)})
         equity_curve.append({"date": day.isoformat(),
                              "equity": round(capital + realized + unreal, 2)})
 

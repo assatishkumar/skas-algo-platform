@@ -298,11 +298,64 @@ function CycleRow({ c }: { c: OptionCycle }) {
         <tr className="bg-slate-900/60">
           <td />
           <td colSpan={10} className="py-2 pr-4">
+            {/* Cycle context (owner ask 2026-07-18): full entry/exit timestamps, the
+                spot journey, and the cycle's MTM at each EOD while it was open. */}
+            <div className="mb-2 flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-400">
+              <span>entered <b className="text-slate-200">{c.entry_date}</b></span>
+              {c.exit_date && <span>exited <b className="text-slate-200">{c.exit_date}</b></span>}
+              {c.underlying_entry != null && c.underlying_exit != null && (
+                <span>
+                  spot <b className="text-slate-200">
+                    {Math.round(c.underlying_entry)} → {Math.round(c.underlying_exit)}
+                  </b>{" "}
+                  <span className={(c.underlying_pct ?? 0) >= 0
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-rose-600 dark:text-rose-400"}>
+                    ({pct(c.underlying_pct ?? 0, 2)})
+                  </span>
+                </span>
+              )}
+            </div>
+            <CycleMtmTable c={c} />
             <PayoffChart cycle={c} />
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+function CycleMtmTable({ c }: { c: OptionCycle }) {
+  // EOD marks while the cycle was open, closed off by the exit itself (net, incl.
+  // charges) — so a same-day stop still shows its one final column.
+  const marks = [
+    ...(c.daily_pnl ?? []).map((d) => ({ key: d.date, label: d.date.slice(5), pnl: d.pnl })),
+    ...(c.exit_date && c.net_pnl != null
+      ? [{ key: "exit", label: `exit ${c.exit_date.slice(11)}`, pnl: c.net_pnl }]
+      : []),
+  ];
+  if (marks.length === 0) return null;
+  return (
+    <div className="mb-2 overflow-x-auto">
+      <table className="text-xs">
+        <tbody>
+          <tr className="text-slate-500">
+            <td className="pr-3 py-0.5">EOD P&L</td>
+            {marks.map((m) => (
+              <td key={m.key} className="px-2 py-0.5 text-right whitespace-nowrap">{m.label}</td>
+            ))}
+          </tr>
+          <tr>
+            <td className="pr-3 py-0.5 text-slate-500">cycle MTM</td>
+            {marks.map((m) => (
+              <td key={m.key} className={`px-2 py-0.5 text-right tabular-nums ${pnlClass(m.pnl)}`}>
+                {formatInr(m.pnl)}
+              </td>
+            ))}
+          </tr>
+        </tbody>
+      </table>
+    </div>
   );
 }
 
