@@ -96,6 +96,24 @@ def test_registry_ids_are_real_strategies():
         get_strategy(sid)   # raises KeyError if the id ever drifts
 
 
+def test_eod_basis_only_for_eod_backtestable_strategies():
+    """A registry `bases` list claiming "eod" must actually run on the EOD engine — the
+    backend's _DEPLOY_ONLY set is exactly the strategies that CANNOT (deploy/intraday-only,
+    live-chain-driven). delta_neutral_monthly slipped through here once: it declared "eod"
+    but its 18Δ entry needs a live chain, so an EOD run silently made 0 trades (2026-07-18).
+    """
+    route_src = (Path(__file__).resolve().parents[1] / "src" / "skas_algo" / "api"
+                 / "routes" / "backtest.py").read_text()
+    m = re.search(r"_DEPLOY_ONLY = \{([^}]*)\}", route_src)
+    deploy_only = set(re.findall(r'"([^"]+)"', m.group(1)))
+    bad = []
+    for sid, body in _specs().items():
+        bases = set(re.findall(r'"(intraday|eod)"', re.search(r"bases: \[([^\]]*)\]", body).group(1)))
+        if "eod" in bases and sid in deploy_only:
+            bad.append(f"{sid}: registry claims eod, but it's _DEPLOY_ONLY (no EOD backtest)")
+    assert not bad, "\n".join(bad)
+
+
 def test_every_registry_param_is_a_real_kwarg():
     problems = []
     for sid, body in _specs().items():

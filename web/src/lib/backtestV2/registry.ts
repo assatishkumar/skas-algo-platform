@@ -169,8 +169,11 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
 
   delta_neutral_monthly: {
     id: "delta_neutral_monthly",
-    bases: ["intraday", "eod"],
-    underlyings: { intraday: ["NIFTY", "BANKNIFTY"], eod: ["NIFTY", "BANKNIFTY"] },
+    // Intraday-store ONLY: the 18Δ entry solves delta off a LIVE chain (ctx.market
+    // .live_chain), which the EOD engine's market doesn't provide — an EOD run silently
+    // makes 0 trades (verified 2026-07-18). It's in _DEPLOY_ONLY for the same reason.
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY", "BANKNIFTY"], eod: NONE },
     monthlyCycle: true,
     note: "18Δ monthly strangle: when |CE−PE| exceeds the adjust threshold the CHEAP side rolls "
       + "to the rich side's price (capped at the other strike → straddle), then breakeven hedges "
