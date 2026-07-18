@@ -488,6 +488,9 @@ async def delta_neutral_deploy(
         "force_entry": body.force_entry,
         "adjust_threshold_pct": body.adjust_threshold_pct,
         "adjust_cooldown_min": body.adjust_cooldown_min,
+        "profit_check": body.profit_check,
+        "stop_check": body.stop_check,
+        "eod_time": body.eod_time,
         "profit_target_pct": body.profit_target_pct,
         "stop_loss_pct": body.stop_loss_pct,
     }
@@ -531,6 +534,9 @@ async def iron_fly_deploy(
         "ironfly_adjust": body.ironfly_adjust,
         "adjust_target_delta": body.adjust_target_delta,
         "adjust_cooldown_min": body.adjust_cooldown_min,
+        "profit_check": body.profit_check,
+        "stop_check": body.stop_check,
+        "eod_time": body.eod_time,
         "profit_target_pct": body.profit_target_pct,
         "stop_loss_pct": body.stop_loss_pct,
     }
@@ -626,6 +632,9 @@ async def intraday_straddle_deploy(
         "trail_trigger_pct": body.trail_trigger_pct,
         "trail_step_pct": body.trail_step_pct,
         "trail_mode": body.trail_mode,
+        "profit_check": body.profit_check,
+        "stop_check": body.stop_check,
+        "eod_time": body.eod_time,
     }
     req = LiveStartRequest(
         strategy_id="intraday_straddle",
@@ -667,6 +676,8 @@ async def weekly_intraday_straddle_deploy(
         "eod_exit": body.eod_exit,
         "candle_minutes": body.candle_minutes,
         "max_entries_per_day": body.max_entries_per_day,
+        "stop_check": body.stop_check,
+        "eod_time": body.eod_time,
         "stop_loss_pct": body.stop_loss_pct,
     }
     req = LiveStartRequest(
@@ -713,6 +724,9 @@ async def cp_ratio_expiry_deploy(
         "profit_target_pct": body.profit_target_pct,
         "stop_loss_pct": body.stop_loss_pct,
         "ratio_tolerance_pct": body.ratio_tolerance_pct,
+        "profit_check": body.profit_check,
+        "stop_check": body.stop_check,
+        "eod_time": body.eod_time,
     }
     req = LiveStartRequest(
         strategy_id="call_put_ratio_expiry",

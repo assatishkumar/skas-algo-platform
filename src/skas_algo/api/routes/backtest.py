@@ -56,7 +56,11 @@ _DEPLOY_ONLY = {"custom_options", "call_put_ratio_expiry", "delta_neutral_monthl
 # replay harness (services/intraday_replay.py) drives over the 1-min option store, plus
 # momentum_theta (its dedicated BS service, adapted). Order = display order.
 _INTRADAY_REPLAY = ["intraday_straddle", "weekly_intraday_straddle", "call_put_ratio_expiry",
-                    "delta_neutral_monthly", "iron_fly_monthly", "momentum_theta_gainer_intra"]
+                    "delta_neutral_monthly", "iron_fly_monthly", "momentum_theta_gainer_intra",
+                    # The positional family joined the store (2026-07-18): ALL index-options
+                    # strategies replay on 1-min data; only stock-option strategies keep EOD.
+                    "call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly",
+                    "hni_weekly", "21_ema_momentum"]
 
 
 @router.get("/strategies")

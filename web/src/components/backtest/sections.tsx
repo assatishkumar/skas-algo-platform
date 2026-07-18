@@ -163,14 +163,12 @@ export function UniversePeriodSection({ spec, basis, underlyings, onUnderlyings,
 }
 
 // ---------------------------------------------------------------- 03 Sizing
-export function SizingSection({ spec, sizing, dispatch }: {
+export function SizingSection({ sizing, dispatch }: {
   spec: StrategyFormSpec; sizing: SizingState; dispatch: (a: SizingAction) => void;
 }) {
   const math = sizingMath(sizing);
-  const marginLabel = spec.sizing === "hni" ? "MARGIN / LOT-SET (₹)" : "MARGIN / LOT (₹)";
-  const marginHint = spec.sizing === "eodRatio"
-    ? "reference only on EOD — this family fits lots off its own model margin"
-    : "today's broker margin for one lot-set of this structure";
+  const marginLabel = "MARGIN / LOT-SET (₹)";
+  const marginHint = "today's broker margin for one lot-set of this strategy's structure";
   return (
     <SectionCard n="03" title="Sizing"
       caption="at today's lot size & margin — past eras rescale automatically">

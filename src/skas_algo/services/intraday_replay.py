@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, time, timedelta
 
+import numpy as np
 import pandas as pd
 
 from skas_algo.data.option_intraday_store import captured_days, load_contract_bars, load_day
@@ -49,10 +50,13 @@ logger = logging.getLogger(__name__)
 _OPEN = time(9, 15)
 _CLOSE = time(15, 30)
 
-# Strategies the harness can replay (Path-B chain readers). momentum_theta_gainer_intra is
-# handled at the route layer by its dedicated BS service — not here.
+# Strategies the harness can replay. momentum_theta_gainer_intra is handled at the route
+# layer by its dedicated BS service — not here. The positional family (ratio/hni/ema21)
+# joined 2026-07-18 via the _Chain cached-chain adapter: ALL index-options strategies now
+# backtest on the 1-min store (the EOD options basis left the UI; equity keeps the cache).
 REPLAYABLE = {"intraday_straddle", "weekly_intraday_straddle", "call_put_ratio_expiry",
-              "delta_neutral_monthly", "iron_fly_monthly"}
+              "delta_neutral_monthly", "iron_fly_monthly", "call_ratio_monthly",
+              "put_ratio_monthly", "batman_ratio_monthly", "hni_weekly", "21_ema_momentum"}
 
 
 class _Market:
@@ -71,9 +75,26 @@ class _Market:
         self.current_date = day
         self.quotes = {}          # live marks don't survive overnight — neither do these
         self.chains = {}
+        # Today's FORMING index bar (running O/H/L off the parity spot) — feeds ema21's
+        # bands with chart-at-decision-time semantics instead of the settled bar.
+        self.spot_open: float | None = None
+        self.spot_high: float | None = None
+        self.spot_low: float | None = None
         for sym in symbols:
             _u, e, strike_s, right = sym.split("|")
             self.chains.setdefault(e, {}).setdefault(float(strike_s), {})[right] = sym
+
+    def note_spot(self) -> float | None:
+        """Sample the current parity spot into today's forming bar (called per minute
+        only when a strategy consumes daily bars — the parity scan isn't free)."""
+        s = self.index_spot(self.underlying)
+        if s is None:
+            return None
+        if self.spot_open is None:
+            self.spot_open = s
+        self.spot_high = s if self.spot_high is None else max(self.spot_high, s)
+        self.spot_low = s if self.spot_low is None else min(self.spot_low, s)
+        return s
 
     def feed(self, symbol: str, close: float, oi: float) -> None:
         self.quotes[symbol] = (float(close), float(oi))
@@ -151,14 +172,65 @@ class _Market:
         return {"spot": spot, "atm_strike": atm, "lot_size": lot, "rows": rows}
 
 
-class _Chain:
-    """ctx.option_chain() — the day's stored expiries."""
+class _ChainRow:
+    """OptionChainView-row lookalike built from the store's forward-filled marks. The
+    ratio family + ema21 read exactly {strike,right,close,oi,symbol}; ``symbol`` is the
+    STORE symbol ("U|iso|strike|right") — LOAD-BEARING: it flows straight into Signal
+    and the replay's _fill splits it on "|" (the engine's instrument symbols would not
+    round-trip)."""
 
-    def __init__(self):
+    __slots__ = ("underlying", "expiry", "strike", "right", "close", "settle", "oi", "symbol")
+
+    def __init__(self, underlying, expiry, strike, right, close, oi, symbol):
+        self.underlying = underlying
+        self.expiry = expiry
+        self.strike = strike
+        self.right = right
+        self.close = close
+        self.settle = None
+        self.oi = oi
+        self.symbol = symbol
+
+
+class _Chain:
+    """ctx.option_chain() — the cached-chain interface (OptionChainView subset) the
+    positional strategies consume, served from the store's minute marks. Only contracts
+    that have PRINTED so far today appear (the store is sparse — untraded far wings are
+    simply absent, and the strategies' own oi>0/_bad guards skip them, exactly as they
+    skip a phantom bhavcopy strike)."""
+
+    def __init__(self, market: "_Market | None" = None):
+        self.market = market
         self.days: list[date] = []
 
     def expiries(self, _u: str, _today: date) -> list[date]:
         return list(self.days)
+
+    def spot(self, u: str, _today: date) -> float | None:
+        return self.market.index_spot(u) if self.market is not None else None
+
+    def expiry_for_dte(self, _u: str, today: date, dte_target: int) -> date | None:
+        """Expiry nearest ``dte_target`` days out (ties → sooner) — mirrors
+        engine/options/chain.py so hni picks the same weekly here as in live."""
+        future = [e for e in self.days if e >= today]
+        if not future:
+            return None
+        return min(future, key=lambda e: (abs((e - today).days - dte_target), (e - today).days))
+
+    def chain(self, u: str, _today: date, expiry: date) -> list["_ChainRow"]:
+        if self.market is None:
+            return []
+        e_iso = expiry.isoformat() if hasattr(expiry, "isoformat") else str(expiry)[:10]
+        rows: list[_ChainRow] = []
+        for strike, legs in sorted((self.market.chains.get(e_iso) or {}).items()):
+            if not strike_allowed(u, strike):
+                continue   # same NIFTY-100 coarsening as live_chain and the EOD view
+            for right, sym in legs.items():
+                q = self.market.quotes.get(sym)
+                if q is None:
+                    continue   # never printed today — absent, like an untraded strike
+                rows.append(_ChainRow(u, expiry, strike, right, q[0], int(q[1]), sym))
+        return rows
 
 
 class _Ctx:
@@ -206,10 +278,40 @@ def _intrinsic(spot: float, strike: float, right: str) -> float:
 # SHORT-leg lot-multiples per lot-set of each strategy's structure — the margin push sums
 # over short legs, so a user-keyed "margin per lot-set" must be spread across them
 # (straddle: CE+PE short = 2; cpre: 3 short lots per side x 2 sides = 6; the fly/strangle
-# families keep 2 shorts through their adjustments).
+# families keep 2 shorts through their adjustments; ratio wings sell 2 [x2 wings for
+# batman], hni's 1-3-2 body sells 3; ema21's credit spread sells 1). FALLBACK ONLY —
+# the run function prefers the instance's own sell_lots when it has one.
 _SHORT_UNITS_PER_SET = {"intraday_straddle": 2, "weekly_intraday_straddle": 2,
                         "delta_neutral_monthly": 2, "iron_fly_monthly": 2,
-                        "call_put_ratio_expiry": 6}
+                        "call_put_ratio_expiry": 6, "call_ratio_monthly": 2,
+                        "put_ratio_monthly": 2, "batman_ratio_monthly": 4,
+                        "hni_weekly": 3, "21_ema_momentum": 1}
+
+
+def _daily_bars_with_forming(u: str, market: "_Market"):
+    """ema21's ``set_daily_bars_fn``: cache bars STRICTLY BEFORE the replay's current day
+    (settled history — the same daily bars live reads from the broker), plus TODAY as the
+    forming bar built from the replay's running parity spot. No settled-bar lookahead."""
+    from skas_algo.data.options_provider import INDEX_SYMBOL
+    from skas_algo.data.provider import get_data_cache
+
+    sd = get_data_cache()
+    sym = INDEX_SYMBOL.get(u.upper()) or u.upper()
+
+    def fn(_u: str, start, end):
+        today = market.current_date
+        hist = sd.get_prices(symbol=sym, start_date=start, end_date=end)
+        if today is not None and hist is not None and not hist.empty:
+            hist = hist[pd.to_datetime(hist["date"]).dt.date < today]
+        spot = market.note_spot()   # ensure the forming bar includes THIS minute
+        if today is not None and spot is not None and (end is None or today <= end):
+            forming = pd.DataFrame([{"date": pd.Timestamp(today),
+                                     "open": market.spot_open, "high": market.spot_high,
+                                     "low": market.spot_low, "close": spot}])
+            hist = pd.concat([hist, forming], ignore_index=True) if hist is not None else forming
+        return hist
+
+    return fn
 
 
 def _nearest_expiry_lot(u: str, day: date, expiries: list[date],
@@ -235,9 +337,11 @@ def _ref_spot(u: str, days_pool: list[date],
         m.start_day(day, list(df["symbol"].unique()))
         expiries = sorted({date.fromisoformat(s.split("|")[1])
                            for s in df["symbol"].unique()})
-        minutes = pd.to_datetime(df["start"]).dt.strftime("%Y-%m-%dT%H:%M")
+        minutes = np.datetime_as_string(
+            pd.to_datetime(df["start"]).values.astype("datetime64[m]"))
         by_min: dict[str, list] = {}
-        for sym, minute, close_px, oi in zip(df["symbol"], minutes, df["close"], df["oi"],
+        for sym, minute, close_px, oi in zip(df["symbol"].to_numpy(), minutes,
+                                             df["close"].to_numpy(), df["oi"].to_numpy(),
                                              strict=True):
             by_min.setdefault(minute, []).append((sym, float(close_px), float(oi)))
         for mk in sorted(by_min):
@@ -276,7 +380,38 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
     sizing = str(p.pop("sizing", "fixed") or "fixed")
     buffer_pct = float(p.pop("sizing_buffer_pct", 10) or 0)
     lot_overrides = p.get("contract_specs")   # same override surface as the engine paths
+
+    # Strategy FIRST: the margin math below reads the instance's real leg ratios.
+    # NOTE the "sizing" name collision resolves in our favor by construction: the harness
+    # popped it above, so a ratio-family strategy is ALWAYS built with its own ctor
+    # default sizing="fixed" — its internal auto-size can never fight the harness's
+    # external lots refit (pinned by test).
+    factory = get_strategy(strategy_id)
+    if strategy_id == "call_put_ratio_expiry":
+        p.setdefault("underlyings", [u])   # cpre ignores ``universe`` — takes underlyings
+    strategy = factory(universe=[u], initial_capital=capital, **p)
+    market = _Market(u, lot_overrides=lot_overrides)
+    chain = _Chain(market)
+    ctx = _Ctx(market, chain)
+    if hasattr(strategy, "set_option_bars_fn"):
+        strategy.set_option_bars_fn(_store_bars_fn)
+    # ema21's EMA channel needs daily INDEX bars: prior days from the cache (settled —
+    # matches live's broker daily history), TODAY as a FORMING bar from the replay's
+    # running parity spot (chart-at-decision-time semantics; the owner vetoed the
+    # settled-bar's ~10-min lookahead, 2026-07-18).
+    track_spot = hasattr(strategy, "set_daily_bars_fn")
+    if track_spot:
+        strategy.set_daily_bars_fn(_daily_bars_with_forming(u, market))
+
+    # Short lot-multiples per lot-set: prefer the instance's own leg ratios (the form can
+    # change sell_lots) over the static table — a mismatch would mis-scale margin_pct vs
+    # what the per-minute push sums over short legs.
     short_per_set = _SHORT_UNITS_PER_SET.get(strategy_id, 2)
+    sell_lots = getattr(strategy, "sell_lots", None)
+    if sell_lots:
+        wings = 2 if strategy_id == "batman_ratio_monthly" else 1
+        short_per_set = int(sell_lots) * wings
+
     margin_pct: float | None = None
     sizing_echo: dict | None = None
     if margin_per_lot > 0:
@@ -297,16 +432,6 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
     if sizing == "capital" and margin_pct is None:
         raise ValueError("capital-based sizing needs margin_per_lot — key in today's "
                          "broker margin for one lot-set of this strategy")
-
-    factory = get_strategy(strategy_id)
-    if strategy_id == "call_put_ratio_expiry":
-        p.setdefault("underlyings", [u])   # cpre ignores ``universe`` — takes underlyings
-    strategy = factory(universe=[u], initial_capital=capital, **p)
-    market = _Market(u, lot_overrides=lot_overrides)
-    chain = _Chain()
-    ctx = _Ctx(market, chain)
-    if hasattr(strategy, "set_option_bars_fn"):
-        strategy.set_option_bars_fn(_store_bars_fn)
 
     trades: list[dict] = []
     equity_curve: list[dict] = []
@@ -414,8 +539,12 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
         chain.days = sorted({date.fromisoformat(s.split("|")[1])
                              for s in df["symbol"].unique()})
         feed: dict[str, list[tuple[str, float, float]]] = {}
-        minutes = pd.to_datetime(df["start"]).dt.strftime("%Y-%m-%dT%H:%M")
-        for sym, minute, close_px, oi in zip(df["symbol"], minutes, df["close"], df["oi"],
+        # numpy datetime64[m] → "YYYY-MM-DDTHH:MM" via C code: pandas .dt.strftime was
+        # ~45% of a replay's runtime on 300k-row merged days (profiled 2026-07-18).
+        minutes = np.datetime_as_string(
+            pd.to_datetime(df["start"]).values.astype("datetime64[m]"))
+        for sym, minute, close_px, oi in zip(df["symbol"].to_numpy(), minutes,
+                                             df["close"].to_numpy(), df["oi"].to_numpy(),
                                              strict=True):
             feed.setdefault(minute, []).append((sym, float(close_px), float(oi)))
 
@@ -435,6 +564,8 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                 market.feed(sym, close_px, oi)
             ctx._now = cur
             market.now = cur
+            if track_spot:
+                market.note_spot()   # today's forming index bar (ema21's bands)
             if not day_sized:
                 spot = market.index_spot(u)
                 if spot:

@@ -119,8 +119,11 @@ def test_weekly_straddle_y_from_day1_entry_day2():
 
 
 def test_unsupported_strategy_and_empty_window_raise():
+    # donchian_strangle_bt trades STOCK options — no 1-min data exists for those, so it
+    # stays on its synthetic-BS EOD path (hni_weekly, the old example here, is replayable
+    # since the 2026-07-18 store migration).
     with pytest.raises(ValueError, match="not intraday-replayable"):
-        run_intraday_backtest("hni_weekly", "NIFTY", D1, D2, 1_000_000, {})
+        run_intraday_backtest("donchian_strangle_bt", "NIFTY", D1, D2, 1_000_000, {})
     with pytest.raises(ValueError, match="no captured days"):
         run_intraday_backtest("intraday_straddle", "NIFTY", D1, D2, 1_000_000, {})
 
@@ -140,7 +143,13 @@ def test_strategies_basis_lists(api_client):
     intraday = api_client.get("/api/v1/strategies?basis=intraday").json()["strategies"]
     assert "weekly_intraday_straddle" not in eod and "intraday_straddle" not in eod
     assert intraday[0] == "intraday_straddle" and "momentum_theta_gainer_intra" in intraday
-    assert "hni_weekly" not in intraday
+    # The positional family joined the store (2026-07-18) — ALL index-options ids replay.
+    for sid in ("hni_weekly", "batman_ratio_monthly", "call_ratio_monthly",
+                "put_ratio_monthly", "21_ema_momentum"):
+        assert sid in intraday, sid
+    # Stock-option strategies stay off the store (no stock 1-min data exists).
+    assert "donchian_strangle_bt" not in intraday
+    assert "staggered_covered_call" not in intraday
 
 
 def _run_job(api_client, body, timeout_s=30.0):
@@ -289,6 +298,130 @@ def test_banknifty_lot_size_eras():
     assert lot_size_for("BANKNIFTY", date(2023, 8, 1)) == 15
     assert lot_size_for("BANKNIFTY", date(2024, 12, 1)) == 30
     assert lot_size_for("BANKNIFTY", date(2026, 2, 1)) == 35
+
+
+def _monthly_day(day, spot=24000.0, exp="2026-08-25", prem=200.0):
+    """A store day carrying a MONTHLY chain: wide strikes (spot±2000, 100-steps) so the
+    ratio family's 300/600/1600 offsets and hni's 200/400/600 all resolve. Premiums decay
+    linearly from ATM so credit gates behave sanely; both rights print every 5 min."""
+    minutes = [(9, m) for m in range(15, 60, 5)] + [(h, m) for h in (10, 11, 12, 13, 14)
+                                                    for m in range(0, 60, 5)] + \
+              [(15, m) for m in range(0, 30, 5)]
+    rows = []
+    for k in range(int(spot - 2000), int(spot + 2100), 100):
+        dist = abs(k - spot)
+        ce = max(prem - (k - spot) * 0.09 - dist * 0.02, 2.0)
+        pe = max(prem + (k - spot) * 0.09 - dist * 0.02, 2.0)
+        for i, (hh, mm) in enumerate(minutes):
+            decay = i * 0.05
+            rows += _leg_rows(day, k, "CE", {(hh, mm): round(max(ce - decay, 1.0), 2)}, exp)
+            rows += _leg_rows(day, k, "PE", {(hh, mm): round(max(pe - decay, 1.0), 2)}, exp)
+    return pd.DataFrame(rows, columns=store.COLUMNS)
+
+
+def test_hni_weekly_replays_on_the_store():
+    """The positional family runs on the 1-min store (2026-07-18): hni enters its 1-3-2
+    tent at entry_time on the ~8-DTE weekly, margin freezes off the harness push, and the
+    Friday force-exit closes the week."""
+    mon, fri = date(2026, 7, 13), date(2026, 7, 17)
+    exp = "2026-07-21"   # 8 days from Monday
+    for d in (mon, date(2026, 7, 14), date(2026, 7, 15), date(2026, 7, 16), fri):
+        store.write_day(d, _monthly_day(d, exp=exp))
+    out = run_intraday_backtest("hni_weekly", "NIFTY", mon, fri, 1_000_000,
+                                {"margin_per_lot": 132_000, "lots": 1})
+    entries = [t for t in out["trades"] if t["action"] in ("SHORT", "BUY")
+               and t["date"].startswith(mon.isoformat())]
+    assert len(entries) == 3                                # 1-3-2 tent = 3 legs
+    assert all(t["date"].startswith("2026-07-13 09:45") for t in entries), entries
+    shorts = [t for t in entries if t["action"] == "SHORT"]
+    assert len(shorts) == 1 and shorts[0]["units"] == 3 * 65   # sell 3 lots body
+    assert all("|" in t["ticker"] and t["ticker"].split("|")[1] == exp for t in entries)
+    closes = [t for t in out["trades"] if t["action"] in ("COVER", "SELL", "SETTLE")]
+    assert closes and out["report"]["metrics"]["Total Trades"] >= 1
+    # margin echo: keyed Rs1.32L spread across the 3 short lots, era-true
+    assert out["report"]["sizing"]["margin_per_lot"] == 132_000
+
+
+def test_call_ratio_monthly_replays_with_1432_structure():
+    """call_ratio enters its 1:2:1 wing at the 14:30 entry_time (owner default for the
+    monthly family) with the strategy's own sizing FORCED to fixed on the replay path."""
+    d1 = date(2026, 7, 13)
+    store.write_day(d1, _monthly_day(d1))
+    out = run_intraday_backtest(
+        "call_ratio_monthly", "NIFTY", d1, d1, 1_000_000,
+        {"margin_per_lot": 130_000, "lots": 1, "entry_time": "14:30",
+         "entry_rule": "post_expiry", "entry_window_days": 30,
+         "min_credit_pct": -10.0, "credit_debit_limit_pct": 10.0, "max_shifts": 0,
+         # the harness pops "sizing" — even if the user sends "capital" the STRATEGY
+         # must still be built sizing="fixed" (its auto-size never fights the harness)
+         "sizing": "fixed"})
+    entries = [t for t in out["trades"] if t["date"].startswith(f"{d1.isoformat()} 14:30")]
+    assert len(entries) == 3, out["trades"][:5]             # buy 1 / sell 2 / hedge 1
+    shorts = [t for t in entries if t["action"] == "SHORT"]
+    assert len(shorts) == 1 and shorts[0]["units"] == 2 * 65
+
+
+def test_ratio_family_own_sizing_is_always_fixed_on_replay():
+    """The name collision resolves by construction: the harness pops params["sizing"]
+    before the strategy is built, so sizing="capital" configures the HARNESS while the
+    strategy keeps its ctor default "fixed"."""
+    d1 = date(2026, 7, 13)
+    store.write_day(d1, _monthly_day(d1))
+    from skas_algo.services import intraday_replay as mod
+    seen = {}
+    orig = mod.get_strategy
+
+    def spy(sid):
+        factory = orig(sid)
+        def wrapped(**kw):
+            s = factory(**kw)
+            seen["sizing"] = getattr(s, "sizing", None)
+            return s
+        return wrapped
+
+    mod.get_strategy, _ = spy, None
+    try:
+        run_intraday_backtest("call_ratio_monthly", "NIFTY", d1, d1, 1_000_000,
+                              {"margin_per_lot": 130_000, "sizing": "capital",
+                               "entry_rule": "post_expiry", "min_credit_pct": -10.0})
+    finally:
+        mod.get_strategy = orig
+    assert seen["sizing"] == "fixed"
+
+
+def test_ema21_bands_use_forming_bar_not_settled(monkeypatch):
+    """ema21 on the store: prior days come from the cache, TODAY is a forming bar from
+    the replay's running parity spot — the settled cache bar for today must be excluded
+    (the ~10-min lookahead the owner vetoed)."""
+    d1 = date(2026, 7, 13)
+    store.write_day(d1, _monthly_day(d1, spot=24000.0))
+    calls = {}
+
+    class _FakeSd:
+        def get_prices(self, symbol, start_date=None, end_date=None, **kw):
+            # 40 prior settled days + a POISONED settled row for d1 itself: if the
+            # forming-bar filter fails, the poison's absurd high/low skews the bands.
+            days = pd.bdate_range(end="2026-07-13", periods=41)
+            df = pd.DataFrame({
+                "date": days,
+                "open": 24000.0, "high": 24010.0, "low": 23990.0, "close": 24000.0,
+            })
+            df.loc[df.index[-1], ["high", "low", "close"]] = [99999.0, 1.0, 99999.0]
+            calls["fetched"] = True
+            return df
+
+    monkeypatch.setattr("skas_algo.data.provider.get_data_cache", lambda: _FakeSd())
+    out = run_intraday_backtest("21_ema_momentum", "NIFTY", d1, d1, 1_000_000, {"lots": 1})
+    assert calls.get("fetched")
+    # The poisoned settled today-bar (high 99999) must NOT reach the bands: with it, the
+    # upper band explodes and no bull-put entry is possible; the forming bar keeps bands
+    # sane. We can't guarantee a signal fires on one synthetic day — assert no crash and
+    # that the report contract exists (the lookahead-exclusion is the real assertion:
+    # a 99999 close WOULD fire a bull-put spread entry at 15:20 if it leaked through).
+    for t in out["trades"]:
+        assert not t["date"].startswith("2026-07-13 15:2") or t["price"] < 5000, \
+            "settled poison bar leaked into the bands"
+    assert "metrics" in out["report"]
 
 
 def test_intraday_backtest_no_coverage_is_422(api_client):

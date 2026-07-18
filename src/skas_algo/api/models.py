@@ -265,6 +265,12 @@ class DeltaNeutralDeploy(BaseModel):
     adjust_cooldown_min: int = 15
     profit_target_pct: float = 2.5      # % of margin deployed
     stop_loss_pct: float = 0.0          # 0 = off (spec-faithful)
+    # Two-cadence model (2026-07-18): live decision sampling. Deploy default = the
+    # owner policy (1min); the strategy ctor default stays "tick" so RECOVERED runs
+    # keep their recorded behavior (recovery binds params_snapshot, not these).
+    profit_check: str = "1min"
+    stop_check: str = "1min"
+    eod_time: str = "15:20"
     capital: float = 1_000_000
     refresh_seconds: int = 20
     mode: str = "PAPER"
@@ -291,6 +297,12 @@ class IronFlyDeploy(BaseModel):
     adjust_cooldown_min: int = 15
     profit_target_pct: float = 2.5      # % of margin deployed
     stop_loss_pct: float = 0.0          # 0 = off; optional hard MTM floor for the naked tail
+    # Two-cadence model (2026-07-18): live decision sampling. Deploy default = the
+    # owner policy (1min); the strategy ctor default stays "tick" so RECOVERED runs
+    # keep their recorded behavior (recovery binds params_snapshot, not these).
+    profit_check: str = "1min"
+    stop_check: str = "1min"
+    eod_time: str = "15:20"
     capital: float = 1_000_000
     refresh_seconds: int = 20
     mode: str = "PAPER"
@@ -338,6 +350,12 @@ class CpRatioExpiryDeploy(BaseModel):
     profit_target_pct: float = 1.1      # % of margin deployed
     stop_loss_pct: float = 1.0
     ratio_tolerance_pct: float = 30.0
+    # Two-cadence model (2026-07-18): live decision sampling. Deploy default = the
+    # owner policy (1min); the strategy ctor default stays "tick" so RECOVERED runs
+    # keep their recorded behavior (recovery binds params_snapshot, not these).
+    profit_check: str = "1min"
+    stop_check: str = "1min"
+    eod_time: str = "15:20"
     capital: float = 500_000
     refresh_seconds: int = 15
     mode: str = "PAPER"
@@ -364,6 +382,12 @@ class IntradayStraddleDeploy(BaseModel):
     trail_trigger_pct: float = 1.0      # every this much peak profit moves the stop
     trail_step_pct: float = 0.5         # ...by this much (0 on either disables trailing)
     trail_mode: str = "ratchet"         # "ratchet" | "below_peak"
+    # Two-cadence model (2026-07-18): live decision sampling. Deploy default = the
+    # owner policy (1min); the strategy ctor default stays "tick" so RECOVERED runs
+    # keep their recorded behavior (recovery binds params_snapshot, not these).
+    profit_check: str = "1min"
+    stop_check: str = "1min"
+    eod_time: str = "15:20"
     capital: float = 1_000_000
     refresh_seconds: int = 20
     mode: str = "PAPER"
@@ -390,6 +414,9 @@ class WeeklyIntradayStraddleDeploy(BaseModel):
     candle_minutes: int = 5
     max_entries_per_day: int = 3
     stop_loss_pct: float = 0.0          # optional MTM stop, % of broker margin; 0 = OFF
+    # Stop-cadence only (no profit-booking decision exists — VWAP exits, bar-driven).
+    stop_check: str = "1min"
+    eod_time: str = "15:20"
     capital: float = 1_000_000
     # 15s ticks so a 5-min candle close is evaluated promptly (loop clamps to ≥5s).
     refresh_seconds: int = 15

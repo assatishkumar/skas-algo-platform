@@ -34,7 +34,7 @@ from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import bad_close, legs_mtm_pnl
+from ._options_common import ExitCadenceMixin, bad_close, legs_mtm_pnl
 
 
 def _hhmm(s: str, fallback: time) -> time:
@@ -45,7 +45,7 @@ def _hhmm(s: str, fallback: time) -> time:
         return fallback
 
 
-class CallPutRatioExpiryStrategy:
+class CallPutRatioExpiryStrategy(ExitCadenceMixin):
     strategy_id = "call_put_ratio_expiry"
     intraday = True  # ticks every refresh_seconds; entry window + exits self-gate
 
@@ -63,6 +63,11 @@ class CallPutRatioExpiryStrategy:
         ratio_divisor: float = 3.0,              # sell strike trades at ATM premium / this
         ratio_tolerance_pct: float = 30.0,       # best candidate further off → skip the day
         sell_lots_per_set: int = 3,
+        # Two-cadence model (2026-07-18): target and stop sampling. "tick" = every call —
+        # the pre-cadence behavior (§1); the deploy/backtest forms default to "1min".
+        profit_check: str = "tick",
+        stop_check: str = "tick",
+        eod_time: str = "15:15",
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
         **_ignored,
@@ -82,6 +87,9 @@ class CallPutRatioExpiryStrategy:
         self.ratio_divisor = float(ratio_divisor)
         self.ratio_tolerance_pct = float(ratio_tolerance_pct)
         self.sell_lots_per_set = int(sell_lots_per_set)
+        self.profit_check = str(profit_check)
+        self.stop_check = str(stop_check)
+        self.eod_time = str(eod_time)
         self.min_leg_oi = int(min_leg_oi)
         self.initial_capital = initial_capital
         self.lot_overrides = lot_overrides
@@ -292,9 +300,12 @@ class CallPutRatioExpiryStrategy:
             except KeyError:
                 return []
             pnl += (cur - leg["entry"]) * leg["units"] * leg["dir"]
-        if pnl >= base * self.target_pct / 100.0:
+        # Cadence-sampled AFTER the guards above (mixin rule #1: _due consumes its
+        # window), and keyed PER UNDERLYING — one shared clock would let a SENSEX slice
+        # consume NIFTY's evaluation slot (this method runs once per book per tick).
+        if self._due(f"profit:{u}", now) and pnl >= base * self.target_pct / 100.0:
             return self._exit_all(u, legs, "target")
-        if pnl <= -base * self.stop_pct / 100.0:
+        if self._due(f"stop:{u}", now) and pnl <= -base * self.stop_pct / 100.0:
             return self._exit_all(u, legs, "stop")
         return []
 
@@ -314,8 +325,9 @@ class CallPutRatioExpiryStrategy:
 
     def exit_rules(self) -> list[str]:
         return [
-            f"Book profit at +{self.target_pct:g}% of broker margin (checked every tick)",
-            f"Stop out at −{self.stop_pct:g}% of broker margin (checked every tick)",
+            f"Book profit at +{self.target_pct:g}% of broker margin "
+            f"({self._cadence_phrase('profit')})",
+            f"Stop out at −{self.stop_pct:g}% of broker margin ({self._cadence_phrase('stop')})",
             f"Hard exit {self.eod_exit.strftime('%H:%M')} — never carried",
         ]
 

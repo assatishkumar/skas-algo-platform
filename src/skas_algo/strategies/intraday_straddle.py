@@ -32,7 +32,7 @@ from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import bad_close, legs_mtm_pnl
+from ._options_common import ExitCadenceMixin, bad_close, legs_mtm_pnl
 
 
 def _hhmm(s: str, fallback: time) -> time:
@@ -43,7 +43,7 @@ def _hhmm(s: str, fallback: time) -> time:
         return fallback
 
 
-class IntradayStraddleStrategy:
+class IntradayStraddleStrategy(ExitCadenceMixin):
     strategy_id = "intraday_straddle"
     intraday = True  # ticks every refresh_seconds; entry window + exits self-gate
 
@@ -65,6 +65,13 @@ class IntradayStraddleStrategy:
         trail_mode: str = "ratchet",      # "ratchet" | "below_peak"
         min_leg_oi: int = 1,
         r: float = 0.065,
+        # Two-cadence model (2026-07-18): how often the trail (profit protection) and the
+        # stop COMPARISON are sampled. "tick" = every call — the exact pre-cadence
+        # behavior, so a recovered deploy is byte-identical (§1); the deploy/backtest
+        # forms default these to "1min".
+        profit_check: str = "tick",
+        stop_check: str = "tick",
+        eod_time: str = "15:20",         # what "eod" means for the cadences (not the exit)
         lot_overrides: dict | None = None,
         **_ignored,
     ):
@@ -80,6 +87,9 @@ class IntradayStraddleStrategy:
         self.trail_mode = str(trail_mode or "ratchet")
         self.min_leg_oi = int(min_leg_oi)
         self.r = float(r)
+        self.profit_check = str(profit_check)
+        self.stop_check = str(stop_check)
+        self.eod_time = str(eod_time)
         self.lot_overrides = lot_overrides
         self.initial_capital = initial_capital
 
@@ -276,11 +286,17 @@ class IntradayStraddleStrategy:
                 return []
             pnl += (cur - leg["entry"]) * leg["units"] * leg["dir"]
         pnl_pct = 100.0 * pnl / base
-        if pnl_pct > self.peak_pct:
+        # Two-cadence sampling: the trail's high-water update rides profit_check, the
+        # stop COMPARISON rides stop_check. Sampled HERE — after the time-exit, margin
+        # and print guards above — because _due consumes its window (mixin rule #1);
+        # sampling before an early return would eat a stop slot. Defaults "tick" keep
+        # this byte-identical to the pre-cadence behavior.
+        if self._due("profit", now) and pnl_pct > self.peak_pct:
             self.peak_pct = pnl_pct
-        stop_pct = self._stop_level()
-        if pnl_pct <= stop_pct:
-            return self._exit_all(legs, "trail" if stop_pct > -self.stop_loss_pct else "stop")
+        if self._due("stop", now):
+            stop_pct = self._stop_level()
+            if pnl_pct <= stop_pct:
+                return self._exit_all(legs, "trail" if stop_pct > -self.stop_loss_pct else "stop")
         return []
 
     def _stop_level(self) -> float:
@@ -310,12 +326,15 @@ class IntradayStraddleStrategy:
         return None, base * self.stop_loss_pct / 100.0  # no fixed target; trailing is the upside
 
     def exit_rules(self) -> list[str]:
-        rules = [f"Stop out at −{self.stop_loss_pct:g}% of broker margin (checked every tick)"]
+        rules = [f"Stop out at −{self.stop_loss_pct:g}% of broker margin "
+                 f"({self._cadence_phrase('stop')})"]
         if self.trail_trigger_pct > 0 and self.trail_step_pct > 0:
             if self.trail_mode == "below_peak":
-                rules.append(f"Trail: once +{self.trail_trigger_pct:g}% up, stop = peak − {self.trail_step_pct:g}%")
+                rules.append(f"Trail: once +{self.trail_trigger_pct:g}% up, stop = peak − "
+                             f"{self.trail_step_pct:g}% ({self._cadence_phrase('profit')})")
             else:
-                rules.append(f"Trail: every +{self.trail_trigger_pct:g}% profit raises the stop +{self.trail_step_pct:g}%")
+                rules.append(f"Trail: every +{self.trail_trigger_pct:g}% profit raises the stop "
+                             f"+{self.trail_step_pct:g}% ({self._cadence_phrase('profit')})")
         rules.append(f"Hard exit {self.exit_time.strftime('%H:%M')} — never carried")
         return rules
 

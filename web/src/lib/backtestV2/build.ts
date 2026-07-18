@@ -50,19 +50,6 @@ function applySizing(spec: StrategyFormSpec, s: SizingState, p: Record<string, u
       p.sizing = s.mode;
       p.sizing_buffer_pct = s.buffer;
       break;
-    case "eodRatio":
-      // The ratio family's own auto-sizing: no margin_per_lot on this path — lots are
-      // fitted from capital × utilization ÷ the era-true MODEL margin.
-      p.lots = s.lots;
-      p.sizing = s.mode === "capital" ? "margin" : "fixed";
-      if (s.mode === "capital") p.capital_utilization_pct = 100 - s.buffer;
-      break;
-    case "hni":
-      p.lots = s.lots;
-      p.margin_per_lotset = s.margin;
-      p.sizing = s.mode === "capital" ? "margin" : "fixed";
-      if (s.mode === "capital") p.capital_utilization_pct = 100 - s.buffer;
-      break;
     case "mtg":
       p.lots = s.lots;   // BS service: capital rides the request envelope
       break;

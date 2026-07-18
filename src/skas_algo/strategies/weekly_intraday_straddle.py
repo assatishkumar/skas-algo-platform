@@ -42,7 +42,7 @@ from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 from skas_algo.live.holidays import previous_trading_day
 
-from ._options_common import bad_close, legs_mtm_pnl
+from ._options_common import ExitCadenceMixin, bad_close, legs_mtm_pnl
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ _ALERT_FETCH_FAILED = (
 )
 
 
-class WeeklyIntradayStraddle:
+class WeeklyIntradayStraddle(ExitCadenceMixin):
     strategy_id = "weekly_intraday_straddle"
     intraday = True  # ticks every refresh_seconds; the cycle/entry/exit windows self-gate
 
@@ -94,6 +94,11 @@ class WeeklyIntradayStraddle:
         candle_minutes: int = 5,
         max_entries_per_day: int = 3,
         stop_loss_pct: float = 0.0,       # optional MTM stop, % of broker margin; 0 = OFF
+        # Stop-comparison cadence (two-cadence model 2026-07-18). "tick" = every call —
+        # the pre-cadence behavior (§1). NO profit_check here: this strategy has no
+        # profit-booking decision (the VWAP cross-up, bar-driven, is the exit).
+        stop_check: str = "tick",
+        eod_time: str = "15:20",
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
         **_ignored,
@@ -106,6 +111,8 @@ class WeeklyIntradayStraddle:
         self.candle_minutes = max(1, int(candle_minutes))
         self.max_entries_per_day = int(max_entries_per_day)
         self.stop_loss_pct = float(stop_loss_pct or 0.0)
+        self.stop_check = str(stop_check)
+        self.eod_time = str(eod_time)
         self.min_leg_oi = int(min_leg_oi)
         self.lot_overrides = lot_overrides
         self.initial_capital = initial_capital
@@ -493,7 +500,9 @@ class WeeklyIntradayStraddle:
         pnl_pct = 100.0 * pnl / base
         if pnl_pct > self.peak_pct:
             self.peak_pct = pnl_pct
-        if pnl_pct <= -self.stop_loss_pct:
+        # Sampled AFTER every readiness guard above — _due consumes its window (mixin
+        # rule #1); default "tick" keeps this byte-identical to pre-cadence behavior.
+        if self._due("stop", now) and pnl_pct <= -self.stop_loss_pct:
             return self._exit_all(legs, "stop")
         return []
 
@@ -511,7 +520,8 @@ class WeeklyIntradayStraddle:
     def exit_rules(self) -> list[str]:
         rules = ["Exit when the combined premium closes back above VWAP (checked per closed 5-min bar)"]
         if self.stop_loss_pct > 0:
-            rules.append(f"Stop out at −{self.stop_loss_pct:g}% of broker margin (checked every tick)")
+            rules.append(f"Stop out at −{self.stop_loss_pct:g}% of broker margin "
+                         f"({self._cadence_phrase('stop')})")
         rules.append(f"Hard square-off {self.eod_exit.strftime('%H:%M')} — never carried")
         return rules
 

@@ -50,7 +50,9 @@ export interface ExitSpec {
   emptyNote?: string;            // strategies with no %-exits (ema21, mtg)
 }
 
-export type SizingVariant = "intradayHarness" | "eodRatio" | "hni" | "mtg";
+// eodRatio/hni collapsed into intradayHarness when the positional family moved to
+// the 1-min store (2026-07-18) — ONE sizing model for every options strategy.
+export type SizingVariant = "intradayHarness" | "mtg";
 
 export interface StrategyFormSpec {
   id: string;
@@ -76,6 +78,21 @@ const f = (param: string, label: string, kind: FieldKind, def: number | string |
 const TIME = (param: string, label: string, def: string, hint?: string): FieldSpec =>
   ({ param, label, kind: "time", default: def, hint });
 
+// The two-cadence decision model (owner, 2026-07-18): every options strategy samples its
+// profit/adjust decision on profit_check and its stop on stop_check. Ctor defaults stay
+// "tick" (§1 — a recovered deploy is unchanged); the FORM defaults below carry the policy:
+// 1min everywhere for profit/adjust, 1min for the intraday family's stops, "eod" 15:20
+// for the positional family's. Hard time exits are never cadence-gated.
+const CADENCE_OPTS = ["tick", "1min", "5min", "15min", "30min", "60min", "eod"]
+  .map((v) => ({ value: v, label: v }));
+const cadenceFields = (profitDef: string, stopDef: string, eodDef: string): FieldSpec[] => [
+  f("profit_check", "PROFIT/ADJUST CHECK", "select", profitDef,
+    { options: CADENCE_OPTS, hint: "how often the profit/adjust decision samples" }),
+  f("stop_check", "STOP/EXIT CHECK", "select", stopDef,
+    { options: CADENCE_OPTS, hint: "how often the SL/exit decision samples" }),
+  TIME("eod_time", "EOD CHECK TIME", eodDef, "what \"eod\" cadence means"),
+];
+
 export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
   // ------------------------------------------------------------------ intraday replays
   intraday_straddle: {
@@ -98,6 +115,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("stop_loss_pct", "STOP LOSS %", "number", 2, { step: "any" }),
         TIME("exit_time", "EOD / FORCE EXIT", "15:25", "hard — never waits on margin"),
+        ...cadenceFields("1min", "1min", "15:20"),
       ],
       trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode" },
     },
@@ -125,6 +143,10 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any", hint: "0 = off" }),
         TIME("eod_exit", "EOD / FORCE EXIT", "15:25", "hard square-off — never carried"),
+        // stop cadence only: this strategy has no profit-booking decision (VWAP exits).
+        f("stop_check", "STOP CHECK", "select", "1min",
+          { options: CADENCE_OPTS, hint: "how often the SL samples" }),
+        TIME("eod_time", "EOD CHECK TIME", "15:20", "what \"eod\" cadence means"),
       ],
     },
     extras: [
@@ -156,6 +178,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         f("profit_target_pct", "PROFIT TARGET %", "number", 1.1, { step: "any" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 1, { step: "any" }),
         TIME("eod_exit", "EOD / FORCE EXIT", "15:20"),
+        ...cadenceFields("1min", "1min", "15:15"),
       ],
     },
     extras: [
@@ -196,6 +219,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any", hint: "0 = off" }),
+        ...cadenceFields("1min", "1min", "15:20"),
       ],
     },
     extras: [
@@ -235,6 +259,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any", hint: "0 = off" }),
+        ...cadenceFields("1min", "1min", "15:20"),
       ],
     },
     extras: [
@@ -281,11 +306,14 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
   // ------------------------------------------------------------------- EOD engine
   "21_ema_momentum": {
     id: "21_ema_momentum",
-    bases: ["eod"],
-    underlyings: { intraday: NONE, eod: ["NIFTY"] },
+    // 1-min store (2026-07-18): real minute premiums at the 15:20 decision; the EMA
+    // bands read cache daily bars for PRIOR days + a FORMING bar for today (no settled-
+    // bar lookahead — owner veto). The EOD options basis left the UI.
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY"], eod: NONE },
     note: "Checked once/day at 15:20: close above the EMA-high band → bull put spread; below the "
       + "EMA-low band → bear call spread; holds until the opposite signal.",
-    sizing: "eodRatio",
+    sizing: "intradayHarness",
     entry: {
       frequency: "daily",
       frequencyHint: "one decision a day, at the decision time",
@@ -314,18 +342,20 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
     ],
   },
 
-  batman_ratio_monthly: {
-    id: "batman_ratio_monthly",
-    bases: ["eod"],
-    underlyings: { intraday: NONE, eod: ["NIFTY", "BANKNIFTY"] },
+  call_ratio_monthly: {
+    id: "call_ratio_monthly",
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY", "BANKNIFTY"], eod: NONE },
     monthlyCycle: true,
-    note: "Batman: BOTH 1:2 ratio wings (call above + put below spot, each hedged; 6 legs). Both "
-      + "wings must qualify for credit or the month is skipped; risk = a fast move either way.",
-    sizing: "eodRatio",
+    note: "1:2 call ratio spread + far hedge on the next monthly — zero DOWNSIDE risk (all "
+      + "calls), upside capped by the hedge; enters only when the credit gate passes.",
+    sizing: "intradayHarness",
     entry: {
       frequency: "monthly",
       frequencyHint: "one entry per monthly cycle, zero adjustments",
       fields: [
+        TIME("entry_time", "ENTRY TIME", "14:30",
+          "owner default for the monthly family (ctor: any time — None)"),
         f("entry_rule", "ENTRY ANCHOR", "select", "last_weekday", {
           options: [
             { value: "last_weekday", label: "Last weekday of month" },
@@ -364,7 +394,137 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any", unit: "fraction" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 3, { step: "any", unit: "fraction" }),
         f("max_holding_days", "MAX HOLDING DAYS", "number", 20),
-        TIME("eod_time", "EOD TIME", "15:15"),
+        ...cadenceFields("1min", "eod", "15:20"),
+      ],
+    },
+    extras: [
+      f("credit_debit_limit_pct", "MAX CREDIT %", "number", 1, { step: "any", unit: "fraction" }),
+      f("min_credit_pct", "MIN CREDIT %", "number", 0, { step: "any", unit: "fraction", hint: "negative allows a debit" }),
+      f("min_vix", "MIN ENTRY IV %", "number", 0, { step: "any", hint: "≈VIX; 0 = off" }),
+      f("tail_hedge_offset", "TAIL HEDGE OFFSET", "number", 0, { step: "any", hint: "0 = off" }),
+      f("shift_step", "SHIFT STEP", "number", 100, { step: "any" }),
+      f("max_shifts", "MAX SHIFTS", "number", 10),
+    ],
+  },
+
+  put_ratio_monthly: {
+    id: "put_ratio_monthly",
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY", "BANKNIFTY"], eod: NONE },
+    monthlyCycle: true,
+    note: "1:2 PUT ratio spread + far hedge — the downside mirror: zero UPSIDE risk; risk is "
+      + "a fast sell-off toward the short strikes, capped beyond the hedge.",
+    sizing: "intradayHarness",
+    entry: {
+      frequency: "monthly",
+      frequencyHint: "one entry per monthly cycle, zero adjustments",
+      fields: [
+        TIME("entry_time", "ENTRY TIME", "14:30",
+          "owner default for the monthly family (ctor: any time — None)"),
+        f("entry_rule", "ENTRY ANCHOR", "select", "last_weekday", {
+          options: [
+            { value: "last_weekday", label: "Last weekday of month" },
+            { value: "post_expiry", label: "Expiry + n days" },
+          ],
+        }),
+        f("entry_weekday", "ANCHOR WEEKDAY", "select", "1", {
+          options: [
+            { value: "0", label: "Monday" }, { value: "1", label: "Tuesday" },
+            { value: "2", label: "Wednesday" }, { value: "3", label: "Thursday" },
+            { value: "4", label: "Friday" },
+          ],
+          showIf: (p) => p.entry_rule === "last_weekday",
+        }),
+        f("entry_window_days", "N — DAYS AFTER EXPIRY", "number", 7, {
+          hint: "retry window after the expiry anchor",
+          showIf: (p) => p.entry_rule === "post_expiry",
+        }),
+        f("strike_mode", "STRIKE BY", "select", "points", {
+          options: [
+            { value: "points", label: "Points from spot" },
+            { value: "percent", label: "% OTM" },
+            { value: "delta", label: "Delta" },
+            { value: "sd", label: "× expected move (SD)" },
+          ],
+        }),
+        f("buy_offset", "BUY OFFSET (NEAR, ×1)", "number", 300, { step: "any" }),
+        f("sell_offset", "SELL OFFSET (BODY, ×2)", "number", 600, { step: "any" }),
+        f("hedge_offset", "HEDGE OFFSET (FAR)", "number", 1600, { step: "any", hint: "caps the wing" }),
+        f("min_dte", "MIN DTE", "number", 18, { hint: "selects next month's monthly" }),
+      ],
+    },
+    exit: {
+      basisNote: "% of account CAPITAL (this family sizes its thresholds off capital, not margin)",
+      fields: [
+        f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any", unit: "fraction" }),
+        f("stop_loss_pct", "STOP LOSS %", "number", 3, { step: "any", unit: "fraction" }),
+        f("max_holding_days", "MAX HOLDING DAYS", "number", 20),
+        ...cadenceFields("1min", "eod", "15:20"),
+      ],
+    },
+    extras: [
+      f("credit_debit_limit_pct", "MAX CREDIT %", "number", 1, { step: "any", unit: "fraction" }),
+      f("min_credit_pct", "MIN CREDIT %", "number", 0, { step: "any", unit: "fraction", hint: "negative allows a debit" }),
+      f("min_vix", "MIN ENTRY IV %", "number", 0, { step: "any", hint: "≈VIX; 0 = off" }),
+      f("tail_hedge_offset", "TAIL HEDGE OFFSET", "number", 0, { step: "any", hint: "0 = off" }),
+      f("shift_step", "SHIFT STEP", "number", 100, { step: "any" }),
+      f("max_shifts", "MAX SHIFTS", "number", 10),
+    ],
+  },
+
+  batman_ratio_monthly: {
+    id: "batman_ratio_monthly",
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY", "BANKNIFTY"], eod: NONE },
+    monthlyCycle: true,
+    note: "Batman: BOTH 1:2 ratio wings (call above + put below spot, each hedged; 6 legs). Both "
+      + "wings must qualify for credit or the month is skipped; risk = a fast move either way.",
+    sizing: "intradayHarness",
+    entry: {
+      frequency: "monthly",
+      frequencyHint: "one entry per monthly cycle, zero adjustments",
+      fields: [
+        TIME("entry_time", "ENTRY TIME", "14:30",
+          "owner default for the monthly family (ctor: any time — None)"),
+        f("entry_rule", "ENTRY ANCHOR", "select", "last_weekday", {
+          options: [
+            { value: "last_weekday", label: "Last weekday of month" },
+            { value: "post_expiry", label: "Expiry + n days" },
+          ],
+        }),
+        f("entry_weekday", "ANCHOR WEEKDAY", "select", "1", {
+          options: [
+            { value: "0", label: "Monday" }, { value: "1", label: "Tuesday" },
+            { value: "2", label: "Wednesday" }, { value: "3", label: "Thursday" },
+            { value: "4", label: "Friday" },
+          ],
+          showIf: (p) => p.entry_rule === "last_weekday",
+        }),
+        f("entry_window_days", "N — DAYS AFTER EXPIRY", "number", 7, {
+          hint: "retry window after the expiry anchor",
+          showIf: (p) => p.entry_rule === "post_expiry",
+        }),
+        f("strike_mode", "STRIKE BY", "select", "points", {
+          options: [
+            { value: "points", label: "Points from spot" },
+            { value: "percent", label: "% OTM" },
+            { value: "delta", label: "Delta" },
+            { value: "sd", label: "× expected move (SD)" },
+          ],
+        }),
+        f("buy_offset", "BUY OFFSET (NEAR, ×1)", "number", 300, { step: "any" }),
+        f("sell_offset", "SELL OFFSET (BODY, ×2)", "number", 600, { step: "any" }),
+        f("hedge_offset", "HEDGE OFFSET (FAR)", "number", 1600, { step: "any", hint: "caps the wing" }),
+        f("min_dte", "MIN DTE", "number", 18, { hint: "selects next month's monthly" }),
+      ],
+    },
+    exit: {
+      basisNote: "% of account CAPITAL (this family sizes its thresholds off capital, not margin)",
+      fields: [
+        f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any", unit: "fraction" }),
+        f("stop_loss_pct", "STOP LOSS %", "number", 3, { step: "any", unit: "fraction" }),
+        f("max_holding_days", "MAX HOLDING DAYS", "number", 20),
+        ...cadenceFields("1min", "eod", "15:20"),
       ],
     },
     extras: [
@@ -380,17 +540,17 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       }),
       f("shift_step", "SHIFT STEP", "number", 100, { step: "any" }),
       f("max_shifts", "MAX SHIFTS", "number", 10),
-      f("margin_per_lotset", "MARGIN / LOT-SET (₹)", "number", 200000),
+      // margin_per_lotset superseded by the harness margin_per_lot (Sizing section).
     ],
   },
 
   hni_weekly: {
     id: "hni_weekly",
-    bases: ["eod"],
-    underlyings: { intraday: NONE, eod: ["NIFTY"] },
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY"], eod: NONE },
     note: "HNI Weekly: net-zero 1-3-2 call ratio \"tent\" on the ~8-DTE weekly (enter Monday, "
       + "force-exit Friday; no weekend carry). Target/stop are % of deployed margin.",
-    sizing: "hni",
+    sizing: "intradayHarness",
     entry: {
       frequency: "weekly",
       frequencyHint: "one trade per ISO week",
@@ -421,6 +581,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
           ],
           hint: "no weekend carry",
         }),
+        ...cadenceFields("1min", "eod", "15:20"),
       ],
     },
     extras: [

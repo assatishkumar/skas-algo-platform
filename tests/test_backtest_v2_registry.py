@@ -31,13 +31,30 @@ _HARNESS = {"margin_per_lot", "sizing", "sizing_buffer_pct", "lots", "capital_ut
             "margin_per_lotset"}                       # replay-harness / ratio-family sizing
 _SERVICE_ONLY = {"momentum_theta_gainer_intra": {"vol_multiplier", "slippage_bps", "r", "capital"}}
 
-# Defaults that intentionally differ from the constructor (they match the OLD form's
-# defaults — the "blank v2 run == blank v1 run" baseline):
+# Defaults that intentionally differ from the constructor — THE single guarded place
+# form≠ctor is legal (§1: ctor defaults preserve running-deploy behavior on recovery;
+# the FORM defaults carry the owner's policy):
 #   force_entry: a monthly strategy on a short backtest window has no expiry to anchor on,
-#     so the FORM has always defaulted it True (the ctor keeps False for live recovery, §1).
+#     so the FORM has always defaulted it True (the ctor keeps False for live recovery).
 #   sets: the ctor takes None and resolves `sets or 1` — the form states the 1 explicitly.
+#   Cadences (owner two-cadence model 2026-07-18): ctors stay "tick"/legacy so recovered
+#     deploys are byte-identical; forms default profit/adjust to 1min everywhere, stops to
+#     1min (intraday family) or eod@15:20 (positional family).
+#   entry_time 14:30: the monthly family's ctor is None (enter any time) — the form pins
+#     the owner's 2:30 PM default so store replays don't enter at 09:15.
 _INTENTIONAL = {("delta_neutral_monthly", "force_entry"), ("iron_fly_monthly", "force_entry"),
                 ("call_put_ratio_expiry", "sets")}
+_INTENTIONAL |= {(sid, "profit_check") for sid in (
+    "intraday_straddle", "call_put_ratio_expiry", "delta_neutral_monthly",
+    "iron_fly_monthly", "batman_ratio_monthly", "call_ratio_monthly",
+    "put_ratio_monthly", "hni_weekly")}
+_INTENTIONAL |= {(sid, "stop_check") for sid in (
+    "intraday_straddle", "weekly_intraday_straddle", "call_put_ratio_expiry",
+    "delta_neutral_monthly", "iron_fly_monthly")}
+_INTENTIONAL |= {(sid, "eod_time") for sid in (
+    "batman_ratio_monthly", "call_ratio_monthly", "put_ratio_monthly", "hni_weekly")}
+_INTENTIONAL |= {(sid, "entry_time") for sid in (
+    "batman_ratio_monthly", "call_ratio_monthly", "put_ratio_monthly")}
 
 
 def _ctor_defaults(strategy_id: str) -> dict:
@@ -150,8 +167,42 @@ def test_registry_defaults_match_the_strategies():
     assert not problems, "\n".join(problems)
 
 
+def test_every_intraday_spec_is_replayable():
+    """A registry strategy offering the intraday basis must be accepted by the replay
+    route — a spec pointing at a 404 would be a dead form."""
+    route_src = (Path(__file__).resolve().parents[1] / "src" / "skas_algo" / "api"
+                 / "routes" / "backtest.py").read_text()
+    m = re.search(r"_INTRADAY_REPLAY = \[([^\]]*)\]", route_src)
+    replayable = set(re.findall(r'"([^"]+)"', m.group(1)))
+    for sid, body in _specs().items():
+        bases = re.search(r"bases: \[([^\]]*)\]", body).group(1)
+        if '"intraday"' in bases:
+            assert sid in replayable, f"{sid} offers intraday but isn't in _INTRADAY_REPLAY"
+
+
+def test_cadence_selects_on_every_percent_exit_spec():
+    """Every options spec with a %-target/stop carries the two cadence selects (the
+    two-cadence model); the signal-driven ones (ema21, mtg) must NOT fake them."""
+    for sid, body in _specs().items():
+        has_pct = "PROFIT TARGET %" in body or "STOP LOSS %" in body
+        # either the shared factory spread or an inline field (weekly's stop-only case)
+        has_cadence = "cadenceFields(" in body or '"stop_check"' in body
+        if sid in ("momentum_theta_gainer_intra", "21_ema_momentum"):
+            assert not has_cadence, f"{sid} is signal-driven — no cadence knobs"
+        elif has_pct:
+            assert has_cadence, f"{sid} has %-exits but no cadence selects"
+
+
+def test_no_dead_sizing_variants():
+    src = REGISTRY_TS.read_text()
+    assert 'sizing: "eodRatio"' not in src and 'sizing: "hni"' not in src, \
+        "eodRatio/hni collapsed into intradayHarness (2026-07-18)"
+
+
 @pytest.mark.parametrize("sid,param", sorted(
     {("batman_ratio_monthly", "profit_target_pct"), ("batman_ratio_monthly", "stop_loss_pct"),
+     ("call_ratio_monthly", "profit_target_pct"), ("call_ratio_monthly", "stop_loss_pct"),
+     ("put_ratio_monthly", "profit_target_pct"), ("put_ratio_monthly", "stop_loss_pct"),
      ("hni_weekly", "profit_target_pct"), ("hni_weekly", "stop_loss_pct")}))
 def test_ratio_family_percents_are_fraction_tagged(sid, param):
     """The ratio family's %s are FRACTIONS — if these lose their tag, a 2.5% target silently

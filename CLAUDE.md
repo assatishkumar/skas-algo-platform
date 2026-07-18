@@ -297,6 +297,30 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   also emits `yearly`/`monthly_profit`/`monthly_equity` from the equity curve (the EOD
   contract keys → ReportView's existing tables just render; runs saved before 2026-07-17
   lack them — re-run).
+- **Two-cadence model + ALL index options on the store (2026-07-18, owner design):**
+  every options strategy samples its PROFIT/ADJUST decision on `profit_check` and its
+  STOP/EXIT on `stop_check` (tick/1..60min/eod@`eod_time`) via `ExitCadenceMixin`
+  (`_options_common` — extracted from the ratio family, where it originated). RULES:
+  `_due` CONSUMES its window → sample once per kind per slice AFTER all readiness guards
+  (margin frozen/prints/pnl) or a stop slot is silently eaten; hard time exits are NEVER
+  gated; multi-book strategies key per book (`f"stop:{u}"` — cpre). Ctor defaults stay
+  "tick" (§1 — recovered deploys byte-identical; verified no stale cadence keys in any
+  running snapshot); FORM/deploy defaults carry the policy: profit 1min everywhere, stop
+  1min (intraday family) / eod 15:20 (positional family). weekly_intraday_straddle has
+  NO profit_check by design (VWAP exits — no profit decision exists). **The positional
+  family (call/put/batman ratio, hni, ema21) is REPLAYABLE on the 1-min store** via
+  `_Chain`'s cached-chain adapter (chain()/spot()/expiry_for_dte emitting STORE-format
+  symbols — load-bearing: `_fill` splits on "|"); the EOD options basis left the UI
+  (backend strategy lists unchanged — DeployPage depends on them; `build_options_run`
+  stays for stock-option strategies [donchian_bt, covered_call, short_premium — no stock
+  1-min data exists] and old runs). Harness sizing is THE sizing on replay (the "sizing"
+  name collision resolves by construction: the harness pops it first, so ratio
+  strategies always build sizing="fixed"). ema21's bands: cache daily bars for PRIOR
+  days + a FORMING today-bar from the replay's running parity spot (owner vetoed the
+  settled-bar lookahead). Store replays are NOT byte-comparable with old EOD options
+  runs (real minute fills, per-fill charges, frozen pushed margin, de-carried parity
+  spot). Coverage: `tests/test_exit_cadence.py`, replay round-trips in
+  `tests/test_intraday_replay.py`, registry pins in `tests/test_backtest_v2_registry.py`.
 - **broker_smoke_test** (Brokers-page card, 2026-07-18): the end-to-end REAL-order probe —
   BUY 1 lot of a cheap OTM weekly (premium band ₹5–20, nearest ₹10, OI floor) or 1 share of
   a stock (default ITC), hold ~60s, SELL, then the run **stops itself** (`stop_requested` →

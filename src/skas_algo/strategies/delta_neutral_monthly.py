@@ -39,7 +39,7 @@ from skas_algo.engine.options.contract_specs import lot_size_for, selection_step
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import bad_close, legs_mtm_pnl
+from ._options_common import ExitCadenceMixin, bad_close, legs_mtm_pnl
 
 # Grid used to SNAP the iron-fly wing/breakeven-hedge strikes (round((K±credit)/step)*step). NIFTY
 # routes through selection_step → 100 (owner rule: NIFTY trades round 100s only), so the snapped
@@ -56,7 +56,7 @@ def _hhmm(s: str, fallback: time) -> time:
         return fallback
 
 
-class DeltaNeutralMonthlyStrategy:
+class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
     strategy_id = "delta_neutral_monthly"
     intraday = True  # ticks every refresh; entry window / adjustments / exits self-gate
 
@@ -84,6 +84,13 @@ class DeltaNeutralMonthlyStrategy:
         profit_target_pct: float = 2.5,      # % of margin_base
         stop_loss_pct: float = 0.0,          # 0 = off (spec-faithful)
         risk_free_rate: float = 0.065,
+        # Two-cadence model (2026-07-18): profit_check samples the TARGET and the
+        # ADJUSTMENT dispatch (owner: profit booking and adjustments share a cadence;
+        # adjust_cooldown_min composes on top); stop_check samples the SL. "tick" =
+        # every call — the pre-cadence behavior (§1); forms default to "1min".
+        profit_check: str = "tick",
+        stop_check: str = "tick",
+        eod_time: str = "15:20",
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
         **_ignored,
@@ -108,6 +115,9 @@ class DeltaNeutralMonthlyStrategy:
         self.target_pct = float(profit_target_pct)
         self.stop_pct = float(stop_loss_pct)
         self.r = float(risk_free_rate)
+        self.profit_check = str(profit_check)
+        self.stop_check = str(stop_check)
+        self.eod_time = str(eod_time)
         self.min_leg_oi = int(min_leg_oi)
         self.initial_capital = initial_capital
         self.lot_overrides = lot_overrides
@@ -362,12 +372,20 @@ class DeltaNeutralMonthlyStrategy:
             self.margin_base = self._broker_margin
             self.margin_source = "broker"
             self._refreeze = False
+        # Cadence-sampled ONCE, here — after the print/pnl/margin-freeze guards above
+        # (mixin rule #1: _due consumes its window; sampling before an early return
+        # would eat a stop slot). due_profit gates the target AND the adjustment
+        # dispatch below (they share the profit/adjust cadence by design).
+        due_profit = self._due("profit", now)
+        due_stop = self._due("stop", now)
         if self.margin_source == "broker" and self.margin_base > 0:
-            if pnl >= self.margin_base * self.target_pct / 100.0:
+            if due_profit and pnl >= self.margin_base * self.target_pct / 100.0:
                 return self._exit_all(live, "target")
-            if self.stop_pct > 0 and pnl <= -self.margin_base * self.stop_pct / 100.0:
+            if due_stop and self.stop_pct > 0 and pnl <= -self.margin_base * self.stop_pct / 100.0:
                 return self._exit_all(live, "stop")
 
+        if not due_profit:
+            return []  # adjustments ride the profit/adjust cadence
         # Iron fly: run the post-formation adjustment when enabled (else ride terminal).
         if self.phase == "ironfly":
             if not self.ironfly_adjust or self._in_cooldown(now):
@@ -606,9 +624,11 @@ class DeltaNeutralMonthlyStrategy:
         return target, stop
 
     def exit_rules(self) -> list[str]:
-        rules = [f"Book profit at +{self.target_pct:g}% of broker margin (checked every tick)"]
+        rules = [f"Book profit at +{self.target_pct:g}% of broker margin "
+                 f"({self._cadence_phrase('profit')})"]
         if self.stop_pct > 0:
-            rules.append(f"Stop out at −{self.stop_pct:g}% of broker margin (checked every tick)")
+            rules.append(f"Stop out at −{self.stop_pct:g}% of broker margin "
+                         f"({self._cadence_phrase('stop')})")
         rules.append(f"Adjust when |CE−PE| > {self.adjust_threshold_pct:g}% of combined "
                      "(cheap side rolls; straddle max → iron fly)")
         if self.ironfly_adjust:

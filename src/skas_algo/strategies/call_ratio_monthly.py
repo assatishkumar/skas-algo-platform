@@ -31,6 +31,7 @@ from skas_algo.engine.options.contract_specs import expected_monthly_expiry, lot
 from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.engine.types import Signal, SignalAction
 
+from ._options_common import ExitCadenceMixin
 from ._options_common import bad_close as _bad
 from ._options_common import legs_mtm_pnl
 from ._options_common import next_monthly_expiry
@@ -42,7 +43,7 @@ def _last_weekday_of_month(d: date, weekday: int) -> date:
     return last - timedelta(days=(last.weekday() - weekday) % 7)
 
 
-class CallRatioMonthlyStrategy:
+class CallRatioMonthlyStrategy(ExitCadenceMixin):
     strategy_id = "call_ratio_monthly"
     right = "CE"  # PutRatioMonthlyStrategy flips this to "PE" (the downside mirror)
     entry_reason = "call_ratio"
@@ -258,55 +259,12 @@ class CallRatioMonthlyStrategy:
         return bool(self.entry_date) and (today - self.entry_date).days >= self.max_holding_days
 
     # ------------------------------------------------- intraday exit cadence
-    # In backtest there's one slice/day at the EOD bar, so every cadence is "due" once a
-    # day → behaviour is unchanged. In live (intraday ticks) these gate how often each
-    # exit type is actually evaluated (e.g. profit every 15 min, stop only at 15:15).
-    _INTERVAL_MIN = {"tick": 0, "1min": 1, "5min": 5, "15min": 15, "30min": 30, "60min": 60}
-
-    def _now(self, ctx) -> datetime:
-        fn = getattr(ctx, "now", None)
-        if fn is not None:
-            return fn()
-        return datetime.combine(ctx.today(), time(15, 30))  # stub ctx → treat as EOD
-
-    def _eod_reached(self, now: datetime) -> bool:
-        try:
-            return now.time() >= time.fromisoformat(self.eod_time)
-        except (ValueError, TypeError):
-            return True
-
-    def _due(self, kind: str, now: datetime) -> bool:
-        """Is the ``kind`` exit ("profit"/"stop"/"time") due to be evaluated at ``now``?"""
-        cadence = getattr(self, f"{kind}_check", "eod")
-        if cadence == "eod":
-            return self._eod_reached(now)
-        mins = self._INTERVAL_MIN.get(cadence, 0)
-        last = self._last_check.get(kind)
-        if last is None or (now - last).total_seconds() >= mins * 60:
-            self._last_check[kind] = now
-            return True
-        return False
-
-    def _entry_time_ok(self, now: datetime) -> bool:
-        if not self.entry_time:
-            return True
-        try:
-            return now.time() >= time.fromisoformat(self.entry_time)
-        except (ValueError, TypeError):
-            return True
+    # The _due/_eod_reached/_entry_time_ok/_cadence_phrase machinery originated here and
+    # now lives in ExitCadenceMixin (_options_common) — shared by EVERY options strategy
+    # (owner two-cadence model, 2026-07-18). In the EOD engine there's one slice/day so
+    # every cadence collapses to the daily bar; on the 1-min replay and in live it bites.
 
     # ------------------------------------------------- exit-rule display
-    def _cadence_phrase(self, kind: str) -> str:
-        """Human wording for how often the ``kind`` exit is SAMPLED — surfaced in the UI
-        so the owner can see the check is periodic, not on-touch (run-7 2026-07-17: the
-        15-min profit samples landed on P&L dips either side of a 19-min target breach)."""
-        cadence = getattr(self, f"{kind}_check", "eod")
-        if cadence == "eod":
-            return f"checked at EOD {self.eod_time}"
-        if cadence == "tick":
-            return "checked every tick"
-        return f"checked every {cadence.replace('min', ' min')}"
-
     def exit_rules(self) -> list[str]:
         rules = [
             f"Book profit at +{self.profit_target_pct * 100:g}% of margin "
