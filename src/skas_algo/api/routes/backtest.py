@@ -501,6 +501,39 @@ def _resolve_run_trades(run: AlgoRun, db: Session) -> list[dict]:
     return []
 
 
+@router.get("/runs/{run_id}/cycles/{index}/detail")
+def get_cycle_detail(run_id: int, index: int, db: Session = Depends(get_db)) -> dict:
+    """The position-lifecycle model for ONE options cycle (entry → rolls/hedges → exit) with
+    reconstructed per-event net delta — powers the Cycle Detail page. Cache-only, read-only."""
+    from skas_algo.data.options_provider import INDEX_SYMBOL, _ffill_lookup
+    from skas_algo.data.provider import get_data_cache
+    from skas_algo.engine.jsonutil import to_native
+    from skas_algo.services.cycle_detail import build_cycle_detail
+
+    run = db.get(AlgoRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    algo = db.get(Algo, run.algo_id)
+    cycles = ((_run_report(run, algo) or {}).get("options") or {}).get("cycles") or []
+    if not (0 <= index < len(cycles)):
+        raise HTTPException(status_code=404, detail="cycle index out of range")
+    cycle = cycles[index]
+    trades = _resolve_run_trades(run, db)
+    leg_syms = {leg.get("symbol") for leg in (cycle.get("legs_detail") or [])}
+    lo, hi = str(cycle.get("entry_date"))[:10], str(cycle.get("exit_date") or "9999")[:10]
+    rows = [t for t in trades if t.get("ticker") in leg_syms
+            and lo <= str(t.get("date"))[:10] <= hi]
+    sd = get_data_cache()
+    sym = INDEX_SYMBOL.get(str(cycle.get("underlying", "")).upper()) or cycle.get("underlying")
+    margin_series = (((_run_report(run, algo) or {}).get("options") or {})
+                     .get("margin_series")) or []
+    model = build_cycle_detail(
+        cycle, rows, _ffill_lookup(sd, sym), margin_series,
+        index=index, run_id=run_id, strategy_id=(algo.strategy_id if algo else ""),
+        name=(algo.name if algo else f"run #{run_id}"))
+    return to_native(model)
+
+
 @router.get("/runs/{run_id}/analysis")
 def run_analysis(run_id: int, db: Session = Depends(get_db)) -> dict:
     """Unified trade feed for the analysis page — works for any run. Prefers a running

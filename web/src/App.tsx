@@ -16,6 +16,7 @@ import LivePage from "./pages/LivePage";
 import LoginPage from "./pages/LoginPage";
 import ResearchPage from "./pages/ResearchPage";
 import RunDetailPage from "./pages/RunDetailPage";
+import CycleDetailPage from "./pages/CycleDetailPage";
 import StrategiesPage from "./pages/StrategiesPage";
 import TradePage from "./pages/TradePage";
 
@@ -202,6 +203,7 @@ export default function App() {
           <Route path="/research" element={<ResearchPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
+          <Route path="/runs/:id/cycle/:index" element={<CycleDetailPage />} />
           <Route path="/compare" element={<ComparePage />} />
           <Route path="/data" element={<DataPage />} />
           {/* legacy routes → new IA */}

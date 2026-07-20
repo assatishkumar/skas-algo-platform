@@ -95,6 +95,8 @@ input[type="number"] {
   --sec-struct: #6a4fd0; --sec-entry: #0f9d63; --sec-exit: #12b3a4; --sec-risk: #b07d10;
   /* Backtest v2 (design handoff): selected-pill tint + the orange strategy-note copy. */
   --tint: #eef5f3; --tint-border: #dbe8e4; --note: #c2661d;
+  /* Cycle-detail (design handoff): PE amber (theme-invariant) + danger fill. */
+  --pe: #e8a13c; --danger-bg: #fdeceb;
 }
 .dark {
   --page: #0c1a18; --card: #142926; --border: #24403b; --strong: #f1f6f5; --muted: #92aaa4;
@@ -111,6 +113,7 @@ input[type="number"] {
   --rose-bg: rgba(240,118,106,.16); --rose-text: #f0a89f;
   --sec-struct: #b39cf5; --sec-entry: #34d399; --sec-exit: #15c2b2; --sec-risk: #f0bd5e;
   --tint: #14302b; --tint-border: #284841; --note: #e8a13c;
+  --pe: #e8a13c; --danger-bg: #42201d;
 }
 
 /* Donchian detail drawer slide-in (transform only — resting state fully opaque). */

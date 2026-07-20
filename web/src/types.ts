@@ -859,6 +859,32 @@ export interface MtgBtResult {
   trades?: MtgBtTrade[];
 }
 
+export interface CycleDetailEventLeg {
+  ref: number; symbol: string; side: string; right: string; strike: number; units: number;
+  price: number | null; cashflow: number | null; realized: number | null;
+}
+export interface CycleDetailEvent {
+  id: string; kind: "entry" | "roll" | "hedge" | "exit"; at: string; spot: number | null;
+  net_delta: number | null; reason: string; realized_so_far: number;
+  closed: CycleDetailEventLeg[]; opened: CycleDetailEventLeg[];
+}
+export interface CycleDetailLeg {
+  ref: number; symbol: string; side: string; right: string; strike: number; units: number;
+  open_event: string | null; close_event: string | null; open_ts: string; close_ts: string | null;
+  open_price: number; close_price: number | null; open_delta: number | null;
+  days: number | null; pnl: number;
+}
+export interface CycleDetail {
+  run_id: number; index: number; strategy_id: string; run_name: string;
+  underlying: string; expiry: string; entered_at: string; exited_at: string | null;
+  exit_reason: string | null; entry_spot: number | null; exit_spot: number | null;
+  entry_vix: number | null; exit_vix: number | null; underlying_pct: number | null;
+  pnl: number | null; premium_traded: number; days_held: number | null;
+  n_rolls: number; n_hedges: number; max_margin: number | null; worst_mtm: number;
+  events: CycleDetailEvent[]; legs: CycleDetailLeg[];
+  mtm_series: { date: string; value: number }[]; spot_path: { date: string; spot: number }[];
+}
+
 export interface LossScore {
   net: number; delta: number; loss_cut: number; winners_hurt: number;
   worst_cycle: number; cycles_changed: number; num_cycles: number;

@@ -7,6 +7,7 @@ import type {
   BrokerAccount,
   BrokerConnectRequest,
   BsCalibrationResult,
+  CycleDetail,
   DonchianStudyRequest,
   DonchianStudyResult,
   CompareRun,
@@ -160,6 +161,8 @@ export const api = {
       params: Record<string, unknown>;
       trades: Trade[];
     }>(`/runs/${id}`),
+  cycleDetail: (runId: number, index: number) =>
+    request<CycleDetail>(`/runs/${runId}/cycles/${index}/detail`),
   backtest: (body: BacktestRequest) =>
     request<BacktestResponse>("/backtest", {
       method: "POST",

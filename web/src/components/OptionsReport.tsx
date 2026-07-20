@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -247,7 +248,7 @@ function PerExpiryBars({ options }: { options: OptionsReportData }) {
   );
 }
 
-function CycleRow({ c }: { c: OptionCycle }) {
+function CycleRow({ c, runId, index }: { c: OptionCycle; runId?: number; index?: number }) {
   const [open, setOpen] = useState(false);
   const legs = c.legs_detail ?? [c.ce, c.pe].filter(Boolean) as OptionPosition[];
   const strikes = [c.ce?.strike, c.pe?.strike].filter((s) => s != null);
@@ -260,7 +261,14 @@ function CycleRow({ c }: { c: OptionCycle }) {
     <>
       <tr className="border-t border-slate-800 cursor-pointer hover:bg-slate-800/40" onClick={() => setOpen((v) => !v)}>
         <td className="py-1 pr-3 whitespace-nowrap text-slate-500">{open ? "▾" : "▸"}</td>
-        <td className="py-1 pr-4 whitespace-nowrap">{c.entry_date}</td>
+        <td className="py-1 pr-4 whitespace-nowrap">
+          {runId != null && index != null ? (
+            <Link to={`/runs/${runId}/cycle/${index}`} onClick={(e) => e.stopPropagation()}
+              className="text-brand hover:underline" title="Open the full cycle lifecycle view">
+              {c.entry_date} ↗
+            </Link>
+          ) : c.entry_date}
+        </td>
         <td className="py-1 pr-4 whitespace-nowrap">{c.expiry}</td>
         <td className="py-1 pr-4"><SpotCell c={c} /></td>
         <td className="py-1 pr-4"><VixCell c={c} /></td>
@@ -382,7 +390,7 @@ function VixCell({ c }: { c: OptionCycle }) {
   );
 }
 
-function PositionsTable({ options }: { options: OptionsReportData }) {
+function PositionsTable({ options, runId }: { options: OptionsReportData; runId?: number }) {
   const [reason, setReason] = useState<string>("ALL");
   const reasons = useMemo(
     () => ["ALL", ...Object.keys(options.exit_reasons)],
@@ -397,7 +405,7 @@ function PositionsTable({ options }: { options: OptionsReportData }) {
     <Card>
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm font-medium text-slate-300">
-          Positions <span className="text-slate-500">({options.cycles.length} cycles · click a row for legs & payoff)</span>
+          Positions <span className="text-slate-500">({options.cycles.length} cycles · click the entry date ↗ for the full lifecycle, or a row for legs &amp; payoff)</span>
         </div>
         <div className="flex gap-1">
           {reasons.map((r) => (
@@ -430,7 +438,8 @@ function PositionsTable({ options }: { options: OptionsReportData }) {
           </thead>
           <tbody>
             {rows.map((c, i) => (
-              <CycleRow key={`${c.entry_date}-${c.expiry}-${i}`} c={c} />
+              <CycleRow key={`${c.entry_date}-${c.expiry}-${i}`} c={c}
+                runId={runId} index={options.cycles.indexOf(c)} />
             ))}
           </tbody>
         </table>
@@ -439,7 +448,7 @@ function PositionsTable({ options }: { options: OptionsReportData }) {
   );
 }
 
-export default function OptionsReport({ options }: { options: OptionsReportData }) {
+export default function OptionsReport({ options, runId }: { options: OptionsReportData; runId?: number }) {
   const isCoveredCall = (options.campaigns?.length ?? 0) > 0;
   const isBasket = (options.basket_cycles?.length ?? 0) > 0;
   return (
@@ -459,7 +468,7 @@ export default function OptionsReport({ options }: { options: OptionsReportData 
         <BasketCyclesReport cycles={options.basket_cycles!} />
       ) : (
         <>
-          <PositionsTable options={options} />
+          <PositionsTable options={options} runId={runId} />
           <PremiumDecayChart options={options} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <ExitReasonDonut options={options} />
