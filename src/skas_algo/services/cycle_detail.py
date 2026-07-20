@@ -23,16 +23,6 @@ from datetime import date, datetime
 
 from skas_algo.engine.options import black_scholes as bs
 
-# Event-kind vocabulary the frontend colours by (entry teal / roll purple / hedge amber /
-# exit green|danger). Derived from the strategy's own reason tags where present.
-_ENTRY_TAGS = {"dnm_entry", "ifm_entry", "batman", "call_ratio", "put_ratio", "hni",
-               "STRATEGY", "entry"}
-_HEDGE_TAGS = {"dnm_ironfly", "ifm_adjust", "ifm_adjust_roll"}
-_ROLL_TAGS = {"dnm_roll"}
-_EXIT_TAGS = {"target", "stop", "time", "expiry", "expiry_settle", "ironfly_payoff_neg",
-              "manual", "eod"}
-
-
 _ENTRY_ACTIONS = {"BUY", "SHORT"}
 _EXIT_ACTIONS = {"SELL", "COVER", "SETTLE"}
 
@@ -212,6 +202,12 @@ def build_cycle_detail(cycle: dict, trade_rows: list[dict], spot_fn, margin_seri
     # ---- events: distinct timestamps where legs opened and/or closed ----
     stamps = sorted({lg["open_ts"] for lg in legs}
                     | {lg["close_ts"] for lg in legs if lg["close_ts"]})
+    # IDs are POSITIONAL, not tag-derived: exactly one E (the first event), a T only if the
+    # cycle ends FLAT (every leg closed), and R1..Rn for everything in between — so a mid-cycle
+    # re-entry or a partial close can never be mislabelled "E"/"T" (which desynced the ladder
+    # and the legs-table order on live delta-neutral run #203, 2026-07).
+    is_flat = all(lg["close_ts"] is not None for lg in legs)
+    n_stamps = len(stamps)
     events = []
     roll_n = 0
     realized = 0.0
@@ -220,13 +216,16 @@ def build_cycle_detail(cycle: dict, trade_rows: list[dict], spot_fn, margin_seri
         closed = [lg for lg in legs if lg["close_ts"] == ts]
         realized += sum(lg["pnl"] for lg in closed)
         tags = {tag_at.get((ts, lg["symbol"])) for lg in opened + closed} - {None}
-        is_first, is_last = j == 0, j == len(stamps) - 1
-        kind = _classify(is_first, is_last, opened, closed, tags)
-        if kind in ("roll", "hedge"):
+        is_first, is_last = j == 0, j == n_stamps - 1
+        if is_first:
+            eid, kind = "E", "entry"
+        elif is_last and is_flat:
+            eid, kind = "T", "exit"
+        else:
             roll_n += 1
             eid = f"R{roll_n}"
-        else:
-            eid = "E" if kind == "entry" else "T"
+            # kind drives only the COLOUR now: a long-leg open = the iron-fly hedge, else a roll
+            kind = "hedge" if any(lg["dir"] > 0 for lg in opened) else "roll"
         spot = (entry_spot if is_first else exit_spot if is_last
                 else (spot_fn(ts.date()) or entry_spot))
         # net delta of the OPEN book right after this event
@@ -275,18 +274,6 @@ def build_cycle_detail(cycle: dict, trade_rows: list[dict], spot_fn, margin_seri
         "spot_path": _spot_path(spot_fn, entry_ts.date(), expiry, entry_spot, exit_spot,
                                 exit_ts.date() if exit_ts else None),
     }
-
-
-def _classify(is_first, is_last, opened, closed, tags) -> str:
-    if is_first or (tags & _ENTRY_TAGS and opened and not closed):
-        return "entry"
-    if tags & _HEDGE_TAGS or any(lg["dir"] > 0 for lg in opened):
-        return "hedge"          # adds a long (breakeven/iron-fly hedge)
-    if opened and closed:
-        return "roll"           # closed one leg, opened another at the same instant
-    if is_last or (closed and not opened):
-        return "exit"
-    return "roll"
 
 
 def _reason(kind: str, tags: set, cycle: dict) -> str:

@@ -349,9 +349,10 @@ function LegsTable({ m, toggle, legInActive }: {
   m: CycleDetail; toggle: (id: string | null) => () => void;
   legInActive: (l: CycleDetailLeg) => boolean;
 }) {
-  const order = m.events.map((e) => e.id);
+  // Chronological by when the leg was OPENED (the timestamp is the source of truth — event
+  // ids can repeat across a live campaign); shorts before the hedge within the same instant.
   const rows = [...m.legs].sort((a, b) =>
-    order.indexOf(a.open_event ?? "") - order.indexOf(b.open_event ?? "")
+    a.open_ts.localeCompare(b.open_ts)
     || (a.side === "long" ? 1 : 0) - (b.side === "long" ? 1 : 0) || a.strike - b.strike);
   const cols = "52px 1.2fr 0.9fr 0.9fr 1.3fr 40px 96px";
   const total = m.legs.reduce((s, l) => s + l.pnl, 0);
