@@ -225,33 +225,63 @@ function Ladder({ m, geo, active, toggle, legInActive }: {
 }
 
 function MtmStrip({ m, geo }: { m: CycleDetail; geo: ReturnType<typeof computeGeometry> }) {
+  const [hover, setHover] = useState<number | null>(null);
   if (!m.mtm_series.length) return null;
   const vals = m.mtm_series.map((d) => d.value);
   const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
   const mtmY = (v: number) => 6 + ((hi - v) / Math.max(hi - lo, 1)) * 80;
   const x = geo.x;
-  const pts = m.mtm_series.map((d) => `${x(d.date + "T15:30").toFixed(0)},${mtmY(d.value).toFixed(0)}`).join(" ");
+  const px = m.mtm_series.map((d) => x(d.date + "T15:30"));
+  const pts = m.mtm_series.map((d, i) => `${px[i].toFixed(0)},${mtmY(d.value).toFixed(0)}`).join(" ");
   const worstI = vals.indexOf(Math.min(...vals));
   const worst = m.mtm_series[worstI];
   const last = m.mtm_series[m.mtm_series.length - 1];
+
+  // map the cursor to the nearest EOD point (svg viewBox is 1120 wide, scaled to the element)
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const sx = ((e.clientX - r.left) / r.width) * 1120;
+    let best = 0;
+    for (let i = 1; i < px.length; i++) if (Math.abs(px[i] - sx) < Math.abs(px[best] - sx)) best = i;
+    setHover(best);
+  };
+  const hp = hover != null ? m.mtm_series[hover] : null;
+  const hx = hover != null ? px[hover] : 0;
+  const anchorEnd = hx > 900;   // flip the tooltip left near the right edge so it doesn't clip
+
   return (
     <div className="border-t border-[var(--divider)] mt-2 pt-3">
       <div className="flex items-baseline gap-2.5 mb-0.5">
         <span className="text-[11px] text-[var(--faint)] font-extrabold tracking-wider">EOD MTM · GROSS</span>
-        <span className="text-xs text-[var(--faint)] font-semibold">dips are what triggered the rolls</span>
+        <span className="text-xs text-[var(--faint)] font-semibold">
+          {hp ? <>{shortDate(hp.date)} · <span className={signCls(hp.value)}>{formatInr(hp.value)}</span></>
+              : "dips are what triggered the rolls — hover the line"}
+        </span>
         <span className={`ml-auto font-[700] text-[13px] font-['Space_Grotesk'] tabular-nums ${signCls(m.pnl ?? 0)}`}>exit {formatInr(m.pnl ?? 0)}</span>
       </div>
-      <svg viewBox="0 0 1120 92" className="w-full block">
+      <svg viewBox="0 0 1120 92" className="w-full block" style={{ cursor: "crosshair" }}
+        onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
         <line x1={X0} y1={mtmY(0)} x2={X1} y2={mtmY(0)} stroke="var(--divider)" strokeWidth={1} />
         {m.events.filter((e) => e.kind === "roll" || e.kind === "hedge").map((e) => (
           <line key={e.id} x1={x(e.at)} y1={6} x2={x(e.at)} y2={86} stroke="var(--divider)" strokeWidth={1} strokeDasharray="2 3" />
         ))}
         <polyline points={pts} fill="none" stroke="var(--accent-deep)" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
-        {worst && worst.value < 0 && <>
-          <circle cx={x(worst.date + "T15:30")} cy={mtmY(worst.value)} r={3} fill="var(--danger)" />
-          <text x={x(worst.date + "T15:30") + 8} y={mtmY(worst.value) + 4} fontSize={10} fontWeight={700} fill="var(--danger)">{formatInr(worst.value)} · {shortDate(worst.date)}</text>
+        {worst && worst.value < 0 && !hp && <>
+          <circle cx={px[worstI]} cy={mtmY(worst.value)} r={3} fill="var(--danger)" />
+          <text x={px[worstI] + 8} y={mtmY(worst.value) + 4} fontSize={10} fontWeight={700} fill="var(--danger)">{formatInr(worst.value)} · {shortDate(worst.date)}</text>
         </>}
-        {last && <circle cx={x(last.date + "T15:30")} cy={mtmY(last.value)} r={3.5} fill="var(--pos)" />}
+        {last && !hp && <circle cx={px[px.length - 1]} cy={mtmY(last.value)} r={3.5} fill="var(--pos)" />}
+        {/* hover crosshair + tooltip */}
+        {hp && <>
+          <line x1={hx} y1={2} x2={hx} y2={90} stroke="var(--accent-deep)" strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+          <circle cx={hx} cy={mtmY(hp.value)} r={4} fill="var(--accent-deep)" stroke="var(--card)" strokeWidth={1.5} />
+          <g transform={`translate(${anchorEnd ? hx - 8 : hx + 8}, ${Math.max(mtmY(hp.value) - 20, 6)})`}>
+            <rect x={anchorEnd ? -128 : 0} y={0} width={128} height={30} rx={6} fill="var(--card)" stroke="var(--border)" strokeWidth={1} />
+            <text x={anchorEnd ? -120 : 8} y={13} fontSize={9.5} fontWeight={800} fill="var(--faint)" letterSpacing="0.05em">{shortDate(hp.date).toUpperCase()}</text>
+            <text x={anchorEnd ? -120 : 8} y={25} fontSize={11.5} fontWeight={700} className="font-['Space_Grotesk']"
+              fill={hp.value >= 0 ? "var(--pos)" : "var(--danger)"}>{formatInr(hp.value)}</text>
+          </g>
+        </>}
       </svg>
     </div>
   );
