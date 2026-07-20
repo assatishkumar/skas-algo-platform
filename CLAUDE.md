@@ -114,9 +114,17 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   to BS); calibrate the multiplier on the **/research** page (BS-vs-live panel, ~1.1 as of Jul 2026).
   Stock lot sizes in `contract_specs._STOCK_LOT_SIZES` are a FLAT 2026-07 Kite snapshot.
 - The **/research** page: Donchian breakout study (cache-only daily bars; expiry-anchored cycles;
-  channel breakout/re-entry/whipsaw stats + live-rule flip simulation) and the BS-vs-live
-  calibration (session-gated, strictly read-only). Backend: `api/routes/research.py`,
-  `services/donchian_study.py`, `services/bs_calibration.py`.
+  channel breakout/re-entry/whipsaw stats + live-rule flip simulation), the BS-vs-live
+  calibration (session-gated, strictly read-only), and the **batman loss-reduction study**
+  (`services/loss_study.py`, `POST /research/loss-study`). The last replays batman ONCE over
+  the 1-min store, reconstructs each cycle's per-minute MTM from the leg bars, then evaluates
+  loss-cutting rules (trailing / VIX / trend / entry-filter) POST-HOC as early-exit overlays —
+  no re-replay per rule (exit-only + entry-skip are exact over the marked path; mid-cycle
+  rolling is out of scope). Ranked by resulting net with an **in-sample/OOS split** (a single
+  window overfits: trailing looked +20k on #224's 19 cycles but −79k OOS over 42; only VIX
+  exits + an entry vol-premium filter survived). Single-flight background job (~100s replay
+  then instant eval). Backend: `api/routes/research.py`, `services/donchian_study.py`,
+  `services/bs_calibration.py`, `services/loss_study.py`.
 - **Donchian entry gates** (from the run-186 loss study; danger = vol COMPRESSION + tight channel,
   NOT rising vol): `min_hv_ratio` (HV20/HV60, ~0.85) and `min_channel_width_pct` (~8) exist in BOTH
   the backtest schedule builder and the live screener (`DonchianParams`; default 0 = off; excluded
