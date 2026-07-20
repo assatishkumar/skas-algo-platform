@@ -52,6 +52,8 @@ const LABELS: Record<string, string> = {
   stop_loss_pct: "Stop loss",
   max_holding_days: "Max holding (days)",
   min_vix: "Min entry IV %",
+  vol_premium_min: "Min vol premium (IV−HV)",
+  hv_window: "HV window (sessions)",
   min_dte: "Min DTE",
   entry_weekday: "Entry weekday",
   strike_step: "Strike step (pts)",

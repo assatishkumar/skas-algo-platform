@@ -142,6 +142,19 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   the backtest FORM defaults to auto. Model margin ignores the long hedges (≈2× broker
   SPAN), so `capital_utilization_pct=95` ≈ ~50% broker margin — the knob is the live
   calibration point. Manual `LiveControlsInput.lots` only bites in fixed mode.
+- **Vol-premium entry filter** (`EntryVolFilterMixin`, `_options_common.py` — GENERIC, any
+  option SELLER can inherit it): skip a new entry when the vol risk premium (ATM-IV − HV`hv_window`,
+  vol points) < `vol_premium_min`. The /research loss-study's one OOS-robust finding (batman
+  ≈2). Wired into the ratio base (batman/call/put ratio + hni): a once-per-entry gate in
+  `_maybe_enter` (market-wide, not per-wing; applies to forced entries like `min_vix`). Implied
+  leg = the strategy's own `_atm_iv` off the chain it's about to trade (same source BT+live →
+  no parity gap); realized leg = the underlying's annualized HV via `set_realized_vol_fn`
+  (`data.options_provider.make_realized_vol_fn`, reuses `engine.options.realized_vol`), wired
+  cache-fed in backtest/replay and **broker-first in live** (the live daily-data invariant),
+  probed by `getattr` like `set_daily_bars_fn`. Ctor default `vol_premium_min=0` = OFF (§1:
+  recovered deploys byte-identical); v2 FORM default also 0 (opt-in). FAIL-OPEN on missing data.
+  To add to another seller: inherit the mixin, add the two ctor params (default off), call
+  `_vol_premium_ok(u, today, atm_iv_pct)` at entry. Coverage: `tests/test_entry_vol_filter.py`.
 - **Two brokers.** `BrokerAccount.broker` ∈ {zerodha, dhan}; `services/broker.make_adapter`
   dispatches. **Dhan** (`brokers/dhan.py`): no api key/secret — client id + a portal-generated
   JWT the user PASTES (its `exp` claim is the session expiry); instruments resolve via the
