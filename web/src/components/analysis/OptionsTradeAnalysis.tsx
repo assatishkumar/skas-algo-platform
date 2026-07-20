@@ -234,7 +234,9 @@ type SumKey = "entered" | "exited" | "held" | "espot" | "xspot" | "move" | "net"
 /** Compact, sortable P&L table across all cycles (one row per weekly/monthly position) + aggregates.
  * Exported so the Live page can show the same per-cycle breakdown on a running deployment (pass
  * points=[] there — the table falls back to each cycle's entry/exit spot captured at trade time). */
-export function CycleSummary({ cycles, points }: { cycles: ReconCycle[]; points: StockSeriesPoint[] }) {
+export function CycleSummary({ cycles, points, runId }: {
+  cycles: ReconCycle[]; points: StockSeriesPoint[]; runId?: number;
+}) {
   const [sortKey, setSortKey] = useState<SumKey>("entered");
   const [dir, setDir] = useState<1 | -1>(-1);
   const rows = cycles.map((c) => {
@@ -314,7 +316,14 @@ export function CycleSummary({ cycles, points }: { cycles: ReconCycle[]; points:
           <tbody>
             {sorted.map((r) => (
               <tr key={`${r.c.expiry}-${r.c.entry_date}`} className="border-b border-slate-800/40">
-                <td className="py-1.5 pr-3">{r.c.entry_date}</td>
+                <td className="py-1.5 pr-3">
+                  {runId != null ? (
+                    <Link to={`/runs/${runId}/cycle/${cycles.indexOf(r.c)}`}
+                      className="text-brand hover:underline" title="Open the full cycle lifecycle view">
+                      {r.c.entry_date} ↗
+                    </Link>
+                  ) : r.c.entry_date}
+                </td>
                 <td className="py-1.5 pr-3">{r.c.exit_date ?? <span className="text-slate-500">open</span>}</td>
                 <td className="py-1.5 pr-3 text-right">{r.held != null ? `${r.held}d` : "—"}</td>
                 <td className="py-1.5 pr-3 text-right">{r.eSpot != null ? Math.round(r.eSpot) : "—"}</td>

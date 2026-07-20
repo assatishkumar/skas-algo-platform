@@ -875,7 +875,7 @@ export interface CycleDetailLeg {
   days: number | null; pnl: number;
 }
 export interface CycleDetail {
-  run_id: number; index: number; strategy_id: string; run_name: string;
+  run_id: number; index: number; strategy_id: string; run_name: string; live?: boolean;
   underlying: string; expiry: string; entered_at: string; exited_at: string | null;
   exit_reason: string | null; entry_spot: number | null; exit_spot: number | null;
   entry_vix: number | null; exit_vix: number | null; underlying_pct: number | null;

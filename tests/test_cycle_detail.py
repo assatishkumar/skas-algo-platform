@@ -3,7 +3,7 @@ with reconstructed net delta. Synthetic cycle, no network."""
 
 from __future__ import annotations
 
-from skas_algo.services.cycle_detail import build_cycle_detail
+from skas_algo.services.cycle_detail import build_cycle_detail, reconstruct_cycles
 
 
 def _leg(strike, right, side, units, entry_dt, entry_px, exit_dt, exit_px, pnl, reason):
@@ -70,3 +70,36 @@ def test_fixed_structure_has_no_adjustments():
                                strategy_id="batman_ratio_monthly", name="batman")
     assert [e["id"] for e in model["events"]] == ["E", "T"]
     assert model["n_rolls"] == 0 and model["n_hedges"] == 0
+
+
+def _t(date, action, strike, right, units, price, **kw):
+    return {"date": date, "ticker": f"BANKNIFTY|2026-05-26|{strike}|{right}", "action": action,
+            "units": units, "price": price, **kw}
+
+
+def test_reconstruct_cycles_open_and_closed():
+    # A closed strangle (entry then both legs covered) + a still-OPEN one on a later expiry.
+    trades = [
+        _t("2026-04-01 11:00", "SHORT", 57000, "CE", 175, 200, tag="dnm_entry", underlying_spot=55000),
+        _t("2026-04-01 11:00", "SHORT", 53000, "PE", 175, 210, tag="dnm_entry", underlying_spot=55000),
+        _t("2026-04-20 15:15", "COVER", 57000, "CE", 175, 100, exit_reason="target", underlying_spot=55500),
+        _t("2026-04-20 15:15", "COVER", 53000, "PE", 175, 120, exit_reason="target", underlying_spot=55500),
+        # a second cycle (different expiry), still open (only entered)
+        {"date": "2026-05-02 11:00", "ticker": "BANKNIFTY|2026-06-30|56000|CE", "action": "SHORT",
+         "units": 175, "price": 300, "tag": "dnm_entry", "underlying_spot": 55800},
+    ]
+    cycles = reconstruct_cycles(trades)
+    assert len(cycles) == 2
+    # newest-first: the open May cycle leads
+    assert cycles[0]["entry_date"].startswith("2026-05-02") and cycles[0]["live"] is True
+    assert cycles[0]["exit_date"] is None and cycles[0]["legs_detail"][0]["exit_date"] is None
+    closed = cycles[1]
+    assert closed["live"] is False and closed["exit_reason"] == "target"
+    assert len(closed["legs_detail"]) == 2
+    # realized = short: (entry−exit)×units for both legs
+    assert closed["net_pnl"] == round((200 - 100) * 175 + (210 - 120) * 175, 2)
+    # the open cycle build_cycle_detail marks live + has no exit event
+    model = build_cycle_detail(cycles[0], trades, lambda d: 55800.0, [], index=0, run_id=9,
+                               strategy_id="delta_neutral_monthly", name="dnm")
+    assert model["live"] is True
+    assert [e["kind"] for e in model["events"]] == ["entry"]   # only opened, nothing closed yet

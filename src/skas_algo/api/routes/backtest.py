@@ -508,17 +508,22 @@ def get_cycle_detail(run_id: int, index: int, db: Session = Depends(get_db)) -> 
     from skas_algo.data.options_provider import INDEX_SYMBOL, _ffill_lookup
     from skas_algo.data.provider import get_data_cache
     from skas_algo.engine.jsonutil import to_native
-    from skas_algo.services.cycle_detail import build_cycle_detail
+    from skas_algo.services.cycle_detail import build_cycle_detail, reconstruct_cycles
 
     run = db.get(AlgoRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     algo = db.get(Algo, run.algo_id)
+    trades = _resolve_run_trades(run, db)
+    # Backtests + stopped runs have the options cycles in the stored report; a RUNNING live
+    # options deployment has none yet → reconstruct from its live trades (same newest-first
+    # order the live page displays, so the index the UI links matches).
     cycles = ((_run_report(run, algo) or {}).get("options") or {}).get("cycles") or []
+    if not cycles:
+        cycles = reconstruct_cycles(trades)
     if not (0 <= index < len(cycles)):
         raise HTTPException(status_code=404, detail="cycle index out of range")
     cycle = cycles[index]
-    trades = _resolve_run_trades(run, db)
     leg_syms = {leg.get("symbol") for leg in (cycle.get("legs_detail") or [])}
     lo, hi = str(cycle.get("entry_date"))[:10], str(cycle.get("exit_date") or "9999")[:10]
     rows = [t for t in trades if t.get("ticker") in leg_syms

@@ -49,15 +49,15 @@ function CycleDetail({ m, active, toggle, setActive }: {
   return (
     <div className="max-w-[1280px] mx-auto px-8 py-6 pb-16">
       {/* breadcrumb + title */}
-      <Link to={`/runs/${m.run_id}`} className="text-sm font-bold text-[var(--muted)] mb-3 inline-block">
-        ← Runs · <span className="text-[var(--accent-deep)]">{m.run_name} #{m.run_id}</span> · positions
+      <Link to={m.live ? `/live/${m.run_id}` : `/runs/${m.run_id}`} className="text-sm font-bold text-[var(--muted)] mb-3 inline-block">
+        ← {m.live ? "Live" : "Runs"} · <span className="text-[var(--accent-deep)]">{m.run_name} #{m.run_id}</span> · positions
       </Link>
       <div className="flex items-center gap-3 mb-2 flex-wrap">
         <h1 className="font-[700] text-[26px] font-['Space_Grotesk'] text-[var(--strong)]">
           Cycle {m.index + 1} · {shortDate(m.entered_at)} → {m.exited_at ? shortDate(m.exited_at) : "open"}
         </h1>
-        <Chip tone={m.exit_reason === "target" ? "ok" : m.exit_reason === "stop" ? "danger" : "chip"}>
-          {(m.exit_reason || "OPEN").toUpperCase()}{m.exit_reason ? " EXIT" : ""}
+        <Chip tone={m.live ? "chip" : m.exit_reason === "target" ? "ok" : m.exit_reason === "stop" ? "danger" : "chip"}>
+          {m.live ? "● RUNNING" : (m.exit_reason || "OPEN").toUpperCase() + (m.exit_reason ? " EXIT" : "")}
         </Chip>
         <Chip tone="chip">{m.underlying} · {expiryLabel(m.expiry)}</Chip>
         <Chip tone="chip">{m.legs.length} LEGS · {m.n_rolls + m.n_hedges} ADJ</Chip>

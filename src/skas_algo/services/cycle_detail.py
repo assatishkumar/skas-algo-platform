@@ -33,6 +33,118 @@ _EXIT_TAGS = {"target", "stop", "time", "expiry", "expiry_settle", "ironfly_payo
               "manual", "eod"}
 
 
+_ENTRY_ACTIONS = {"BUY", "SHORT"}
+_EXIT_ACTIONS = {"SELL", "COVER", "SETTLE"}
+
+
+def _parse_option_ticker(ticker):
+    p = (ticker or "").split("|")   # UNDERLYING|EXPIRY|STRIKE|RIGHT
+    if len(p) != 4 or p[3] not in ("CE", "PE"):
+        return None
+    try:
+        return {"underlying": p[0], "expiry": p[1], "strike": float(p[2]), "right": p[3]}
+    except ValueError:
+        return None
+
+
+def reconstruct_cycles(trades: list[dict]) -> list[dict]:
+    """Backend port of web/src/lib/optionCycles.reconstructCycles — group a LIVE/running
+    options run's flat trade feed into cycles (by expiry, held until flat), ONE leg per symbol
+    (size-weighted avg entry/exit), INCLUDING the currently-open cycle (open legs keep
+    exit_date=None). Produces cycle dicts (the legs_detail shape) that build_cycle_detail
+    consumes — so a running deployment whose stored report has no cycles yet still renders.
+    Sorted NEWEST-FIRST to match the live page's display order (index parity)."""
+    open_c: dict[str, dict] = {}
+    done: list[dict] = []
+    for t in trades or []:
+        mm = _parse_option_ticker(t.get("ticker"))
+        if not mm:
+            continue
+        is_entry = t.get("action") in _ENTRY_ACTIONS
+        is_exit = t.get("action") in _EXIT_ACTIONS
+        if not (is_entry or is_exit):
+            continue
+        cyc = open_c.get(mm["expiry"])
+        if cyc is None:
+            if not is_entry:
+                continue
+            cyc = {"underlying": mm["underlying"], "expiry": mm["expiry"], "entry_date": t["date"],
+                   "legs": {}, "entry_spot": t.get("underlying_spot"), "exit_spot": None,
+                   "exit_reason": None}
+            open_c[mm["expiry"]] = cyc
+        legs, sym = cyc["legs"], t["ticker"]
+        units, price = float(t.get("units") or 0), float(t.get("price") or 0)
+        leg = legs.get(sym)
+        if is_entry:
+            if leg is None:
+                leg = {"symbol": sym, "underlying": mm["underlying"], "strike": mm["strike"],
+                       "right": mm["right"], "side": "long" if t["action"] == "BUY" else "short",
+                       "units": 0.0, "entry_premium": 0.0, "entry_date": t["date"],
+                       "open_units": 0.0, "exit_units": 0.0, "exit_price": None,
+                       "exit_date": None, "exit_reason": None}
+                legs[sym] = leg
+            denom = leg["units"] + units
+            leg["entry_premium"] = ((leg["entry_premium"] * leg["units"] + price * units) / denom
+                                    if denom else price)
+            leg["units"] += units
+            leg["open_units"] += units
+        else:
+            if leg is None:
+                continue
+            denom = leg["exit_units"] + units
+            leg["exit_price"] = (((leg["exit_price"] or 0) * leg["exit_units"] + price * units)
+                                 / denom if denom else price)
+            leg["exit_units"] += units
+            leg["open_units"] -= units
+            leg["exit_date"] = t["date"]
+            leg["exit_reason"] = t.get("exit_reason") or t.get("tag")
+            if t.get("exit_reason"):
+                cyc["exit_reason"] = t["exit_reason"]
+            if t.get("underlying_spot") is not None:
+                cyc["exit_spot"] = t["underlying_spot"]
+        if legs and all(lg["open_units"] <= 1e-9 for lg in legs.values()):
+            done.append(_finalize_recon(cyc))
+            del open_c[mm["expiry"]]
+    for cyc in open_c.values():
+        done.append(_finalize_recon(cyc))
+    done.sort(key=lambda c: c["entry_date"], reverse=True)   # newest first (live-page order)
+    return done
+
+
+def _finalize_recon(cyc: dict) -> dict:
+    """Turn a reconstruction into the legs_detail-shaped cycle build_cycle_detail expects."""
+    legs_detail, realized, exit_date, any_open = [], 0.0, None, False
+    for lg in cyc["legs"].values():
+        sign = 1 if lg["side"] == "long" else -1
+        closed = lg["exit_price"] is not None and lg["exit_units"] > 0
+        pnl = sign * (lg["exit_price"] - lg["entry_premium"]) * lg["exit_units"] if closed else 0.0
+        realized += pnl
+        if closed and lg["exit_date"] and (exit_date is None or lg["exit_date"] > exit_date):
+            exit_date = lg["exit_date"]
+        if lg["open_units"] > 1e-9:
+            any_open = True
+        hd = None
+        if lg["exit_date"]:
+            hd = max((_parse_ts(lg["exit_date"]) - _parse_ts(lg["entry_date"])).days, 0)
+        legs_detail.append({
+            "symbol": lg["symbol"], "underlying": lg["underlying"], "strike": lg["strike"],
+            "right": lg["right"], "side": lg["side"], "units": int(lg["units"]),
+            "entry_date": lg["entry_date"], "entry_premium": lg["entry_premium"],
+            "exit_date": lg["exit_date"] if not (lg["open_units"] > 1e-9) else None,
+            "exit_price": lg["exit_price"] if not (lg["open_units"] > 1e-9) else None,
+            "exit_reason": lg["exit_reason"], "pnl": pnl, "holding_days": hd})
+    hold = None
+    if exit_date and not any_open:
+        hold = max((_parse_ts(exit_date) - _parse_ts(cyc["entry_date"])).days, 0)
+    return {"underlying": cyc["underlying"], "expiry": cyc["expiry"],
+            "entry_date": cyc["entry_date"], "exit_date": None if any_open else exit_date,
+            "exit_reason": None if any_open else cyc.get("exit_reason"),
+            "net_pnl": round(realized, 2), "realized_pnl": round(realized, 2),
+            "holding_days": hold, "underlying_entry": cyc.get("entry_spot"),
+            "underlying_exit": cyc.get("exit_spot"), "vix_entry": None, "vix_exit": None,
+            "underlying_pct": None, "daily_pnl": [], "legs_detail": legs_detail, "live": any_open}
+
+
 def _parse_ts(v) -> datetime:
     s = str(v).replace("T", " ")
     try:
@@ -144,6 +256,7 @@ def build_cycle_detail(cycle: dict, trade_rows: list[dict], spot_fn, margin_seri
 
     return {
         "run_id": run_id, "index": index, "strategy_id": strategy_id, "run_name": name,
+        "live": bool(cycle.get("live")),   # an open (running) cycle — legs still held
         "underlying": underlying, "expiry": str(expiry)[:10],
         "entered_at": cycle["entry_date"], "exited_at": cycle.get("exit_date"),
         "exit_reason": cycle.get("exit_reason"),

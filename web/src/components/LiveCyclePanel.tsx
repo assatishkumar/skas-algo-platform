@@ -20,7 +20,7 @@ export default function LiveCyclePanel({ runId, version }: { runId: number; vers
   if (cycles.length === 0) return null;
   return (
     <div className="mt-3">
-      <CycleSummary cycles={cycles} points={[]} />
+      <CycleSummary cycles={cycles} points={[]} runId={runId} />
     </div>
   );
 }
