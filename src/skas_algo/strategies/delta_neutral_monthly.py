@@ -275,13 +275,18 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         return abs(bs.delta(spot, k, t, self.r, iv, right))
 
     def _pick_delta_strike(self, rows: dict[float, dict], side: str, spot: float,
-                           t: float, target_delta: float | None = None) -> tuple[float, float] | None:
+                           t: float, target_delta: float | None = None,
+                           exclude: set[float] | None = None) -> tuple[float, float] | None:
         """(strike, ltp) whose BS |delta| (IV solved from its own LTP) is nearest
         ``target_delta`` (defaults to ``self.target_delta``). OTM rows only — the target-Δ
-        strike is OTM by definition."""
+        strike is OTM by definition. ``exclude`` strikes are skipped (see _open_untested:
+        an untested-side short must never land on a strike the fly already holds, or it MERGES
+        into that leg's position and a later roll closes both)."""
         want = self.target_delta if target_delta is None else target_delta
         best = None
         for k, r in rows.items():
+            if exclude and k in exclude:
+                continue
             if (side == "ce" and k <= spot) or (side == "pe" and k >= spot):
                 continue
             leg = r.get(side)
@@ -541,7 +546,12 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             side = "ce"          # put side tested → sell the untested CALL
         else:
             return []
-        pick = self._pick_delta_strike(rows, side, spot, t, self.adjust_target_delta)
+        # NEVER re-use a strike the fly already holds on this side — the short would merge into
+        # that leg's position (same symbol) and a later adjustment-roll would EXIT_ALL the whole
+        # merged position, closing the straddle short too (the run-#203 naked-call blow-up).
+        right = "CE" if side == "ce" else "PE"
+        held = {float(leg["symbol"].split("|")[2]) for leg in self.legs if leg["right"] == right}
+        pick = self._pick_delta_strike(rows, side, spot, t, self.adjust_target_delta, exclude=held)
         if pick is None:
             return []
         k, ltp = pick

@@ -243,7 +243,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   runtime-togglable via `set_ironfly_adjust` → `POST /live/{id}/ironfly-adjust`, persisted in
   export_state, so it survives a restart). When enabled and phase=="ironfly", `_adjust_ironfly`
   replaces the old terminal ride: on a breakeven breach (K ± net_credit) it sells a naked
-  ~15-20Δ short on the UNTESTED side (`adjust_target_delta`, reuses `_pick_delta_strike`), rolls
+  ~15-20Δ short on the UNTESTED side (`adjust_target_delta`, reuses `_pick_delta_strike` with
+  `exclude`=the fly's held same-side strikes — the naked short must NEVER land on a strike the
+  fly already holds, or it MERGES into that leg's position and a later roll's EXIT_ALL closes the
+  STRADDLE short too, leaving a naked call: the run-#203 blow-up, 2026-07), rolls
   it when it decays (≤`adjust_close_delta`=10Δ OR ≤`adjust_close_prem_frac`=¼ of its sold
   premium; banks the credit in `adjust_realized`), and calls `_exit_all("ironfly_payoff_neg")`
   when `_payoff_max(legs) < 0` (the whole expiry payoff is below zero — a backend piecewise-linear

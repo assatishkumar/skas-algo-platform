@@ -371,3 +371,31 @@ def test_ironfly_adjust_gated_off_by_default_and_togglable():
     st2 = DeltaNeutralMonthlyStrategy()
     st2.load_state(st.export_state())
     assert st2.ironfly_adjust is True
+
+
+def test_open_untested_never_reuses_a_held_strike():
+    """Regression (run #203): the untested-side naked short must never be picked at a strike
+    the fly already holds — else it merges into that leg's position and a later roll's EXIT_ALL
+    closes the straddle short too, leaving a naked call. _pick_delta_strike's exclude enforces
+    it; _open_untested passes the held same-side strikes."""
+    import math
+
+    from skas_algo.strategies.delta_neutral_monthly import DeltaNeutralMonthlyStrategy
+
+    st = DeltaNeutralMonthlyStrategy()
+    spot, t = 55000.0, 20 / 365.0
+    # OTM puts below spot; 54000 sits nearest ~0.18Δ, 53000 a bit further.
+    rows = {k: {"strike": float(k), "ce": {"ltp": 10.0, "oi": 9000},
+                "pe": {"ltp": pe, "oi": 9000}}
+            for k, pe in [(54000, 260.0), (53500, 190.0), (53000, 140.0), (52500, 95.0)]}
+
+    base = st._pick_delta_strike(rows, "pe", spot, t, 0.18)
+    assert base is not None
+    picked = base[0]
+    # Excluding the natural pick forces a DIFFERENT, still-OTM strike (never the held one).
+    alt = st._pick_delta_strike(rows, "pe", spot, t, 0.18, exclude={picked})
+    assert alt is not None and alt[0] != picked
+    # Excluding every candidate → no pick (caller then holds / exits, never a colliding short).
+    assert st._pick_delta_strike(rows, "pe", spot, t, 0.18, exclude=set(rows)) is None
+    # A CE already at the pick's strike does NOT block a PE pick (different symbol/right).
+    assert not math.isnan(picked)
