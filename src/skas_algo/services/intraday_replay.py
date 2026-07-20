@@ -75,10 +75,16 @@ class _Market:
         self.chains: dict[str, dict[float, dict[str, str]]] = {}
         self.current_date: date | None = None
         self.now: datetime | None = None
+        # index_spot memo: quotes are stable between mutations, but index_spot is called
+        # several times per minute (sizing, note_spot, margin push, strategy internals),
+        # each re-scanning every strike via _parity. Cache it; any quote write dirties it.
+        self._spot_dirty = True
+        self._spot_cache: float | None = None
 
     def start_day(self, day: date, symbols: list[str]) -> None:
         self.current_date = day
         self.quotes = {}          # live marks don't survive overnight — neither do these
+        self._spot_dirty = True
         self.chains = {}
         # Today's FORMING index bar (running O/H/L off the parity spot) — feeds ema21's
         # bands with chart-at-decision-time semantics instead of the settled bar.
@@ -103,6 +109,7 @@ class _Market:
 
     def feed(self, symbol: str, close: float, oi: float) -> None:
         self.quotes[symbol] = (float(close), float(oi))
+        self._spot_dirty = True
 
     def close(self, symbol: str) -> float:
         q = self.quotes.get(symbol)
@@ -142,11 +149,17 @@ class _Market:
         return f / (1.0 + self._CARRY_R * t_days / 365.0)
 
     def index_spot(self, _u: str) -> float | None:
+        if not self._spot_dirty:
+            return self._spot_cache
+        val = None
         for e in sorted(self.chains):   # nearest stored expiry that has a parity pair
             spot = self._parity(e)
             if spot is not None:
-                return self._decarry(spot, e)
-        return None
+                val = self._decarry(spot, e)
+                break
+        self._spot_cache = val
+        self._spot_dirty = False
+        return val
 
     def live_chain(self, _u: str, expiry_iso: str) -> dict | None:
         strikes = self.chains.get(str(expiry_iso)[:10])
@@ -334,8 +347,7 @@ def _ref_spot(u: str, days_pool: list[date],
     ``u`` bars — the reference notional for the user-keyed margin ("TODAY'S broker margin
     per lot"). Walks back a few days so a data-hole tail can't void the run."""
     for day in list(reversed(days_pool))[:10]:
-        df = load_day(day)
-        df = df[df["symbol"].str.startswith(f"{u}|")]
+        df = load_day(day, underlying=u, columns=["symbol", "start", "close", "oi"])
         if df.empty:
             continue
         m = _Market(u)
@@ -547,23 +559,27 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
     for day_i, day in enumerate(days):
         if progress is not None:
             progress(day_i, len(days), day.isoformat())
-        df = load_day(day)
-        df = df[df["symbol"].str.startswith(f"{u}|")]
+        df = load_day(day, underlying=u, columns=["symbol", "start", "close", "oi"])
         if df.empty:
             continue
         days_with_bars += 1
         market.start_day(day, list(df["symbol"].unique()))
         chain.days = sorted({date.fromisoformat(s.split("|")[1])
                              for s in df["symbol"].unique()})
-        feed: dict[str, list[tuple[str, float, float]]] = {}
-        # numpy datetime64[m] → "YYYY-MM-DDTHH:MM" via C code: pandas .dt.strftime was
-        # ~45% of a replay's runtime on 300k-row merged days (profiled 2026-07-18).
-        minutes = np.datetime_as_string(
-            pd.to_datetime(df["start"]).values.astype("datetime64[m]"))
-        for sym, minute, close_px, oi in zip(df["symbol"].to_numpy(), minutes,
-                                             df["close"].to_numpy(), df["oi"].to_numpy(),
-                                             strict=True):
-            feed.setdefault(minute, []).append((sym, float(close_px), float(oi)))
+        # Single-pass sweep: sort the day's prints by minute, then a pointer advances with
+        # the clock so each print is TOUCHED ONCE. The old design bucketed every print into
+        # a per-minute dict up front and re-walked them in the loop — 2× the work over ~10M
+        # prints/quarter (63% of runtime was this Python churn, profiled 2026-07-20).
+        # numpy datetime64[m] → "YYYY-MM-DDTHH:MM" via C code (pandas .dt.strftime was ~45%
+        # of runtime on 300k-row days); Python lists index far faster than numpy scalars.
+        mins_arr = pd.to_datetime(df["start"]).values.astype("datetime64[m]")
+        order = np.argsort(mins_arr, kind="stable")   # within-minute order preserved
+        min_strs = np.datetime_as_string(mins_arr[order]).tolist()
+        p_syms = df["symbol"].to_numpy()[order].tolist()
+        p_close = df["close"].to_numpy()[order].astype(float).tolist()
+        p_oi = df["oi"].to_numpy()[order].astype(float).tolist()
+        n_prints = len(p_syms)
+        pi = 0
 
         # Capital-based sizing: refit lots to CURRENT equity on FLAT days only (an open
         # multi-day book is never resized). Sized at the first minute with a parity spot;
@@ -577,8 +593,14 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
         end_dt = datetime.combine(day, _CLOSE)
         while cur <= end_dt:
             minute_key = cur.strftime("%Y-%m-%dT%H:%M")
-            for sym, close_px, oi in feed.get(minute_key, []):
-                market.feed(sym, close_px, oi)
+            while pi < n_prints and min_strs[pi] < minute_key:
+                pi += 1            # strays before the open (the old dict never visited them)
+            if pi < n_prints and min_strs[pi] == minute_key:
+                q = market.quotes
+                while pi < n_prints and min_strs[pi] == minute_key:
+                    q[p_syms[pi]] = (p_close[pi], p_oi[pi])   # == market.feed, no dispatch
+                    pi += 1
+                market._spot_dirty = True  # invalidate the per-minute parity cache
             ctx._now = cur
             market.now = cur
             if track_spot:

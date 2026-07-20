@@ -81,16 +81,27 @@ def write_day(day: date | str, df: pd.DataFrame) -> None:
     tmp.rename(path)
 
 
-def load_day(day: date | str) -> pd.DataFrame:
-    """All bars of one day (all contracts), or an empty frame if the day isn't captured."""
+def load_day(day: date | str, underlying: str | None = None,
+             columns: list[str] | None = None) -> pd.DataFrame:
+    """All bars of one day (all contracts), or an empty frame if the day isn't captured.
+
+    ``underlying`` pushes a ``symbol LIKE 'U|%'`` predicate into the Parquet scan and
+    ``columns`` projects only those columns — both done in DuckDB so a single-underlying
+    replay never materialises the other indices' rows (nor runs a pandas ``.str`` filter
+    over them). Defaults reproduce the old "everything" behaviour byte-for-byte."""
     path = day_path(day)
+    cols = ", ".join(columns) if columns else "*"
     if not path.exists():
-        return pd.DataFrame(columns=COLUMNS)
+        return pd.DataFrame(columns=columns or COLUMNS)
     con = duckdb.connect()
     try:
-        df = con.execute(
-            "SELECT * FROM read_parquet(?) ORDER BY symbol, start", [str(path)]
-        ).df()
+        if underlying:
+            df = con.execute(
+                f"SELECT {cols} FROM read_parquet(?) WHERE symbol LIKE ? ORDER BY symbol, start",
+                [str(path), f"{underlying}|%"]).df()
+        else:
+            df = con.execute(
+                f"SELECT {cols} FROM read_parquet(?) ORDER BY symbol, start", [str(path)]).df()
     finally:
         con.close()
     return df

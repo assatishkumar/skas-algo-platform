@@ -57,6 +57,27 @@ def test_load_missing_day_is_empty():
     assert store.load_day(DAY).empty and store.captured_days() == []
 
 
+def test_load_day_underlying_filter_and_projection():
+    """The intraday replay reads one underlying's minute marks — push the symbol predicate
+    and column projection into DuckDB so a NIFTY replay never materialises BANKNIFTY rows
+    (nor runs a pandas .str filter over them). The default call is unchanged."""
+    store.write_day(DAY, _df([
+        _row("NIFTY|2026-07-21|24000|CE", 9, 15, 100.0),
+        _row("NIFTY|2026-07-21|24000|PE", 9, 15, 90.0),
+        _row("BANKNIFTY|2026-07-24|52000|CE", 9, 15, 300.0),
+    ]))
+    # default: everything, all columns
+    assert len(store.load_day(DAY)) == 3
+    assert list(store.load_day(DAY).columns) == store.COLUMNS
+    # filtered + projected
+    nifty = store.load_day(DAY, underlying="NIFTY", columns=["symbol", "close"])
+    assert set(nifty["symbol"]) == {"NIFTY|2026-07-21|24000|CE", "NIFTY|2026-07-21|24000|PE"}
+    assert list(nifty.columns) == ["symbol", "close"]
+    # LIKE 'NIFTY|%' must NOT catch BANKNIFTY (the shared 'NIFTY' substring)
+    assert not any(s.startswith("BANKNIFTY") for s in nifty["symbol"])
+    assert store.load_day(DAY, underlying="BANKNIFTY").shape[0] == 1
+
+
 # ------------------------------------------------------------------ resampling
 def test_resample_1min_to_5min_sparse():
     sym = "X|2026-07-21|100|CE"
