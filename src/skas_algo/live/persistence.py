@@ -51,7 +51,13 @@ def start_live_run(
 def record_trades(session: Session, algo_id: int, events: list[dict]) -> None:
     """One Order (FILLED) + Fill per executed trade event."""
     for ev in events:
-        side = OrderSide.SELL if ev["action"] == "SELL" else OrderSide.BUY
+        # The broker side of the FILLED order: a short-OPEN is a SELL (its action is "SHORT",
+        # NOT "SELL") and a sell-to-close-a-long is "SELL"; a long-OPEN ("BUY") and a
+        # short-CLOSE ("COVER") are BUY. Mapping only "SELL"→SELL stored every short as BUY,
+        # so the durable Order trail couldn't be paired back into opens/closes (delta_neutral
+        # run #203, 2026-07 — every leg looked open). SETTLE (expiry) is a non-traded close;
+        # left BUY (the short-premium common case) — it never re-opens, so pairing is intact.
+        side = OrderSide.SELL if ev["action"] in ("SELL", "SHORT") else OrderSide.BUY
         order = Order(
             algo_id=algo_id,
             client_order_id=uuid.uuid4().hex,
