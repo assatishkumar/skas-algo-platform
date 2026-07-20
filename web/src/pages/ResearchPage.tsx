@@ -17,7 +17,7 @@ import {
 import { api, brokers } from "../api/client";
 import { ErrorBox, NumberInput } from "../components/ui";
 import { Panel, Segmented, SessionBanner } from "../components/redesign";
-import type { BsCalibrationResult, CalibStats, DonchianStudyResult, MtgBtResult, StudyLeagueRow } from "../types";
+import type { BsCalibrationResult, CalibStats, DonchianStudyResult, LossStudyResult, MtgBtResult, StudyLeagueRow } from "../types";
 
 /** Research page — validates the Donchian strangle two ways:
  *  1. Breakout study (cache-only): per expiry-anchored monthly cycle, did each Nifty-50
@@ -704,16 +704,187 @@ function MomentumThetaBtSection() {
   );
 }
 
+const signed = (n: number) => (n >= 0 ? "text-emerald-600 dark:text-emerald-400"
+  : "text-rose-600 dark:text-rose-400");
+
+function LossStudySection() {
+  const [start, setStart] = useState("2021-07-29");
+  const [oos, setOos] = useState("2024-07-01");
+  const [margin, setMargin] = useState(300_000);
+  const [lots, setLots] = useState(3);
+  const [jobId, setJobId] = useState<string | null>(null);
+
+  const run = useMutation({
+    mutationFn: () => api.researchLossStudy({ start_date: start, oos_start: oos,
+      margin_per_lot: margin, lots }),
+    onSuccess: (d) => setJobId(d.job_id),
+  });
+  const { data: prog } = useQuery({
+    queryKey: ["loss-study", jobId],
+    queryFn: api.researchLossStudyProgress,
+    enabled: !!jobId,
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 2500 : false),
+  });
+  const res: LossStudyResult | undefined = prog?.status === "done" ? prog.result ?? undefined : undefined;
+  const busy = run.isPending || prog?.status === "running";
+  const oosBase = res
+    ? res.cycles.filter((c) => !c.in_sample).reduce((s, c) => s + c.baseline_net, 0)
+    : 0;
+
+  return (
+    <Panel className="p-4">
+      <div className="font-semibold">Loss-reduction study — batman_ratio_monthly</div>
+      <div className="text-xs text-[var(--muted)] mt-0.5">
+        Replays batman ONCE over the 1-min store, then tests candidate loss-cutting rules
+        (trailing / VIX / trend / entry-filter) post-hoc over each cycle's reconstructed MTM
+        path, ranked by resulting net P&amp;L with an <b>in-sample / out-of-sample split</b> so a
+        single window can't overfit. Rules are early-exit overlays on the real strategy; no
+        strategy changes. The replay is ~100&nbsp;s.
+      </div>
+      <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-3">
+        <Field label="Start"><input type="date" className={inputClass} value={start} onChange={(e) => setStart(e.target.value)} /></Field>
+        <Field label="OOS split (entries ≥)"><input type="date" className={inputClass} value={oos} onChange={(e) => setOos(e.target.value)} /></Field>
+        <Field label="Margin / lot-set (₹)"><NumberInput className={inputClass} value={margin} onChange={setMargin} /></Field>
+        <Field label="Lots"><NumberInput className={inputClass} value={lots} onChange={setLots} /></Field>
+        <div className="self-end">
+          <button onClick={() => { setJobId(null); run.mutate(); }} disabled={busy}
+            className="rounded-md bg-brand hover:bg-brand-light px-4 py-2 text-sm font-medium disabled:opacity-50">
+            {busy ? "Running…" : "Run study"}
+          </button>
+        </div>
+      </div>
+      {busy && <div className="mt-3 text-sm text-[var(--muted)]">
+        {prog?.day ?? "starting"}… (one batman replay over the full store, then instant rule eval)
+      </div>}
+      {run.error && <div className="mt-3"><ErrorBox message={(run.error as Error).message} /></div>}
+      {prog?.status === "error" && <div className="mt-3"><ErrorBox message={prog.error ?? "study failed"} /></div>}
+
+      {res && (
+        <div className="mt-4 space-y-5">
+          {/* Headline: the top robust rule vs the do-nothing baseline. */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label="Baseline net" value={inr(res.baseline.net)}
+              sub={`${res.params.num_cycles} cycles · worst ${inr(res.baseline.worst_cycle)}`} />
+            {res.top_rule && <>
+              <Stat label="Best rule" value={res.top_rule.family}
+                sub={res.top_rule.best} accent />
+              <Stat label="Net with best rule" value={inr(res.top_rule.full.net)}
+                sub={`${res.top_rule.full.delta >= 0 ? "+" : ""}${inr(res.top_rule.full.delta)} vs baseline`}
+                cls={signed(res.top_rule.full.delta)} />
+              <Stat label="Out-of-sample" value={inr((res.top_rule.oos?.net ?? 0))}
+                sub={`${((res.top_rule.oos?.net ?? 0) - oosBase) >= 0 ? "+" : ""}${inr((res.top_rule.oos?.net ?? 0) - oosBase)} vs baseline OOS`}
+                cls={signed((res.top_rule.oos?.net ?? 0) - oosBase)} />
+            </>}
+          </div>
+
+          {/* Ranked rules — full-sample net, Δ, and the OOS Δ that guards against overfitting. */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-xs text-[var(--muted)] text-left">
+                <tr><th className="py-1 pr-3">Rule family</th><th className="pr-3">Best setting</th>
+                  <th className="pr-3 text-right">Net</th><th className="pr-3 text-right">Δ net</th>
+                  <th className="pr-3 text-right">Winners hurt</th><th className="pr-3 text-right">Chg</th>
+                  <th className="pr-3 text-right">OOS Δ</th></tr>
+              </thead>
+              <tbody>
+                {res.rules.map((r) => {
+                  const oosD = (r.oos?.net ?? 0) - oosBase;
+                  return (
+                    <tr key={r.family} className="border-t border-[var(--field-border)]">
+                      <td className="py-1 pr-3 font-medium">{r.family}</td>
+                      <td className="pr-3 text-[var(--muted)]">{r.best}</td>
+                      <td className="pr-3 text-right tabular-nums">{inr(r.full.net)}</td>
+                      <td className={`pr-3 text-right tabular-nums ${signed(r.full.delta)}`}>{inr(r.full.delta)}</td>
+                      <td className="pr-3 text-right tabular-nums text-rose-500">{inr(-r.full.winners_hurt)}</td>
+                      <td className="pr-3 text-right tabular-nums">{r.full.cycles_changed}</td>
+                      <td className={`pr-3 text-right tabular-nums ${signed(oosD)}`}>{inr(oosD)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Robustness of the top family — net across every threshold (the fitted point is
+              only trustworthy if the curve around it is flat, not a spike). */}
+          {res.top_rule && res.robustness[res.top_rule.family]?.length > 1 && (
+            <div>
+              <div className="text-xs text-[var(--muted)] mb-1">
+                Robustness — {res.top_rule.family} net across thresholds (baseline {inr(res.baseline.net)})
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <LineChart data={res.robustness[res.top_rule.family]}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+                  <Tooltip formatter={(v: number) => inr(v)} />
+                  <Line type="monotone" dataKey="net" stroke="#3b82f6" dot />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Per-cycle before/after — the losers and the signals that flagged (or missed) them. */}
+          <details>
+            <summary className="cursor-pointer text-sm text-[var(--muted)]">Per-cycle detail ({res.cycles.length})</summary>
+            <div className="overflow-x-auto mt-2">
+              <table className="w-full text-xs">
+                <thead className="text-[var(--muted)] text-left">
+                  <tr><th className="py-1 pr-3">Entry</th><th className="pr-3 text-right">Baseline</th>
+                    <th className="pr-3 text-right">Best rule</th><th className="pr-3 text-right">|move|%</th>
+                    <th className="pr-3 text-right">max VIX</th><th className="pr-3 text-right">peak/u</th>
+                    <th className="pr-3 text-right">trough/u</th><th className="pr-3">split</th></tr>
+                </thead>
+                <tbody>
+                  {res.cycles.map((c) => (
+                    <tr key={c.entry_date} className={`border-t border-[var(--field-border)] ${c.baseline_net < 0 ? "bg-rose-500/5" : ""}`}>
+                      <td className="py-1 pr-3 whitespace-nowrap">{c.entry_date}</td>
+                      <td className={`pr-3 text-right tabular-nums ${signed(c.baseline_net)}`}>{inr(c.baseline_net)}</td>
+                      <td className={`pr-3 text-right tabular-nums ${signed(c.top_rule_net)}`}>{inr(c.top_rule_net)}</td>
+                      <td className="pr-3 text-right tabular-nums">{c.max_move_pct}</td>
+                      <td className="pr-3 text-right tabular-nums">{c.max_vix ?? "—"}</td>
+                      <td className="pr-3 text-right tabular-nums">{c.peak_per_unit}</td>
+                      <td className="pr-3 text-right tabular-nums">{c.trough_per_unit}</td>
+                      <td className="pr-3 text-[var(--muted)]">{c.in_sample ? "IS" : "OOS"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+
+          <ul className="text-xs text-[var(--muted)] list-disc pl-5 space-y-0.5">
+            {res.caveats.map((c, i) => <li key={i}>{c}</li>)}
+          </ul>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function Stat({ label, value, sub, cls, accent }:
+  { label: string; value: string; sub?: string; cls?: string; accent?: boolean }) {
+  return (
+    <div className="rounded-lg border border-[var(--field-border)] px-3 py-2">
+      <div className="text-xs text-[var(--muted)]">{label}</div>
+      <div className={`text-lg font-semibold ${accent ? "text-[var(--accent)]" : ""} ${cls ?? ""}`}>{value}</div>
+      {sub && <div className="text-xs text-[var(--muted)] mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+
 export default function ResearchPage() {
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold">Research</h1>
         <div className="text-sm text-[var(--muted)]">
-          Pure-price breakout behaviour of the basket (does the channel hold?), and how honest
-          the synthetic option pricing is (BS-with-HV vs the live market).
+          Pure-price breakout behaviour of the basket (does the channel hold?), how honest
+          the synthetic option pricing is (BS-with-HV vs the live market), and which signals
+          would have cut the ratio strategy's worst losses (out-of-sample tested).
         </div>
       </div>
+      <LossStudySection />
       <StudySection />
       <CalibrationSection />
       <MomentumThetaBtSection />

@@ -580,6 +580,21 @@ class BsCalibrationRequest(BaseModel):
     round_out: bool = False
 
 
+class LossStudyRequest(BaseModel):
+    """Loss-reduction study for batman_ratio_monthly (Research page). Replays batman ONCE
+    over the 1-min store, then evaluates candidate loss-cutting rules (trailing / VIX / trend
+    / entry-filter) post-hoc over each cycle's reconstructed MTM path, with an in-sample /
+    out-of-sample split so a single window can't overfit the thresholds. Cache + store only —
+    no broker session, read-only, never an order path."""
+
+    start_date: date = date(2021, 7, 29)
+    end_date: date | None = None            # None → the store's last captured day
+    oos_start: date = date(2024, 7, 1)      # cycles entered on/after this validate the fit
+    capital: float = 1_000_000
+    margin_per_lot: float = 300_000
+    lots: int = 3
+
+
 class DeploymentUpdate(BaseModel):
     name: str | None = None
     notes: str | None = None

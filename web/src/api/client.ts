@@ -53,6 +53,7 @@ import type {
   IronFlyDeploy,
   MomentumThetaDeploy,
   MtgBtResult,
+  LossStudyProgress,
   SmokeTestDeploy,
   WatchRow,
   WeeklyIntradayStraddleDeploy,
@@ -288,6 +289,13 @@ export const api = {
     request<BsCalibrationResult>("/research/bs-calibration", {
       method: "POST", body: JSON.stringify(body),
     }),
+  researchLossStudy: (body: { start_date: string; end_date?: string | null; oos_start: string;
+    capital?: number; margin_per_lot?: number; lots?: number }) =>
+    request<{ job_id: string }>("/research/loss-study", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  researchLossStudyProgress: () =>
+    request<LossStudyProgress>("/research/loss-study/progress"),
 
   // --- live / paper ---
   liveList: () => request<LiveRunSnapshot[]>("/live"),

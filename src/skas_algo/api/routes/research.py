@@ -14,7 +14,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
-from skas_algo.api.models import BsCalibrationRequest, DonchianStudyRequest, MtgBacktestRequest
+from skas_algo.api.models import (
+    BsCalibrationRequest,
+    DonchianStudyRequest,
+    LossStudyRequest,
+    MtgBacktestRequest,
+)
 from skas_algo.api.routes.data import _live_adapter
 from skas_algo.data import universes
 from skas_algo.data.options_provider import VIX_SYMBOL, _ffill_lookup
@@ -194,3 +199,78 @@ def bs_calibration(
         "rows": rows, "aggregates": aggregate(rows), "errors": errors,
     })
     return out
+
+
+# The canonical batman baseline params — the study replays THIS config once, then evaluates
+# loss-cutting rules over the resulting cycles. Matches the deployed/#224 batman defaults;
+# only the window / sizing come from the request. profit/stop stay ON (the baseline is the
+# real strategy; rules are early-exit overlays on it).
+_BATMAN_BASELINE = {
+    "buy_offset": 300, "sell_offset": 600, "hedge_offset": 1600, "min_dte": 18,
+    "profit_target_pct": 0.025, "stop_loss_pct": 0.03, "max_holding_days": 20,
+    "tail_hedge_offset": 2100, "tail_hedge_lots": 0.5, "tail_hedge_side": "put",
+    "shift_step": 100, "max_shifts": 10, "credit_debit_limit_pct": 0.03,
+    "min_credit_pct": 0, "combined_credit_limit_pct": 0.06, "entry_time": "09:30",
+    "entry_weekday": 0, "profit_check": "1min", "stop_check": "eod", "eod_time": "15:20",
+    "strike_step": 50, "dte_target": 8,
+}
+
+
+@router.post("/loss-study")
+def loss_study(body: LossStudyRequest, sd=Depends(get_data_cache)) -> dict:
+    """Loss-reduction study for batman_ratio_monthly. Replays batman ONCE over the 1-min
+    store, reconstructs each cycle's MTM path, and evaluates candidate loss-cutting rules
+    (trailing / VIX / trend / entry-filter) post-hoc with an in-sample/OOS split. Runs as a
+    single-flight BACKGROUND job (the replay is ~100 s); returns {job_id}, poll
+    GET /research/loss-study/progress. Cache + store only — read-only, no order path."""
+    from datetime import date as _date
+
+    from skas_algo.data.option_intraday_store import captured_days, load_contract_bars
+    from skas_algo.services import replay_jobs
+    from skas_algo.services.intraday_replay import run_intraday_backtest
+    from skas_algo.services.loss_study import (
+        LossStudyParams,
+        build_cycles,
+        build_daily_signals,
+    )
+    from skas_algo.services.loss_study import run_study as run_loss_study
+
+    days = captured_days()
+    if not days:
+        raise HTTPException(status_code=503, detail="the option store is empty")
+    end = body.end_date or _date.fromisoformat(days[-1])
+
+    def work(progress):
+        progress(0, 3, "replaying batman")
+        params = {**_BATMAN_BASELINE, "margin_per_lot": body.margin_per_lot,
+                  "lots": body.lots, "sizing": "fixed"}
+        rep = run_intraday_backtest("batman_ratio_monthly", "NIFTY", body.start_date, end,
+                                    body.capital, params)
+        cyc = (rep["report"].get("options") or {}).get("cycles") or []
+        progress(1, 3, "reconstructing paths")
+        p = LossStudyParams(start=body.start_date, end=end, oos_start=body.oos_start,
+                            capital=body.capital, margin_per_lot=body.margin_per_lot,
+                            lots=body.lots)
+        cycles = build_cycles(cyc, load_contract_bars, p)
+        if not cycles:
+            raise ValueError("no batman cycles in this window — widen the dates")
+        progress(2, 3, "evaluating rules")
+        daily = build_daily_signals(
+            "NIFTY", body.start_date, end,
+            lambda s, a, b: sd.get_prices(symbol=s, start_date=a, end_date=b, asset_type="stock"),
+            _ffill_lookup(sd, VIX_SYMBOL))
+        return to_native(run_loss_study(cycles, daily, p))
+
+    try:
+        return {"job_id": replay_jobs.start(work)}
+    except RuntimeError as exc:      # single-flight: one heavy job at a time
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/loss-study/progress")
+def loss_study_progress() -> dict:
+    """Snapshot of the single-flight study/replay job: status running|done|error|idle,
+    a step counter for the bar, and the full study dict once done."""
+    from skas_algo.services import replay_jobs
+
+    return replay_jobs.snapshot()

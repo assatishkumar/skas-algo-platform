@@ -859,6 +859,36 @@ export interface MtgBtResult {
   trades?: MtgBtTrade[];
 }
 
+export interface LossScore {
+  net: number; delta: number; loss_cut: number; winners_hurt: number;
+  worst_cycle: number; cycles_changed: number; num_cycles: number;
+}
+export interface LossRule {
+  family: string; best: string;
+  full: LossScore; in_sample?: LossScore; oos?: LossScore;
+}
+export interface LossCycleRow {
+  entry_date: string; baseline_exit: string; baseline_net: number; top_rule_net: number;
+  entry_spot: number | null; body_units: number; peak_per_unit: number;
+  trough_per_unit: number; max_move_pct: number; max_vix: number | null; in_sample: boolean;
+}
+export interface LossStudyResult {
+  params: { strategy_id: string; underlying: string; start: string; end: string;
+            oos_start: string; num_cycles: number };
+  baseline: LossScore;
+  top_rule: LossRule | null;
+  rules: LossRule[];
+  robustness: Record<string, { label: string; net: number; loss_cut: number; winners_hurt: number }[]>;
+  cycles: LossCycleRow[];
+  caveats: string[];
+}
+/** The single-flight study job snapshot (POST returns {job_id}; poll this). */
+export interface LossStudyProgress {
+  status: "idle" | "running" | "done" | "error";
+  done?: number; total?: number; day?: string | null;
+  error?: string | null; result?: LossStudyResult | null;
+}
+
 export interface DeltaNeutralDeploy {
   name: string;
   underlying: string;
