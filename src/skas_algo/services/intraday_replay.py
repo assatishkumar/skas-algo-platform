@@ -420,6 +420,18 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
     track_spot = hasattr(strategy, "set_daily_bars_fn")
     if track_spot:
         strategy.set_daily_bars_fn(_daily_bars_with_forming(u, market))
+    # Vol-premium entry filter (ratio family): realized-vol leg from the cached index series
+    # (prior settled sessions — no lookahead). Called only at a monthly entry, so no per-min
+    # cost; the implied leg is the strategy's own ATM-IV off the store chain.
+    if hasattr(strategy, "set_realized_vol_fn"):
+        from skas_algo.data.options_provider import INDEX_SYMBOL, make_realized_vol_fn
+        from skas_algo.data.provider import get_data_cache
+
+        _rv_sd = get_data_cache()
+        strategy.set_realized_vol_fn(make_realized_vol_fn(
+            lambda u: _rv_sd.get_prices(symbol=INDEX_SYMBOL.get(u.upper(), u.upper()),
+                                        asset_type="stock"),
+            window=getattr(strategy, "hv_window", 20)))
 
     # Short lot-multiples per lot-set: prefer the instance's own leg ratios (the form can
     # change sell_lots) over the static table — a mismatch would mis-scale margin_pct vs

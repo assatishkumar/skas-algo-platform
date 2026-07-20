@@ -102,6 +102,31 @@ def _ffill_lookup(sd, symbol: str):
     return fn
 
 
+def make_realized_vol_fn(price_getter, window: int = 20):
+    """``(underlying, on_date) -> annualized HV percent | None`` over the last ``window``
+    SETTLED sessions STRICTLY before ``on_date`` (no lookahead — an intraday entry can't
+    know today's close). ``price_getter(underlying) -> OHLC DataFrame | None`` (the caller
+    maps the underlying to its series/broker source). Feeds the EntryVolFilterMixin's
+    realized leg; reuses the engine's realized-vol core so it matches the /research
+    loss-study and the donchian HV. None when the series is too short."""
+    from skas_algo.engine.options.realized_vol import realized_vol_series
+
+    def fn(underlying: str, on_date):
+        df = price_getter(underlying)
+        if df is None or len(df) == 0:
+            return None
+        s = df.copy()
+        s["date"] = pd.to_datetime(s["date"]).dt.date
+        cutoff = on_date.date() if hasattr(on_date, "date") else on_date
+        closes = s[s["date"] < cutoff].sort_values("date")["close"].tolist()
+        if len(closes) < window + 1:
+            return None
+        vals = list(realized_vol_series(closes, window=window))  # Series|list|ndarray → list
+        return float(vals[-1]) * 100.0 if vals else None
+
+    return fn
+
+
 def enrich_with_market(sd, options_report: dict, underlying: str) -> None:
     """Tag each position/cycle with the underlying spot + India VIX at entry & exit.
 

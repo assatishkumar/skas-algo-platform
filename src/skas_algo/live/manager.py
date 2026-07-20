@@ -437,6 +437,28 @@ class LiveRun:
                         logger.exception("pivot-stale alert failed for run %s", self.run_id)
 
                 notify_hook(_pivot_notify)
+        # Vol-premium entry filter (ratio family): realized-vol leg from BROKER-first daily
+        # bars (the live invariant — never depend on a manually refreshed cache), cache
+        # fallback. Called only at a monthly entry; the implied leg is the strategy's ATM-IV.
+        rv_hook = getattr(strategy, "set_realized_vol_fn", None)
+        if rv_hook is not None:
+            from datetime import timedelta as _td
+
+            from skas_algo.data.options_provider import INDEX_SYMBOL, make_realized_vol_fn
+            from skas_algo.data.provider import get_price_loader
+
+            _rv_window = getattr(strategy, "hv_window", 20)
+            _rv_cache = get_price_loader()
+
+            def _rv_getter(u: str):
+                lo = date.today() - _td(days=max(_rv_window * 3, 60))
+                df = _broker_daily_df(getattr(self.quote_source, "adapter", None),
+                                      u, lo, date.today())
+                if df is not None and len(df):
+                    return df
+                return _rv_cache(INDEX_SYMBOL.get(u.upper()) or u.upper(), lo, date.today())
+
+            rv_hook(make_realized_vol_fn(_rv_getter, window=_rv_window))
         seed_fn = getattr(strategy, "seed_intraday_bars", None)
         bars_fn = getattr(getattr(self.quote_source, "adapter", None), "intraday_bars", None)
         if seed_fn is not None and bars_fn is not None:

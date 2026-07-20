@@ -142,6 +142,16 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
                 return sd.get_prices(symbol=sym, start_date=start, end_date=end)
 
             bars_hook(_daily_bars)
+        # Vol-premium entry filter (ratio family): realized-vol leg from the cached index
+        # series (prior settled sessions). Same source as the /research loss-study.
+        rv_hook = getattr(strategy, "set_realized_vol_fn", None)
+        if rv_hook is not None:
+            from skas_algo.data.options_provider import INDEX_SYMBOL, make_realized_vol_fn
+
+            rv_hook(make_realized_vol_fn(
+                lambda u: sd.get_prices(symbol=INDEX_SYMBOL.get(u.upper()) or u.upper(),
+                                        asset_type="stock"),
+                window=getattr(strategy, "hv_window", 20)))
         # Options are business income (slab) → no per-trade tax modelled; instead F&O
         # transaction charges (brokerage + STT + exchange + GST + SEBI + stamp) are
         # deducted at execution so the equity curve is net of costs.

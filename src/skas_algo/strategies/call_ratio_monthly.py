@@ -31,7 +31,7 @@ from skas_algo.engine.options.contract_specs import expected_monthly_expiry, lot
 from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import ExitCadenceMixin
+from ._options_common import EntryVolFilterMixin, ExitCadenceMixin
 from ._options_common import bad_close as _bad
 from ._options_common import legs_mtm_pnl
 from ._options_common import next_monthly_expiry
@@ -43,7 +43,7 @@ def _last_weekday_of_month(d: date, weekday: int) -> date:
     return last - timedelta(days=(last.weekday() - weekday) % 7)
 
 
-class CallRatioMonthlyStrategy(ExitCadenceMixin):
+class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
     strategy_id = "call_ratio_monthly"
     right = "CE"  # PutRatioMonthlyStrategy flips this to "PE" (the downside mirror)
     entry_reason = "call_ratio"
@@ -80,6 +80,11 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin):
         stop_loss_pct: float = 0.03,             # exit at −3% of capital
         max_holding_days: int = 20,              # hard time exit (avoid end-of-month gamma)
         min_vix: float = 0.0,                     # skip entry if ATM IV% (≈ India VIX) below this
+        # Vol-premium entry filter (EntryVolFilterMixin) — skip entry when ATM-IV − HV(hv_window)
+        # < this (vol points). Default 0 = OFF (§1: recovered deploys byte-identical). The
+        # /research loss-study found ~2 the robust value for batman; opt in via the form.
+        vol_premium_min: float = 0.0,
+        hv_window: int = 20,                       # realized-vol lookback for the filter (sessions)
         min_dte: int = 18,                        # selects the *next* month's monthly expiry
         entry_weekday: int = 1,                   # Tuesday
         # Entry anchor: "last_weekday" (legacy — first slice on/after the month's last
@@ -125,6 +130,9 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin):
         self.stop_loss_pct = float(stop_loss_pct)
         self.max_holding_days = int(max_holding_days)
         self.min_vix = float(min_vix)
+        self.vol_premium_min = float(vol_premium_min)
+        self.hv_window = int(hv_window)
+        self._realized_vol_fn = None   # injected by the runtime (backtest/replay/live)
         self.min_dte = int(min_dte)
         self.entry_weekday = int(entry_weekday)
         self.entry_rule = entry_rule
@@ -330,6 +338,14 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin):
             return None
         return bs.implied_vol(row.close, spot, atm, t, self.r, right or self.right)
 
+    def _entry_atm_iv(self, chain, today: date, expiry: date, spot: float) -> float | None:
+        """ATM-IV of the entry expiry, in PERCENT — the implied leg of the vol-premium gate."""
+        rows = {r.strike: r for r in chain.chain(self.underlying, today, expiry)
+                if r.right == self.right and r.oi > 0}
+        t = max((expiry - today).days, 0) / 365.0
+        iv = self._atm_iv(rows, spot, t, self.right)
+        return iv * 100.0 if iv is not None else None
+
     def _target_strikes(self, spot: float, expiry: date, today: date, rows: dict,
                         right: str | None = None) -> list:
         """The three base target strikes (buy, sell, hedge) per ``strike_mode``.
@@ -378,6 +394,12 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin):
         expiry = self._select_expiry(chain, today)
         spot = chain.spot(self.underlying, today)
         if expiry is None or spot is None:
+            return []
+        # Vol-premium gate (default off): don't sell into a thin ATM-IV − HV premium. A
+        # market-wide condition, so checked ONCE here (not per wing). Like min_vix/credit it
+        # applies even to a forced entry — a structure that fails a risk gate stays out.
+        if self.vol_premium_min > 0 and not self._vol_premium_ok(
+                self.underlying, today, self._entry_atm_iv(chain, today, expiry, spot)):
             return []
         lot_size = lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
         base = self._capital_base(ctx)

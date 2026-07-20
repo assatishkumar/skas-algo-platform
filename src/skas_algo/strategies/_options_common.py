@@ -83,6 +83,45 @@ class ExitCadenceMixin:
         return f"checked every {cadence.replace('min', ' min')}"
 
 
+class EntryVolFilterMixin:
+    """Optional entry gate for option SELLERS: skip a NEW entry when the vol risk premium
+    (implied − realized vol, in vol points) is thin — i.e. you'd be selling cheap vol into a
+    market already moving that much. Validated on batman (the /research loss-study, 2026-07):
+    of nine candidate signals, an entry vol-premium filter (skip when VIX−HV20 < ~2) was the
+    only one that cut losses OUT-OF-SAMPLE without giving back more in winners.
+
+    GENERIC — any option-selling strategy inherits this, adds ``vol_premium_min`` /
+    ``hv_window`` ctor params (BOTH defaulting to the OFF value, so §1 recovery stays
+    byte-identical), injects a realized-vol provider via ``set_realized_vol_fn`` (the runtime
+    wires it in backtest / replay / live by probing for the method), and calls
+    ``_vol_premium_ok`` at its entry point passing its OWN ATM-IV.
+
+    Implied vol = the strategy's ATM-IV off the chain it's about to trade (≈ India VIX for a
+    NIFTY monthly) — same source in backtest and live, so no parity gap. Realized vol = the
+    underlying's annualized HV over ``hv_window`` SETTLED sessions from the injected provider
+    (cache-fed in backtest/replay, broker-first in live). FAIL-OPEN: if either number is
+    unavailable the entry is NOT blocked — a data hiccup must never silently freeze trading.
+    ``_last_vol_premium`` is stashed for surfacing (None when off / unevaluable)."""
+
+    def set_realized_vol_fn(self, fn) -> None:
+        """Inject ``fn(underlying, on_date) -> annualized HV percent | None``."""
+        self._realized_vol_fn = fn
+
+    def _vol_premium_ok(self, underlying: str, on_date, implied_iv_pct: float | None) -> bool:
+        """True = OK to enter. ``implied_iv_pct`` and the provider's HV are both in PERCENT
+        (vol points). Off (``vol_premium_min`` ≤ 0) or unevaluable → True (fail-open)."""
+        self._last_vol_premium = None
+        vpm = float(getattr(self, "vol_premium_min", 0.0) or 0.0)
+        if vpm <= 0:
+            return True                      # filter off → behaviour unchanged (§1)
+        fn = getattr(self, "_realized_vol_fn", None)
+        hv = fn(underlying, on_date) if fn is not None else None
+        if implied_iv_pct is None or hv is None:
+            return True                      # missing data → don't block trading
+        self._last_vol_premium = float(implied_iv_pct) - float(hv)
+        return self._last_vol_premium >= vpm
+
+
 def legs_mtm_pnl(legs, closes: dict) -> float | None:
     """The DECISION-basis MTM the %-of-margin exit checks compare: Σ dir × (mark − entry)
     × units over the strategy's OWN legs. Leg entries are the decision-time premiums, not
