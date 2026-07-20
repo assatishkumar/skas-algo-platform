@@ -85,14 +85,22 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
   }, [spec, basis]);
 
   // THE params effect: defaults ⊕ (clone | template). One writer, so no ordering hazard.
-  // The clone guard stops a late-arriving templates query from clobbering a clone or the
-  // user's edits — the same failure the classic form had to fix.
-  const cloneAppliedRef = useRef(false);
+  // A clone for the active strategy owns the form and lands ONCE; after that a late
+  // templatesData load (or any re-render) for the SAME strategy must not fall back to the
+  // template and clobber the clone or the user's edits (the reported bug — #224's cloned
+  // 300000/3-lots/09:30/2-yr silently became the template's 200000/10-lots). Switching the
+  // strategy away and back is a genuine re-selection: the clone is spent, template applies.
+  const cloneAppliedForRef = useRef<string | null>(null);
+  const lastStrategyRef = useRef<string | null>(null);
   useEffect(() => {
+    const cloneForThis = clonePrefill?.strategy_id === strategyId;
+    const sameStrategyRerun = lastStrategyRef.current === strategyId;
+    lastStrategyRef.current = strategyId;
+    if (cloneForThis && cloneAppliedForRef.current === strategyId && sameStrategyRerun) return;
+
     const base = defaultParams(spec, basis);
-    const cloneSrc = clonePrefill?.strategy_id === strategyId && !cloneAppliedRef.current
-      ? clonePrefill : null;
-    const src = cloneSrc?.params ?? (cloneSrc ? null : templatesData?.templates?.[strategyId]?.params);
+    const cloneSrc = cloneForThis && cloneAppliedForRef.current !== strategyId ? clonePrefill : null;
+    const src = cloneSrc?.params ?? templatesData?.templates?.[strategyId]?.params;
     if (src) {
       for (const fld of allFields(spec)) {
         const raw = (src as Record<string, unknown>)[fld.param];
@@ -106,11 +114,13 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
       }
       const sz: Record<string, number | boolean> = {};
       const s = src as Record<string, unknown>;
+      // margin_per_lot is the canonical harness field; margin_per_lotset is the legacy name
+      // a pre-migration run recorded (and batman still records its OWN internal one) — read
+      // it only as a fallback so it can never overwrite the real sizing margin.
+      if (typeof s.margin_per_lotset === "number" && s.margin_per_lotset > 0) sz.margin = s.margin_per_lotset;
       if (typeof s.margin_per_lot === "number" && s.margin_per_lot > 0) sz.margin = s.margin_per_lot;
-      if (typeof s.margin_per_lotset === "number") sz.margin = s.margin_per_lotset;
       if (typeof s.lots === "number") sz.lots = s.lots;
       if (typeof s.sizing_buffer_pct === "number") sz.buffer = s.sizing_buffer_pct;
-      if (s.sizing === "capital" || s.sizing === "margin") sz.mode = true as never;
       const cap = cloneSrc?.capital ?? templatesData?.templates?.[strategyId]?.capital;
       if (typeof cap === "number" && cap > 0) sz.capital = cap;
       dispatchSizing({ type: "reset", v: {
@@ -122,10 +132,13 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
       setAppliedTemplate(null);
     }
     if (cloneSrc) {
-      cloneAppliedRef.current = true;
-      if (cloneSrc.start_date && cloneSrc.end_date) {
-        setPeriod({ preset: "CUSTOM", customStart: cloneSrc.start_date, customEnd: cloneSrc.end_date });
-      }
+      cloneAppliedForRef.current = strategyId;
+      // The window is stored INSIDE the run's params (the clone producers don't lift it to
+      // the top level) — restore it so a cloned run reopens on its own dates, not 1Y default.
+      const cp = (cloneSrc.params ?? {}) as Record<string, unknown>;
+      const cs = cloneSrc.start_date ?? (typeof cp.start_date === "string" ? cp.start_date : undefined);
+      const ce = cloneSrc.end_date ?? (typeof cp.end_date === "string" ? cp.end_date : undefined);
+      if (cs && ce) setPeriod({ preset: "CUSTOM", customStart: cs, customEnd: ce });
       setName((n) => n || `${strategyId} (copy)`);
     }
     setParams(base);
