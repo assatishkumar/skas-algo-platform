@@ -53,6 +53,7 @@ import type {
   DeltaNeutralDeploy,
   DoubleDiagonalDeploy,
   IronFlyDeploy,
+  RatioManualDeploy,
   MomentumThetaDeploy,
   MtgBtResult,
   LossStudyProgress,
@@ -256,6 +257,8 @@ export const api = {
     request<LiveRunSnapshot>("/trade/options/iron-fly/deploy", { method: "POST", body: JSON.stringify(body) }),
   doubleDiagonalDeploy: (body: DoubleDiagonalDeploy) =>
     request<LiveRunSnapshot>("/trade/options/double-diagonal/deploy", { method: "POST", body: JSON.stringify(body) }),
+  ratioDeploy: (body: RatioManualDeploy) =>
+    request<LiveRunSnapshot>("/trade/options/ratio/deploy", { method: "POST", body: JSON.stringify(body) }),
   smokeTestDeploy: (body: SmokeTestDeploy) =>
     request<LiveRunSnapshot>("/trade/smoke-test/deploy", { method: "POST", body: JSON.stringify(body) }),
   ironflyAdjust: (runId: number, on: boolean) =>

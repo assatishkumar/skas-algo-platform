@@ -24,17 +24,20 @@ from __future__ import annotations
 
 import calendar
 import math
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 
 from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.contract_specs import expected_monthly_expiry, lot_size_for
 from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import EntryVolFilterMixin, ExitCadenceMixin
+from ._options_common import (
+    EntryVolFilterMixin,
+    ExitCadenceMixin,
+    legs_mtm_pnl,
+    next_monthly_expiry,
+)
 from ._options_common import bad_close as _bad
-from ._options_common import legs_mtm_pnl
-from ._options_common import next_monthly_expiry
 
 
 def _last_weekday_of_month(d: date, weekday: int) -> date:
@@ -53,13 +56,13 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         universe: list[str] | None = None,
         initial_capital: float = 100_000,
         underlying: str | None = None,
-        strike_mode: str = "points",   # "points" | "percent" (%OTM) | "delta" (|Δ|) | "sd" (×expected move)
+        strike_mode: str = "points",  # "points" | "percent" (%OTM) | "delta" (|Δ|) | "sd" (×expected move)
         buy_offset: float = 300,
         sell_offset: float = 600,
         hedge_offset: float = 1600,
         lots: int = 1,
-        buy_lots: int = 1,    # leg ratio multiples (×lots): 1:2:1 = the classic ratio;
-        sell_lots: int = 2,   # HNI weekly uses 1:3:2 — net contracts must stay balanced
+        buy_lots: int = 1,  # leg ratio multiples (×lots): 1:2:1 = the classic ratio;
+        sell_lots: int = 2,  # HNI weekly uses 1:3:2 — net contracts must stay balanced
         hedge_lots: int = 1,  # (buy+hedge ≥ sell) or the wing carries a naked tail
         # Lot sizing. "fixed" (legacy): trade exactly ``lots`` lot-sets — §1 backstop, keeps
         # running deploys byte-identical. "margin": ``lots`` is only a fallback — at each
@@ -70,23 +73,23 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         # used for sizing). NOTE the model charges shorts only (no long-hedge offset), so it
         # reads ≈2× the real broker SPAN: utilization 95 ≈ ~50% of broker margin — raise it
         # (sweepable) once live margins are observed.
-        sizing: str = "fixed",                    # "fixed" | "margin" (auto-size to capital)
-        capital_utilization_pct: float = 95.0,    # % of equity deployed as MODEL margin
-        max_auto_lots: int = 0,                   # safety cap on auto lots (0 = uncapped)
-        credit_debit_limit_pct: float = 0.01,   # max net CREDIT = this × capital (credit required)
-        shift_step: float = 100,                 # strike-adjust step (searched ± both directions)
-        max_shifts: int = 10,                    # search up to ±max_shifts × shift_step
-        profit_target_pct: float = 0.025,        # exit at +2.5% of capital
-        stop_loss_pct: float = 0.03,             # exit at −3% of capital
-        max_holding_days: int = 20,              # hard time exit (avoid end-of-month gamma)
-        min_vix: float = 0.0,                     # skip entry if ATM IV% (≈ India VIX) below this
+        sizing: str = "fixed",  # "fixed" | "margin" (auto-size to capital)
+        capital_utilization_pct: float = 95.0,  # % of equity deployed as MODEL margin
+        max_auto_lots: int = 0,  # safety cap on auto lots (0 = uncapped)
+        credit_debit_limit_pct: float = 0.01,  # max net CREDIT = this × capital (credit required)
+        shift_step: float = 100,  # strike-adjust step (searched ± both directions)
+        max_shifts: int = 10,  # search up to ±max_shifts × shift_step
+        profit_target_pct: float = 0.025,  # exit at +2.5% of capital
+        stop_loss_pct: float = 0.03,  # exit at −3% of capital
+        max_holding_days: int = 20,  # hard time exit (avoid end-of-month gamma)
+        min_vix: float = 0.0,  # skip entry if ATM IV% (≈ India VIX) below this
         # Vol-premium entry filter (EntryVolFilterMixin) — skip entry when ATM-IV − HV(hv_window)
         # < this (vol points). Default 0 = OFF (§1: recovered deploys byte-identical). The
         # /research loss-study found ~2 the robust value for batman; opt in via the form.
         vol_premium_min: float = 0.0,
-        hv_window: int = 20,                       # realized-vol lookback for the filter (sessions)
-        min_dte: int = 18,                        # selects the *next* month's monthly expiry
-        entry_weekday: int = 1,                   # Tuesday
+        hv_window: int = 20,  # realized-vol lookback for the filter (sessions)
+        min_dte: int = 18,  # selects the *next* month's monthly expiry
+        entry_weekday: int = 1,  # Tuesday
         # Entry anchor: "last_weekday" (legacy — first slice on/after the month's last
         # entry_weekday, i.e. ON/just before expiry) | "post_expiry" (first trading day
         # AFTER the calendar-expected monthly expiry — cycle-anchored like donchian).
@@ -96,21 +99,26 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         # (credit-gate failures). Mirrors the legacy window (last weekday → month end,
         # ~5 sessions) — unbounded retry would silently enter debit months mid-cycle.
         entry_window_days: int = 7,
-        strike_step: float = 50,                  # informational; strikes are snapped to listings
+        strike_step: float = 50,  # informational; strikes are snapped to listings
         risk_free_rate: float = 0.065,
         tail_hedge_offset: float = 0.0,  # 0=off; extra far long per wing (same units as offsets)
-        tail_hedge_lots: float = 1.0,    # tail size as a fraction of ``lots`` (whole-lot rounded)
-        tail_hedge_side: str = "both",   # "both" | "call" | "put" — which wings carry the tail
-        min_credit_pct: float = 0.0,     # credit floor ×capital (negative = allow a small debit)
+        tail_hedge_lots: float = 1.0,  # tail size as a fraction of ``lots`` (whole-lot rounded)
+        tail_hedge_side: str = "both",  # "both" | "call" | "put" — which wings carry the tail
+        min_credit_pct: float = 0.0,  # credit floor ×capital (negative = allow a small debit)
         # --- live intraday exit cadence (backtest is EOD → every cadence collapses to the
         #     daily bar, so these change nothing in backtest). Each ∈ tick/1/5/15/30/60min/eod.
-        entry_time: str | None = None,   # only enter at/after this IST time (None = any time)
-        profit_check: str = "eod",       # how often to evaluate the profit target
-        stop_check: str = "eod",         # how often to evaluate the stop loss
-        time_check: str = "eod",         # how often to evaluate the time exit
-        eod_time: str = "15:15",         # what "eod" means (at/after this IST time)
+        entry_time: str | None = None,  # only enter at/after this IST time (None = any time)
+        profit_check: str = "eod",  # how often to evaluate the profit target
+        stop_check: str = "eod",  # how often to evaluate the stop loss
+        time_check: str = "eod",  # how often to evaluate the time exit
+        eod_time: str = "15:15",  # what "eod" means (at/after this IST time)
         margin_per_lotset: float = 130_000.0,  # ~SPAN+exposure margin per ratio lot-set
         lot_overrides: dict | None = None,
+        # Build-view manual deploy: explicit entry legs [{side,right,strike,expiry ISO,lots}].
+        # When set, enter these VERBATIM (skip the calendar/credit/sizing gates) then run the
+        # NORMAL management — the %-of-margin profit/stop AND the native time exit (batman:
+        # max_holding_days; HNI: exit_weekday). One-shot. Default None → runs unchanged (§1).
+        entry_legs: list[dict] | None = None,
         **_ignored,
     ):
         self.underlying = (underlying or (universe[0] if universe else "NIFTY")).upper()
@@ -132,7 +140,7 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         self.min_vix = float(min_vix)
         self.vol_premium_min = float(vol_premium_min)
         self.hv_window = int(hv_window)
-        self._realized_vol_fn = None   # injected by the runtime (backtest/replay/live)
+        self._realized_vol_fn = None  # injected by the runtime (backtest/replay/live)
         self.min_dte = int(min_dte)
         self.entry_weekday = int(entry_weekday)
         self.entry_rule = entry_rule
@@ -158,8 +166,10 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         self.eod_time = str(eod_time)
         self.margin_per_lotset = float(margin_per_lotset)
         self.lot_overrides = lot_overrides
+        self.entry_legs = entry_legs
+        self._manual_done = False  # one-shot latch for a manual (entry_legs) deploy
         # Per-exit last-evaluation timestamps (for interval cadences); transient.
-        self._last_check: dict[str, "datetime"] = {}
+        self._last_check: dict[str, datetime] = {}
         # +1 for calls (OTM = above spot), −1 for puts (OTM = below spot).
         self._sign = 1 if self.right == "CE" else -1
 
@@ -198,8 +208,10 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
                 # New cycle AND still inside the entry window. The window cap matters:
                 # without it a credit-gate miss keeps retrying ALL cycle — entering a
                 # skipped (debit) month weeks late, sometimes onto the FOLLOWING expiry.
-                return (anchor != self._entered_after_expiry
-                        and (today - anchor).days <= self.entry_window_days)
+                return (
+                    anchor != self._entered_after_expiry
+                    and (today - anchor).days <= self.entry_window_days
+                )
         if self.last_entry_month == (today.year, today.month):
             return False  # already traded this month (one entry / month, zero adjustments)
         return today >= _last_weekday_of_month(today, self.entry_weekday)
@@ -285,7 +297,8 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
             rules.append(f"Calendar exit from {days[int(ew) % 7]} ({self._cadence_phrase('time')})")
         else:
             rules.append(
-                f"Time exit after {self.max_holding_days}d ({self._cadence_phrase('time')})")
+                f"Time exit after {self.max_holding_days}d ({self._cadence_phrase('time')})"
+            )
         return rules
 
     # ------------------------------------------------------------------ helpers
@@ -303,7 +316,8 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         if self.tail_hedge_offset <= 0:
             return False
         return self.tail_hedge_side == "both" or (
-            self.tail_hedge_side == ("call" if right == "CE" else "put"))
+            self.tail_hedge_side == ("call" if right == "CE" else "put")
+        )
 
     def _tail_units(self, units: int) -> int:
         """Tail leg units: tail_hedge_lots × lots, rounded half-up to whole lots."""
@@ -312,8 +326,9 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         lot = units // self.lots
         return int(math.floor(self.lots * self.tail_hedge_lots + 0.5)) * lot
 
-    def _delta_strike(self, rows: dict, spot: float, t: float, target_delta: float,
-                      right: str | None = None) -> float | None:
+    def _delta_strike(
+        self, rows: dict, spot: float, t: float, target_delta: float, right: str | None = None
+    ) -> float | None:
         """Listed strike (of ``right``) whose |BS delta| is nearest ``target_delta``."""
         right = right or self.right
         best, best_err = None, 1e9
@@ -340,14 +355,18 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
 
     def _entry_atm_iv(self, chain, today: date, expiry: date, spot: float) -> float | None:
         """ATM-IV of the entry expiry, in PERCENT — the implied leg of the vol-premium gate."""
-        rows = {r.strike: r for r in chain.chain(self.underlying, today, expiry)
-                if r.right == self.right and r.oi > 0}
+        rows = {
+            r.strike: r
+            for r in chain.chain(self.underlying, today, expiry)
+            if r.right == self.right and r.oi > 0
+        }
         t = max((expiry - today).days, 0) / 365.0
         iv = self._atm_iv(rows, spot, t, self.right)
         return iv * 100.0 if iv is not None else None
 
-    def _target_strikes(self, spot: float, expiry: date, today: date, rows: dict,
-                        right: str | None = None) -> list:
+    def _target_strikes(
+        self, spot: float, expiry: date, today: date, rows: dict, right: str | None = None
+    ) -> list:
         """The three base target strikes (buy, sell, hedge) per ``strike_mode``.
 
         Offsets are OTM distances: ABOVE spot for calls, BELOW spot for puts (sign).
@@ -382,10 +401,89 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         entry-time gates. Credit gates still apply — a structure that can't be built at
         an acceptable credit stays out (that guard is the strategy's core)."""
         self._force_pending = True
-        return ("next tick enters the current cycle (credit gates still apply — "
-                "no entry if the structure can't be built at an acceptable credit)")
+        return (
+            "next tick enters the current cycle (credit gates still apply — "
+            "no entry if the structure can't be built at an acceptable credit)"
+        )
+
+    # ---------------------------------------------- manual (Build-view) entry
+    def _manual_leg_expiry(self, chain, today: date, spec: dict) -> date | None:
+        """A leg's expiry: an ISO date verbatim, or a 'near'/'far'/empty keyword → this
+        strategy's normal selected expiry (monthly for the ratios, the weekly for HNI)."""
+        which = str(spec.get("expiry", "")).lower()
+        if which and which not in ("near", "far"):
+            try:
+                return date.fromisoformat(which[:10])
+            except (ValueError, TypeError):
+                return None
+        return self._select_expiry(chain, today)
+
+    def _manual_row(self, chain, today: date, expiry: date, strike: float, right: str):
+        for r in chain.chain(self.underlying, today, expiry):
+            if r.right == right and float(r.strike) == strike and not _bad(r.close):
+                return r
+        return None
+
+    def _enter_manual(self, ctx, chain, today: date) -> list[Signal]:
+        """Enter the owner's explicit legs VERBATIM, then let the normal _manage run (the
+        %-of-margin profit/stop + the native time exit). One-shot (a completed manual cycle
+        does not re-enter). The credit/sizing gates are skipped — the owner picked the legs."""
+        legs: list[dict] = []
+        signals: list[Signal] = []
+        near: date | None = None
+        for spec in self.entry_legs:
+            exp = self._manual_leg_expiry(chain, today, spec)
+            if exp is None:
+                return []
+            try:
+                right = str(spec["right"]).upper()
+                strike = float(spec["strike"])
+                direction = -1 if str(spec.get("side", "sell")).lower() == "sell" else 1
+                lots = int(spec.get("lots", self.lots) or self.lots)
+                lot_size = lot_size_for(self.underlying, exp, overrides=self.lot_overrides)
+            except (KeyError, ValueError, TypeError):
+                return []
+            units = lots * lot_size
+            row = self._manual_row(chain, today, exp, strike, right)
+            if row is None:
+                return []  # a leg isn't tradeable yet — retry next tick, don't half-enter
+            legs.append(
+                {"symbol": row.symbol, "dir": direction, "units": units, "entry": row.close}
+            )
+            if direction < 0:
+                signals.append(
+                    Signal(
+                        row.symbol,
+                        SignalAction.ENTER_SHORT,
+                        quantity=units,
+                        reason=self.entry_reason,
+                        meta={"multiplier": 1},
+                    )
+                )
+            else:
+                signals.append(
+                    Signal(
+                        row.symbol,
+                        SignalAction.ENTER_LONG,
+                        quantity=units,
+                        reason=self.entry_reason,
+                    )
+                )
+            near = exp if near is None or exp < near else near
+        if not legs:
+            return []
+        self.legs = legs
+        self.entry_expiry = near
+        self.entry_date = today
+        self._manual_done = True  # one-shot
+        self._mark_entered(today)
+        self._force_pending = False
+        return signals
 
     def _maybe_enter(self, ctx, chain, today: date) -> list[Signal]:
+        if self.entry_legs:
+            # Build-view manual deploy: enter on the first flat tick, verbatim, one-shot.
+            return [] if self._manual_done else self._enter_manual(ctx, chain, today)
         forced = getattr(self, "_force_pending", False)
         if not forced and not self._entry_allowed(today):
             return []
@@ -399,7 +497,8 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         # market-wide condition, so checked ONCE here (not per wing). Like min_vix/credit it
         # applies even to a forced entry — a structure that fails a risk gate stays out.
         if self.vol_premium_min > 0 and not self._vol_premium_ok(
-                self.underlying, today, self._entry_atm_iv(chain, today, expiry, spot)):
+            self.underlying, today, self._entry_atm_iv(chain, today, expiry, spot)
+        ):
             return []
         lot_size = lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
         base = self._capital_base(ctx)
@@ -427,31 +526,57 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         signals: list[Signal] = []
         t_units = self._tail_units(units)
         for buy, sell, hedge, tail in sides:
-            b_units, s_units, h_units = (self.buy_lots * units, self.sell_lots * units,
-                                         self.hedge_lots * units)
+            b_units, s_units, h_units = (
+                self.buy_lots * units,
+                self.sell_lots * units,
+                self.hedge_lots * units,
+            )
             side_legs = [
                 {"symbol": buy.symbol, "dir": 1, "units": b_units, "entry": buy.close},
                 {"symbol": sell.symbol, "dir": -1, "units": s_units, "entry": sell.close},
                 {"symbol": hedge.symbol, "dir": 1, "units": h_units, "entry": hedge.close},
             ]
             side_sigs = [
-                Signal(buy.symbol, SignalAction.ENTER_LONG, quantity=b_units, reason=self.entry_reason),
-                Signal(sell.symbol, SignalAction.ENTER_SHORT, quantity=s_units,
-                       reason=self.entry_reason, meta={"multiplier": 1}),
-                Signal(hedge.symbol, SignalAction.ENTER_LONG, quantity=h_units, reason=self.entry_reason),
+                Signal(
+                    buy.symbol, SignalAction.ENTER_LONG, quantity=b_units, reason=self.entry_reason
+                ),
+                Signal(
+                    sell.symbol,
+                    SignalAction.ENTER_SHORT,
+                    quantity=s_units,
+                    reason=self.entry_reason,
+                    meta={"multiplier": 1},
+                ),
+                Signal(
+                    hedge.symbol,
+                    SignalAction.ENTER_LONG,
+                    quantity=h_units,
+                    reason=self.entry_reason,
+                ),
             ]
             if tail is not None and t_units:
                 if tail.symbol == hedge.symbol:
                     # Tail landed on the hedge strike → one doubled-up hedge leg (two
                     # legs on the same symbol would double-fire EXIT_ALL).
                     side_legs[2]["units"] += t_units
-                    side_sigs[2] = Signal(hedge.symbol, SignalAction.ENTER_LONG,
-                                          quantity=h_units + t_units, reason=self.entry_reason)
+                    side_sigs[2] = Signal(
+                        hedge.symbol,
+                        SignalAction.ENTER_LONG,
+                        quantity=h_units + t_units,
+                        reason=self.entry_reason,
+                    )
                 else:
                     side_legs.append(
-                        {"symbol": tail.symbol, "dir": 1, "units": t_units, "entry": tail.close})
-                    side_sigs.append(Signal(tail.symbol, SignalAction.ENTER_LONG,
-                                            quantity=t_units, reason=self.entry_reason))
+                        {"symbol": tail.symbol, "dir": 1, "units": t_units, "entry": tail.close}
+                    )
+                    side_sigs.append(
+                        Signal(
+                            tail.symbol,
+                            SignalAction.ENTER_LONG,
+                            quantity=t_units,
+                            reason=self.entry_reason,
+                        )
+                    )
             self.legs += side_legs
             signals += side_sigs
         self.entry_expiry = expiry
@@ -477,8 +602,11 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         debit months were shown to be the losers, being flat is the edge.
         """
         sign = 1 if right == "CE" else -1
-        rows = {r.strike: r for r in chain.chain(self.underlying, today, expiry)
-                if r.right == right and r.oi > 0}
+        rows = {
+            r.strike: r
+            for r in chain.chain(self.underlying, today, expiry)
+            if r.right == right and r.oi > 0
+        }
         if not rows:
             return None
         # IV floor: skip while the chain's ATM IV (≈ India VIX) is below min_vix
@@ -504,9 +632,16 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
             sk = self._snap(strike_list, base[1] + shift)
             hk = self._snap(strike_list, base[2] + shift)
             buy, sell, hedge = rows.get(bk), rows.get(sk), rows.get(hk)
-            if (buy is None or sell is None or hedge is None or len({bk, sk, hk}) < 3
-                    or (bk - atm) * sign < 0  # buy leg must stay ATM-or-OTM
-                    or _bad(buy.close) or _bad(sell.close) or _bad(hedge.close)):
+            if (
+                buy is None
+                or sell is None
+                or hedge is None
+                or len({bk, sk, hk}) < 3
+                or (bk - atm) * sign < 0  # buy leg must stay ATM-or-OTM
+                or _bad(buy.close)
+                or _bad(sell.close)
+                or _bad(hedge.close)
+            ):
                 continue
             tail = None
             if t_units:
@@ -523,8 +658,11 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
                 tail = rows.get(tk)
                 if tail is None or _bad(tail.close):
                     tail = hedge  # same-strike merge: hedge is simply doubled up
-            net = (self.sell_lots * sell.close - self.buy_lots * buy.close
-                   - self.hedge_lots * hedge.close) * units  # +ve = credit received
+            net = (
+                self.sell_lots * sell.close
+                - self.buy_lots * buy.close
+                - self.hedge_lots * hedge.close
+            ) * units  # +ve = credit received
             if tail is not None:
                 net -= tail.close * t_units
             if floor_amt <= net <= limit:
@@ -547,8 +685,10 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
             if not all(market.has_print(leg["symbol"]) for leg in self.legs):
                 return []
         try:
-            pnl = sum(leg["dir"] * (ctx.close(leg["symbol"]) - leg["entry"]) * leg["units"]
-                      for leg in self.legs)
+            pnl = sum(
+                leg["dir"] * (ctx.close(leg["symbol"]) - leg["entry"]) * leg["units"]
+                for leg in self.legs
+            )
         except KeyError:
             return []  # a leg didn't print today; manage next slice
         base = self._risk_base(ctx)
@@ -581,21 +721,28 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
             "entry_expiry": self.entry_expiry.isoformat() if self.entry_expiry else None,
             "entry_date": self.entry_date.isoformat() if self.entry_date else None,
             "last_entry_month": list(self.last_entry_month) if self.last_entry_month else None,
-            "entered_after_expiry": (self._entered_after_expiry.isoformat()
-                                     if self._entered_after_expiry else None),
+            "entered_after_expiry": (
+                self._entered_after_expiry.isoformat() if self._entered_after_expiry else None
+            ),
             "frozen_margin": self._frozen_margin,
+            "manual_done": self._manual_done,
         }
 
     def load_state(self, state: dict) -> None:
         self.legs = list(state.get("legs", []))
         self.strike_mode = state.get("strike_mode", self.strike_mode)
-        ee, ed, lem = state.get("entry_expiry"), state.get("entry_date"), state.get("last_entry_month")
+        ee, ed, lem = (
+            state.get("entry_expiry"),
+            state.get("entry_date"),
+            state.get("last_entry_month"),
+        )
         self.entry_expiry = date.fromisoformat(ee) if ee else None
         self.entry_date = date.fromisoformat(ed) if ed else None
         self.last_entry_month = tuple(lem) if lem else None
         eae = state.get("entered_after_expiry")
         self._entered_after_expiry = date.fromisoformat(eae) if eae else None
         self._frozen_margin = state.get("frozen_margin")
+        self._manual_done = bool(state.get("manual_done", False))
 
 
 class PutRatioMonthlyStrategy(CallRatioMonthlyStrategy):
@@ -613,7 +760,7 @@ class PutRatioMonthlyStrategy(CallRatioMonthlyStrategy):
 
 
 class BatmanRatioMonthlyStrategy(CallRatioMonthlyStrategy):
-    """"Batman": BOTH ratio wings in one position — a 1:2 call ratio spread above spot
+    """ "Batman": BOTH ratio wings in one position — a 1:2 call ratio spread above spot
     AND a 1:2 put ratio spread below spot, each with its outer hedge (6 legs; the payoff
     tent on each side draws the silhouette).
 
@@ -635,13 +782,25 @@ class BatmanRatioMonthlyStrategy(CallRatioMonthlyStrategy):
     strategy_id = "batman_ratio_monthly"
     entry_reason = "batman"
 
-    def __init__(self, *args, combined_credit_limit_pct: float = 0.02,
-                 tail_hedge_offset: float = 2100.0, tail_hedge_lots: float = 0.5,
-                 tail_hedge_side: str = "put", margin_per_lotset: float = 200_000.0, **kwargs):
+    def __init__(
+        self,
+        *args,
+        combined_credit_limit_pct: float = 0.02,
+        tail_hedge_offset: float = 2100.0,
+        tail_hedge_lots: float = 0.5,
+        tail_hedge_side: str = "put",
+        margin_per_lotset: float = 200_000.0,
+        **kwargs,
+    ):
         # Batman runs BOTH ratio wings → ~2× a single ratio's margin per lot-set.
-        super().__init__(*args, tail_hedge_offset=tail_hedge_offset,
-                         tail_hedge_lots=tail_hedge_lots, tail_hedge_side=tail_hedge_side,
-                         margin_per_lotset=margin_per_lotset, **kwargs)
+        super().__init__(
+            *args,
+            tail_hedge_offset=tail_hedge_offset,
+            tail_hedge_lots=tail_hedge_lots,
+            tail_hedge_side=tail_hedge_side,
+            margin_per_lotset=margin_per_lotset,
+            **kwargs,
+        )
         # Cap on the COMBINED (both wings) net credit, as a fraction of capital. The
         # per-wing cap (credit_debit_limit_pct, 1%) still applies, so the default 2%
         # changes nothing; a tighter combined cap re-shifts BOTH wings further OTM.
@@ -649,8 +808,9 @@ class BatmanRatioMonthlyStrategy(CallRatioMonthlyStrategy):
 
     def _wing_credit(self, side: tuple, units: int) -> float:
         buy, sell, hedge, tail = side
-        net = (self.sell_lots * sell.close - self.buy_lots * buy.close
-               - self.hedge_lots * hedge.close) * units
+        net = (
+            self.sell_lots * sell.close - self.buy_lots * buy.close - self.hedge_lots * hedge.close
+        ) * units
         if tail is not None:
             net -= tail.close * self._tail_units(units)
         return net

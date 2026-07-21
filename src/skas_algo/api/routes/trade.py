@@ -18,17 +18,18 @@ from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
     CpRatioExpiryDeploy,
     DeltaNeutralDeploy,
-    DoubleDiagonalDeploy,
-    IntradayStraddleDeploy,
-    IronFlyDeploy,
     DonchianAnalyzeRequest,
     DonchianDeploy,
     DonchianPortfolioRequest,
+    DoubleDiagonalDeploy,
     EquityTradeDeploy,
+    IntradayStraddleDeploy,
+    IronFlyDeploy,
     LiveStartRequest,
     MomentumThetaDeploy,
     OptionsTradeDeploy,
     OptionTradeLeg,
+    RatioManualDeploy,
     SmokeTestDeploy,
     WeeklyIntradayStraddleDeploy,
 )
@@ -677,6 +678,61 @@ async def double_diagonal_deploy(
     }
     req = LiveStartRequest(
         strategy_id="double_diagonal_calendar",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=body.underlying.upper(),
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+_RATIO_STRATEGIES = {
+    "batman_ratio_monthly",
+    "hni_weekly",
+    "call_ratio_monthly",
+    "put_ratio_monthly",
+}
+
+
+@router.post("/options/ratio/deploy")
+async def ratio_manual_deploy(
+    body: RatioManualDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy a ratio-family structure from explicit Build-view legs — the strategy enters them
+    verbatim then runs its OWN management (%-margin profit/stop + its native time exit)."""
+    if body.strategy_id not in _RATIO_STRATEGIES:
+        raise HTTPException(status_code=422, detail=f"not a ratio strategy: {body.strategy_id}")
+    if body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="a manual ratio deploy fills at the LIVE chain — deploy with a broker "
+            "quote source (zerodha)",
+        )
+    if not body.entry_legs:
+        raise HTTPException(status_code=422, detail="at least one entry leg is required")
+    params = {
+        "entry_legs": body.entry_legs,
+        "profit_target_pct": body.profit_target_pct / 100.0,  # whole percent → fraction
+        "stop_loss_pct": body.stop_loss_pct / 100.0,
+        "max_holding_days": body.max_holding_days,
+        "profit_check": body.profit_check,
+        "stop_check": body.stop_check,
+        "time_check": body.time_check,
+        "eod_time": body.eod_time,
+    }
+    req = LiveStartRequest(
+        strategy_id=body.strategy_id,
         name=body.name,
         notes=body.notes,
         instrument_class="DERIV",

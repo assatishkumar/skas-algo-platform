@@ -319,6 +319,34 @@ class IronFlyDeploy(BaseModel):
     auto: bool = True
 
 
+class RatioManualDeploy(BaseModel):
+    """Build-view manual deploy of a ratio-family strategy (batman / hni / call- / put-ratio):
+    enter the owner's explicit legs VERBATIM, then run the strategy's OWN management — the
+    %-of-broker-margin profit/stop AND the native time exit (batman: max_holding_days; HNI:
+    exit_weekday). Percentages are whole numbers here → fractions at the strategy. Live-chain
+    (broker source required)."""
+
+    name: str
+    notes: str | None = None
+    strategy_id: str  # batman_ratio_monthly | hni_weekly | call_ratio_monthly | put_ratio_monthly
+    underlying: str = "NIFTY"
+    entry_legs: list[dict] = Field(default_factory=list)
+    profit_target_pct: float = 2.5  # % of margin (whole percent)
+    stop_loss_pct: float = 3.0  # % of margin (whole percent; 0 = off)
+    max_holding_days: int = 20  # batman time exit (HNI uses its Friday exit_weekday)
+    profit_check: str = "1min"
+    stop_check: str = "eod"
+    time_check: str = "eod"
+    eod_time: str = "15:15"
+    capital: float = 1_000_000
+    refresh_seconds: int = 20
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class DoubleDiagonalDeploy(BaseModel):
     """Deploy double_diagonal_calendar: a NIFTY double-diagonal calendar — a near short strangle +
     farther long hedges (the first TWO-expiry position). Delta-first (shorts ~20-25Δ, hedges

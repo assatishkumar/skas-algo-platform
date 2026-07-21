@@ -971,6 +971,21 @@ export interface DoubleDiagonalLeg {
   lots: number;
 }
 
+export interface RatioManualDeploy {
+  name: string;
+  strategy_id: string; // batman_ratio_monthly | hni_weekly | call_ratio_monthly | put_ratio_monthly
+  underlying: string;
+  entry_legs: DoubleDiagonalLeg[];
+  profit_target_pct: number; // whole percent
+  stop_loss_pct: number;
+  max_holding_days: number;
+  capital: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  auto: boolean;
+}
+
 export interface DoubleDiagonalDeploy {
   name: string;
   notes?: string | null;

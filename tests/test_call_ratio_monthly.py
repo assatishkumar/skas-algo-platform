@@ -36,7 +36,9 @@ def _biz_days(start: date, end: date) -> list[date]:
     return out
 
 
-CALENDAR = _biz_days(date(2024, 1, 25), date(2024, 2, 23))  # entry Jan 30 (last Tue), time-exit mid-Feb
+CALENDAR = _biz_days(
+    date(2024, 1, 25), date(2024, 2, 23)
+)  # entry Jan 30 (last Tue), time-exit mid-Feb
 
 
 def _prem(strike: float, dte: int, right: str = "CE") -> float:
@@ -66,16 +68,30 @@ class FakeCRSD:
 
     def get_option_chain(self, underlying, on_date, expiry=None):
         dte = (EXPIRY - on_date).days
-        rows = [dict(trade_date=on_date, symbol="NIFTY", expiry_date=EXPIRY, strike_price=k,
-                     option_type=right, close=_prem(k, dte, right),
-                     settle_price=_prem(k, dte, right), open_interest=1000)
-                for k in self.strikes for right in ("CE", "PE")]
+        rows = [
+            dict(
+                trade_date=on_date,
+                symbol="NIFTY",
+                expiry_date=EXPIRY,
+                strike_price=k,
+                option_type=right,
+                close=_prem(k, dte, right),
+                settle_price=_prem(k, dte, right),
+                open_interest=1000,
+            )
+            for k in self.strikes
+            for right in ("CE", "PE")
+        ]
         return pd.DataFrame(rows)
 
-    def get_option_series(self, underlying, expiry, strike, option_type, start_date=None, end_date=None):
-        rows = [{"trade_date": d, "close": _prem(float(strike), (EXPIRY - d).days, option_type.upper())}
-                for d in self.cal
-                if (start_date is None or d >= start_date) and (end_date is None or d <= end_date)]
+    def get_option_series(
+        self, underlying, expiry, strike, option_type, start_date=None, end_date=None
+    ):
+        rows = [
+            {"trade_date": d, "close": _prem(float(strike), (EXPIRY - d).days, option_type.upper())}
+            for d in self.cal
+            if (start_date is None or d >= start_date) and (end_date is None or d <= end_date)
+        ]
         return pd.DataFrame(rows)
 
 
@@ -83,16 +99,24 @@ def _run(strategy):
     sd = FakeCRSD(CALENDAR)
     mv, _chain, settler, margin = build_options_run(sd, "NIFTY", CALENDAR[0], CALENDAR[-1])
     runner = BacktestRunner(
-        strategy=strategy, universe=["NIFTY"], loader=lambda *a: None,
-        initial_capital=100_000, tax_rate=0.0,
-        market_view=mv, settler=settler, margin_model=margin,
+        strategy=strategy,
+        universe=["NIFTY"],
+        loader=lambda *a: None,
+        initial_capital=100_000,
+        tax_rate=0.0,
+        market_view=mv,
+        settler=settler,
+        margin_model=margin,
     )
     return runner.run(CALENDAR[0], CALENDAR[-1])
 
 
 def test_entry_structure_and_time_exit():
     strat = CallRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
+        universe=["NIFTY"],
+        initial_capital=100_000,
+        max_holding_days=15,
+        min_dte=18,
     )
     result = _run(strat)
     txns = result.transactions
@@ -115,7 +139,10 @@ def test_entry_structure_and_time_exit():
 
 def test_put_ratio_mirrors_below_spot():
     strat = PutRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
+        universe=["NIFTY"],
+        initial_capital=100_000,
+        max_holding_days=15,
+        min_dte=18,
     )
     result = _run(strat)
     txns = result.transactions
@@ -138,7 +165,10 @@ def test_put_ratio_mirrors_below_spot():
 
 def test_batman_enters_both_wings():
     strat = BatmanRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=200_000, max_holding_days=15, min_dte=18,
+        universe=["NIFTY"],
+        initial_capital=200_000,
+        max_holding_days=15,
+        min_dte=18,
         tail_hedge_offset=0,  # un-tailed wing mechanics (tail default covered separately)
     )
     result = _run(strat)
@@ -148,8 +178,12 @@ def test_batman_enters_both_wings():
 
     # 6 legs: 2 longs + 1 short (×2 units) per wing.
     assert len(buys) == 4 and len(shorts) == 2, [(t["action"], t["ticker"]) for t in txns]
-    ce = sorted(int(t["ticker"].split("|")[2]) for t in buys + shorts if t["ticker"].endswith("|CE"))
-    pe = sorted(int(t["ticker"].split("|")[2]) for t in buys + shorts if t["ticker"].endswith("|PE"))
+    ce = sorted(
+        int(t["ticker"].split("|")[2]) for t in buys + shorts if t["ticker"].endswith("|CE")
+    )
+    pe = sorted(
+        int(t["ticker"].split("|")[2]) for t in buys + shorts if t["ticker"].endswith("|PE")
+    )
     assert ce == [21300, 21600, 22600]  # call wing above spot
     assert pe == [19400, 20400, 20700]  # put wing below spot
     assert all(t["units"] == 2 * 50 for t in shorts)
@@ -162,8 +196,12 @@ def test_batman_combined_credit_cap_reshifts_both_wings():
     # ₹1,220. A combined cap of 0.5% (₹1,000) must rebuild both wings further OTM
     # (half-cap per wing = ₹500 → 2 extra shifts each) so the sum fits.
     strat = BatmanRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=200_000, max_holding_days=15, min_dte=18,
-        combined_credit_limit_pct=0.005, tail_hedge_offset=0,
+        universe=["NIFTY"],
+        initial_capital=200_000,
+        max_holding_days=15,
+        min_dte=18,
+        combined_credit_limit_pct=0.005,
+        tail_hedge_offset=0,
     )
     result = _run(strat)
     entries = [t for t in result.transactions if t["action"] in ("BUY", "SHORT")]
@@ -180,15 +218,19 @@ def test_batman_requires_both_wings():
     # A CE-only chain (no PE rows) must skip — a single qualifying wing is not a Batman.
     prem = {21000.0 + 50 * i: 50.0 for i in range(-40, 80)}
     chain = _StubChain(21000.0, EXPIRY, prem)  # emits CE rows only
-    s = BatmanRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=200_000,
-                                   credit_debit_limit_pct=99)
+    s = BatmanRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=200_000, credit_debit_limit_pct=99
+    )
     assert s.on_slice(_StubCtx(chain, date(2024, 1, 30))) == []
     assert s.legs == []
 
 
 def test_report_reconstructs_all_three_legs():
     strat = CallRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
+        universe=["NIFTY"],
+        initial_capital=100_000,
+        max_holding_days=15,
+        min_dte=18,
     )
     result = _run(strat)
     rep = build_options_report(result, 100_000, {"Max Margin Used": 1.0})
@@ -205,8 +247,12 @@ def test_percent_mode_scales_strikes_with_spot():
     def legs_at(spot):
         chain = _StubChain(spot, EXPIRY, {spot + 50 * i: 50.0 for i in range(-40, 80)})
         s = CallRatioMonthlyStrategy(
-            universe=["NIFTY"], initial_capital=100_000, strike_mode="percent",
-            buy_offset=1.3, sell_offset=2.6, hedge_offset=7.0,
+            universe=["NIFTY"],
+            initial_capital=100_000,
+            strike_mode="percent",
+            buy_offset=1.3,
+            sell_offset=2.6,
+            hedge_offset=7.0,
             credit_debit_limit_pct=99,  # premiums flat → net≈0, never gated
         )
         out = s.on_slice(_StubCtx(chain, date(2024, 1, 30)))
@@ -222,8 +268,8 @@ def test_percent_mode_scales_strikes_with_spot():
 
 
 def test_delta_mode_picks_near_target_deltas():
-    import math
     from skas_algo.engine.options import black_scholes as bs
+
     spot, t, r = 21000.0, 30 / 365.0, 0.065
     # Build a chain priced at a known IV so deltas are well-defined.
     prem = {}
@@ -232,8 +278,13 @@ def test_delta_mode_picks_near_target_deltas():
         prem[k] = max(bs.price(spot, k, t, r, 0.15, "CE"), 0.05)
     chain = _StubChain(spot, EXPIRY, prem)
     s = CallRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=100_000, strike_mode="delta",
-        buy_offset=0.36, sell_offset=0.25, hedge_offset=0.05, credit_debit_limit_pct=99,
+        universe=["NIFTY"],
+        initial_capital=100_000,
+        strike_mode="delta",
+        buy_offset=0.36,
+        sell_offset=0.25,
+        hedge_offset=0.05,
+        credit_debit_limit_pct=99,
     )
     out = s.on_slice(_StubCtx(chain, date(2024, 1, 30)))
     assert out and len(out) == 3
@@ -268,11 +319,21 @@ def test_stale_mark_guard_blocks_exit_until_all_legs_print():
         def __init__(self, stale_symbol=None):
             self._stale = stale_symbol
             self.market = self
-        def has_print(self, sym): return sym != self._stale
-        def lots(self, sym): return [object()]
-        def close(self, sym): return closes[sym]
-        def today(self): return date(2024, 2, 5)
-        def option_chain(self): return object()
+
+        def has_print(self, sym):
+            return sym != self._stale
+
+        def lots(self, sym):
+            return [object()]
+
+        def close(self, sym):
+            return closes[sym]
+
+        def today(self):
+            return date(2024, 2, 5)
+
+        def option_chain(self):
+            return object()
 
     # One leg unprinted (the short stuck at entry) → no exit, manage next slice.
     assert s.on_slice(Ctx(stale_symbol=s.legs[1]["symbol"])) == []
@@ -284,21 +345,39 @@ def test_stale_mark_guard_blocks_exit_until_all_legs_print():
 
 def test_min_vix_filter_skips_low_iv_months():
     from skas_algo.engine.options import black_scholes as bs
+
     spot, t, r = 21000.0, 30 / 365.0, 0.065
-    prem = {spot + 50 * i: max(bs.price(spot, spot + 50 * i, t, r, 0.12, "CE"), 0.05)
-            for i in range(-20, 60)}  # chain priced at 12% IV
+    prem = {
+        spot + 50 * i: max(bs.price(spot, spot + 50 * i, t, r, 0.12, "CE"), 0.05)
+        for i in range(-20, 60)
+    }  # chain priced at 12% IV
     chain = _StubChain(spot, EXPIRY, prem)
     kw = dict(universe=["NIFTY"], initial_capital=100_000, credit_debit_limit_pct=99)
-    assert CallRatioMonthlyStrategy(min_vix=15, **kw).on_slice(_StubCtx(chain, date(2024, 1, 30))) == []
+    assert (
+        CallRatioMonthlyStrategy(min_vix=15, **kw).on_slice(_StubCtx(chain, date(2024, 1, 30)))
+        == []
+    )
     assert CallRatioMonthlyStrategy(min_vix=10, **kw).on_slice(_StubCtx(chain, date(2024, 1, 30)))
 
 
 def test_debit_month_is_skipped():
     # Base strikes (21300/21600/22600) price to a net DEBIT (−18/unit) — a low-IV month.
     # The strategy must SKIP (no entry), even though a closer structure would yield credit.
-    prem = {21000.0: 130.0, 21100.0: 115.0, 21200.0: 100.0, 21300.0: 90.0, 21400.0: 75.0,
-            21500.0: 58.0, 21600.0: 40.0, 21700.0: 30.0, 22300.0: 12.0, 22400.0: 10.0,
-            22500.0: 9.0, 22600.0: 8.0, 22700.0: 6.5}
+    prem = {
+        21000.0: 130.0,
+        21100.0: 115.0,
+        21200.0: 100.0,
+        21300.0: 90.0,
+        21400.0: 75.0,
+        21500.0: 58.0,
+        21600.0: 40.0,
+        21700.0: 30.0,
+        22300.0: 12.0,
+        22400.0: 10.0,
+        22500.0: 9.0,
+        22600.0: 8.0,
+        22700.0: 6.5,
+    }
     chain = _StubChain(21000.0, EXPIRY, prem)
     s = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=100_000)
     assert s.on_slice(_StubCtx(chain, date(2024, 1, 30))) == []
@@ -326,9 +405,15 @@ def test_generalized_132_ratio_units_and_net():
     prem = {21200.0: 90.0, 21400.0: 70.0, 21600.0: 55.0}
     chain = _StubChain(SPOT, EXPIRY, prem)
     s = CallRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=100_000,
-        buy_lots=1, sell_lots=3, hedge_lots=2,
-        buy_offset=200, sell_offset=400, hedge_offset=600, credit_debit_limit_pct=99,
+        universe=["NIFTY"],
+        initial_capital=100_000,
+        buy_lots=1,
+        sell_lots=3,
+        hedge_lots=2,
+        buy_offset=200,
+        sell_offset=400,
+        hedge_offset=600,
+        credit_debit_limit_pct=99,
     )
     out = s.on_slice(_StubCtx(chain, date(2024, 1, 30)))
     assert len(out) == 3
@@ -354,8 +439,10 @@ class _StubChain:
         return sorted(self._prem)
 
     def chain(self, u, on, e):
-        return [ChainRow(u, e, k, "CE", p, p, 1000, make(u, e, k, "CE").symbol)
-                for k, p in sorted(self._prem.items())]
+        return [
+            ChainRow(u, e, k, "CE", p, p, 1000, make(u, e, k, "CE").symbol)
+            for k, p in sorted(self._prem.items())
+        ]
 
 
 class _StubCtx:
@@ -372,11 +459,117 @@ class _StubCtx:
         return []
 
 
+# --------------------------------------------------- manual (Build-view) entry
+def test_manual_entry_runs_native_exits_and_is_one_shot():
+    """A Build-view manual deploy (explicit entry_legs) enters those legs VERBATIM — skipping
+    the credit/calendar gates — and the NATIVE management runs: the max-holding-days time exit
+    fires, and after the exit it does NOT re-enter (one-shot)."""
+    EXP = date(2024, 2, 29)
+    prem = {21300.0: 100.0, 21600.0: 60.0, 22600.0: 20.0}
+
+    class Chain:
+        def spot(self, u, on):
+            return 21000.0
+
+        def chain(self, u, on, e):
+            return [
+                ChainRow(u, e, k, "CE", p, p, 1000, make(u, e, k, "CE").symbol)
+                for k, p in prem.items()
+            ]
+
+    class Ctx:
+        def __init__(self, today, held=frozenset(), closes=None):
+            self._t, self._held, self._closes = today, held, closes or {}
+            self.market = self
+
+        def option_chain(self):
+            return Chain()
+
+        def today(self):
+            return self._t
+
+        def lots(self, sym):
+            return [object()] if sym in self._held else []
+
+        def close(self, sym):
+            return self._closes.get(sym, 0.0)
+
+        def has_print(self, sym):
+            return True
+
+    specs = [
+        {"side": "buy", "right": "CE", "strike": 21300, "expiry": EXP.isoformat(), "lots": 1},
+        {"side": "sell", "right": "CE", "strike": 21600, "expiry": EXP.isoformat(), "lots": 2},
+        {"side": "buy", "right": "CE", "strike": 22600, "expiry": EXP.isoformat(), "lots": 1},
+    ]
+    s = CallRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=100_000, entry_legs=specs, max_holding_days=15
+    )
+    out = s.on_slice(Ctx(date(2024, 2, 1)))
+    assert len(out) == 3
+    got = {int(sig.symbol.split("|")[2]): sig.action.name for sig in out}
+    assert got == {21300: "ENTER_LONG", 21600: "ENTER_SHORT", 22600: "ENTER_LONG"}
+    assert s.entry_date == date(2024, 2, 1) and s._manual_done is True
+
+    held = {leg["symbol"] for leg in s.legs}
+    flat = {leg["symbol"]: leg["entry"] for leg in s.legs}  # MTM flat → no target/stop
+    assert s.on_slice(Ctx(date(2024, 2, 10), held, flat)) == []  # day 9 < 15 → hold
+    ex = s.on_slice(Ctx(date(2024, 2, 16), held, flat))  # day 15 → native time exit
+    assert ex and all(sig.reason == "time" for sig in ex)
+    # One-shot: after the exit, a later flat tick does NOT re-enter.
+    assert s.on_slice(Ctx(date(2024, 3, 1))) == []
+
+
+def test_batman_accepts_manual_entry():
+    """Batman inherits the manual path — explicit legs enter verbatim (its combined MTM
+    management then runs unchanged)."""
+    EXP = date(2024, 2, 29)
+    prem = {
+        ("CE", 21600.0): 60.0,
+        ("CE", 22600.0): 20.0,
+        ("PE", 20400.0): 55.0,
+        ("PE", 19400.0): 18.0,
+    }
+
+    class Chain:
+        def spot(self, u, on):
+            return 21000.0
+
+        def chain(self, u, on, e):
+            return [
+                ChainRow(u, e, k, r, p, p, 1000, make(u, e, k, r).symbol)
+                for (r, k), p in prem.items()
+            ]
+
+    class Ctx:
+        def option_chain(self):
+            return Chain()
+
+        def today(self):
+            return date(2024, 2, 1)
+
+        def lots(self, sym):
+            return []
+
+    specs = [
+        {"side": "sell", "right": "CE", "strike": 21600, "expiry": EXP.isoformat(), "lots": 2},
+        {"side": "buy", "right": "CE", "strike": 22600, "expiry": EXP.isoformat(), "lots": 2},
+        {"side": "sell", "right": "PE", "strike": 20400, "expiry": EXP.isoformat(), "lots": 2},
+        {"side": "buy", "right": "PE", "strike": 19400, "expiry": EXP.isoformat(), "lots": 2},
+    ]
+    s = BatmanRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=100_000, entry_legs=specs)
+    out = s.on_slice(Ctx())
+    assert len(out) == 4 and s._manual_done is True
+
+
 # ---------------------------------------------------------------- tail hedge
 def test_tail_hedge_adds_fourth_leg():
     """tail_hedge_offset adds one extra far long per wing, cost counted in the credit."""
     strat = CallRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
+        universe=["NIFTY"],
+        initial_capital=100_000,
+        max_holding_days=15,
+        min_dte=18,
         tail_hedge_offset=2100,
     )
     result = _run(strat)
@@ -392,8 +585,12 @@ def test_tail_hedge_on_hedge_strike_doubles_hedge():
     """A tail AT the hedge strike merges into one doubled hedge leg (no duplicate
     symbol legs); the extra cost makes the wing a debit, allowed via min_credit_pct."""
     strat = CallRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
-        tail_hedge_offset=1600, min_credit_pct=-0.01,
+        universe=["NIFTY"],
+        initial_capital=100_000,
+        max_holding_days=15,
+        min_dte=18,
+        tail_hedge_offset=1600,
+        min_credit_pct=-0.01,
     )
     result = _run(strat)
     buys = [t for t in result.transactions if t["action"] == "BUY"]
@@ -405,16 +602,26 @@ def test_tail_hedge_on_hedge_strike_doubles_hedge():
 def test_tail_hedge_put_side_only_on_batman():
     """tail_hedge_side='put' tails only the PE wing: 7 legs total (CE 3 + PE 4)."""
     strat = BatmanRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
-        tail_hedge_offset=2100, tail_hedge_side="put",
+        universe=["NIFTY"],
+        initial_capital=100_000,
+        max_holding_days=15,
+        min_dte=18,
+        tail_hedge_offset=2100,
+        tail_hedge_side="put",
     )
     result = _run(strat)
     entries = [t for t in result.transactions if t["action"] in ("BUY", "SHORT")]
     assert len(entries) == 7, [(t["action"], t["ticker"]) for t in entries]
-    pe_buys = sorted(int(t["ticker"].split("|")[2]) for t in entries
-                     if t["action"] == "BUY" and t["ticker"].endswith("|PE"))
-    ce_buys = sorted(int(t["ticker"].split("|")[2]) for t in entries
-                     if t["action"] == "BUY" and t["ticker"].endswith("|CE"))
+    pe_buys = sorted(
+        int(t["ticker"].split("|")[2])
+        for t in entries
+        if t["action"] == "BUY" and t["ticker"].endswith("|PE")
+    )
+    ce_buys = sorted(
+        int(t["ticker"].split("|")[2])
+        for t in entries
+        if t["action"] == "BUY" and t["ticker"].endswith("|CE")
+    )
     assert pe_buys == [18900, 19400, 20700]  # tail spot−2100, hedge −1600, near −300
     assert ce_buys == [21300, 22600]  # call wing untailed
 
@@ -424,7 +631,10 @@ def test_tail_hedge_snaps_to_last_listed_strike():
     farthest ELIGIBLE strike rather than skipping the month. NIFTY trades round 100s only (owner
     rule), so the farthest strike is 25900 (the listed 25950 is filtered out), not 25950."""
     strat = CallRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=100_000, max_holding_days=15, min_dte=18,
+        universe=["NIFTY"],
+        initial_capital=100_000,
+        max_holding_days=15,
+        min_dte=18,
         tail_hedge_offset=6000,
     )
     result = _run(strat)
@@ -437,20 +647,27 @@ def test_batman_defaults_to_half_put_tail():
     """Batman ships with the run-92 config: half-size put-wing tail at 2100 pts —
     7 legs (CE 3 + PE 4), tail at spot−2100 with half the wing's units."""
     strat = BatmanRatioMonthlyStrategy(
-        universe=["NIFTY"], initial_capital=200_000, max_holding_days=15, min_dte=18,
+        universe=["NIFTY"],
+        initial_capital=200_000,
+        max_holding_days=15,
+        min_dte=18,
         lots=2,  # 2 lots → half-tail = 1 whole lot
     )
-    assert (strat.tail_hedge_offset, strat.tail_hedge_lots, strat.tail_hedge_side) == (2100.0, 0.5, "put")
+    assert (strat.tail_hedge_offset, strat.tail_hedge_lots, strat.tail_hedge_side) == (
+        2100.0,
+        0.5,
+        "put",
+    )
     result = _run(strat)
     entries = [t for t in result.transactions if t["action"] in ("BUY", "SHORT")]
     assert len(entries) == 7, [(t["action"], t["ticker"]) for t in entries]
-    tail = next(t for t in entries
-                if t["action"] == "BUY" and t["ticker"].split("|")[2] == "18900")
+    tail = next(t for t in entries if t["action"] == "BUY" and t["ticker"].split("|")[2] == "18900")
     assert tail["ticker"].endswith("|PE") and tail["units"] == 50  # 1 lot vs wings' 2
 
 
 def test_post_expiry_entry_rule_gates_by_cycle():
     from datetime import date
+
     from skas_algo.strategies.call_ratio_monthly import CallRatioMonthlyStrategy
 
     s = CallRatioMonthlyStrategy(underlying="NIFTY", entry_rule="post_expiry")
@@ -459,12 +676,12 @@ def test_post_expiry_entry_rule_gates_by_cycle():
     # doesn't count; the window opens the day AFTER and stays open entry_window_days.
     assert not s._entry_allowed(date(2024, 6, 20))
     assert not s._entry_allowed(date(2024, 6, 27))
-    assert s._entry_allowed(date(2024, 6, 28))      # first day after → new cycle
-    assert s._entry_allowed(date(2024, 7, 3))       # still inside the 7-day retry window
+    assert s._entry_allowed(date(2024, 6, 28))  # first day after → new cycle
+    assert s._entry_allowed(date(2024, 7, 3))  # still inside the 7-day retry window
     s._mark_entered(date(2024, 6, 28))
     assert not s._entry_allowed(date(2024, 7, 10))  # mid-cycle: same anchor → locked
     assert not s._entry_allowed(date(2024, 7, 25))  # July expiry day itself — still locked
-    assert s._entry_allowed(date(2024, 7, 26))      # new cycle (day after July expiry)
+    assert s._entry_allowed(date(2024, 7, 26))  # new cycle (day after July expiry)
     # State round-trip keeps the cycle lock (live restart must not double-enter).
     st = s.export_state()
     s2 = CallRatioMonthlyStrategy(underlying="NIFTY", entry_rule="post_expiry")
@@ -478,13 +695,19 @@ def test_post_expiry_entry_rule_gates_by_cycle():
 
 # ─────────────────────────── capital-based auto sizing (sizing="margin")
 
+
 def _run_cap(strategy, capital: float):
     sd = FakeCRSD(CALENDAR)
     mv, _chain, settler, margin = build_options_run(sd, "NIFTY", CALENDAR[0], CALENDAR[-1])
     runner = BacktestRunner(
-        strategy=strategy, universe=["NIFTY"], loader=lambda *a: None,
-        initial_capital=capital, tax_rate=0.0,
-        market_view=mv, settler=settler, margin_model=margin,
+        strategy=strategy,
+        universe=["NIFTY"],
+        loader=lambda *a: None,
+        initial_capital=capital,
+        tax_rate=0.0,
+        market_view=mv,
+        settler=settler,
+        margin_model=margin,
     )
     return runner.run(CALENDAR[0], CALENDAR[-1])
 
@@ -492,33 +715,39 @@ def _run_cap(strategy, capital: float):
 def test_auto_sizing_fits_lots_to_capital():
     # Era-true divisor at the fixture: 0.13 × 21000 × (2 lots × 50) = ₹273,000 per lot-set.
     # ₹10L × 95% → 3 sets; ₹1L → floors to 0 → min 1 set (same as fixed lots=1).
-    big = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=1_000_000,
-                                   sizing="margin", min_dte=18)
+    big = CallRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=1_000_000, sizing="margin", min_dte=18
+    )
     r = _run_cap(big, 1_000_000)
     shorts = [t for t in r.transactions if t["action"] == "SHORT"]
     assert big.lots == 3 and shorts[0]["units"] == 3 * 2 * 50
     assert big._entry_capital_base == 1_000_000  # credit gates scaled with the same base
 
-    small = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=100_000,
-                                     sizing="margin", min_dte=18)
+    small = CallRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=100_000, sizing="margin", min_dte=18
+    )
     r2 = _run_cap(small, 100_000)
     shorts2 = [t for t in r2.transactions if t["action"] == "SHORT"]
     assert small.lots == 1 and shorts2[0]["units"] == 2 * 50
+
     # Strike geometry identical in both — the rupee credit gate scaled with capital, so
     # bigger capital does NOT shift strikes.
     def k(t):
         return int(t["ticker"].split("|")[2])
+
     assert k(shorts[0]) == k(shorts2[0]) == 21600
 
 
 def test_auto_sizing_cap_and_fixed_default_unchanged():
-    capped = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=1_000_000,
-                                      sizing="margin", max_auto_lots=2, min_dte=18)
+    capped = CallRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=1_000_000, sizing="margin", max_auto_lots=2, min_dte=18
+    )
     _run_cap(capped, 1_000_000)
     assert capped.lots == 2
     # Default (fixed) ignores capital entirely — lots param is exact, like before.
-    fixed = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=1_000_000,
-                                     lots=5, min_dte=18)
+    fixed = CallRatioMonthlyStrategy(
+        universe=["NIFTY"], initial_capital=1_000_000, lots=5, min_dte=18
+    )
     r2 = _run_cap(fixed, 1_000_000)
     shorts = [t for t in r2.transactions if t["action"] == "SHORT"]
     assert fixed.lots == 5 and shorts[0]["units"] == 5 * 2 * 50
@@ -526,9 +755,9 @@ def test_auto_sizing_cap_and_fixed_default_unchanged():
 
 def test_capital_base_guarded_for_stub_ctx():
     s = CallRatioMonthlyStrategy(universe=["NIFTY"], initial_capital=250_000, sizing="margin")
-    assert s._capital_base(None) == 250_000            # no ctx → fallback
+    assert s._capital_base(None) == 250_000  # no ctx → fallback
 
-    class NoEquity:                                     # stub ctx without an equity accessor
+    class NoEquity:  # stub ctx without an equity accessor
         pass
 
     assert s._capital_base(NoEquity()) == 250_000
@@ -560,12 +789,12 @@ def test_risk_base_frozen_at_entry_not_floating():
 
     # First in-market broker push freezes the REAL basket margin.
     st.set_broker_margin(1_626_499.0)
-    assert st._risk_base(ctx_big) == 1_626_499.0          # frozen, ignores the model margin
+    assert st._risk_base(ctx_big) == 1_626_499.0  # frozen, ignores the model margin
 
     # A later collapsed/off-hours margin must NOT move the base, and re-pushes are ignored.
     ctx_tiny = SimpleNamespace(position_margin=lambda: 176_000.0)
     st.set_broker_margin(176_000.0)
-    assert st._risk_base(ctx_tiny) == 1_626_499.0          # STILL the entry value
+    assert st._risk_base(ctx_tiny) == 1_626_499.0  # STILL the entry value
 
     # Persists across a restart; resets flat on exit (re-frozen next cycle).
     st2 = BatmanRatioMonthlyStrategy()
@@ -573,7 +802,7 @@ def test_risk_base_frozen_at_entry_not_floating():
     assert st2._risk_base(ctx_tiny) == 1_626_499.0
     st._flat()
     assert st._frozen_margin is None
-    assert st._risk_base(ctx_big) == 8_000_000.0           # back to the model path when flat
+    assert st._risk_base(ctx_big) == 8_000_000.0  # back to the model path when flat
 
 
 def test_maybe_refresh_margin_skips_off_hours(monkeypatch):
@@ -598,16 +827,20 @@ def test_maybe_refresh_margin_skips_off_hours(monkeypatch):
         )
         return SimpleNamespace(
             config=SimpleNamespace(instrument_class="DERIV", quote_source="zerodha"),
-            session=SimpleNamespace(portfolio=pf, strategy=SimpleNamespace(),
-                                    set_margin_override=lambda m: None),
+            session=SimpleNamespace(
+                portfolio=pf, strategy=SimpleNamespace(), set_margin_override=lambda m: None
+            ),
             quote_source=SimpleNamespace(adapter=_Adapter()),
-            _margin_symbols=[], _last_margin_at=None, _margin=None, run_id=1,
+            _margin_symbols=[],
+            _last_margin_at=None,
+            _margin=None,
+            run_id=1,
         )
 
     monkeypatch.setattr(mgr, "is_market_open", lambda: False)
     LiveRun._maybe_refresh_margin(make_self())
-    assert calls["basket_margin"] == 0                     # off-hours → no broker call
+    assert calls["basket_margin"] == 0  # off-hours → no broker call
 
     monkeypatch.setattr(mgr, "is_market_open", lambda: True)
     LiveRun._maybe_refresh_margin(make_self())
-    assert calls["basket_margin"] == 1                     # in-market → recomputes
+    assert calls["basket_margin"] == 1  # in-market → recomputes

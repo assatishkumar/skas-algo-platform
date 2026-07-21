@@ -31,7 +31,8 @@ type SeedLeg = {
 };
 interface Tpl {
   id: string; kind: "own" | "classic"; name: string; sub: string;
-  deploy: "ddc" | "delta_neutral" | "custom"; legs: SeedLeg[];
+  deploy: "ddc" | "delta_neutral" | "ratio" | "custom"; legs: SeedLeg[];
+  strategyId?: string; // for deploy === "ratio"
 }
 
 const OWN: Tpl[] = [
@@ -42,12 +43,12 @@ const OWN: Tpl[] = [
   { id: "delta_neutral", kind: "own", name: "delta_neutral · entry", sub: "18Δ strangle → rolls the cheap side — auto-managed",
     deploy: "delta_neutral",
     legs: [{ side: "sell", right: "CE", delta: 0.18 }, { side: "sell", right: "PE", delta: 0.18 }] },
-  { id: "batman_ratio", kind: "own", name: "batman_ratio · entry", sub: "both-side 1:2 ratio wings + tails, 6 legs",
-    deploy: "custom",
+  { id: "batman_ratio", kind: "own", name: "batman_ratio · entry", sub: "both-side 1:2 ratio wings + tails — auto-managed",
+    deploy: "ratio", strategyId: "batman_ratio_monthly",
     legs: [{ side: "buy", right: "CE", off: 300 }, { side: "sell", right: "CE", off: 600, lots: 2 }, { side: "buy", right: "CE", off: 1600, lots: 2 },
            { side: "buy", right: "PE", off: -300 }, { side: "sell", right: "PE", off: -600, lots: 2 }, { side: "buy", right: "PE", off: -1600, lots: 2 }] },
-  { id: "hni_weekly", kind: "own", name: "hni_weekly · entry", sub: "1-3-2 call-ratio tent",
-    deploy: "custom",
+  { id: "hni_weekly", kind: "own", name: "hni_weekly · entry", sub: "1-3-2 call-ratio tent — auto-managed",
+    deploy: "ratio", strategyId: "hni_weekly",
     legs: [{ side: "buy", right: "CE", off: 200 }, { side: "sell", right: "CE", off: 400, lots: 3 }, { side: "buy", right: "CE", off: 600, lots: 2 }] },
 ];
 
@@ -87,9 +88,9 @@ export default function BuildView() {
   const [blank, setBlank] = useState(false);
   const tpl = blank ? null : ALL_TPLS.find((t) => t.id === tplId) ?? null;
   const isDdc = tpl?.deploy === "ddc";
-  // "Managed" deploys run the STRATEGY'S own engine (roll + ±% margin exits) from the manual legs
+  // "Managed" deploys run the STRATEGY'S own engine (its adjustment/exits) from the manual legs
   // — no generic exits card. Custom deploys use custom_options with the exits card.
-  const managedDeploy = tpl?.deploy === "ddc" || tpl?.deploy === "delta_neutral";
+  const managedDeploy = tpl?.deploy === "ddc" || tpl?.deploy === "delta_neutral" || tpl?.deploy === "ratio";
 
   const [underlying, setUnderlying] = useState("NIFTY");
   const [nearExpiry, setNearExpiry] = useState("");
@@ -151,6 +152,7 @@ export default function BuildView() {
   const [params, setParams] = useState({
     lots: 1, shortDelta: 0.225, hedgeDelta: 0.175, targetDelta: 0.18, bias: "neutral" as "up" | "neutral" | "down",
     nearDte: 5, farDte: 10, target: 1.5, stop: 1.5,
+    ratioTarget: 2.5, ratioStop: 3, maxHold: 20,
   });
   const setP = (patch: Partial<typeof params>) => setParams((p) => ({ ...p, ...patch }));
 
@@ -253,6 +255,13 @@ export default function BuildView() {
           profit_target_pct: params.target, stop_loss_pct: params.stop,
           entry_legs: entryLegs, capital: 1_000_000, mode, quote_source: live ? "zerodha" : "cache", broker_account_id: liveAcc, auto: true,
         });
+      } else if (tpl?.deploy === "ratio") {
+        snap = await api.ratioDeploy({
+          name: name.trim() || `${tpl.name.split(" ")[0]} ${underlying}`, strategy_id: tpl.strategyId!,
+          underlying: underlying.toUpperCase(), entry_legs: entryLegs,
+          profit_target_pct: params.ratioTarget, stop_loss_pct: params.ratioStop, max_holding_days: params.maxHold,
+          capital: 1_000_000, mode, quote_source: live ? "zerodha" : "cache", broker_account_id: liveAcc, auto: true,
+        });
       } else {
         const tradeLegs: OptionTradeLeg[] = legs.map((l) => ({ right: l.right, strike: l.strike, side: l.side, lots: l.lots, expiry: l.expiry === nearExpiry ? null : l.expiry }));
         snap = await api.deployOptionTrade({
@@ -336,7 +345,7 @@ export default function BuildView() {
         {tpl?.kind === "own" && (
           <section className="rounded-[16px] border border-[var(--border)] bg-[var(--card)] p-4">
             <div className="mb-1 font-['Space_Grotesk'] text-[15px] font-bold">02 · Strategy params</div>
-            <p className="mb-3 text-[12px] text-[var(--muted)]">Seed the strikes from these; every leg stays editable below. {isDdc ? "The double diagonal auto-manages the ±% margin exits + the untested-short roll." : tpl.deploy === "delta_neutral" ? "delta_neutral runs its cheap-side roll + ±% margin exits from these legs." : "Deploys as a managed position (your exits below)."}</p>
+            <p className="mb-3 text-[12px] text-[var(--muted)]">Seed the strikes from these; every leg stays editable below. {isDdc ? "The double diagonal auto-manages the ±% margin exits + the untested-short roll." : tpl.deploy === "delta_neutral" ? "delta_neutral runs its cheap-side roll + ±% margin exits from these legs." : tpl.deploy === "ratio" ? "Runs the strategy's OWN engine from these legs — its %-of-margin target/stop + its native time exit." : "Deploys as a managed position (your exits below)."}</p>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {isDdc ? (
                 <>
@@ -360,6 +369,17 @@ export default function BuildView() {
                   <Field label="Target Δ" v={params.targetDelta} step={0.005} on={(n) => setP({ targetDelta: n })} />
                   <Field label="Target % marg" v={params.target} step={0.1} on={(n) => setP({ target: n })} />
                   <Field label="Stop % marg (0=off)" v={params.stop} step={0.1} on={(n) => setP({ stop: n })} />
+                </>
+              ) : tpl.deploy === "ratio" ? (
+                <>
+                  <Field label="Target % marg" v={params.ratioTarget} step={0.1} on={(n) => setP({ ratioTarget: n })} />
+                  <Field label="Stop % marg (0=off)" v={params.ratioStop} step={0.1} on={(n) => setP({ ratioStop: n })} />
+                  {tpl.id === "batman_ratio" && <Field label="Max holding days" v={params.maxHold} on={(n) => setP({ maxHold: n })} />}
+                  <div className="col-span-2 text-[11.5px] text-[var(--faint)] sm:col-span-4">
+                    {tpl.id === "hni_weekly"
+                      ? "Runs its Friday exit + %-of-margin target/stop."
+                      : "Runs its max-holding-days time exit + %-of-margin target/stop."}
+                  </div>
                 </>
               ) : (
                 <div className="col-span-2 text-[12px] text-[var(--faint)] sm:col-span-4">Strikes seeded from the strategy's default offsets — edit any leg below.</div>
@@ -477,7 +497,7 @@ export default function BuildView() {
 
           {error && <ErrorBox message={error} />}
           <button disabled={busy || !canDeploy} onClick={deploy} className="w-full rounded-[13px] bg-[var(--ft)] py-2.5 text-sm font-bold text-white disabled:opacity-40">
-            {busy ? "Deploying…" : isDdc ? "Deploy double diagonal" : tpl?.deploy === "delta_neutral" ? "Deploy delta neutral" : `Deploy position · ${legs.length} legs`}
+            {busy ? "Deploying…" : isDdc ? "Deploy double diagonal" : tpl?.deploy === "delta_neutral" ? "Deploy delta neutral" : tpl?.deploy === "ratio" ? `Deploy ${tpl.id === "hni_weekly" ? "HNI weekly" : "batman"}` : `Deploy position · ${legs.length} legs`}
           </button>
           <div className="text-center text-[11.5px] text-[var(--faint)]">
             One-shot: deploys once and never re-enters.{managedDeploy ? " Auto-manages roll + ±% exits from these legs." : ""}
