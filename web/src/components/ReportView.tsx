@@ -329,7 +329,7 @@ export default function ReportView({
   runId?: number;
   defaultBenchmark?: string;
 }) {
-  const m = report.metrics;
+  const m = report.metrics ?? {};   // a not-yet-finalised run can carry {} — never crash on it
   const netMonthly = m["Avg Monthly Net P&L (Post-Tax)"] ?? 0;
   // Deployed-capital + idle-cash overlay (present only for opt-in strategies). The idle-CAGR
   // key carries the configured rate (e.g. "CAGR (idle @ 6%) %"), so find it dynamically.

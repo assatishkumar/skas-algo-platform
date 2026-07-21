@@ -230,7 +230,7 @@ export default function RunDetailPage() {
         }}
       />
 
-      {data.report ? (
+      {data.report && Object.keys(data.report).length > 0 ? (
         <ReportView
           report={data.report}
           trades={data.trades}
