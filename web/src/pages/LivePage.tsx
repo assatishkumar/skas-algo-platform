@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
 import { Badge, timeAgo } from "../components/ui";
 import GreeksPanel from "../components/GreeksPanel";
@@ -1142,7 +1142,7 @@ function DeploymentTile({
           ];
 
   return (
-    <div className={`flex flex-col rounded-[16px] border border-[var(--border)] bg-[var(--card)] p-5 ${expanded ? "md:col-span-2" : ""} ${dep.status !== "active" ? "opacity-70" : ""}`}>
+    <div id={`dep-${dep.run_id}`} className={`flex flex-col rounded-[16px] border border-[var(--border)] bg-[var(--card)] p-5 ${expanded ? "md:col-span-2" : ""} ${dep.status !== "active" ? "opacity-70" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           {editing ? (
@@ -1493,6 +1493,27 @@ export default function LivePage() {
     queryClient.invalidateQueries({ queryKey: ["deployments"] });
     seed();
   }, [queryClient, seed]);
+
+  // Deep-focus a specific run: the Cycle Detail breadcrumb returns here as /live?run=<id> —
+  // switch to its mode, open its strategy group + tile, and scroll to it, so "← Live" lands
+  // on the exact card the user drilled in from (not the collapsed top of the page).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusRun = searchParams.get("run");
+  useEffect(() => {
+    if (!focusRun || !deployments.length) return;
+    const rid = Number(focusRun);
+    const dep = deployments.find((d) => d.run_id === rid);
+    if (!dep) return;
+    setMode(dep.mode === "LIVE" ? "live" : "paper");
+    setOpenGroups((g) => ({ ...g, [dep.strategy_id]: true }));
+    setExpanded(rid);
+    const t = setTimeout(() => {
+      document.getElementById(`dep-${rid}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setSearchParams({}, { replace: true });   // consume the param (no re-fire)
+    }, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRun, deployments]);
 
   const q = search.trim().toLowerCase();
   const wantLive = mode === "live";

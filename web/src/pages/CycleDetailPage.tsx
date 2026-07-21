@@ -48,7 +48,7 @@ function CycleDetail({ m, active, toggle, setActive }: {
   // Deterministic: land on the SOURCE page the cycle-date link lives on — the Live page
   // (`/live`, where LiveCyclePanel renders a running deploy's cycle table) for a live cycle,
   // else the run detail. Plain <Link>, independent of browser history.
-  const backTo = m.live ? "/live" : `/runs/${m.run_id}`;
+  const backTo = m.live ? `/live?run=${m.run_id}` : `/runs/${m.run_id}`;
 
   const move = m.underlying_pct ?? 0;
   return (
