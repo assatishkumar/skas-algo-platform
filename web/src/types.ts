@@ -813,6 +813,7 @@ export interface OptionTradeLeg {
   strike: number;
   side: "buy" | "sell";
   lots: number;
+  expiry?: string | null; // per-leg ISO expiry (calendars); omit → the trade's default expiry
 }
 
 export interface MtgBtStats {
@@ -926,6 +927,7 @@ export interface DeltaNeutralDeploy {
   adjust_cooldown_min: number;
   profit_target_pct: number;
   stop_loss_pct: number;
+  entry_legs?: { side: "buy" | "sell"; right: "CE" | "PE"; strike: number; expiry: string; lots: number }[] | null;
   capital: number;
   mode: string;
   quote_source: string;
@@ -958,6 +960,47 @@ export interface IronFlyDeploy {
   mode: string;
   quote_source: string;
   broker_account_id: number | null;
+  auto: boolean;
+}
+
+export interface DoubleDiagonalLeg {
+  side: "buy" | "sell";
+  right: "CE" | "PE";
+  strike: number;
+  expiry: string; // "near" | "far" | ISO date
+  lots: number;
+}
+
+export interface DoubleDiagonalDeploy {
+  name: string;
+  notes?: string | null;
+  underlying: string;
+  lots: number;
+  short_target_delta: number;
+  hedge_target_delta: number;
+  near_min_dte: number;
+  far_min_dte: number;
+  bias: "up" | "neutral" | "down";
+  bias_skew: number;
+  entry_time: string;
+  entry_weekday: number;
+  recurring: boolean;
+  force_entry: boolean;
+  adjust_cooldown_min: number;
+  adjust_close_delta: number;
+  adjust_close_prem_frac: number;
+  min_adjust_dte: number;
+  profit_target_pct: number;
+  stop_loss_pct: number;
+  profit_check: string;
+  stop_check: string;
+  eod_time: string;
+  entry_legs?: DoubleDiagonalLeg[] | null;
+  capital: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  ignore_market_hours?: boolean;
   auto: boolean;
 }
 

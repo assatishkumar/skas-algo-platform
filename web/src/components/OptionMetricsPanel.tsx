@@ -39,7 +39,9 @@ export default function OptionMetricsPanel({ run }: { run: LiveRunSnapshot }) {
     for (const p of run.positions ?? []) {
       const parts = p.symbol.split("|"); // UNDERLYING|EXPIRY|STRIKE|RIGHT
       if (parts.length !== 4) continue;
-      expiry = parts[1];
+      // Fallback = the EARLIEST leg expiry (a calendar holds two; the payoff terminal is the near
+      // one). computeMetrics reads per-leg expiry, so this is only the single-expiry fallback.
+      expiry = !expiry || Date.parse(parts[1]) < Date.parse(expiry) ? parts[1] : expiry;
       legs.push({
         strike: Number(parts[2]),
         right: parts[3],
@@ -47,6 +49,7 @@ export default function OptionMetricsPanel({ run }: { run: LiveRunSnapshot }) {
         units: p.units,
         entry: p.avg_price,
         ltp: p.ltp,
+        expiry: parts[1], // per-leg expiry so a calendar values the far leg at the near expiry
       });
     }
     if (!legs.length || !spot || !expiry) return null;
@@ -68,10 +71,13 @@ export default function OptionMetricsPanel({ run }: { run: LiveRunSnapshot }) {
           .join(", ")
       : "—";
 
-  // Expiry (from the open legs) + the strategy's exit triggers — so the card shows WHY it exits.
+  // Expiry (the NEAREST leg expiry — a calendar squares at the near one) + the strategy's exit
+  // triggers, so the card shows WHY it exits.
   const expiry = (run.positions ?? [])
     .map((p) => p.symbol.split("|"))
-    .find((parts) => parts.length === 4)?.[1];
+    .filter((parts) => parts.length === 4)
+    .map((parts) => parts[1])
+    .sort((a, b) => Date.parse(a) - Date.parse(b))[0];
   const exitRules = [
     ...(run.exit_rules ?? []),
     ...(expiry ? [`Settles at expiry ${expiry}`] : []),

@@ -39,6 +39,15 @@ export function bsPrice(
   return right === "CE" ? dS * normCdf(d1) - dK * normCdf(d2) : dK * normCdf(-d2) - dS * normCdf(-d1);
 }
 
+/** Black-Scholes delta (signed: CE 0..1, PE −1..0). Mirrors engine/options/black_scholes.delta. */
+export function bsDelta(
+  spot: number, strike: number, t: number, r: number, sigma: number, right: string,
+): number {
+  if (t <= 0 || sigma <= 0) return right === "CE" ? (spot > strike ? 1 : 0) : spot < strike ? -1 : 0;
+  const d1 = (Math.log(spot / strike) + (r + 0.5 * sigma * sigma) * t) / (sigma * Math.sqrt(t));
+  return right === "CE" ? normCdf(d1) : normCdf(d1) - 1;
+}
+
 export function impliedVol(
   price: number, spot: number, strike: number, t: number, r: number, right: string, q = 0,
 ): number | null {
@@ -134,29 +143,63 @@ export interface LiveLeg {
   units: number;
   entry: number; // avg fill premium
   ltp: number | null;
+  expiry?: string; // per-leg ISO expiry (calendars); absent → the position's single expiry
 }
 
 export interface LivePayoffData {
   data: { spot: number; expiry: number; now: number }[];
   spot: number;
-  expiryDate: string;
+  expiryDate: string; // the TERMINAL date the payoff is drawn at (the nearest leg expiry)
 }
 
-/** Expiry payoff tent + a current-value (T+0) curve for the OPEN option legs.
+/** The nearest leg expiry — the date the "expiry" payoff is evaluated at. For a calendar the near
+ *  legs settle here while the far legs still carry time value (see legTerminalMeta). */
+function terminalExpiry(legs: LiveLeg[], fallback: string): string {
+  let best: string | null = null;
+  for (const l of legs) {
+    const e = l.expiry ?? fallback;
+    if (best === null || Date.parse(e) < Date.parse(best)) best = e;
+  }
+  return best ?? fallback;
+}
+
+interface LegMeta { iv: number; tLeg: number; tRemain: number }
+
+/** Per-leg valuation inputs at the terminal date: the leg's own IV (backed out from its LTP at its
+ *  own DTE) and the residual DTE it still has AT the terminal (0 for legs expiring there → they go
+ *  to intrinsic; >0 for a calendar's far legs → BS-valued, which rounds the payoff tent). */
+function legTerminalMeta(legs: LiveLeg[], spot: number, asOf: string, term: string): LegMeta[] {
+  return legs.map((l) => {
+    const exp = l.expiry ?? term;
+    const tLeg = Math.max(daysBetween(asOf, exp) / 365, 1 / 365); // ≥ ~1 day keeps BS sane
+    const iv = (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, tLeg, RISK_FREE, l.right) : null) ?? 0.15;
+    const tRemain = Math.max(daysBetween(term, exp) / 365, 0);
+    return { iv, tLeg, tRemain };
+  });
+}
+
+/** A leg's value AT the terminal date: intrinsic if it expires there, else BS at its residual DTE. */
+function legValueAtTerminal(l: LiveLeg, S: number, m: LegMeta): number {
+  return m.tRemain <= 1e-9
+    ? intrinsic(l.right, S, l.strike)
+    : bsPrice(S, l.strike, m.tRemain, RISK_FREE, m.iv, l.right);
+}
+
+/** Expiry payoff tent + a current-value (T+0) curve for the OPEN option legs. Two-expiry aware:
+ *  the "expiry" curve is drawn at the NEAREST leg expiry — near legs go to intrinsic while a
+ *  calendar's far legs keep BS-valued time value (the rounded calendar tent). For a single-expiry
+ *  position this is identical to plain intrinsic.
  *  Auto range hugs the STRUCTURE (spot + strikes + breakevens, padded by a fraction of that
  *  width) — NOT a fixed % of the index level; ``rangePct`` (zoom) overrides it with a symmetric
- *  spot ± pct window — strikes outside simply fall off the chart, which is the point of zooming
- *  in. IV per leg from its live LTP (fallback 15%). */
+ *  spot ± pct window. IV per leg from its live LTP (fallback 15%). */
 export function buildLivePayoff(
   legs: LiveLeg[], spot: number, expiryDate: string, today?: string,
   rangePct?: number | null, breakevens?: number[],
 ): LivePayoffData | null {
   if (!legs.length || !spot) return null;
   const asOf = today ?? new Date().toISOString().slice(0, 10);
-  const t = Math.max(daysBetween(asOf, expiryDate) / 365, 1 / 365); // ≥ ~1 day keeps BS sane
-  const ivs = legs.map(
-    (l) => (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, t, RISK_FREE, l.right) : null) ?? 0.15,
-  );
+  const term = terminalExpiry(legs, expiryDate);
+  const meta = legTerminalMeta(legs, spot, asOf, term);
   // Auto range spans spot, EVERY strike, and the breakevens (so the tent kinks + zero-crossings
   // are always on-screen), padded by a fraction of that structure width with a modest floor.
   // A fixed ±10% of the absolute level blew a NIFTY straddle (strikes ≈ spot) out to a ~5000-pt
@@ -176,12 +219,12 @@ export function buildLivePayoff(
     let expiry = 0;
     let now = 0;
     legs.forEach((l, j) => {
-      expiry += l.direction * (intrinsic(l.right, S, l.strike) - l.entry) * l.units;
-      now += l.direction * (bsPrice(S, l.strike, t, RISK_FREE, ivs[j], l.right) - l.entry) * l.units;
+      expiry += l.direction * (legValueAtTerminal(l, S, meta[j]) - l.entry) * l.units;
+      now += l.direction * (bsPrice(S, l.strike, meta[j].tLeg, RISK_FREE, meta[j].iv, l.right) - l.entry) * l.units;
     });
     data.push({ spot: S, expiry, now });
   }
-  return { data, spot, expiryDate };
+  return { data, spot, expiryDate: term };
 }
 
 /** A spot that is SANE for this leg set. A multi-underlying run's `underlying_spot` is the
@@ -228,8 +271,13 @@ export function computeMetrics(
   const asOf = today ?? new Date().toISOString().slice(0, 10);
   const t = Math.max(daysBetween(asOf, expiryDate) / 365, 1 / 365);
 
+  // Terminal payoff = value at the NEAREST leg expiry (near legs → intrinsic, a calendar's far
+  // legs → BS at their residual DTE). For a single-expiry position this is plain intrinsic, so
+  // breakevens / max-P&L / POP are unchanged; for a calendar they reflect the rounded tent.
+  const term = terminalExpiry(legs, expiryDate);
+  const meta = legTerminalMeta(legs, spot, asOf, term);
   const expiryPnl = (S: number) =>
-    legs.reduce((p, l) => p + l.direction * (intrinsic(l.right, S, l.strike) - l.entry) * l.units, 0);
+    legs.reduce((p, l, j) => p + l.direction * (legValueAtTerminal(l, S, meta[j]) - l.entry) * l.units, 0);
 
   // Unbounded tails: only net calls run away (puts are capped at S=0).
   const ceNet = legs

@@ -86,7 +86,9 @@ export default function LivePayoffChart({
       const parts = p.symbol.split("|"); // UNDERLYING|EXPIRY|STRIKE|RIGHT
       if (parts.length !== 4) continue;
       const g = groups.get(parts[0]) ?? { legs: [], expiry: "" };
-      g.expiry = parts[1];
+      // Terminal (fallback) expiry = the EARLIEST leg expiry — a calendar holds two, and the
+      // payoff is drawn at the nearer one (buildLivePayoff/computeMetrics read per-leg expiry).
+      g.expiry = !g.expiry || Date.parse(parts[1]) < Date.parse(g.expiry) ? parts[1] : g.expiry;
       g.legs.push({
         strike: Number(parts[2]),
         right: parts[3],
@@ -94,6 +96,7 @@ export default function LivePayoffChart({
         units: p.units,
         entry: p.avg_price,
         ltp: p.ltp,
+        expiry: parts[1], // per-leg expiry so calendars value the far leg at the near expiry
       });
       groups.set(parts[0], g);
     }
