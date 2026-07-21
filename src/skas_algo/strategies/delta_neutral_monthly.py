@@ -70,7 +70,7 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         entry_time: str = "11:00",
         entry_window_end: str = "15:00",
         entry_days_after_expiry: int = 2,
-        force_entry: bool = False,           # deploy-time: enter next window tick, any day
+        force_entry: bool = False,  # deploy-time: enter next window tick, any day
         adjust_threshold_pct: float = 40.0,  # |CE−PE| vs (CE+PE)
         adjust_cooldown_min: int = 15,
         # Post-iron-fly adjustment (default OFF here per §1 — a running delta_neutral deploy is
@@ -78,11 +78,11 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         # set_ironfly_adjust). When a breakeven is breached, sell a naked ~15-20Δ short on the
         # untested side and roll it as it decays; exit all if the expiry payoff goes fully negative.
         ironfly_adjust: bool = False,
-        adjust_target_delta: float = 0.175,   # 15-20Δ midpoint for the untested-side sell
-        adjust_close_delta: float = 0.10,     # roll the adjustment leg at ≤10Δ ...
-        adjust_close_prem_frac: float = 0.25, # ... OR when its LTP ≤ ¼ of its sold premium
-        profit_target_pct: float = 2.5,      # % of margin_base
-        stop_loss_pct: float = 0.0,          # 0 = off (spec-faithful)
+        adjust_target_delta: float = 0.175,  # 15-20Δ midpoint for the untested-side sell
+        adjust_close_delta: float = 0.10,  # roll the adjustment leg at ≤10Δ ...
+        adjust_close_prem_frac: float = 0.25,  # ... OR when its LTP ≤ ¼ of its sold premium
+        profit_target_pct: float = 2.5,  # % of margin_base
+        stop_loss_pct: float = 0.0,  # 0 = off (spec-faithful)
         risk_free_rate: float = 0.065,
         # Two-cadence model (2026-07-18): profit_check samples the TARGET and the
         # ADJUSTMENT dispatch (owner: profit booking and adjustments share a cadence;
@@ -93,6 +93,10 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         eod_time: str = "15:20",
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
+        # Build-view manual deploy: explicit entry legs [{side,right,strike,expiry ISO,lots}].
+        # When set, the strategy enters these VERBATIM (skipping the delta pick) then runs its
+        # normal management/adjustment. Default None → existing runs unchanged (§1-safe).
+        entry_legs: list[dict] | None = None,
         **_ignored,
     ):
         self.underlying = (underlying or (universe[0] if universe else "BANKNIFTY")).upper()
@@ -121,20 +125,23 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         self.min_leg_oi = int(min_leg_oi)
         self.initial_capital = initial_capital
         self.lot_overrides = lot_overrides
+        self.entry_legs = entry_legs
 
         # ---- state (all persisted) ----
-        self.legs: list[dict] = []            # [{symbol, right, dir, units, entry}]
-        self.phase: str = "idle"              # idle | strangle | straddle | ironfly
+        self.legs: list[dict] = []  # [{symbol, right, dir, units, entry}]
+        self.phase: str = "idle"  # idle | strangle | straddle | ironfly
         self.cycle_expiry: str | None = None  # ISO expiry of the open cycle
-        self.done_expiry: str | None = None   # last completed cycle (no same-month re-entry)
+        self.done_expiry: str | None = None  # last completed cycle (no same-month re-entry)
         self.margin_base: float = 0.0
         self.margin_source: str = ""
         self.last_adjust_at: str | None = None
         self.adjust_count: int = 0
-        self.entered_day: str | None = None   # entry attempted/made this day (once/day gate)
-        self.force_pending: bool = False       # Live-page force entry (persisted)
-        self.adjust_symbol: str | None = None  # the active untested-side adjustment short (persisted)
-        self.adjust_realized: float = 0.0      # banked P&L from CLOSED adjustment legs (persisted)
+        self.entered_day: str | None = None  # entry attempted/made this day (once/day gate)
+        self.force_pending: bool = False  # Live-page force entry (persisted)
+        self.adjust_symbol: str | None = (
+            None  # the active untested-side adjustment short (persisted)
+        )
+        self.adjust_realized: float = 0.0  # banked P&L from CLOSED adjustment legs (persisted)
         # Latest broker basket margin pushed by the live manager (NOT persisted — it
         # re-arrives within a tick of recovery). margin_base freezes from this only.
         self._broker_margin: float | None = None
@@ -167,8 +174,9 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         if chain is None:
             return []
         try:
-            return sorted(date.fromisoformat(str(e)[:10])
-                          for e in chain.expiries(self.underlying, today))
+            return sorted(
+                date.fromisoformat(str(e)[:10]) for e in chain.expiries(self.underlying, today)
+            )
         except Exception:  # pragma: no cover - chain hiccup → no entry this tick
             return []
 
@@ -221,7 +229,11 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             self.adjust_count = 0
             self.last_adjust_at = None
 
-        if self.force_pending:
+        # A force button, or a manual Build-view deploy (explicit entry_legs + force_entry), enters
+        # on the NEXT tick — bypassing the entry-day + window gates. The done_expiry gate + the
+        # legs' fixed expiries keep a manual deploy one-shot; a normal force_entry run still honors
+        # the window via _is_entry_day below (unchanged).
+        if self.force_pending or (self.entry_legs and self.force_entry):
             got = self._try_enter(ctx, now, today)
             if got:
                 self.force_pending = False
@@ -260,12 +272,17 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
     def _t_years(self, expiry: date, now: datetime) -> float:
         # Live now() is IST-aware; backtest/test clocks are naive — build the expiry
         # timestamp in the SAME tz-ness or the subtraction raises (bit run 203).
-        exp_dt = datetime(expiry.year, expiry.month, expiry.day,
-                          _EXPIRY_CUTOFF.hour, _EXPIRY_CUTOFF.minute, tzinfo=now.tzinfo)
+        exp_dt = datetime(
+            expiry.year,
+            expiry.month,
+            expiry.day,
+            _EXPIRY_CUTOFF.hour,
+            _EXPIRY_CUTOFF.minute,
+            tzinfo=now.tzinfo,
+        )
         return max((exp_dt - now).total_seconds(), 0.0) / (365.0 * 86400.0)
 
-    def _leg_delta(self, spot: float, k: float, t: float, right: str,
-                   prem: float) -> float | None:
+    def _leg_delta(self, spot: float, k: float, t: float, right: str, prem: float) -> float | None:
         """Absolute BS delta of a leg, IV solved from its own LTP. None if unsolvable."""
         if t <= 0 or prem is None:
             return None
@@ -274,9 +291,15 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             return None
         return abs(bs.delta(spot, k, t, self.r, iv, right))
 
-    def _pick_delta_strike(self, rows: dict[float, dict], side: str, spot: float,
-                           t: float, target_delta: float | None = None,
-                           exclude: set[float] | None = None) -> tuple[float, float] | None:
+    def _pick_delta_strike(
+        self,
+        rows: dict[float, dict],
+        side: str,
+        spot: float,
+        t: float,
+        target_delta: float | None = None,
+        exclude: set[float] | None = None,
+    ) -> tuple[float, float] | None:
         """(strike, ltp) whose BS |delta| (IV solved from its own LTP) is nearest
         ``target_delta`` (defaults to ``self.target_delta``). OTM rows only — the target-Δ
         strike is OTM by definition. ``exclude`` strikes are skipped (see _open_untested:
@@ -311,7 +334,97 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         if self.margin_source != "broker":
             self.margin_source = "pending"
 
+    # ---------------------------------------------------- manual (Build-view) entry
+    def _manual_spec_expiry(self, ctx, today: date, spec: dict) -> date | None:
+        """A leg's expiry: an ISO date verbatim, or a 'near'/'far'/empty keyword → the current
+        monthly (the base's normal cycle expiry)."""
+        which = str(spec.get("expiry", "")).lower()
+        if which and which not in ("near", "far"):
+            try:
+                return date.fromisoformat(which[:10])
+            except (ValueError, TypeError):
+                return None
+        return self._current_monthly(self._listed_expiries(ctx, today), today)
+
+    def _enter_manual_generic(self, ctx, now: datetime, today: date) -> list[Signal]:
+        """Enter the owner's explicit legs VERBATIM (Build-view manual deploy), then let the
+        strategy's normal _manage/adjustment run. Phase is inferred: any long leg → an
+        already-hedged 'ironfly' (→ _adjust_ironfly), else a naked 'strangle' (→ _maybe_adjust)."""
+        exps: list[date] = []
+        for spec in self.entry_legs:
+            e = self._manual_spec_expiry(ctx, today, spec)
+            if e is None:
+                return []
+            if e not in exps:
+                exps.append(e)
+        if not exps:
+            return []
+        exps.sort()
+        cycle = exps[0]
+        if cycle.isoformat() == self.done_expiry:
+            return []
+        spot_fn = getattr(ctx.market, "index_spot", None)
+        spot = spot_fn(self.underlying) if spot_fn else None
+        if spot is None or bad_close(spot):
+            return []
+        chains: dict[str, dict] = {}
+        for e in exps:
+            rows = self._chain_rows(ctx, e.isoformat())
+            if rows is None:
+                return []
+            chains[e.isoformat()] = rows
+        legs = []
+        for spec in self.entry_legs:
+            try:
+                exp = self._manual_spec_expiry(ctx, today, spec)
+                right = str(spec["right"]).upper()
+                strike = float(spec["strike"])
+                direction = -1 if str(spec.get("side", "sell")).lower() == "sell" else 1
+                lots = int(spec.get("lots", self.lots) or self.lots)
+                per_lot = lot_size_for(self.underlying, exp, overrides=self.lot_overrides)
+                prem = self._ltp((chains[exp.isoformat()].get(strike) or {}).get(right.lower()))
+                if prem is None:
+                    return []
+                sym = make(
+                    self.underlying,
+                    exp,
+                    strike,
+                    right,
+                    lot_size=per_lot,
+                    lot_overrides=self.lot_overrides,
+                ).symbol
+                legs.append(
+                    {
+                        "symbol": sym,
+                        "right": right,
+                        "dir": direction,
+                        "units": float(lots * per_lot),
+                        "entry": prem,
+                    }
+                )
+            except (KeyError, ValueError, TypeError):
+                return []
+        self.legs = legs
+        self.phase = "ironfly" if any(leg["dir"] > 0 for leg in legs) else "strangle"
+        self.cycle_expiry = cycle.isoformat()
+        self.entered_day = today.isoformat()
+        self.adjust_count = 0
+        self.last_adjust_at = None
+        self._freeze_margin(ctx, float(spot))
+        return [
+            Signal(
+                leg["symbol"],
+                SignalAction.ENTER_SHORT if leg["dir"] < 0 else SignalAction.ENTER_LONG,
+                quantity=int(leg["units"]),
+                reason="manual_entry",
+                meta={"multiplier": 1},
+            )
+            for leg in legs
+        ]
+
     def _try_enter(self, ctx, now: datetime, today: date) -> list[Signal]:
+        if self.entry_legs:
+            return self._enter_manual_generic(ctx, now, today)
         expiries = self._listed_expiries(ctx, today)
         expiry = self._current_monthly(expiries, today)
         if expiry is None or expiry.isoformat() == self.done_expiry:
@@ -335,14 +448,18 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         units = float(self.lots * per_lot)
 
         def sym(k: float, right: str) -> str:
-            return make(self.underlying, expiry, float(k), right, lot_size=per_lot,
-                        lot_overrides=self.lot_overrides).symbol
+            return make(
+                self.underlying,
+                expiry,
+                float(k),
+                right,
+                lot_size=per_lot,
+                lot_overrides=self.lot_overrides,
+            ).symbol
 
         self.legs = [
-            {"symbol": sym(ce[0], "CE"), "right": "CE", "dir": -1, "units": units,
-             "entry": ce[1]},
-            {"symbol": sym(pe[0], "PE"), "right": "PE", "dir": -1, "units": units,
-             "entry": pe[1]},
+            {"symbol": sym(ce[0], "CE"), "right": "CE", "dir": -1, "units": units, "entry": ce[1]},
+            {"symbol": sym(pe[0], "PE"), "right": "PE", "dir": -1, "units": units, "entry": pe[1]},
         ]
         self.phase = "strangle"
         self.cycle_expiry = expiry.isoformat()
@@ -351,8 +468,13 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         self.last_adjust_at = None
         self._freeze_margin(ctx, float(spot))
         return [
-            Signal(leg["symbol"], SignalAction.ENTER_SHORT, quantity=int(leg["units"]),
-                   reason="dnm_entry", meta={"multiplier": 1})
+            Signal(
+                leg["symbol"],
+                SignalAction.ENTER_SHORT,
+                quantity=int(leg["units"]),
+                reason="dnm_entry",
+                meta={"multiplier": 1},
+            )
             for leg in self.legs
         ]
 
@@ -411,8 +533,9 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             last = last.replace(tzinfo=now.tzinfo)
         return (now - last).total_seconds() < self.adjust_cooldown_min * 60
 
-    def _maybe_adjust(self, ctx, live: list[dict], marks: dict[str, float],
-                      now: datetime) -> list[Signal]:
+    def _maybe_adjust(
+        self, ctx, live: list[dict], marks: dict[str, float], now: datetime
+    ) -> list[Signal]:
         ce_leg = next((leg for leg in live if leg["right"] == "CE" and leg["dir"] < 0), None)
         pe_leg = next((leg for leg in live if leg["right"] == "PE" and leg["dir"] < 0), None)
         if ce_leg is None or pe_leg is None:
@@ -439,16 +562,34 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             return []  # nearest match IS the current strike — nothing to roll
 
         per_lot = int(cheap["units"] // self.lots) or 1
-        new_sym = make(self.underlying, expiry, float(new_k), cheap["right"],
-                       lot_size=per_lot, lot_overrides=self.lot_overrides).symbol
+        new_sym = make(
+            self.underlying,
+            expiry,
+            float(new_k),
+            cheap["right"],
+            lot_size=per_lot,
+            lot_overrides=self.lot_overrides,
+        ).symbol
         signals = [
             Signal(cheap["symbol"], SignalAction.EXIT_ALL, reason="dnm_roll"),
-            Signal(new_sym, SignalAction.ENTER_SHORT, quantity=int(cheap["units"]),
-                   reason="dnm_roll", meta={"multiplier": 1}),
+            Signal(
+                new_sym,
+                SignalAction.ENTER_SHORT,
+                quantity=int(cheap["units"]),
+                reason="dnm_roll",
+                meta={"multiplier": 1},
+            ),
         ]
         self.legs = [leg for leg in self.legs if leg["symbol"] != cheap["symbol"]]
-        self.legs.append({"symbol": new_sym, "right": cheap["right"], "dir": -1,
-                          "units": cheap["units"], "entry": new_ltp})
+        self.legs.append(
+            {
+                "symbol": new_sym,
+                "right": cheap["right"],
+                "dir": -1,
+                "units": cheap["units"],
+                "entry": new_ltp,
+            }
+        )
         self.adjust_count += 1
         self.last_adjust_at = now.isoformat()
 
@@ -461,13 +602,32 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             for k, right in ((up_k, "CE"), (dn_k, "PE")):
                 row = rows.get(float(k), {}).get(right.lower())
                 prem = self._ltp(row) or 0.0
-                hedge_sym = make(self.underlying, expiry, float(k), right,
-                                 lot_size=per_lot, lot_overrides=self.lot_overrides).symbol
-                signals.append(Signal(hedge_sym, SignalAction.ENTER_LONG,
-                                      quantity=int(cheap["units"]), reason="dnm_ironfly",
-                                      meta={"multiplier": 1}))
-                self.legs.append({"symbol": hedge_sym, "right": right, "dir": 1,
-                                  "units": cheap["units"], "entry": prem})
+                hedge_sym = make(
+                    self.underlying,
+                    expiry,
+                    float(k),
+                    right,
+                    lot_size=per_lot,
+                    lot_overrides=self.lot_overrides,
+                ).symbol
+                signals.append(
+                    Signal(
+                        hedge_sym,
+                        SignalAction.ENTER_LONG,
+                        quantity=int(cheap["units"]),
+                        reason="dnm_ironfly",
+                        meta={"multiplier": 1},
+                    )
+                )
+                self.legs.append(
+                    {
+                        "symbol": hedge_sym,
+                        "right": right,
+                        "dir": 1,
+                        "units": cheap["units"],
+                        "entry": prem,
+                    }
+                )
             self.phase = "ironfly"
         else:
             self.phase = "strangle"
@@ -477,8 +637,9 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         self._freeze_margin(ctx, float(spot))
         return signals
 
-    def _match_premium_strike(self, rows: dict[float, dict], side: str,
-                              target_ltp: float, cap_strike: float):
+    def _match_premium_strike(
+        self, rows: dict[float, dict], side: str, target_ltp: float, cap_strike: float
+    ):
         """(strike, ltp) on ``side`` whose LTP is nearest ``target_ltp``, hard-capped at
         the other side's strike (puts stay ≤ cap, calls stay ≥ cap — never crossing)."""
         best = None
@@ -507,10 +668,16 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         """(be_lo, be_hi) of the CORE iron fly = short strike K ± net credit (Σ short entries −
         Σ long entries, in points). Excludes the active adjustment leg. (None, None) if the
         core straddle isn't present."""
-        shorts = [leg for leg in self.legs if leg["dir"] < 0 and leg["symbol"] != self.adjust_symbol]
+        shorts = [
+            leg for leg in self.legs if leg["dir"] < 0 and leg["symbol"] != self.adjust_symbol
+        ]
         longs = [leg for leg in self.legs if leg["dir"] > 0]
-        k_ce = next((float(leg["symbol"].split("|")[2]) for leg in shorts if leg["right"] == "CE"), None)
-        k_pe = next((float(leg["symbol"].split("|")[2]) for leg in shorts if leg["right"] == "PE"), None)
+        k_ce = next(
+            (float(leg["symbol"].split("|")[2]) for leg in shorts if leg["right"] == "CE"), None
+        )
+        k_pe = next(
+            (float(leg["symbol"].split("|")[2]) for leg in shorts if leg["right"] == "PE"), None
+        )
         if k_ce is None or k_pe is None:
             return None, None
         k = (k_ce + k_pe) / 2.0  # equal for a straddle; average is robust
@@ -533,17 +700,18 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
                 best = pnl
         return best if best is not None else self.adjust_realized
 
-    def _open_untested(self, ctx, rows: dict[float, dict], spot: float, t: float,
-                       now: datetime) -> list[Signal]:
+    def _open_untested(
+        self, ctx, rows: dict[float, dict], spot: float, t: float, now: datetime
+    ) -> list[Signal]:
         """Sell one naked ~adjust_target_delta short on the UNTESTED side, but only if a
         breakeven is breached (else no-op — spot is back inside the fly)."""
         be_lo, be_hi = self._ironfly_breakevens()
         if be_lo is None:
             return []
         if spot > be_hi:
-            side = "pe"          # call side tested → sell the untested PUT
+            side = "pe"  # call side tested → sell the untested PUT
         elif spot < be_lo:
-            side = "ce"          # put side tested → sell the untested CALL
+            side = "ce"  # put side tested → sell the untested CALL
         else:
             return []
         # NEVER re-use a strike the fly already holds on this side — the short would merge into
@@ -556,21 +724,41 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             return []
         k, ltp = pick
         right = "CE" if side == "ce" else "PE"
-        units = next((leg["units"] for leg in self.legs if leg["dir"] < 0
-                      and leg["symbol"] != self.adjust_symbol), float(self.lots))
+        units = next(
+            (
+                leg["units"]
+                for leg in self.legs
+                if leg["dir"] < 0 and leg["symbol"] != self.adjust_symbol
+            ),
+            float(self.lots),
+        )
         per_lot = int(units // self.lots) or 1
-        sym = make(self.underlying, date.fromisoformat(self.cycle_expiry), float(k), right,
-                   lot_size=per_lot, lot_overrides=self.lot_overrides).symbol
+        sym = make(
+            self.underlying,
+            date.fromisoformat(self.cycle_expiry),
+            float(k),
+            right,
+            lot_size=per_lot,
+            lot_overrides=self.lot_overrides,
+        ).symbol
         self.legs.append({"symbol": sym, "right": right, "dir": -1, "units": units, "entry": ltp})
         self.adjust_symbol = sym
         self.last_adjust_at = now.isoformat()
         self.adjust_count += 1
         self._freeze_margin(ctx, spot)
-        return [Signal(sym, SignalAction.ENTER_SHORT, quantity=int(units), reason="ifm_adjust",
-                       meta={"multiplier": 1})]
+        return [
+            Signal(
+                sym,
+                SignalAction.ENTER_SHORT,
+                quantity=int(units),
+                reason="ifm_adjust",
+                meta={"multiplier": 1},
+            )
+        ]
 
-    def _adjust_ironfly(self, ctx, live: list[dict], marks: dict[str, float],
-                        now: datetime) -> list[Signal]:
+    def _adjust_ironfly(
+        self, ctx, live: list[dict], marks: dict[str, float], now: datetime
+    ) -> list[Signal]:
         """Repair the iron fly once a breakeven is breached: sell a naked ~15-20Δ short on the
         untested side and harvest/roll it; exit ALL if no expiry outcome stays profitable."""
         spot_fn = getattr(ctx.market, "index_spot", None)
@@ -595,11 +783,16 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
                 self.adjust_symbol = None
             else:
                 ltp = marks.get(leg["symbol"])
-                d = (self._leg_delta(spot, float(leg["symbol"].split("|")[2]), t,
-                                     leg["right"], ltp) if ltp is not None else None)
-                decayed = ((d is not None and d <= self.adjust_close_delta)
-                           or (ltp is not None and leg["entry"] > 0
-                               and ltp <= self.adjust_close_prem_frac * leg["entry"]))
+                d = (
+                    self._leg_delta(spot, float(leg["symbol"].split("|")[2]), t, leg["right"], ltp)
+                    if ltp is not None
+                    else None
+                )
+                decayed = (d is not None and d <= self.adjust_close_delta) or (
+                    ltp is not None
+                    and leg["entry"] > 0
+                    and ltp <= self.adjust_close_prem_frac * leg["entry"]
+                )
                 if not decayed:
                     return []  # hold the adjustment leg
                 # close it (bank the harvested credit) → re-sell below if still breached
@@ -634,17 +827,25 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         return target, stop
 
     def exit_rules(self) -> list[str]:
-        rules = [f"Book profit at +{self.target_pct:g}% of broker margin "
-                 f"({self._cadence_phrase('profit')})"]
+        rules = [
+            f"Book profit at +{self.target_pct:g}% of broker margin "
+            f"({self._cadence_phrase('profit')})"
+        ]
         if self.stop_pct > 0:
-            rules.append(f"Stop out at −{self.stop_pct:g}% of broker margin "
-                         f"({self._cadence_phrase('stop')})")
-        rules.append(f"Adjust when |CE−PE| > {self.adjust_threshold_pct:g}% of combined "
-                     "(cheap side rolls; straddle max → iron fly)")
+            rules.append(
+                f"Stop out at −{self.stop_pct:g}% of broker margin "
+                f"({self._cadence_phrase('stop')})"
+            )
+        rules.append(
+            f"Adjust when |CE−PE| > {self.adjust_threshold_pct:g}% of combined "
+            "(cheap side rolls; straddle max → iron fly)"
+        )
         if self.ironfly_adjust:
-            rules.append("Iron fly: on a breakeven breach, sell ~15-20Δ on the untested side "
-                         "and roll it (≤10Δ / ≤¼ premium); exit all if the payoff turns fully "
-                         "negative")
+            rules.append(
+                "Iron fly: on a breakeven breach, sell ~15-20Δ on the untested side "
+                "and roll it (≤10Δ / ≤¼ premium); exit all if the payoff turns fully "
+                "negative"
+            )
         return rules
 
     # --------------------------------------------------------------- monitor
@@ -656,8 +857,7 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             "margin_base": self.margin_base,
             "margin_source": self.margin_source,
             "target_amt": self.margin_base * self.target_pct / 100.0,
-            "stop_amt": (self.margin_base * self.stop_pct / 100.0)
-            if self.stop_pct > 0 else None,
+            "stop_amt": (self.margin_base * self.stop_pct / 100.0) if self.stop_pct > 0 else None,
             "adjust_count": self.adjust_count,
             "cycle_expiry": self.cycle_expiry,
             "ironfly_adjust": self.ironfly_adjust,

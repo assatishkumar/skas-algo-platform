@@ -18,6 +18,7 @@ from .call_ratio_monthly import (
 from .custom_equity import CustomEquityStrategy
 from .custom_options import CustomOptionsStrategy
 from .delta_neutral_monthly import DeltaNeutralMonthlyStrategy
+from .double_diagonal_calendar import DoubleDiagonalCalendarStrategy
 from .donchian_strangle_bt import DonchianStrangleBtStrategy
 from .iron_fly_monthly import IronFlyMonthlyStrategy
 from .donchian_strangle_monthly import DonchianStrangleMonthlyStrategy
@@ -51,6 +52,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     CallPutRatioExpiryStrategy.strategy_id: CallPutRatioExpiryStrategy,
     BrokerSmokeTestStrategy.strategy_id: BrokerSmokeTestStrategy,
     DeltaNeutralMonthlyStrategy.strategy_id: DeltaNeutralMonthlyStrategy,
+    DoubleDiagonalCalendarStrategy.strategy_id: DoubleDiagonalCalendarStrategy,
     IronFlyMonthlyStrategy.strategy_id: IronFlyMonthlyStrategy,
     Ema21MomentumStrategy.strategy_id: Ema21MomentumStrategy,
     MomentumThetaGainerIntra.strategy_id: MomentumThetaGainerIntra,

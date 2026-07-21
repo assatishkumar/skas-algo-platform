@@ -91,14 +91,16 @@ class CustomOptionsStrategy:
         entry premium is read from ``ctx.close`` (live LTP on a live run, else the cached
         mark). This lets a live deployment of ANY listed contract (incl. stock F&O whose
         EOD chain isn't cached) fill at the real price."""
-        expiry = self._expiry_date()
-        if expiry is None:
-            return []
-        per_lot = self._per_lot(expiry)
-        if per_lot <= 0:
-            return []
+        default_expiry = self._expiry_date()
         resolved: list[tuple[int, str, str, float, float]] = []
         for i, leg in enumerate(self.leg_defs):
+            # Per-leg expiry (calendars/diagonals); legs without one use the trade's default.
+            expiry = self._leg_expiry(leg, default_expiry)
+            if expiry is None:
+                return []
+            per_lot = self._per_lot(expiry)
+            if per_lot <= 0:
+                return []
             right = str(leg["right"]).upper()
             side = str(leg["side"]).lower()
             lots = int(leg.get("lots", 1) or 1)
@@ -209,6 +211,16 @@ class CustomOptionsStrategy:
         if isinstance(e, date):
             return e
         return date.fromisoformat(str(e)[:10]) if e else None
+
+    def _leg_expiry(self, leg: dict, default: date | None) -> date | None:
+        """A leg's own expiry (calendars) or the trade default. Bad/absent value → default."""
+        e = leg.get("expiry")
+        if not e:
+            return default
+        try:
+            return date.fromisoformat(str(e)[:10])
+        except (ValueError, TypeError):
+            return default
 
     def _risk_base(self, ctx=None) -> float:
         """Rupee base the combined target/stop % apply to: |net entry premium| of open legs."""

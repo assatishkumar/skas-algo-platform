@@ -94,8 +94,8 @@ class LiveStartRequest(BaseModel):
     notes: str | None = None
     symbols: list[str] = Field(default_factory=list)
     universe: str | None = None
-    instrument_class: str = "STOCK"   # "STOCK" | "DERIV" (options)
-    underlying: str | None = None     # DERIV: NIFTY/BANKNIFTY
+    instrument_class: str = "STOCK"  # "STOCK" | "DERIV" (options)
+    underlying: str | None = None  # DERIV: NIFTY/BANKNIFTY
     capital: float = 2_500_000
     params: dict = Field(default_factory=dict)
     tax_rate: float = 0.20
@@ -117,10 +117,11 @@ class LiveStartRequest(BaseModel):
 class OptionTradeLeg(BaseModel):
     """One leg of a custom option trade picked off the chain."""
 
-    right: str       # "CE" | "PE"
+    right: str  # "CE" | "PE"
     strike: float
-    side: str        # "buy" | "sell"
-    lots: int = 1    # lot-sets (× the contract lot size)
+    side: str  # "buy" | "sell"
+    lots: int = 1  # lot-sets (× the contract lot size)
+    expiry: str | None = None  # per-leg ISO expiry (calendars); None → the trade's default expiry
 
 
 class OptionsTradeDeploy(BaseModel):
@@ -129,13 +130,13 @@ class OptionsTradeDeploy(BaseModel):
 
     name: str
     underlying: str
-    expiry: str                                  # ISO date from the chain
+    expiry: str  # ISO date from the chain
     legs: list[OptionTradeLeg] = Field(default_factory=list)
-    lot_size: int = 0                            # explicit contract lot size (required for stock F&O)
+    lot_size: int = 0  # explicit contract lot size (required for stock F&O)
     capital: float = 1_000_000
-    spot_upper: float | None = None              # exit-all band on the underlying spot
+    spot_upper: float | None = None  # exit-all band on the underlying spot
     spot_lower: float | None = None
-    target_pct: float | None = None              # combined P&L target, % of net entry premium
+    target_pct: float | None = None  # combined P&L target, % of net entry premium
     stop_pct: float | None = None
     leg_targets: dict[int, float] | None = None  # {leg_index: %} per-leg premium target
     leg_stops: dict[int, float] | None = None
@@ -162,7 +163,7 @@ class DonchianAnalyzeRequest(BaseModel):
 
     broker_account_id: int
     names: list[DonchianNameInput] = Field(default_factory=list)
-    range_start: str | None = None    # ISO overrides (else resolved from the monthly calendar)
+    range_start: str | None = None  # ISO overrides (else resolved from the monthly calendar)
     range_end: str | None = None
     entry_date: str | None = None
     sell_expiry: str | None = None
@@ -171,13 +172,13 @@ class DonchianAnalyzeRequest(BaseModel):
     hv_window: int = 20
     skip_leg_min_premium_pct: float = 0.5  # % of spot
     round_out: bool = False
-    breakout_atm: bool = True              # spot beyond range → sell the ATM opposite leg (skip ITM)
+    breakout_atm: bool = True  # spot beyond range → sell the ATM opposite leg (skip ITM)
     lots_per_name: int = 1
     min_dte: int = 7
     # Entry gates ported from the backtest loss study (0 = off): vol compression + tight
     # channel marked the worst entries. Excluded rows keep their legs (deployable override).
-    min_hv_ratio: float = 0.0              # exclude when HV(hv_window)/HV60 < this (~0.85)
-    min_channel_width_pct: float = 0.0     # exclude when (high−low)/spot·100 < this (~8)
+    min_hv_ratio: float = 0.0  # exclude when HV(hv_window)/HV60 < this (~0.85)
+    min_channel_width_pct: float = 0.0  # exclude when (high−low)/spot·100 < this (~8)
 
 
 class DonchianPortfolioRequest(BaseModel):
@@ -193,7 +194,7 @@ class DonchianPortfolioRequest(BaseModel):
     portfolio_sl_pct: float = 2.0
     portfolio_target_enabled: bool = False
     portfolio_target_pct: float = 50.0  # % of the basis (see portfolio_basis)
-    portfolio_basis: str = "notional"   # "notional" (legacy) | "margin" (stop+target as % of margin)
+    portfolio_basis: str = "notional"  # "notional" (legacy) | "margin" (stop+target as % of margin)
 
 
 class DonchianDeploy(BaseModel):
@@ -202,23 +203,25 @@ class DonchianDeploy(BaseModel):
 
     name: str
     notes: str | None = None
-    sell_expiry: str                              # ISO monthly expiry for all legs
-    legs: list[dict] = Field(default_factory=list)  # [{underlying, right, strike, side, lots, spot, lot_size}]
+    sell_expiry: str  # ISO monthly expiry for all legs
+    legs: list[dict] = Field(
+        default_factory=list
+    )  # [{underlying, right, strike, side, lots, spot, lot_size}]
     capital: float = 5_000_000
     portfolio_sl_pct: float = 2.0
     portfolio_target_enabled: bool = False
     portfolio_target_pct: float = 50.0
-    portfolio_basis: str = "notional"   # "notional" (legacy) | "margin"
+    portfolio_basis: str = "notional"  # "notional" (legacy) | "margin"
     leg_target_enabled: bool = False
-    leg_target_pct: float = 80.0        # % of each leg's own premium → close that leg
+    leg_target_pct: float = 80.0  # % of each leg's own premium → close that leg
     # New deploys flip INTRADAY the moment spot clears a strike (touch), capped at one flip per
     # name per day (the strategy's last_flip_day guard). The strategy constructor still defaults to
     # "close"/2 as the conservative backstop for any param-less recovery (see CLAUDE.md §1); the
     # deploy layer explicitly opts into the intraday behavior here.
-    breach_basis: str = "touch"     # "touch" (intraday) | "close" (EOD)
+    breach_basis: str = "touch"  # "touch" (intraday) | "close" (EOD)
     breach_buffer_pct: float = 0.5  # spot must clear a short strike by this % to flip
     flip_delta: str = "atm"  # "atm" | "30delta"
-    max_flips: int = 3       # up to two rolls (once/day), then close the name on the next breach
+    max_flips: int = 3  # up to two rolls (once/day), then close the name on the next breach
     mode: str = "PAPER"
     quote_source: str = "cache"
     broker_account_id: int | None = None
@@ -260,17 +263,19 @@ class DeltaNeutralDeploy(BaseModel):
     lots: int = 1
     target_delta: float = 0.18
     entry_time: str = "11:00"
-    force_entry: bool = False           # enter next window tick instead of waiting for entry day
+    force_entry: bool = False  # enter next window tick instead of waiting for entry day
     adjust_threshold_pct: float = 40.0
     adjust_cooldown_min: int = 15
-    profit_target_pct: float = 2.5      # % of margin deployed
-    stop_loss_pct: float = 0.0          # 0 = off (spec-faithful)
+    profit_target_pct: float = 2.5  # % of margin deployed
+    stop_loss_pct: float = 0.0  # 0 = off (spec-faithful)
     # Two-cadence model (2026-07-18): live decision sampling. Deploy default = the
     # owner policy (1min); the strategy ctor default stays "tick" so RECOVERED runs
     # keep their recorded behavior (recovery binds params_snapshot, not these).
     profit_check: str = "1min"
     stop_check: str = "1min"
     eod_time: str = "15:20"
+    # Build-view manual deploy: explicit entry legs — enter these verbatim, then run the roll.
+    entry_legs: list[dict] | None = None
     capital: float = 1_000_000
     refresh_seconds: int = 20
     mode: str = "PAPER"
@@ -291,18 +296,63 @@ class IronFlyDeploy(BaseModel):
     underlying: str = "BANKNIFTY"
     lots: int = 1
     entry_time: str = "11:00"
-    force_entry: bool = False           # enter next window tick instead of waiting for entry day
-    ironfly_adjust: bool = True         # the active adjustment (the whole point)
+    force_entry: bool = False  # enter next window tick instead of waiting for entry day
+    ironfly_adjust: bool = True  # the active adjustment (the whole point)
     adjust_target_delta: float = 0.175  # 15-20Δ untested-side sell
     adjust_cooldown_min: int = 15
-    profit_target_pct: float = 2.5      # % of margin deployed
-    stop_loss_pct: float = 0.0          # 0 = off; optional hard MTM floor for the naked tail
+    profit_target_pct: float = 2.5  # % of margin deployed
+    stop_loss_pct: float = 0.0  # 0 = off; optional hard MTM floor for the naked tail
     # Two-cadence model (2026-07-18): live decision sampling. Deploy default = the
     # owner policy (1min); the strategy ctor default stays "tick" so RECOVERED runs
     # keep their recorded behavior (recovery binds params_snapshot, not these).
     profit_check: str = "1min"
     stop_check: str = "1min"
     eod_time: str = "15:20"
+    # Build-view manual deploy: explicit entry legs — enter these verbatim, then run the adjustment.
+    entry_legs: list[dict] | None = None
+    capital: float = 1_000_000
+    refresh_seconds: int = 20
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
+class DoubleDiagonalDeploy(BaseModel):
+    """Deploy double_diagonal_calendar: a NIFTY double-diagonal calendar — a near short strangle +
+    farther long hedges (the first TWO-expiry position). Delta-first (shorts ~20-25Δ, hedges
+    ~15-20Δ) with a manual bias skew, ±%-of-broker-margin exits, and the untested-short roll +
+    far-hedge drag adjustment. Manual deploy (deploy-once), auto-managed. Live-chain-driven (two
+    chains) → broker quote source required; no backtest. ``entry_legs`` (optional) overrides the
+    delta pick with explicit legs from the Build view."""
+
+    name: str
+    notes: str | None = None
+    underlying: str = "NIFTY"
+    lots: int = 1
+    short_target_delta: float = 0.225  # near shorts (20-25Δ)
+    hedge_target_delta: float = 0.175  # far hedges (15-20Δ)
+    near_min_dte: int = 5
+    far_min_dte: int = 10
+    bias: str = "neutral"  # up | neutral | down (manual skew knob)
+    bias_skew: float = 0.05
+    entry_time: str = "11:00"
+    entry_weekday: int = 0  # 0 = Monday
+    recurring: bool = False  # deploy-once; the owner owns the next cycle
+    force_entry: bool = False
+    adjust_cooldown_min: int = 15
+    adjust_close_delta: float = 0.10
+    adjust_close_prem_frac: float = 0.25
+    min_adjust_dte: int = 3
+    profit_target_pct: float = 1.5  # % of broker margin
+    stop_loss_pct: float = 1.5
+    # Two-cadence: deploy default = owner policy (1min); ctor default stays "tick" (recovered
+    # runs unchanged — §1). eod_time squares the structure at the near expiry.
+    profit_check: str = "1min"
+    stop_check: str = "1min"
+    eod_time: str = "15:20"
+    entry_legs: list[dict] | None = None  # manual Build-view override (explicit legs)
     capital: float = 1_000_000
     refresh_seconds: int = 20
     mode: str = "PAPER"
@@ -319,18 +369,18 @@ class SmokeTestDeploy(BaseModel):
     hard-coded to 1 lot / 1 share in the strategy; mode=LIVE is the whole point but the
     §1 gates (armed ∧ flag ∧ adapter) still decide whether orders are real."""
 
-    leg: str = "option"                 # "option" | "stock"
+    leg: str = "option"  # "option" | "stock"
     name: str | None = None
-    underlying: str = "NIFTY"           # option leg
-    right: str = "CE"                   # option leg: CE | PE
-    symbol: str = "ITC"                 # stock leg
+    underlying: str = "NIFTY"  # option leg
+    right: str = "CE"  # option leg: CE | PE
+    symbol: str = "ITC"  # stock leg
     hold_seconds: int = Field(60, ge=15, le=600)
-    target_premium: float = 10.0        # option leg: strike trading nearest this…
-    premium_min: float = 5.0            # …within this band
+    target_premium: float = 10.0  # option leg: strike trading nearest this…
+    premium_min: float = 5.0  # …within this band
     premium_max: float = 20.0
     capital: float = 50_000
     refresh_seconds: int = Field(10, ge=5)  # fast ticks so the 60s hold is honored ±10s
-    mode: str = "PAPER"                 # UI requires a typed confirmation for LIVE
+    mode: str = "PAPER"  # UI requires a typed confirmation for LIVE
     quote_source: str = "zerodha"
     broker_account_id: int | None = None
 
@@ -343,11 +393,11 @@ class CpRatioExpiryDeploy(BaseModel):
     name: str
     notes: str | None = None
     underlyings: list[str] = Field(default_factory=lambda: ["NIFTY"])
-    sets: dict[str, int] = Field(default_factory=dict)   # 1 set = buy1 + sell3 per side
+    sets: dict[str, int] = Field(default_factory=dict)  # 1 set = buy1 + sell3 per side
     entry_start: str = "09:20"
     entry_end: str = "09:27"
     eod_exit: str = "15:20"
-    profit_target_pct: float = 1.1      # % of margin deployed
+    profit_target_pct: float = 1.1  # % of margin deployed
     stop_loss_pct: float = 1.0
     ratio_tolerance_pct: float = 30.0
     # Two-cadence model (2026-07-18): live decision sampling. Deploy default = the
@@ -372,16 +422,16 @@ class IntradayStraddleDeploy(BaseModel):
 
     name: str
     notes: str | None = None
-    underlying: str = "NIFTY"           # NIFTY or BANKNIFTY, one per deployment
+    underlying: str = "NIFTY"  # NIFTY or BANKNIFTY, one per deployment
     lots: int = 1
-    strike_delta: float = 0.0           # 0 = ATM straddle; e.g. 0.6 = slight-ITM (by BS delta)
+    strike_delta: float = 0.0  # 0 = ATM straddle; e.g. 0.6 = slight-ITM (by BS delta)
     entry_time: str = "09:18"
     entry_window_end: str = "15:00"
     exit_time: str = "15:25"
-    stop_loss_pct: float = 2.0          # fixed SL, % of broker margin
-    trail_trigger_pct: float = 1.0      # every this much peak profit moves the stop
-    trail_step_pct: float = 0.5         # ...by this much (0 on either disables trailing)
-    trail_mode: str = "ratchet"         # "ratchet" | "below_peak"
+    stop_loss_pct: float = 2.0  # fixed SL, % of broker margin
+    trail_trigger_pct: float = 1.0  # every this much peak profit moves the stop
+    trail_step_pct: float = 0.5  # ...by this much (0 on either disables trailing)
+    trail_mode: str = "ratchet"  # "ratchet" | "below_peak"
     # Two-cadence model (2026-07-18): live decision sampling. Deploy default = the
     # owner policy (1min); the strategy ctor default stays "tick" so RECOVERED runs
     # keep their recorded behavior (recovery binds params_snapshot, not these).
@@ -402,18 +452,19 @@ class WeeklyIntradayStraddleDeploy(BaseModel):
     strike is locked once per weekly expiry cycle (09:20 on expiry+1, nearest 100) and traded
     every day: SELL when the combined premium closes below both its VWAP and the prior day's
     intraday low; exit on a VWAP cross-up or 15:25; up to max_entries_per_day. Optional MTM stop
-    (% of broker margin), default off. Live-chain + Kite option bars → broker source; no backtest."""
+    (% of broker margin), default off. Live-chain + Kite option bars → broker source; no backtest.
+    """
 
     name: str
     notes: str | None = None
-    underlying: str = "NIFTY"           # NIFTY only for v1
+    underlying: str = "NIFTY"  # NIFTY only for v1
     lots: int = 1
-    entry_start: str = "09:20"          # cycle lock time + daily entry-window open
-    entry_cutoff: str = "15:20"         # no fresh entries after this
-    eod_exit: str = "15:25"             # hard intraday square-off
+    entry_start: str = "09:20"  # cycle lock time + daily entry-window open
+    entry_cutoff: str = "15:20"  # no fresh entries after this
+    eod_exit: str = "15:25"  # hard intraday square-off
     candle_minutes: int = 5
     max_entries_per_day: int = 3
-    stop_loss_pct: float = 0.0          # optional MTM stop, % of broker margin; 0 = OFF
+    stop_loss_pct: float = 0.0  # optional MTM stop, % of broker margin; 0 = OFF
     # Stop-cadence only (no profit-booking decision exists — VWAP exits, bar-driven).
     stop_check: str = "1min"
     eod_time: str = "15:20"
@@ -435,14 +486,14 @@ class MomentumThetaDeploy(BaseModel):
     name: str
     notes: str | None = None
     underlyings: list[str] = Field(default_factory=lambda: ["NIFTY"])
-    lots: dict[str, int] = Field(default_factory=dict)   # per-underlying lots (default 1)
+    lots: dict[str, int] = Field(default_factory=dict)  # per-underlying lots (default 1)
     st_period: int = 7
     st_multiplier: float = 3.0
     candle_minutes: int = 15
     max_trades_per_day: int = 3
     eod_exit: str = "15:20"
     entry_cutoff: str = "15:00"
-    min_dte: int = 0            # 0 → sell the 0DTE weekly on expiry day
+    min_dte: int = 0  # 0 → sell the 0DTE weekly on expiry day
     capital: float = 500_000
     # 15s ticks so a candle close is evaluated promptly (loop clamps to ≥5s).
     refresh_seconds: int = 15
@@ -458,14 +509,14 @@ class EquityTradeDeploy(BaseModel):
 
     name: str
     symbol: str
-    qty: int = 0                  # explicit share count; 0 → size from capital
+    qty: int = 0  # explicit share count; 0 → size from capital
     capital: float = 1_000_000
     entry_mode: str = "immediate"  # "immediate" | "trigger" (engine-managed GTT)
     trigger_price: float | None = None
-    target_pct: float | None = None   # % from entry
-    stop_pct: float | None = None     # % from entry
+    target_pct: float | None = None  # % from entry
+    stop_pct: float | None = None  # % from entry
     trailing: bool = False
-    trail_pct: float | None = None    # % below the high-water mark
+    trail_pct: float | None = None  # % below the high-water mark
     mode: str = "PAPER"
     quote_source: str = "cache"
     broker_account_id: int | None = None
@@ -480,7 +531,7 @@ class GoLiveRequest(BaseModel):
     broker_account_id: int
     keep_paper_running: bool = True
     capital: float | None = None  # optional resize (UI deferred)
-    lots: int | None = None       # optional resize (UI deferred)
+    lots: int | None = None  # optional resize (UI deferred)
 
 
 class BrokerConnectRequest(BaseModel):
@@ -559,12 +610,12 @@ class DonchianStudyRequest(BaseModel):
     universe: str = "nifty50"
     symbols: list[str] = Field(default_factory=list)  # explicit list overrides the universe
     start_date: date = date(2010, 1, 1)
-    end_date: date | None = None      # None → today
-    buffer_pct: float = 0.5           # breach must clear the edge by this % (live default)
-    basis: str = "touch"              # "touch" (day high/low) | "close" (day close)
-    max_flips: int = 3                # live deploy default: two rolls, then close the name
-    include_index: bool = True        # add the NIFTY 50 row alongside the stocks
-    detail: bool = True               # include per-name-per-cycle rows (~10k small rows)
+    end_date: date | None = None  # None → today
+    buffer_pct: float = 0.5  # breach must clear the edge by this % (live default)
+    basis: str = "touch"  # "touch" (day high/low) | "close" (day close)
+    max_flips: int = 3  # live deploy default: two rolls, then close the name
+    include_index: bool = True  # add the NIFTY 50 row alongside the stocks
+    detail: bool = True  # include per-name-per-cycle rows (~10k small rows)
 
 
 class BsCalibrationRequest(BaseModel):
@@ -576,7 +627,7 @@ class BsCalibrationRequest(BaseModel):
     names: list[str] = Field(default_factory=list)  # empty → nifty50 resolved server-side
     hv_window: int = 20
     r: float = 0.065
-    sell_expiry: str | None = None    # ISO; None → resolved like the screener (min_dte=7)
+    sell_expiry: str | None = None  # ISO; None → resolved like the screener (min_dte=7)
     round_out: bool = False
 
 
@@ -588,8 +639,8 @@ class LossStudyRequest(BaseModel):
     no broker session, read-only, never an order path."""
 
     start_date: date = date(2021, 7, 29)
-    end_date: date | None = None            # None → the store's last captured day
-    oos_start: date = date(2024, 7, 1)      # cycles entered on/after this validate the fit
+    end_date: date | None = None  # None → the store's last captured day
+    oos_start: date = date(2024, 7, 1)  # cycles entered on/after this validate the fit
     capital: float = 1_000_000
     margin_per_lot: float = 300_000
     lots: int = 3

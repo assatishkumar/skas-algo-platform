@@ -18,6 +18,7 @@ from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
     CpRatioExpiryDeploy,
     DeltaNeutralDeploy,
+    DoubleDiagonalDeploy,
     IntradayStraddleDeploy,
     IronFlyDeploy,
     DonchianAnalyzeRequest,
@@ -84,11 +85,13 @@ def option_trade_margin(
         return {"margin": None, "source": None}
     sized = [
         {
-            "symbol": make(body.underlying.upper(), exp, float(leg.strike), leg.right.upper(),
-                           lot_size=per_lot).symbol,
+            "symbol": make(
+                body.underlying.upper(), exp, float(leg.strike), leg.right.upper(), lot_size=per_lot
+            ).symbol,
             "direction": -1 if leg.side.lower() == "sell" else 1,
             "units": int(leg.lots) * per_lot,
-            "right": leg.right.upper(), "strike": float(leg.strike),
+            "right": leg.right.upper(),
+            "strike": float(leg.strike),
         }
         for leg in body.legs
     ]
@@ -107,7 +110,9 @@ def option_trade_margin(
     if spot is None:
         return {"margin": None, "source": None}
     p = MarginParams()
-    total = sum(short_option_margin(spot, leg["units"], 1, p) for leg in sized if leg["direction"] < 0)
+    total = sum(
+        short_option_margin(spot, leg["units"], 1, p) for leg in sized if leg["direction"] < 0
+    )
     return {"margin": float(total), "source": "model"}
 
 
@@ -156,17 +161,19 @@ async def deploy_option_trade(
 class FibRetRequest(BaseModel):
     broker_account_id: int
     symbols: list[str]
-    expiry: str | None = None        # ISO; default = nearest listed expiry with DTE ≥ min_dte
-    swing_lookback: int = 20         # trading days for the swing high/low (recent swing)
-    entry_fib: float = 1.618         # short-strike extension level
-    stop_fib: float = 0.786          # spot stop level
-    target_pct: float = 90.0         # whole percent (UI) → fraction at deploy
-    min_oi: int = 0                  # liquidity floor for the ⚑ flag
+    expiry: str | None = None  # ISO; default = nearest listed expiry with DTE ≥ min_dte
+    swing_lookback: int = 20  # trading days for the swing high/low (recent swing)
+    entry_fib: float = 1.618  # short-strike extension level
+    stop_fib: float = 0.786  # spot stop level
+    target_pct: float = 90.0  # whole percent (UI) → fraction at deploy
+    min_oi: int = 0  # liquidity floor for the ⚑ flag
     lots: int = 1
     min_dte: int = 7
 
 
-def _pick_expiry(adapter, symbol: str, requested: str | None, on_date: date, min_dte: int) -> date | None:
+def _pick_expiry(
+    adapter, symbol: str, requested: str | None, on_date: date, min_dte: int
+) -> date | None:
     if requested:
         return date.fromisoformat(requested[:10])
     try:
@@ -190,8 +197,12 @@ def fibret_analyze(
     adapter = _live_adapter(body.broker_account_id, db)  # 4xx if no valid session
     on_date = date.today()
     params = FibParams(
-        swing_lookback=body.swing_lookback, entry_fib=body.entry_fib, stop_fib=body.stop_fib,
-        target_pct=(body.target_pct / 100.0), lots=max(1, body.lots), min_oi=body.min_oi,
+        swing_lookback=body.swing_lookback,
+        entry_fib=body.entry_fib,
+        stop_fib=body.stop_fib,
+        target_pct=(body.target_pct / 100.0),
+        lots=max(1, body.lots),
+        min_oi=body.min_oi,
     )
     rows: list[dict] = []
     for raw in body.symbols:
@@ -217,10 +228,17 @@ def fibret_analyze(
         if not chain:
             rows.append({"symbol": sym, "error": f"no listed options for {exp.isoformat()}"})
             continue
-        rows.append(analyze_symbol(symbol=sym, df=df, chain=chain, expiry=exp, on_date=on_date, params=params))
+        rows.append(
+            analyze_symbol(
+                symbol=sym, df=df, chain=chain, expiry=exp, on_date=on_date, params=params
+            )
+        )
     from skas_algo.services.vault_export import journal_safe
+
     setups = sum(1 for r in rows if not r.get("error") and r.get("premium"))
-    journal_safe("screen", f"FibRet screen: {len(rows)} symbols, {setups} setups", strategy="fibret")
+    journal_safe(
+        "screen", f"FibRet screen: {len(rows)} symbols, {setups} setups", strategy="fibret"
+    )
     return {
         "as_of": on_date.isoformat(),
         "target_pct": body.target_pct,
@@ -231,6 +249,7 @@ def fibret_analyze(
 
 
 # ───────────────────────────────────── Donchian Strangle Monthly (basket) ─────────────────────────
+
 
 def _d(s: str | None) -> date | None:
     return date.fromisoformat(s[:10]) if s else None
@@ -253,10 +272,15 @@ def donchian_analyze(
     adapter = _live_adapter(body.broker_account_id, db)  # 4xx if no valid session
     today = date.today()
     params = DonchianParams(
-        ivp_min=body.ivp_min, require_iv_gt_hv=body.require_iv_gt_hv, hv_window=body.hv_window,
-        skip_leg_min_premium_pct=body.skip_leg_min_premium_pct, round_out=body.round_out,
-        breakout_atm=body.breakout_atm, lots_per_name=max(1, body.lots_per_name),
-        min_hv_ratio=body.min_hv_ratio, min_channel_width_pct=body.min_channel_width_pct,
+        ivp_min=body.ivp_min,
+        require_iv_gt_hv=body.require_iv_gt_hv,
+        hv_window=body.hv_window,
+        skip_leg_min_premium_pct=body.skip_leg_min_premium_pct,
+        round_out=body.round_out,
+        breakout_atm=body.breakout_atm,
+        lots_per_name=max(1, body.lots_per_name),
+        min_hv_ratio=body.min_hv_ratio,
+        min_channel_width_pct=body.min_channel_width_pct,
     )
     # Live India VIX for the market-stress advisory (the backtest's VIX rule can't act
     # mechanically live — lots are the owner's call — so the UI warns instead).
@@ -266,12 +290,15 @@ def donchian_analyze(
         live_vix = None
     # NIFTY daily series (once) → the index trading calendar (holiday-adjusted anchors) + per-name beta.
     try:
-        nifty_df = cache.get_prices("NIFTY 50", start_date=today - timedelta(days=400), end_date=today)
+        nifty_df = cache.get_prices(
+            "NIFTY 50", start_date=today - timedelta(days=400), end_date=today
+        )
     except Exception:
         nifty_df = None
     trading_days = (
         {(d.date() if hasattr(d, "date") else d) for d in nifty_df["date"].tolist()}
-        if nifty_df is not None and len(nifty_df) else None
+        if nifty_df is not None and len(nifty_df)
+        else None
     )
     # Cycle anchor: listed monthly expiries from a representative name (stocks list monthlies only).
     listed: list[date] = []
@@ -283,15 +310,25 @@ def donchian_analyze(
         if exps:
             listed = sorted({date.fromisoformat(str(e)[:10]) for e in exps})
             break
-    cyc = resolve_cycle(today, listed, trading_days=trading_days,
-                        range_start=_d(body.range_start), range_end=_d(body.range_end),
-                        entry_date=_d(body.entry_date), sell_expiry=_d(body.sell_expiry),
-                        min_dte=body.min_dte)
+    cyc = resolve_cycle(
+        today,
+        listed,
+        trading_days=trading_days,
+        range_start=_d(body.range_start),
+        range_end=_d(body.range_end),
+        entry_date=_d(body.entry_date),
+        sell_expiry=_d(body.sell_expiry),
+        min_dte=body.min_dte,
+    )
     sell, rstart, rend = cyc["sell_expiry"], cyc["range_start"], cyc["range_end"]
     dates = {k: _iso(v) for k, v in cyc.items()}
     if not (sell and rstart and rend):
-        return {"as_of": today.isoformat(), "dates": dates, "rows": [],
-                "error": "could not resolve cycle dates — set them manually"}
+        return {
+            "as_of": today.isoformat(),
+            "dates": dates,
+            "rows": [],
+            "error": "could not resolve cycle dates — set them manually",
+        }
 
     rows: list[dict] = []
     for n in body.names:
@@ -311,18 +348,38 @@ def donchian_analyze(
             rows.append({"symbol": sym, "status": "error", "error": f"live chain failed: {exc}"})
             continue
         if not chain:
-            rows.append({"symbol": sym, "status": "error", "error": f"no listed options for {sell.isoformat()}"})
+            rows.append(
+                {
+                    "symbol": sym,
+                    "status": "error",
+                    "error": f"no listed options for {sell.isoformat()}",
+                }
+            )
             continue
         row = analyze_name(
-            symbol=sym, df=df, chain=chain, sell_expiry=sell, range_start=rstart, range_end=rend,
-            entry_date=cyc["entry_date"], atm_iv=n.atm_iv, ivp=n.ivp, event=n.event, params=params,
+            symbol=sym,
+            df=df,
+            chain=chain,
+            sell_expiry=sell,
+            range_start=rstart,
+            range_end=rend,
+            entry_date=cyc["entry_date"],
+            atm_iv=n.atm_iv,
+            ivp=n.ivp,
+            event=n.event,
+            params=params,
         )
         row["beta"] = beta_from_frames(df, nifty_df)
         rows.append(row)
     from skas_algo.services.vault_export import journal_safe
+
     tradeable = sum(1 for r in rows if r.get("status") in ("strangle", "CE-only", "PE-only"))
-    journal_safe("screen", f"Donchian screen: {len(rows)} names, {tradeable} tradeable",
-                 strategy="donchian_strangle_monthly", detail=f"sell expiry {sell.isoformat()}")
+    journal_safe(
+        "screen",
+        f"Donchian screen: {len(rows)} names, {tradeable} tradeable",
+        strategy="donchian_strangle_monthly",
+        detail=f"sell expiry {sell.isoformat()}",
+    )
     return {"as_of": today.isoformat(), "dates": dates, "rows": rows, "vix": live_vix}
 
 
@@ -337,9 +394,11 @@ def donchian_portfolio(
     adapter = _live_adapter(body.broker_account_id, db)
     sell = date.fromisoformat(body.sell_expiry[:10])
     params = DonchianParams(
-        hedge_otm_pct=body.hedge_otm_pct, hedge_cost_cap_pct=body.hedge_cost_cap_pct,
+        hedge_otm_pct=body.hedge_otm_pct,
+        hedge_cost_cap_pct=body.hedge_cost_cap_pct,
         hedge_beta_weight=body.hedge_beta_weight,
-        portfolio_sl_pct=body.portfolio_sl_pct, portfolio_target_enabled=body.portfolio_target_enabled,
+        portfolio_sl_pct=body.portfolio_sl_pct,
+        portfolio_target_enabled=body.portfolio_target_enabled,
         portfolio_target_pct=body.portfolio_target_pct,
     )
     try:
@@ -348,8 +407,13 @@ def donchian_portfolio(
         nifty_chain = None
     nifty_spot = (nifty_chain or {}).get("spot")
     nifty_lot = int((nifty_chain or {}).get("lot_size") or 0)
-    panel = portfolio_panel(body.selected, nifty_spot=nifty_spot, nifty_lot_size=nifty_lot,
-                            nifty_chain=nifty_chain, params=params)
+    panel = portfolio_panel(
+        body.selected,
+        nifty_spot=nifty_spot,
+        nifty_lot_size=nifty_lot,
+        nifty_chain=nifty_chain,
+        params=params,
+    )
 
     # Combined basket margin: every selected short leg + the hedge longs.
     legs: list[dict] = []
@@ -359,7 +423,9 @@ def donchian_portfolio(
             continue
         for leg, right in ((r.get("ce"), "CE"), (r.get("pe"), "PE")):
             if leg and leg.get("premium") is not None and not leg.get("skip"):
-                sym = make(r["symbol"].upper(), sell, float(leg["strike"]), right, lot_size=1).symbol
+                sym = make(
+                    r["symbol"].upper(), sell, float(leg["strike"]), right, lot_size=1
+                ).symbol
                 legs.append({"symbol": sym, "direction": -1, "units": units})
     hedge = panel.get("hedge") or {}
     h_units = int((hedge.get("nifty_lot_size") or 0) * (hedge.get("nifty_lots") or 0))
@@ -384,7 +450,9 @@ def donchian_portfolio(
     return panel
 
 
-def _basket_required_margin(legs: list[dict], db: Session, broker_account_id: int | None, sell: date) -> float:
+def _basket_required_margin(
+    legs: list[dict], db: Session, broker_account_id: int | None, sell: date
+) -> float:
     """Margin the basket needs: the broker's net basket margin (live session, hedge-benefited) when
     available, else a SPAN+exposure model estimate on the short legs."""
     sized: list[dict] = []
@@ -394,8 +462,13 @@ def _basket_required_margin(legs: list[dict], db: Session, broker_account_id: in
         units = int((leg.get("lot_size") or 0) * (leg.get("lots") or 1))
         if units <= 0:
             continue
-        sym = make(str(leg["underlying"]).upper(), sell, float(leg["strike"]), str(leg["right"]).upper(),
-                   lot_size=1).symbol
+        sym = make(
+            str(leg["underlying"]).upper(),
+            sell,
+            float(leg["strike"]),
+            str(leg["right"]).upper(),
+            lot_size=1,
+        ).symbol
         short = str(leg.get("side", "sell")).lower() == "sell"
         sized.append({"symbol": sym, "direction": -1 if short else 1, "units": units})
         if short and leg.get("spot"):
@@ -425,15 +498,19 @@ async def donchian_deploy(
         raise HTTPException(status_code=422, detail="at least one leg is required")
     # Pre-flight: the deployment capital must fund the basket margin, or the broker rejects it live
     # and the %-of-notional stop is meaningless.
-    required = _basket_required_margin(body.legs, db, body.broker_account_id, date.fromisoformat(body.sell_expiry[:10]))
+    required = _basket_required_margin(
+        body.legs, db, body.broker_account_id, date.fromisoformat(body.sell_expiry[:10])
+    )
     if required and body.capital < required:
         import math
 
         suggested = int(math.ceil(required * 1.1 / 100_000) * 100_000)
         raise HTTPException(
             status_code=422,
-            detail=(f"Capital ₹{body.capital:,.0f} is below the ~₹{required:,.0f} basket margin. "
-                    f"Deploy with at least ₹{suggested:,.0f}, or reduce names / lots."),
+            detail=(
+                f"Capital ₹{body.capital:,.0f} is below the ~₹{required:,.0f} basket margin. "
+                f"Deploy with at least ₹{suggested:,.0f}, or reduce names / lots."
+            ),
         )
     params = {
         "expiry": body.sell_expiry,
@@ -478,7 +555,7 @@ async def delta_neutral_deploy(
         raise HTTPException(
             status_code=422,
             detail="delta selection and premium-matched rolls need the LIVE chain — "
-                   "deploy with a broker quote source (zerodha)",
+            "deploy with a broker quote source (zerodha)",
         )
     params = {
         "underlying": body.underlying.upper(),
@@ -493,6 +570,7 @@ async def delta_neutral_deploy(
         "eod_time": body.eod_time,
         "profit_target_pct": body.profit_target_pct,
         "stop_loss_pct": body.stop_loss_pct,
+        "entry_legs": body.entry_legs,
     }
     req = LiveStartRequest(
         strategy_id="delta_neutral_monthly",
@@ -524,7 +602,7 @@ async def iron_fly_deploy(
         raise HTTPException(
             status_code=422,
             detail="the ATM straddle, breakeven wings and delta-based adjustment need the LIVE "
-                   "chain — deploy with a broker quote source (zerodha)",
+            "chain — deploy with a broker quote source (zerodha)",
         )
     params = {
         "underlying": body.underlying.upper(),
@@ -539,9 +617,66 @@ async def iron_fly_deploy(
         "eod_time": body.eod_time,
         "profit_target_pct": body.profit_target_pct,
         "stop_loss_pct": body.stop_loss_pct,
+        "entry_legs": body.entry_legs,
     }
     req = LiveStartRequest(
         strategy_id="iron_fly_monthly",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=body.underlying.upper(),
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/options/double-diagonal/deploy")
+async def double_diagonal_deploy(
+    body: DoubleDiagonalDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the NIFTY double-diagonal calendar (near short strangle + far long hedges)."""
+    if body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="the two-expiry delta selection and premium reads need the LIVE chain — "
+            "deploy with a broker quote source (zerodha)",
+        )
+    params = {
+        "underlying": body.underlying.upper(),
+        "lots": body.lots,
+        "short_target_delta": body.short_target_delta,
+        "hedge_target_delta": body.hedge_target_delta,
+        "near_min_dte": body.near_min_dte,
+        "far_min_dte": body.far_min_dte,
+        "bias": body.bias,
+        "bias_skew": body.bias_skew,
+        "entry_time": body.entry_time,
+        "entry_weekday": body.entry_weekday,
+        "recurring": body.recurring,
+        "force_entry": body.force_entry,
+        "adjust_cooldown_min": body.adjust_cooldown_min,
+        "adjust_close_delta": body.adjust_close_delta,
+        "adjust_close_prem_frac": body.adjust_close_prem_frac,
+        "min_adjust_dte": body.min_adjust_dte,
+        "profit_check": body.profit_check,
+        "stop_check": body.stop_check,
+        "eod_time": body.eod_time,
+        "profit_target_pct": body.profit_target_pct,
+        "stop_loss_pct": body.stop_loss_pct,
+        "entry_legs": body.entry_legs,
+    }
+    req = LiveStartRequest(
+        strategy_id="double_diagonal_calendar",
         name=body.name,
         notes=body.notes,
         instrument_class="DERIV",
@@ -574,7 +709,8 @@ async def smoke_test_deploy(
         raise HTTPException(
             status_code=422,
             detail="the OTM strike pick needs the LIVE chain — deploy with a broker "
-                   "quote source (zerodha)")
+            "quote source (zerodha)",
+        )
     if body.premium_min <= 0 or body.premium_max < body.premium_min:
         raise HTTPException(status_code=422, detail="premium band must satisfy 0 < min ≤ max")
     is_option = leg == "option"
@@ -590,7 +726,8 @@ async def smoke_test_deploy(
     }
     req = LiveStartRequest(
         strategy_id="broker_smoke_test",
-        name=body.name or f"smoke_{'opt_' + body.underlying.lower() if is_option else 'eq_' + body.symbol.lower()}",
+        name=body.name
+        or f"smoke_{'opt_' + body.underlying.lower() if is_option else 'eq_' + body.symbol.lower()}",
         instrument_class="DERIV" if is_option else "STOCK",
         underlying=body.underlying.upper() if is_option else None,
         symbols=[] if is_option else [body.symbol.upper()],
@@ -602,7 +739,7 @@ async def smoke_test_deploy(
         broker_account_id=body.broker_account_id,
         refresh_seconds=max(5, int(body.refresh_seconds)),
         ignore_market_hours=False,  # a smoke test outside market hours proves nothing
-        auto=True,                  # the whole point is that it runs immediately
+        auto=True,  # the whole point is that it runs immediately
     )
     return start_deployment(req, db, loader, avail).snapshot()
 
@@ -619,7 +756,7 @@ async def intraday_straddle_deploy(
         raise HTTPException(
             status_code=422,
             detail="the ATM/delta strike selection needs the LIVE chain — deploy with a broker "
-                   "quote source (zerodha)",
+            "quote source (zerodha)",
         )
     params = {
         "underlying": body.underlying.upper(),
@@ -666,7 +803,7 @@ async def weekly_intraday_straddle_deploy(
         raise HTTPException(
             status_code=422,
             detail="strike selection needs the LIVE chain and the VWAP/prior-day low need Kite "
-                   "option bars — deploy with a broker quote source (zerodha)",
+            "option bars — deploy with a broker quote source (zerodha)",
         )
     params = {
         "underlying": body.underlying.upper(),
@@ -713,7 +850,7 @@ async def cp_ratio_expiry_deploy(
         raise HTTPException(
             status_code=422,
             detail="this strategy picks strikes off the LIVE chain at 09:20 — "
-                   "deploy with a broker quote source (zerodha)",
+            "deploy with a broker quote source (zerodha)",
         )
     params = {
         "underlyings": unders,

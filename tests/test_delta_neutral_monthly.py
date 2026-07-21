@@ -21,11 +21,19 @@ def bs_chain(spot=SPOT, iv=0.14, t_days=26, lot=35, overrides=None):
     for k in range(int(spot - 6000), int(spot + 6100), 100):
         ce = max(bs.price(spot, k, t, 0.065, iv, "CE"), 0.6)
         pe = max(bs.price(spot, k, t, 0.065, iv, "PE"), 0.6)
-        rows.append({"strike": float(k),
-                     "ce": {"ltp": round(ce, 2), "oi": 9000},
-                     "pe": {"ltp": round(pe, 2), "oi": 9000}})
-    chain = {"spot": spot, "atm_strike": float(round(spot / 100) * 100),
-             "lot_size": lot, "rows": rows}
+        rows.append(
+            {
+                "strike": float(k),
+                "ce": {"ltp": round(ce, 2), "oi": 9000},
+                "pe": {"ltp": round(pe, 2), "oi": 9000},
+            }
+        )
+    chain = {
+        "spot": spot,
+        "atm_strike": float(round(spot / 100) * 100),
+        "lot_size": lot,
+        "rows": rows,
+    }
     if overrides:
         by = {r["strike"]: r for r in rows}
         for (k, side), ltp in overrides.items():
@@ -110,7 +118,7 @@ def enter(st=None):
 
 def test_entry_day_arithmetic_and_window():
     st = DeltaNeutralMonthlyStrategy()
-    assert st._entry_day(PREV_EXP) == ENTRY_DAY          # Tue → Wed(1) → Thu(2)
+    assert st._entry_day(PREV_EXP) == ENTRY_DAY  # Tue → Wed(1) → Thu(2)
     assert st._entry_day(date(2026, 7, 3)) == date(2026, 7, 7)  # Fri → Mon, Tue
 
     ctx = FakeCtx(FakeMarket(bs_chain()))
@@ -164,10 +172,13 @@ def test_spec_example_roll_geometry():
     cheap_mark = round(pe["entry"] * 0.6, 2)
     target_pe_k = pe_k + 800
     assert target_pe_k < ce_k
-    ctx.market.chain = bs_chain(overrides={
-        (ce_k, "ce"): rich_mark, (pe_k, "pe"): cheap_mark,
-        (target_pe_k, "pe"): rich_mark,  # the premium-matched landing strike
-    })
+    ctx.market.chain = bs_chain(
+        overrides={
+            (ce_k, "ce"): rich_mark,
+            (pe_k, "pe"): cheap_mark,
+            (target_pe_k, "pe"): rich_mark,  # the premium-matched landing strike
+        }
+    )
     ctx.market.prices[ce["symbol"]] = rich_mark
     ctx.market.prices[pe["symbol"]] = cheap_mark
     sigs = tick(st, ctx, datetime(2026, 7, 6, 11, 30))
@@ -192,10 +203,13 @@ def test_cooldown_suppresses_back_to_back_rolls():
     pe = next(leg for leg in st.legs if leg["right"] == "PE")
     ce_k, pe_k = float(ce["symbol"].split("|")[2]), float(pe["symbol"].split("|")[2])
     rich_mark = round(ce["entry"] * 1.5, 2)
-    ctx.market.chain = bs_chain(overrides={
-        (ce_k, "ce"): rich_mark, (pe_k, "pe"): round(pe["entry"] * 0.6, 2),
-        (pe_k + 800, "pe"): rich_mark,
-    })
+    ctx.market.chain = bs_chain(
+        overrides={
+            (ce_k, "ce"): rich_mark,
+            (pe_k, "pe"): round(pe["entry"] * 0.6, 2),
+            (pe_k + 800, "pe"): rich_mark,
+        }
+    )
     ctx.market.prices[ce["symbol"]] = rich_mark
     ctx.market.prices[pe["symbol"]] = round(pe["entry"] * 0.6, 2)
     assert len(tick(st, ctx, datetime(2026, 7, 6, 11, 30))) == 2
@@ -221,16 +235,25 @@ def test_straddle_cap_builds_iron_fly():
     # cap → straddle → iron-fly hedges in the same decision.
     hedge_up = round((ce_k + rich_mark + cap_pe_mark) / 100) * 100
     hedge_dn = round((ce_k - rich_mark - cap_pe_mark) / 100) * 100
-    def row(k, ce_ltp, pe_ltp):
-        return {"strike": float(k), "ce": {"ltp": ce_ltp, "oi": 9000},
-                "pe": {"ltp": pe_ltp, "oi": 9000}}
 
-    ctx.market.chain = {"spot": SPOT, "atm_strike": 57000.0, "lot_size": 35, "rows": [
-        row(ce_k, rich_mark, cap_pe_mark),
-        row(pe_k, 5.0, cheap_mark),
-        row(hedge_up, 40.0, 900.0),
-        row(hedge_dn, 900.0, 40.0),
-    ]}
+    def row(k, ce_ltp, pe_ltp):
+        return {
+            "strike": float(k),
+            "ce": {"ltp": ce_ltp, "oi": 9000},
+            "pe": {"ltp": pe_ltp, "oi": 9000},
+        }
+
+    ctx.market.chain = {
+        "spot": SPOT,
+        "atm_strike": 57000.0,
+        "lot_size": 35,
+        "rows": [
+            row(ce_k, rich_mark, cap_pe_mark),
+            row(pe_k, 5.0, cheap_mark),
+            row(hedge_up, 40.0, 900.0),
+            row(hedge_dn, 900.0, 40.0),
+        ],
+    }
     ctx.market.prices[ce["symbol"]] = rich_mark
     ctx.market.prices[pe["symbol"]] = cheap_mark
     sigs = tick(st, ctx, datetime(2026, 7, 6, 12, 0))
@@ -319,6 +342,33 @@ def test_cycle_gating_and_state_round_trip():
     assert tick(st3, ctx3, datetime(2026, 7, 10, 11, 30)) == []
 
 
+def test_manual_entry_legs_enter_verbatim():
+    """Build-view manual deploy: explicit legs enter VERBATIM (skip the delta pick); phase is
+    'strangle' for naked shorts (→ the cheap-side roll runs) and 'ironfly' when a long is present.
+    """
+    legs = [
+        {"side": "sell", "right": "CE", "strike": 58000, "expiry": CUR_EXP.isoformat(), "lots": 1},
+        {"side": "sell", "right": "PE", "strike": 56000, "expiry": CUR_EXP.isoformat(), "lots": 1},
+    ]
+    st = DeltaNeutralMonthlyStrategy(force_entry=True, entry_legs=legs)
+    ctx = FakeCtx(FakeMarket(bs_chain()))
+    sigs = tick(st, ctx, datetime(2026, 7, 6, 11, 30))
+    assert len(sigs) == 2 and all(s.action.name == "ENTER_SHORT" for s in sigs)
+    got = {float(leg["symbol"].split("|")[2]) for leg in st.legs}
+    assert got == {58000.0, 56000.0}
+    assert st.phase == "strangle" and st.cycle_expiry == CUR_EXP.isoformat()
+
+    # A manual iron-fly (a long wing present) → phase "ironfly".
+    fly = legs + [
+        {"side": "buy", "right": "CE", "strike": 59000, "expiry": CUR_EXP.isoformat(), "lots": 1},
+        {"side": "buy", "right": "PE", "strike": 55000, "expiry": CUR_EXP.isoformat(), "lots": 1},
+    ]
+    st2 = DeltaNeutralMonthlyStrategy(force_entry=True, entry_legs=fly)
+    ctx2 = FakeCtx(FakeMarket(bs_chain()))
+    sigs2 = tick(st2, ctx2, datetime(2026, 7, 6, 11, 30))
+    assert len(sigs2) == 4 and st2.phase == "ironfly"
+
+
 def test_entry_with_tz_aware_clock():
     """Live now() is IST-aware — run 203's force-entry crashed on naive-minus-aware.
     The whole entry path must work with an aware clock."""
@@ -346,26 +396,35 @@ def test_ironfly_adjust_gated_off_by_default_and_togglable():
     unlocks the post-iron-fly adjustment (sell the untested side on a breakeven breach)."""
     from skas_algo.engine.types import SignalAction
 
-    st = DeltaNeutralMonthlyStrategy()          # default ironfly_adjust=False
+    st = DeltaNeutralMonthlyStrategy()  # default ironfly_adjust=False
     assert st.ironfly_adjust is False
 
     def leg(k, right, d, e):
-        return {"symbol": f"BANKNIFTY|2026-07-28|{float(k)}|{right}", "right": right,
-                "dir": d, "units": 175, "entry": e}
+        return {
+            "symbol": f"BANKNIFTY|2026-07-28|{float(k)}|{right}",
+            "right": right,
+            "dir": d,
+            "units": 175,
+            "entry": e,
+        }
 
-    st.legs = [leg(57000, "CE", -1, 850), leg(57000, "PE", -1, 850),
-               leg(58700, "CE", 1, 300), leg(55300, "PE", 1, 300)]
+    st.legs = [
+        leg(57000, "CE", -1, 850),
+        leg(57000, "PE", -1, 850),
+        leg(58700, "CE", 1, 300),
+        leg(55300, "PE", 1, 300),
+    ]
     st.phase = "ironfly"
     st.cycle_expiry = CUR_EXP.isoformat()
     st.set_broker_margin(500_000.0)
-    ctx = FakeCtx(FakeMarket(bs_chain(spot=59000)))   # spot well above the upper breakeven
+    ctx = FakeCtx(FakeMarket(bs_chain(spot=59000)))  # spot well above the upper breakeven
     for lg in st.legs:
         ctx.market.prices[lg["symbol"]] = lg["entry"]
         ctx.positions[lg["symbol"]] = 175
 
-    assert tick(st, ctx, datetime(2026, 7, 2, 11, 30, 0)) == []   # OFF → terminal, no adjustment
+    assert tick(st, ctx, datetime(2026, 7, 2, 11, 30, 0)) == []  # OFF → terminal, no adjustment
     st.set_ironfly_adjust(True)
-    sigs = tick(st, ctx, datetime(2026, 7, 2, 12, 0, 0))          # ON → adjusts
+    sigs = tick(st, ctx, datetime(2026, 7, 2, 12, 0, 0))  # ON → adjusts
     assert any(s.action == SignalAction.ENTER_SHORT and s.symbol.endswith("PE") for s in sigs)
     # and it round-trips through state (survives a restart)
     st2 = DeltaNeutralMonthlyStrategy()
@@ -385,9 +444,10 @@ def test_open_untested_never_reuses_a_held_strike():
     st = DeltaNeutralMonthlyStrategy()
     spot, t = 55000.0, 20 / 365.0
     # OTM puts below spot; 54000 sits nearest ~0.18Δ, 53000 a bit further.
-    rows = {k: {"strike": float(k), "ce": {"ltp": 10.0, "oi": 9000},
-                "pe": {"ltp": pe, "oi": 9000}}
-            for k, pe in [(54000, 260.0), (53500, 190.0), (53000, 140.0), (52500, 95.0)]}
+    rows = {
+        k: {"strike": float(k), "ce": {"ltp": 10.0, "oi": 9000}, "pe": {"ltp": pe, "oi": 9000}}
+        for k, pe in [(54000, 260.0), (53500, 190.0), (53000, 140.0), (52500, 95.0)]
+    }
 
     base = st._pick_delta_strike(rows, "pe", spot, t, 0.18)
     assert base is not None

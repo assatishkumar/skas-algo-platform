@@ -49,6 +49,13 @@ class IronFlyMonthlyStrategy(DeltaNeutralMonthlyStrategy):
         return best[1] if best else None
 
     def _try_enter(self, ctx, now: datetime, today: date) -> list[Signal]:
+        if self.entry_legs:
+            # Build-view manual deploy: enter the owner's exact fly, then run _adjust_ironfly.
+            sigs = self._enter_manual_generic(ctx, now, today)
+            if sigs:  # a manual fly seeds the adjustment state the ironfly manager expects
+                self.adjust_symbol = None
+                self.adjust_realized = 0.0
+            return sigs
         expiries = self._listed_expiries(ctx, today)
         expiry = self._current_monthly(expiries, today)
         if expiry is None or expiry.isoformat() == self.done_expiry:
@@ -74,16 +81,22 @@ class IronFlyMonthlyStrategy(DeltaNeutralMonthlyStrategy):
 
         step = _STRIKE_STEP.get(self.underlying, 100)
         combined = ce_ltp + pe_ltp
-        up_k = round((k + combined) / step) * step   # long CALL wing at the upper breakeven
-        dn_k = round((k - combined) / step) * step   # long PUT wing at the lower breakeven
+        up_k = round((k + combined) / step) * step  # long CALL wing at the upper breakeven
+        dn_k = round((k - combined) / step) * step  # long PUT wing at the lower breakeven
         up_prem = self._ltp(rows.get(float(up_k), {}).get("ce"))
         dn_prem = self._ltp(rows.get(float(dn_k), {}).get("pe"))
         if up_prem is None or dn_prem is None:
             return []  # a wing strike isn't tradeable in the chain — retry/skip
 
         def sym(strike: float, right: str) -> str:
-            return make(self.underlying, expiry, float(strike), right, lot_size=per_lot,
-                        lot_overrides=self.lot_overrides).symbol
+            return make(
+                self.underlying,
+                expiry,
+                float(strike),
+                right,
+                lot_size=per_lot,
+                lot_overrides=self.lot_overrides,
+            ).symbol
 
         self.legs = [
             {"symbol": sym(k, "CE"), "right": "CE", "dir": -1, "units": units, "entry": ce_ltp},
@@ -100,8 +113,12 @@ class IronFlyMonthlyStrategy(DeltaNeutralMonthlyStrategy):
         self.adjust_realized = 0.0
         self._freeze_margin(ctx, float(spot))
         return [
-            Signal(leg["symbol"],
-                   SignalAction.ENTER_SHORT if leg["dir"] < 0 else SignalAction.ENTER_LONG,
-                   quantity=int(leg["units"]), reason="ifm_entry", meta={"multiplier": 1})
+            Signal(
+                leg["symbol"],
+                SignalAction.ENTER_SHORT if leg["dir"] < 0 else SignalAction.ENTER_LONG,
+                quantity=int(leg["units"]),
+                reason="ifm_entry",
+                meta={"multiplier": 1},
+            )
             for leg in self.legs
         ]
