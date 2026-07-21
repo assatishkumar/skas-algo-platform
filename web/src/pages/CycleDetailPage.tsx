@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { formatInr, pct } from "../lib/format";
@@ -42,14 +42,24 @@ function CycleDetail({ m, active, toggle, setActive }: {
   toggle: (id: string | null) => () => void; setActive: (v: string | null) => void;
 }) {
   const geo = useMemo(() => computeGeometry(m), [m]);
+  const navigate = useNavigate();
+  const location = useLocation();
   const legInActive = (l: CycleDetailLeg) =>
     !active || l.open_event === active || l.close_event === active;
+
+  // Breadcrumb "back": if we arrived via an in-app link, browser-back so the origin page
+  // (the live/run detail) is restored AT ITS SCROLL POSITION — the cycle table sits far down.
+  // A deep-link / reload (location.key === "default") has no history, so follow the href.
+  const backTo = m.live ? `/live/${m.run_id}` : `/runs/${m.run_id}`;
+  const onBack = (e: React.MouseEvent) => {
+    if (location.key !== "default") { e.preventDefault(); navigate(-1); }
+  };
 
   const move = m.underlying_pct ?? 0;
   return (
     <div className="max-w-[1280px] mx-auto px-8 py-6 pb-16">
       {/* breadcrumb + title */}
-      <Link to={m.live ? `/live/${m.run_id}` : `/runs/${m.run_id}`} className="text-sm font-bold text-[var(--muted)] mb-3 inline-block">
+      <Link to={backTo} onClick={onBack} className="text-sm font-bold text-[var(--muted)] mb-3 inline-block">
         ← {m.live ? "Live" : "Runs"} · <span className="text-[var(--accent-deep)]">{m.run_name} #{m.run_id}</span> · positions
       </Link>
       <div className="flex items-center gap-3 mb-2 flex-wrap">
