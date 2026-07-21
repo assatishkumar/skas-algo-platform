@@ -536,6 +536,10 @@ def get_cycle_detail(run_id: int, index: int, db: Session = Depends(get_db)) -> 
         cycle, rows, _ffill_lookup(sd, sym), margin_series,
         index=index, run_id=run_id, strategy_id=(algo.strategy_id if algo else ""),
         name=(algo.name if algo else f"run #{run_id}"))
+    # Whether the RUN is a deployment (paper/live) vs a backtest — drives the breadcrumb
+    # target. Distinct from the per-cycle ``live`` flag (a CLOSED cycle on a live run is
+    # ``live=False`` but still belongs on /live, not /runs).
+    model["is_deployment"] = run.mode in (TradingMode.PAPER, TradingMode.LIVE)
     return to_native(model)
 
 

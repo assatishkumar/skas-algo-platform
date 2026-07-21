@@ -45,17 +45,23 @@ function CycleDetail({ m, active, toggle, setActive }: {
   const legInActive = (l: CycleDetailLeg) =>
     !active || l.open_event === active || l.close_event === active;
 
-  // Deterministic: land on the SOURCE page the cycle-date link lives on — the Live page
-  // (`/live`, where LiveCyclePanel renders a running deploy's cycle table) for a live cycle,
-  // else the run detail. Plain <Link>, independent of browser history.
-  const backTo = m.live ? `/live?run=${m.run_id}` : `/runs/${m.run_id}`;
+  // Whether the RUN is a deployment (→ breadcrumb to /live) vs a backtest (→ /runs). The
+  // per-cycle `live` flag is NOT this: a CLOSED cycle on a live run is `live=false` yet still
+  // belongs on /live. Authoritative signal is the backend `is_deployment`; until a backend
+  // that serves it, fall back to membership in the live-deployments list (works immediately,
+  // no restart), then the open-cycle flag.
+  const { data: deps } = useQuery({ queryKey: ["deployments"], queryFn: () => api.liveDeployments() });
+  const inLiveList = deps?.some((d) => d.run_id === m.run_id);
+  // Deterministic <Link>, independent of browser history.
+  const onLive = m.is_deployment ?? inLiveList ?? m.live;
+  const backTo = onLive ? `/live?run=${m.run_id}` : `/runs/${m.run_id}`;
 
   const move = m.underlying_pct ?? 0;
   return (
     <div className="max-w-[1280px] mx-auto px-8 py-6 pb-16">
       {/* breadcrumb + title */}
       <Link to={backTo} className="text-sm font-bold text-[var(--muted)] mb-3 inline-block">
-        ← {m.live ? "Live" : "Runs"} · <span className="text-[var(--accent-deep)]">{m.run_name} #{m.run_id}</span> · positions
+        ← {onLive ? "Live" : "Runs"} · <span className="text-[var(--accent-deep)]">{m.run_name} #{m.run_id}</span> · positions
       </Link>
       <div className="flex items-center gap-3 mb-2 flex-wrap">
         <h1 className="font-[700] text-[26px] font-['Space_Grotesk'] text-[var(--strong)]">
