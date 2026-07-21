@@ -143,12 +143,13 @@ export interface LivePayoffData {
 }
 
 /** Expiry payoff tent + a current-value (T+0) curve for the OPEN option legs.
- *  Default range spans spot AND every strike ±10%; ``rangePct`` (zoom) overrides it
- *  with a symmetric spot ± pct window — strikes outside simply fall off the chart,
- *  which is the point of zooming in. IV per leg from its live LTP (fallback 15%). */
+ *  Auto range hugs the STRUCTURE (spot + strikes + breakevens, padded by a fraction of that
+ *  width) — NOT a fixed % of the index level; ``rangePct`` (zoom) overrides it with a symmetric
+ *  spot ± pct window — strikes outside simply fall off the chart, which is the point of zooming
+ *  in. IV per leg from its live LTP (fallback 15%). */
 export function buildLivePayoff(
   legs: LiveLeg[], spot: number, expiryDate: string, today?: string,
-  rangePct?: number | null,
+  rangePct?: number | null, breakevens?: number[],
 ): LivePayoffData | null {
   if (!legs.length || !spot) return null;
   const asOf = today ?? new Date().toISOString().slice(0, 10);
@@ -156,12 +157,18 @@ export function buildLivePayoff(
   const ivs = legs.map(
     (l) => (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, t, RISK_FREE, l.right) : null) ?? 0.15,
   );
-  // Span spot AND every strike (padded) so the payoff kinks + breakevens are visible even when a
-  // strike sits well outside ±10% of spot (e.g. a far-OTM short call). A zoom override
-  // narrows to spot ± rangePct instead.
-  const refs = [spot, ...legs.map((l) => l.strike)];
-  const lo = rangePct ? spot * (1 - rangePct) : Math.min(...refs) * 0.9;
-  const hi = rangePct ? spot * (1 + rangePct) : Math.max(...refs) * 1.1;
+  // Auto range spans spot, EVERY strike, and the breakevens (so the tent kinks + zero-crossings
+  // are always on-screen), padded by a fraction of that structure width with a modest floor.
+  // A fixed ±10% of the absolute level blew a NIFTY straddle (strikes ≈ spot) out to a ~5000-pt
+  // window around a ~200-pt-wide payoff (2026-07) — and squashed the tent's y-scale flat. Basing
+  // the pad on the structure's own width keeps it tight; the floor keeps the loss legs visible.
+  // A zoom override narrows to spot ± rangePct instead.
+  const refs = [spot, ...legs.map((l) => l.strike), ...(breakevens ?? [])];
+  const lo0 = Math.min(...refs);
+  const hi0 = Math.max(...refs);
+  const pad = Math.max((hi0 - lo0) * 0.4, spot * 0.015);
+  const lo = rangePct ? spot * (1 - rangePct) : lo0 - pad;
+  const hi = rangePct ? spot * (1 + rangePct) : hi0 + pad;
   const n = 81;
   const data = [];
   for (let i = 0; i < n; i++) {

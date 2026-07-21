@@ -109,14 +109,16 @@ export default function LivePayoffChart({
   // The run's underlying_spot is the PRIMARY underlying's — swap in a spot that matches
   // the charted book (parity-derived when the provided one is another index's).
   const chartSpot = useMemo(() => effectiveSpot(legs, spot), [legs, spot]);
-  const pf = useMemo(
-    () => (legs.length && chartSpot && expiry ? buildLivePayoff(legs, chartSpot, expiry, asOf, ZOOMS[zoomIdx]) : null),
-    [legs, chartSpot, expiry, asOf, zoomIdx],
-  );
   // Breakevens = zero-crossings of the expiry payoff; mark the ones inside the visible x-window.
+  // Computed BEFORE the payoff so the auto-range can include them (keeps the tent's zero-crossings
+  // on-screen and the x-window tight to the structure).
   const bes = useMemo(
     () => (legs.length && chartSpot && expiry ? computeMetrics(legs, chartSpot, expiry, asOf)?.breakevens ?? [] : []),
     [legs, chartSpot, expiry, asOf],
+  );
+  const pf = useMemo(
+    () => (legs.length && chartSpot && expiry ? buildLivePayoff(legs, chartSpot, expiry, asOf, ZOOMS[zoomIdx], bes) : null),
+    [legs, chartSpot, expiry, asOf, zoomIdx, bes],
   );
 
   // Unique CE/PE strikes to mark on the chart (a strangle → one CE + one PE line; dedup exact dupes).
