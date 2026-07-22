@@ -109,17 +109,23 @@ WebSocket upgrades to `wss` automatically.
     - **Logs:** `journalctl -u skas-algo -f` (or `skasctl.sh logs`) · **Status/health:** `skasctl.sh status` / `skasctl.sh health`
     - Symlink it onto PATH for a global `skas` command: `sudo ln -sf "$PWD/scripts/skasctl.sh" /usr/local/bin/skas`
     - `restart` re-reads `.env` and re-recovers runs (real-order runs return as paper unless `SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY=true`).
-- **Update code:** one command, off-hours:
-  ```bash
-  # On the VPS:
-  ~/git/skas-algo-platform/scripts/vps-update.sh
-  ```
-  It stops the backend, pulls, `pip install -e .`, builds `web/` **and** `web-mobile/`, then
-  daemon-reloads + starts + health-checks. Builds on the VPS are fine **only while the backend
-  is STOPPED** — Vite/tsc OOM-fights the live loop for RAM on a small Lightsail box, but runs
-  clean on a stopped one (owner-verified 2026-07-18); the script enforces that ordering and
-  ALWAYS restarts the backend even if a build fails. (`web*/dist` are gitignored, so `git pull`
-  never clobbers a built bundle.)
+- **Update code — two steps (never build the UI on the box).** The Vite/tsc build OOM-thrashes on
+  the small Lightsail box (the bundle outgrew ~1 GB) and hangs before the restart, leaving it dead —
+  so the UI is built on the Mac and rsync'd. `web*/dist` are gitignored, so `git pull` never clobbers
+  the shipped bundle.
+  1. **Backend** — on the VPS, off-hours:
+     ```bash
+     ~/git/skas-algo-platform/scripts/vps-update.sh   # stop → pull → pip → start → health
+     ```
+     Pulls `../skas-data` too (editable), daemon-reloads, and ALWAYS restarts the backend on exit
+     even if a step fails (a failure must never leave the box dead). No `npm` here — it's backend-only.
+  2. **UI** — on the Mac (a dist-only update needs NO restart; the backend serves `web/dist` live, so
+     the live loop is never interrupted for a UI change):
+     ```bash
+     scripts/deploy-web.sh <vps-ssh-host>   # e.g. ubuntu@<vps>.<tailnet>.ts.net
+     ```
+     Builds `web/` (+ `web-mobile/` if present) and rsyncs the `dist` up. Then **hard-refresh** the
+     browser (Cmd/Ctrl+Shift+R — the PWA service worker caches the old bundle).
 - **Mobile webapp:** the backend serves `web-mobile/dist` at **`/mobile/`** on the same Tailscale
   origin — open `https://<vps>.<tailnet>.ts.net/mobile/` in the phone's browser (leave the
   Backend URL field blank there: blank = same origin). Same bundle the iPhone shell wraps.
