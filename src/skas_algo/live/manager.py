@@ -45,9 +45,21 @@ class ReconcileUnavailable(Exception):
 # Deploy/backtest bookkeeping that lives in a run's persisted params but is NOT a strategy
 # constructor arg (universe/capital are passed explicitly). Stripped before building a strategy.
 _BOOKKEEPING_PARAM_KEYS = {
-    "universe", "initial_capital", "start_date", "end_date", "instrument_class",
-    "symbols", "lookback", "tax_rate", "withdrawal_rate", "warm_from_date",
-    "quote_source", "broker_account_id", "name", "notes", "batch_id",
+    "universe",
+    "initial_capital",
+    "start_date",
+    "end_date",
+    "instrument_class",
+    "symbols",
+    "lookback",
+    "tax_rate",
+    "withdrawal_rate",
+    "warm_from_date",
+    "quote_source",
+    "broker_account_id",
+    "name",
+    "notes",
+    "batch_id",
 }
 
 
@@ -87,8 +99,8 @@ class LiveConfig:
     symbols: list[str]
     notes: str | None = None
     capital: float = 2_500_000
-    instrument_class: str = "STOCK"   # "STOCK" | "DERIV" (options)
-    underlying: str | None = None     # DERIV: NIFTY/BANKNIFTY (option underlying)
+    instrument_class: str = "STOCK"  # "STOCK" | "DERIV" (options)
+    underlying: str | None = None  # DERIV: NIFTY/BANKNIFTY (option underlying)
     params: dict = field(default_factory=dict)
     tax_rate: float = 0.20
     withdrawal_rate: float = 0.0
@@ -118,12 +130,17 @@ def _serialize_event(ev: dict) -> dict:
     return out
 
 
-def _build_session(config: "LiveConfig", strategy, loader, is_deriv: bool, underlying: str) -> LiveSession:
+def _build_session(
+    config: "LiveConfig", strategy, loader, is_deriv: bool, underlying: str
+) -> LiveSession:
     """A LiveSession wired for the deployment's instrument class. DERIV builds the live
     options stack (chain/lazy-marks/settler/charges/margin); STOCK is the Donchian view."""
     common = dict(
-        initial_capital=config.capital, lookback=config.lookback, tax_rate=config.tax_rate,
-        withdrawal_rate=config.withdrawal_rate, overrides=config.overrides,
+        initial_capital=config.capital,
+        lookback=config.lookback,
+        tax_rate=config.tax_rate,
+        withdrawal_rate=config.withdrawal_rate,
+        overrides=config.overrides,
         excluded_symbols=config.excluded_symbols,
     )
     if is_deriv:
@@ -132,11 +149,19 @@ def _build_session(config: "LiveConfig", strategy, loader, is_deriv: bool, under
         from skas_algo.engine.options.charges import ChargeModel
 
         mv, _chain, settler, margin = build_live_options_run(
-            get_data_cache(), underlying,
-            lot_overrides=config.params.get("contract_specs"), now=datetime.now(IST),
+            get_data_cache(),
+            underlying,
+            lot_overrides=config.params.get("contract_specs"),
+            now=datetime.now(IST),
         )
-        return LiveSession(strategy, market_view=mv, settler=settler,
-                           charge_model=ChargeModel(), margin_model=margin, **common)
+        return LiveSession(
+            strategy,
+            market_view=mv,
+            settler=settler,
+            charge_model=ChargeModel(),
+            margin_model=margin,
+            **common,
+        )
     session = LiveSession(strategy, **common)
     session.warmup(warmup_history(loader, config.symbols, config.lookback))
     _seed_supertrend(session, strategy, loader, config.symbols)
@@ -147,7 +172,9 @@ def _seed_supertrend(session, strategy, loader, symbols) -> None:
     """For a SuperTrend strategy, compute each symbol's latest completed-bar direction from the
     cached OHLC and set it on the live view (live quotes carry no high/low, so ATR comes from the
     cache). Refreshed daily by the run loop. No-op for other strategies."""
-    if not getattr(strategy, "needs_supertrend", False) or not hasattr(strategy, "supertrend_config"):
+    if not getattr(strategy, "needs_supertrend", False) or not hasattr(
+        strategy, "supertrend_config"
+    ):
         return
     market = getattr(session, "market", None)
     if market is None or not hasattr(market, "set_supertrend_dir"):
@@ -178,7 +205,8 @@ def _seed_supertrend(session, strategy, loader, symbols) -> None:
             last = bands.iloc[-1]
             line = last["supertrend"]
             market.set_supertrend_dir(
-                sym, float(last["direction"]),
+                sym,
+                float(last["direction"]),
                 float(line) if pd.notna(line) else None,
             )
         else:
@@ -198,8 +226,11 @@ def _broker_daily_df(adapter, u: str, start, end):
 
     s, e, tdy = start.isoformat(), end.isoformat(), date.today().isoformat()
     try:
-        rows = [b for b in (daily_fn(u, (end - start).days + 5) or [])
-                if s <= str(b["date"])[:10] <= e and str(b["date"])[:10] < tdy]
+        rows = [
+            b
+            for b in (daily_fn(u, (end - start).days + 5) or [])
+            if s <= str(b["date"])[:10] <= e and str(b["date"])[:10] < tdy
+        ]
     except Exception:  # pragma: no cover - broker hiccup → cache fallback
         return None
     return pd.DataFrame(rows) if rows else None
@@ -250,8 +281,7 @@ def _fmt_recon(detail: dict) -> str:
     if not syms:
         return "  (both flat)"
     return "\n".join(
-        f"  {ts}: platform {ours.get(ts, 0):+.0f} / broker {broker.get(ts, 0):+.0f}"
-        for ts in syms
+        f"  {ts}: platform {ours.get(ts, 0):+.0f} / broker {broker.get(ts, 0):+.0f}" for ts in syms
     )
 
 
@@ -293,6 +323,7 @@ class LiveRun:
         # keeps PaperBroker → False); cleared by the first clean reconcile. Dormant while
         # live orders are disabled — the safety net that must exist BEFORE the first order.
         from skas_algo.brokers.live_broker import LiveBroker
+
         self.reconcile_pending: bool = isinstance(getattr(session, "broker", None), LiveBroker)
         # A LIVE run recovery WANTED to re-arm real orders (SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY)
         # but couldn't — the restart happened before the morning broker login, so there was no
@@ -360,23 +391,32 @@ class LiveRun:
                 if df is None:
                     df = cache_loader(sym, start, end)
                 today = date.today()
-                if end < today or (df is not None and len(df) and
-                                   _pd.to_datetime(df["date"]).dt.date.max() >= today):
+                if end < today or (
+                    df is not None
+                    and len(df)
+                    and _pd.to_datetime(df["date"]).dt.date.max() >= today
+                ):
                     return df
                 row = None
-                bars_fn = getattr(getattr(self.quote_source, "adapter", None),
-                                  "intraday_bars", None)
+                bars_fn = getattr(
+                    getattr(self.quote_source, "adapter", None), "intraday_bars", None
+                )
                 if bars_fn is not None:
                     try:
-                        intra = [b for b in bars_fn(u, 1) or []
-                                 if str(b["start"])[:10] == today.isoformat()]
+                        intra = [
+                            b
+                            for b in bars_fn(u, 1) or []
+                            if str(b["start"])[:10] == today.isoformat()
+                        ]
                     except Exception:  # pragma: no cover - fall to the LTP stub
                         intra = []
                     if intra:
-                        row = {"date": today,
-                               "high": max(b["high"] for b in intra),
-                               "low": min(b["low"] for b in intra),
-                               "close": intra[-1]["close"]}
+                        row = {
+                            "date": today,
+                            "high": max(b["high"] for b in intra),
+                            "low": min(b["low"] for b in intra),
+                            "close": intra[-1]["close"],
+                        }
                 if row is None:
                     ltp_fn = getattr(self.session.market, "index_spot", None)
                     ltp = ltp_fn(u.upper()) if ltp_fn else None
@@ -385,8 +425,9 @@ class LiveRun:
                 if row is None:
                     return df
                 add = _pd.DataFrame([row])
-                return add if df is None or not len(df) else _pd.concat(
-                    [df, add], ignore_index=True)
+                return (
+                    add if df is None or not len(df) else _pd.concat([df, add], ignore_index=True)
+                )
 
             bars_hook(_daily_bars_live)
         ohlc_fn = getattr(strategy, "set_daily_ohlc_fn", None)
@@ -406,33 +447,45 @@ class LiveRun:
                 daily_fn = getattr(adapter, "daily_bars", None)
                 if daily_fn is not None:
                     try:
-                        bars = [b for b in (daily_fn(u, 30) or [])
-                                if str(b["date"])[:10] < today.isoformat()]
+                        bars = [
+                            b
+                            for b in (daily_fn(u, 30) or [])
+                            if str(b["date"])[:10] < today.isoformat()
+                        ]
                     except Exception:  # pragma: no cover - broker hiccup → cache below
                         bars = []
                     if bars:
                         b = bars[-1]
-                        return {"date": str(b["date"])[:10], "high": float(b["high"]),
-                                "low": float(b["low"]), "close": float(b["close"])}
+                        return {
+                            "date": str(b["date"])[:10],
+                            "high": float(b["high"]),
+                            "low": float(b["low"]),
+                            "close": float(b["close"]),
+                        }
                 sym = INDEX_SYMBOL.get(u.upper()) or u.upper()
                 df = loader(sym, today - _td(days=14), today - _td(days=1))
                 if df is None or len(df) == 0:
                     return None  # e.g. SENSEX — no cached series → bar-derived fallback
                 row = df.iloc[-1]
                 rd = row["date"]
-                return {"date": (rd.date().isoformat() if hasattr(rd, "date") else str(rd)[:10]),
-                        "high": float(row["high"]), "low": float(row["low"]),
-                        "close": float(row["close"])}
+                return {
+                    "date": (rd.date().isoformat() if hasattr(rd, "date") else str(rd)[:10]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                }
 
             ohlc_fn(_prior_day_ohlc)
             notify_hook = getattr(strategy, "set_notify_fn", None)
             if notify_hook is not None:
+
                 def _pivot_notify(u: str, message: str):
                     try:  # pragma: no cover - alert is best-effort
                         from skas_algo.notify import Alert, AlertLevel, build_notifier
 
-                        build_notifier().send(Alert(
-                            f"{self.config.name} · {u}", message, AlertLevel.WARNING))
+                        build_notifier().send(
+                            Alert(f"{self.config.name} · {u}", message, AlertLevel.WARNING)
+                        )
                     except Exception:
                         logger.exception("pivot-stale alert failed for run %s", self.run_id)
 
@@ -452,8 +505,9 @@ class LiveRun:
 
             def _rv_getter(u: str):
                 lo = date.today() - _td(days=max(_rv_window * 3, 60))
-                df = _broker_daily_df(getattr(self.quote_source, "adapter", None),
-                                      u, lo, date.today())
+                df = _broker_daily_df(
+                    getattr(self.quote_source, "adapter", None), u, lo, date.today()
+                )
                 if df is not None and len(df):
                     return df
                 return _rv_cache(INDEX_SYMBOL.get(u.upper()) or u.upper(), lo, date.today())
@@ -493,6 +547,7 @@ class LiveRun:
         spot_keys: dict[str, str] = {}
         if self.config.instrument_class.upper() == "DERIV":
             from skas_algo.data.options_provider import INDEX_SYMBOL
+
             names: set[str] = set()
             if self.config.underlying:
                 names.add(self.config.underlying.upper())
@@ -557,8 +612,7 @@ class LiveRun:
             return  # can't reconcile → stay pending, retry next tick (throttle NOT armed)
         detail: dict = {}
         try:
-            problem = manager.reconcile_account_book(
-                self.config.broker_account_id, adapter, detail)
+            problem = manager.reconcile_account_book(self.config.broker_account_id, adapter, detail)
         except ReconcileUnavailable as exc:
             # Broker book temporarily UNREADABLE (expired token / API blip) — NOT a mismatch. Stay
             # pending (throttle NOT armed) and retry next tick; never halt on a failed read.
@@ -574,8 +628,11 @@ class LiveRun:
         if problem and not self.order_error:
             self.order_error = f"book mismatch: {problem}"
             logger.error("run %s halted on reconciliation: %s", self.run_id, problem)
-            self._notify_recon("ERROR", f"BOOK MISMATCH: {self.config.name}",
-                               problem + "\n\nbroker vs strategy:\n" + _fmt_recon(detail))
+            self._notify_recon(
+                "ERROR",
+                f"BOOK MISMATCH: {self.config.name}",
+                problem + "\n\nbroker vs strategy:\n" + _fmt_recon(detail),
+            )
         elif not problem:
             self._alert_reconciled_ok(detail, now)
 
@@ -590,14 +647,19 @@ class LiveRun:
         alerts + halts on its own path above."""
         ours = detail.get("ours", {}) or {}
         if not ours:
-            self._notify_recon("INFO", f"Reconciled: {self.config.name}",
-                               "Broker book matches strategy — both flat.")
+            self._notify_recon(
+                "INFO",
+                f"Reconciled: {self.config.name}",
+                "Broker book matches strategy — both flat.",
+            )
             return
         n = sum(abs(q) for q in ours.values())
         self._notify_recon(
-            "INFO", f"Reconciled: {self.config.name}",
+            "INFO",
+            f"Reconciled: {self.config.name}",
             f"Broker book matches strategy — {len(ours)} contract(s), {n:.0f} qty.\n"
-            + _fmt_recon(detail))
+            + _fmt_recon(detail),
+        )
 
     def _notify_recon(self, level: str, title: str, body: str) -> None:
         try:
@@ -611,7 +673,8 @@ class LiveRun:
         """Throttled (~1/min) real Zerodha basket margin, built from our own legs. Falls
         back silently to the model estimate (in the session snapshot) when unavailable."""
         if self.config.instrument_class.upper() != "DERIV" or not is_broker_source(
-                self.config.quote_source):
+            self.config.quote_source
+        ):
             return
         # MARKET HOURS ONLY. Off-hours the broker basket margin collapses to a small stale
         # value; recomputing it then poisons the margin override + any frozen base + the
@@ -708,6 +771,7 @@ class LiveRun:
         if spot_fn is None:
             return
         from skas_algo.engine.options.instrument import parse as parse_option
+
         for ev in events:
             if ev.get("underlying_spot") is not None:
                 continue
@@ -734,8 +798,9 @@ class LiveRun:
             try:
                 from skas_algo.notify import Alert, AlertLevel, build_notifier
 
-                build_notifier().send(Alert(
-                    f"ORDERS HALTED: {self.config.name}", str(exc), AlertLevel.ERROR))
+                build_notifier().send(
+                    Alert(f"ORDERS HALTED: {self.config.name}", str(exc), AlertLevel.ERROR)
+                )
             except Exception:  # pragma: no cover
                 pass
             events = []
@@ -805,7 +870,8 @@ class LiveRun:
         strategy = getattr(self.session, "strategy", None)
         want_deployed = getattr(strategy, "report_deployed_metrics", False)
         report = build_report(
-            rr, self.config.capital,
+            rr,
+            self.config.capital,
             deployed_metrics=want_deployed,
             idle_return=getattr(strategy, "idle_return", 0.06) if want_deployed else 0.0,
         )
@@ -851,21 +917,23 @@ class LiveRun:
             "order_error": self.order_error,
             "reconcile_pending": self.reconcile_pending,
             "supports_force_entry": hasattr(
-                getattr(self.session, "strategy", None), "request_force_entry"),
+                getattr(self.session, "strategy", None), "request_force_entry"
+            ),
             "quote_error": self.quote_error,
             # Strategy-surfaced data-health alert (e.g. weekly straddle: Kite option bars
             # unfetchable → entries self-gated) — amber banner on the run card + a tile chip.
             "strategy_alert": getattr(
-                getattr(self.session, "strategy", None), "strategy_alert", None),
+                getattr(self.session, "strategy", None), "strategy_alert", None
+            ),
             "parts_total": self.config.params.get("capital_parts"),
             # Options deployments expose lot-sets (editable live while flat); equity
             # strategies have no `lots` attr → null → the UI hides the control.
             "lots": getattr(getattr(self.session, "strategy", None), "lots", None),
             # Per-underlying lot-set map for multi-underlying strategies (momentum_theta's `lots`
             # dict, call_put_ratio_expiry's `sets` dict) → the UI shows a stepper per underlying.
-            "lot_sets": (
-                lambda a: dict(getattr(self.session.strategy, a)) if a else None
-            )(_lot_sets_attr(getattr(self.session, "strategy", None))),
+            "lot_sets": (lambda a: dict(getattr(self.session.strategy, a)) if a else None)(
+                _lot_sets_attr(getattr(self.session, "strategy", None))
+            ),
             # Live underlying spot (for the positions payoff diagram), if known.
             "underlying_spot": self._underlying_spot(),
             # Live controls + exclusion editing surface for the UI.
@@ -990,10 +1058,13 @@ class LiveRunManager:
             max_orders_per_day=settings.live_max_orders_per_day,
             order_timeout_s=settings.live_order_timeout_s,
         )
-        logger.warning("REAL-ORDER broker injected for %s (account %s)",
-                       config.name, config.broker_account_id)
+        logger.warning(
+            "REAL-ORDER broker injected for %s (account %s)", config.name, config.broker_account_id
+        )
 
-    def reconcile_account_book(self, account_id: int, adapter, details: dict | None = None) -> str | None:
+    def reconcile_account_book(
+        self, account_id: int, adapter, details: dict | None = None
+    ) -> str | None:
         """Compare the broker's NET positions against the AGGREGATE book of all LIVE-mode
         real-order runs on this account (the broker nets per contract across runs — a
         per-run comparison would false-alarm whenever two strategies share a strike).
@@ -1019,8 +1090,9 @@ class LiveRunManager:
                         ts = adapter._option_tradingsymbol(inst)
                     ours[ts or sym] = ours.get(ts or sym, 0.0) + lot.direction * lot.units
         try:
-            broker_net = {p["tradingsymbol"]: float(p.get("quantity") or 0)
-                          for p in adapter.positions()}
+            broker_net = {
+                p["tradingsymbol"]: float(p.get("quantity") or 0) for p in adapter.positions()
+            }
         except Exception as exc:
             # Couldn't READ the broker book (expired overnight Kite token / API blip). This is NOT a
             # mismatch — raise a distinct transient signal so the caller retries instead of HALTING
@@ -1042,10 +1114,13 @@ class LiveRunManager:
         # backtest bookkeeping (instrument_class, dates, …) that strict constructors reject.
         strategy_params = strategy_kwargs(factory, config.params)
         is_deriv = config.instrument_class.upper() == "DERIV"
-        underlying = (config.underlying or (config.symbols[0] if config.symbols else "NIFTY")).upper()
+        underlying = (
+            config.underlying or (config.symbols[0] if config.symbols else "NIFTY")
+        ).upper()
         strategy = factory(
             universe=[underlying] if is_deriv else config.symbols,
-            initial_capital=config.capital, **strategy_params,
+            initial_capital=config.capital,
+            **strategy_params,
         )
 
         # Margin guard (options): capital must fund the position's margin for the chosen
@@ -1176,8 +1251,11 @@ class LiveRunManager:
         # recomputes self.lots from equity at the next entry, overwriting this value.
         # Per-underlying dict lots (momentum_theta) are NOT scalar-editable here — a
         # scalar overwrite would break the strategy's per-name lookups.
-        if lots is not None and hasattr(live.session.strategy, "lots") \
-                and not isinstance(live.session.strategy.lots, dict):
+        if (
+            lots is not None
+            and hasattr(live.session.strategy, "lots")
+            and not isinstance(live.session.strategy.lots, dict)
+        ):
             live.session.strategy.lots = max(1, int(lots))
             cfg.params = {**cfg.params, "lots": live.session.strategy.lots}
         # Per-underlying lot-sets (momentum_theta's `lots` dict / cp_ratio_expiry's `sets` dict):
@@ -1209,8 +1287,11 @@ class LiveRunManager:
                     refresh_seconds=cfg.refresh_seconds,
                     excluded_symbols=cfg.excluded_symbols,
                 )
-                if lots is not None and hasattr(live.session.strategy, "lots") \
-                        and not isinstance(live.session.strategy.lots, dict):
+                if (
+                    lots is not None
+                    and hasattr(live.session.strategy, "lots")
+                    and not isinstance(live.session.strategy.lots, dict)
+                ):
                     snap["lots"] = live.session.strategy.lots
                 if lot_sets and sets_attr is not None:
                     snap[sets_attr] = dict(getattr(live.session.strategy, sets_attr))
@@ -1222,7 +1303,8 @@ class LiveRunManager:
         """Self-heal a zerodha run stuck on a quote_error: if a VALID session exists (honest
         expiry → False once the token truly dies, so we never hammer a dead token), rebuild the
         adapter from the current DB token and clear the error so the loop polls again. Throttled
-        to ~once/minute. Recovers a re-login (and transient rate-limits) without manual Reconnect."""
+        to ~once/minute. Recovers a re-login (and transient rate-limits) without manual Reconnect.
+        """
         from skas_algo.db.models import BrokerAccount
         from skas_algo.services import broker as broker_svc
 
@@ -1255,7 +1337,11 @@ class LiveRunManager:
         live = self.runs.get(run_id)
         # Promote a run that's on cache fallback OR whose live quotes errored (rejected token):
         # rebuilding the adapter from the account picks up the fresh session after a re-login.
-        if live is None or not (live.on_cache_fallback or live.quote_error) or not live.config.broker_account_id:
+        if (
+            live is None
+            or not (live.on_cache_fallback or live.quote_error)
+            or not live.config.broker_account_id
+        ):
             return False
         from skas_algo.db.models import BrokerAccount
         from skas_algo.live.pricefeed import build_quote_source
@@ -1297,11 +1383,14 @@ class LiveRunManager:
         try:
             from skas_algo.notify import Alert, AlertLevel, build_notifier
 
-            build_notifier().send(Alert(
-                f"Real orders RESUMED: {live.config.name}",
-                "The broker login re-armed this LIVE run's real-order broker after a restart. "
-                "Its broker book will be reconciled before the first decision.",
-                AlertLevel.WARNING))
+            build_notifier().send(
+                Alert(
+                    f"Real orders RESUMED: {live.config.name}",
+                    "The broker login re-armed this LIVE run's real-order broker after a restart. "
+                    "Its broker book will be reconciled before the first decision.",
+                    AlertLevel.WARNING,
+                )
+            )
         except Exception:  # pragma: no cover - alert is best-effort
             logger.exception("resume-orders alert failed for run %s", live.run_id)
 
@@ -1315,10 +1404,13 @@ class LiveRunManager:
         if account is None or not broker_svc.has_valid_session(account):
             return []
         adapter = broker_svc.make_adapter(account)
-        return [rid for rid, live in self.runs.items()
-                if (live.on_cache_fallback or live.quote_error)
-                and live.config.broker_account_id == account_id
-                and self.promote_quote_source(rid, db, adapter=adapter)]
+        return [
+            rid
+            for rid, live in self.runs.items()
+            if (live.on_cache_fallback or live.quote_error)
+            and live.config.broker_account_id == account_id
+            and self.promote_quote_source(rid, db, adapter=adapter)
+        ]
 
     def promote_account_runs_async(self, account_id: int) -> None:
         """Fire-and-forget promotion on a daemon thread with its OWN db session.
@@ -1333,8 +1425,9 @@ class LiveRunManager:
                 with session_scope() as db:
                     promoted = self.promote_account_runs(account_id, db)
                 if promoted:
-                    logger.info("promoted %d runs after login on account %s",
-                                len(promoted), account_id)
+                    logger.info(
+                        "promoted %d runs after login on account %s", len(promoted), account_id
+                    )
             except Exception:  # pragma: no cover - background best-effort
                 logger.exception("background promotion failed for account %s", account_id)
 
@@ -1404,8 +1497,9 @@ class LiveRunManager:
                 continue
             task = self._tasks.get(run_id)
             if task is None or task.done():
-                logger.error("watchdog: run %s (%s) loop is dead — restarting",
-                             run_id, live.config.name)
+                logger.error(
+                    "watchdog: run %s (%s) loop is dead — restarting", run_id, live.config.name
+                )
                 self._notify_watchdog(live)
                 self._start_loop_on_loop(run_id)
 
@@ -1413,11 +1507,14 @@ class LiveRunManager:
         try:
             from skas_algo.notify import Alert, AlertLevel, build_notifier
 
-            build_notifier().send(Alert(
-                "Run loop restarted",
-                f"[{live.config.name}] background loop had died and was restarted by the "
-                f"watchdog — check for a repeating crash.",
-                AlertLevel.WARNING))
+            build_notifier().send(
+                Alert(
+                    "Run loop restarted",
+                    f"[{live.config.name}] background loop had died and was restarted by the "
+                    f"watchdog — check for a repeating crash.",
+                    AlertLevel.WARNING,
+                )
+            )
         except Exception:  # pragma: no cover - alert is best-effort
             logger.exception("watchdog notification failed")
 
@@ -1442,8 +1539,11 @@ class LiveRunManager:
         from skas_algo.live.holidays import is_nse_holiday
 
         now = datetime.now(IST)
-        if (now.weekday() >= 5 or is_nse_holiday(now.date())
-                or self._last_cache_refresh_day == now.date()):
+        if (
+            now.weekday() >= 5
+            or is_nse_holiday(now.date())
+            or self._last_cache_refresh_day == now.date()
+        ):
             return
         symbols = self._daily_refresh_symbols()
         result = await asyncio.to_thread(self._run_cache_refresh, symbols)
@@ -1451,11 +1551,16 @@ class LiveRunManager:
             return  # no valid Zerodha session yet → retry next tick (once connected)
         self._last_cache_refresh_day = now.date()
         ok = sum(1 for r in result.values() if "error" not in r)
-        self.last_cache_refresh = {"at": now.isoformat(), "symbols": len(result),
-                                   "ok": ok, "errors": len(result) - ok}
+        self.last_cache_refresh = {
+            "at": now.isoformat(),
+            "symbols": len(result),
+            "ok": ok,
+            "errors": len(result) - ok,
+        }
         self.broadcaster.publish({"type": "cache_refreshed", **self.last_cache_refresh})
-        logger.info("daily cache refresh: %s symbols (%s ok, %s errors)",
-                    len(result), ok, len(result) - ok)
+        logger.info(
+            "daily cache refresh: %s symbols (%s ok, %s errors)", len(result), ok, len(result) - ok
+        )
 
     def _data_account(self, db):
         """A Zerodha account with a valid session for READ-ONLY historical work (cache
@@ -1510,9 +1615,13 @@ class LiveRunManager:
         except Exception:
             after = time(15, 45)
         now = datetime.now(IST)
-        if (now.weekday() >= 5 or is_nse_holiday(now.date()) or now.time() < after
-                or self._last_option_capture_day == now.date()
-                or self.option_capture_running):
+        if (
+            now.weekday() >= 5
+            or is_nse_holiday(now.date())
+            or now.time() < after
+            or self._last_option_capture_day == now.date()
+            or self.option_capture_running
+        ):
             return
         self.option_capture_running = True
         try:
@@ -1549,7 +1658,8 @@ class LiveRunManager:
         if trading and now.time() < after:
             raise ValueError(
                 f"capture opens at {after.strftime('%H:%M')} IST — today's bars aren't "
-                f"final until the market closes")
+                f"final until the market closes"
+            )
         if self.option_capture_running:
             return {"started": False, "reason": "a capture is already running"}
         target = now.date() if trading else previous_trading_day(now.date())
@@ -1563,14 +1673,22 @@ class LiveRunManager:
                     from skas_algo.data.option_intraday_store import mirror_store
 
                     b = await asyncio.to_thread(mirror_store, settings.option_bars_backup_dir)
-                    result = {"account": None, "days": [], "backup": b,
-                              "note": "no broker session — mirrored the existing store only"}
+                    result = {
+                        "account": None,
+                        "days": [],
+                        "backup": b,
+                        "note": "no broker session — mirrored the existing store only",
+                    }
                 if result is not None:
                     self._last_option_capture_day = datetime.now(IST).date()
                     self.last_option_capture = {
-                        "at": datetime.now(IST).isoformat(), "trigger": "manual", **result}
+                        "at": datetime.now(IST).isoformat(),
+                        "trigger": "manual",
+                        **result,
+                    }
                     self.broadcaster.publish(
-                        {"type": "option_bars_captured", **self.last_option_capture})
+                        {"type": "option_bars_captured", **self.last_option_capture}
+                    )
                     logger.info("manual option-bar capture: %s", result)
             except Exception:  # pragma: no cover - background task must never die silently
                 logger.exception("manual option-bar capture failed")
@@ -1584,7 +1702,12 @@ class LiveRunManager:
         """Worker-thread body: capture today's bars + sweep recent missing days (only
         still-listed contracts are recoverable). None when no valid session (caller retries)."""
         from skas_algo.config import get_settings
-        from skas_algo.data.option_intraday_store import capture_day, day_path, mirror_store
+        from skas_algo.data.option_intraday_store import (
+            capture_day,
+            day_path,
+            mirror_store,
+            prune_store,
+        )
         from skas_algo.live.holidays import previous_trading_day
         from skas_algo.services import broker as broker_svc
 
@@ -1595,8 +1718,9 @@ class LiveRunManager:
                 return None
             adapter = broker_svc.make_adapter(account)
             label = account.label
-        unders = [u.strip().upper()
-                  for u in settings.option_bars_underlyings.split(",") if u.strip()]
+        unders = [
+            u.strip().upper() for u in settings.option_bars_underlyings.split(",") if u.strip()
+        ]
         days = [today]
         d = today
         for _ in range(max(0, int(settings.option_bars_days_back))):
@@ -1606,15 +1730,27 @@ class LiveRunManager:
         todo = [day for day in days if not day_path(day).exists()]
         summaries = []
         for i, day in enumerate(todo, 1):
+
             def _progress(done: int, total: int, _d=day.isoformat(), _i=i, _n=len(todo)):
-                self.option_capture_progress = {"day": _d, "done": done, "total": total,
-                                                "day_index": _i, "days_total": _n}
+                self.option_capture_progress = {
+                    "day": _d,
+                    "done": done,
+                    "total": total,
+                    "day_index": _i,
+                    "days_total": _n,
+                }
+
             try:
-                summaries.append(capture_day(
-                    adapter, day, underlyings=unders,
-                    expiry_days=int(settings.option_bars_expiry_days),
-                    strike_pct=float(settings.option_bars_strike_pct),
-                    progress=_progress))
+                summaries.append(
+                    capture_day(
+                        adapter,
+                        day,
+                        underlyings=unders,
+                        expiry_days=int(settings.option_bars_expiry_days),
+                        strike_pct=float(settings.option_bars_strike_pct),
+                        progress=_progress,
+                    )
+                )
             except Exception:  # pragma: no cover - one day's failure never kills the rest
                 logger.exception("option-bar capture failed for %s", day)
         self.option_capture_progress = None
@@ -1627,6 +1763,13 @@ class LiveRunManager:
             except Exception:  # pragma: no cover - backup failure must not fail capture
                 logger.exception("option-bar store mirror failed")
                 out["backup"] = {"error": "mirror failed — see log"}
+        # Rolling retention (VPS trading box: keep_days=7): prune the LOCAL store to the newest
+        # N day-files AFTER any mirror. No-op when keep_days=0 (the Mac keeps the full store).
+        if int(settings.option_bars_keep_days) > 0:
+            try:
+                out["pruned"] = prune_store(int(settings.option_bars_keep_days))
+            except Exception:  # pragma: no cover - retention must never fail the capture
+                logger.exception("option-bar store prune failed")
         return out
 
     def _daily_refresh_symbols(self) -> list[str]:
@@ -1671,8 +1814,9 @@ class LiveRunManager:
             return False
         if live.session.portfolio.lot_symbols():
             return False  # still holding — never abandon a live book
-        logger.info("run %s (%s) completed its lifecycle — stopping itself",
-                    live.run_id, live.config.name)
+        logger.info(
+            "run %s (%s) completed its lifecycle — stopping itself", live.run_id, live.config.name
+        )
         self.stop(live.run_id)
         return True
 
@@ -1705,7 +1849,11 @@ class LiveRunManager:
                 #   • it's an off-hours CACHE run with ignore_market_hours (offline testing).
                 should_price = (
                     mkt
-                    or (is_zerodha and not live.quote_error and self._due_offhours_refresh(live, now))
+                    or (
+                        is_zerodha
+                        and not live.quote_error
+                        and self._due_offhours_refresh(live, now)
+                    )
                     or (live.config.ignore_market_hours and not is_zerodha)
                 )
                 if should_price:
@@ -1716,7 +1864,8 @@ class LiveRunManager:
                         # synchronously on the ONE event loop starved the entire API
                         # (2026-07-07 morning). publish/start_loop are thread-safe now.
                         await loop.run_in_executor(
-                            self._tick_pool, self._tick, live, tick_driven, decide_at)
+                            self._tick_pool, self._tick, live, tick_driven, decide_at
+                        )
                     except Exception:  # pragma: no cover - keep the loop alive
                         logger.exception("live loop tick failed for run %s", live.run_id)
                     # Self-stop seam (broker_smoke_test): honored HERE, on the event loop —

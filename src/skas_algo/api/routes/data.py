@@ -16,14 +16,14 @@ from sqlalchemy.orm import Session
 from skas_algo.api.deps import get_db
 from skas_algo.data.options_provider import make_spot_provider
 from skas_algo.data.provider import get_data_cache
-from skas_algo.db.models import BrokerAccount
-from skas_algo.services import broker as broker_svc
 from skas_algo.data.synthetic_options import (
     SYNTHETIC_UNDERLYINGS,
     synthetic_chain_for_view,
     synthetic_expiries,
 )
+from skas_algo.db.models import BrokerAccount
 from skas_algo.engine.options.black_scholes import greeks, implied_vol
+from skas_algo.services import broker as broker_svc
 
 router = APIRouter(tags=["data"], prefix="/data")
 
@@ -84,8 +84,11 @@ def coverage(
         u = (underlying or "NIFTY").upper()
         try:
             # GOLD (synthetic) spans its cached futures series; others span the options DB.
-            cov = (cache.get_coverage_stats(u) if u in SYNTHETIC_UNDERLYINGS
-                   else cache.options_coverage(u)) or {}
+            cov = (
+                cache.get_coverage_stats(u)
+                if u in SYNTHETIC_UNDERLYINGS
+                else cache.options_coverage(u)
+            ) or {}
         except Exception:
             cov = {}
         return {
@@ -131,7 +134,9 @@ def symbol_detail(symbol: str, cache=Depends(get_data_cache)) -> dict:
     try:
         cov = cache.get_coverage_stats(symbol)
     except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"no cached data for {symbol!r}: {exc}") from exc
+        raise HTTPException(
+            status_code=404, detail=f"no cached data for {symbol!r}: {exc}"
+        ) from exc
     if not cov or not cov.get("total_records"):
         raise HTTPException(status_code=404, detail=f"no cached data for {symbol!r}")
 
@@ -185,12 +190,18 @@ def stock_series(
     # SuperTrend cold-starts (ATR needs ~period bars) — fetch a warmup buffer BEFORE start so the
     # overlay's direction converges (matching the engine/TradingView), then display only [start, end].
     st_on = bool(st_period and st_multiplier)
-    buffer_days = {"daily": 400, "weekly": 1500, "monthly": 3000}.get(st_timeframe.lower(), 400) if st_on else 0
+    buffer_days = (
+        {"daily": 400, "weekly": 1500, "monthly": 3000}.get(st_timeframe.lower(), 400)
+        if st_on
+        else 0
+    )
     fetch_start = start - timedelta(days=buffer_days)
     try:
         df = cache.get_prices(symbol, start_date=fetch_start, end_date=end)
     except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"no cached data for {symbol!r}: {exc}") from exc
+        raise HTTPException(
+            status_code=404, detail=f"no cached data for {symbol!r}: {exc}"
+        ) from exc
     if df is None or len(df) == 0:
         raise HTTPException(status_code=404, detail=f"no cached data for {symbol!r}")
     df = df.copy()
@@ -200,8 +211,9 @@ def stock_series(
         from skas_algo.engine.indicators.supertrend import supertrend_bands
 
         try:
-            st = supertrend_bands(df, period=int(st_period), multiplier=float(st_multiplier),
-                                  timeframe=st_timeframe)
+            st = supertrend_bands(
+                df, period=int(st_period), multiplier=float(st_multiplier), timeframe=st_timeframe
+            )
             for ts, row in st.iterrows():
                 key = ts.date().isoformat() if hasattr(ts, "date") else str(ts)[:10]
                 st_by_date[key] = (row["supertrend"], row["direction"])
@@ -279,6 +291,29 @@ def options_intraday_store(days: int = 30) -> dict:
     }
 
 
+@router.get("/options/intraday-store/day/{day}")
+def options_intraday_store_day(day: str):
+    """Download ONE day's raw Parquet file — the restore transport for a Mac that missed a day
+    while the VPS kept capturing (``skas-algo restore-option-bars`` pulls this over Tailscale).
+    Auth-gated (this router) + path-validated (ISO date, resolved inside the store dir)."""
+    from fastapi.responses import FileResponse
+
+    from skas_algo.data.option_intraday_store import OPTION_INTRADAY_DIR, day_path
+
+    try:
+        d = date.fromisoformat(day)
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail="day must be an ISO date (YYYY-MM-DD)"
+        ) from None
+    path = day_path(d)
+    if path.parent.resolve() != OPTION_INTRADAY_DIR.resolve() or not path.exists():
+        raise HTTPException(status_code=404, detail=f"no capture for {d.isoformat()}")
+    return FileResponse(
+        path, media_type="application/octet-stream", filename=f"{d.isoformat()}.parquet"
+    )
+
+
 @router.post("/options/intraday-store/capture")
 async def options_intraday_capture() -> dict:
     """Data-page manual trigger: capture whatever day-files are missing (today after
@@ -321,8 +356,13 @@ def options_coverage_route(underlying: str, cache=Depends(get_data_cache)) -> di
                 detail=f"no cached {u} series yet — refresh GOLD futures from the Brokers screen",
             )
         n = cov.get("total_records", 0)
-        return {"symbol": u, "start_date": _iso(cov.get("start_date")),
-                "end_date": _iso(cov.get("end_date")), "total_records": n, "trading_days": n}
+        return {
+            "symbol": u,
+            "start_date": _iso(cov.get("start_date")),
+            "end_date": _iso(cov.get("end_date")),
+            "total_records": n,
+            "trading_days": n,
+        }
     cov = cache.options_coverage(u) or {}
     if not cov.get("total_records"):
         raise HTTPException(status_code=404, detail=f"no cached options for {underlying!r}")
@@ -330,18 +370,25 @@ def options_coverage_route(underlying: str, cache=Depends(get_data_cache)) -> di
 
 
 @router.get("/options/{underlying}/expiries")
-def options_expiries(underlying: str, date: str | None = None, cache=Depends(get_data_cache)) -> dict:
+def options_expiries(
+    underlying: str, date: str | None = None, cache=Depends(get_data_cache)
+) -> dict:
     u = underlying.upper()
     if u in SYNTHETIC_UNDERLYINGS:
         on = _parse_date(date) if date else datetime.now(UTC).date()
-        return {"underlying": u, "date": date, "expiries": [_iso(e) for e in synthetic_expiries(u, on)]}
+        return {
+            "underlying": u,
+            "date": date,
+            "expiries": [_iso(e) for e in synthetic_expiries(u, on)],
+        }
     on = _parse_date(date) if date else None
     exps = cache.list_option_expiries(u, on_date=on)
     return {"underlying": u, "date": date, "expiries": [_iso(e) for e in exps]}
 
 
-def _pivot_chain(df, on: date, expiry: date, spot: float | None, with_greeks: bool, r: float,
-                 q: float = 0.0) -> list[dict]:
+def _pivot_chain(
+    df, on: date, expiry: date, spot: float | None, with_greeks: bool, r: float, q: float = 0.0
+) -> list[dict]:
     """Pivot a (strike × CE/PE) option chain into one row per strike.
 
     ``q=r`` switches the IV/greeks convention to Black-76 — used for synthetic
@@ -369,10 +416,19 @@ def _pivot_chain(df, on: date, expiry: date, spot: float | None, with_greeks: bo
                 iv = implied_vol(px, spot, float(strike), t, r, ot, q=q) if px else None
                 if iv:
                     g = greeks(spot, float(strike), t, r, iv, ot, q=q)
-                    leg.update({"iv": iv, "delta": g["delta"], "gamma": g["gamma"],
-                                "theta": g["theta"], "vega": g["vega"]})
+                    leg.update(
+                        {
+                            "iv": iv,
+                            "delta": g["delta"],
+                            "gamma": g["gamma"],
+                            "theta": g["theta"],
+                            "vega": g["vega"],
+                        }
+                    )
                 else:
-                    leg.update({"iv": None, "delta": None, "gamma": None, "theta": None, "vega": None})
+                    leg.update(
+                        {"iv": None, "delta": None, "gamma": None, "theta": None, "vega": None}
+                    )
             entry[side] = leg
         rows.append(entry)
     rows.sort(key=lambda x: x["strike"])
@@ -401,8 +457,13 @@ def options_chain(
     if spot is not None and rows:
         atm = min(rows, key=lambda x: abs(x["strike"] - spot))["strike"]
     return {
-        "underlying": u, "date": date, "expiry": expiry,
-        "spot": spot, "atm_strike": atm, "rows": rows, "synthetic": synthetic,
+        "underlying": u,
+        "date": date,
+        "expiry": expiry,
+        "spot": spot,
+        "atm_strike": atm,
+        "rows": rows,
+        "synthetic": synthetic,
     }
 
 
@@ -429,14 +490,22 @@ def options_live_underlyings(broker_account_id: int, db: Session = Depends(get_d
     except HTTPException:
         raise
     except Exception as exc:  # pragma: no cover - network/API hiccup
-        raise HTTPException(status_code=502, detail=f"live instruments fetch failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"live instruments fetch failed: {exc}"
+        ) from exc
 
 
 @router.get("/options/live/{underlying}/expiries")
-def options_live_expiries(underlying: str, broker_account_id: int, db: Session = Depends(get_db)) -> dict:
+def options_live_expiries(
+    underlying: str, broker_account_id: int, db: Session = Depends(get_db)
+) -> dict:
     adapter = _live_adapter(broker_account_id, db)
     try:
-        return {"underlying": underlying.upper(), "date": None, "expiries": adapter.option_expiries(underlying)}
+        return {
+            "underlying": underlying.upper(),
+            "date": None,
+            "expiries": adapter.option_expiries(underlying),
+        }
     except HTTPException:
         raise
     except Exception as exc:  # pragma: no cover
@@ -445,7 +514,10 @@ def options_live_expiries(underlying: str, broker_account_id: int, db: Session =
 
 @router.get("/options/live/{underlying}/chain")
 def options_live_chain(
-    underlying: str, expiry: str, broker_account_id: int, db: Session = Depends(get_db),
+    underlying: str,
+    expiry: str,
+    broker_account_id: int,
+    db: Session = Depends(get_db),
 ) -> dict:
     """Real-time chain (per-strike CE/PE LTP + OI, live spot, ATM, lot size) for one expiry."""
     adapter = _live_adapter(broker_account_id, db)
@@ -456,9 +528,16 @@ def options_live_chain(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"live chain fetch failed: {exc}") from exc
     if ch is None:
-        raise HTTPException(status_code=404, detail=f"no listed {underlying.upper()} options for {expiry}")
-    return {"underlying": underlying.upper(), "date": datetime.now(UTC).date().isoformat(),
-            "expiry": expiry, "live": True, **ch}
+        raise HTTPException(
+            status_code=404, detail=f"no listed {underlying.upper()} options for {expiry}"
+        )
+    return {
+        "underlying": underlying.upper(),
+        "date": datetime.now(UTC).date().isoformat(),
+        "expiry": expiry,
+        "live": True,
+        **ch,
+    }
 
 
 class _RefreshBody(BaseModel):
@@ -477,7 +556,9 @@ def _validate_refresh(body: _RefreshBody) -> tuple[list[str], date, date]:
         )
     start, end = _parse_date(body.start_date), _parse_date(body.end_date)
     if (end - start).days > MAX_REFRESH_DAYS:
-        raise HTTPException(status_code=400, detail=f"range too large (max {MAX_REFRESH_DAYS} days/call)")
+        raise HTTPException(
+            status_code=400, detail=f"range too large (max {MAX_REFRESH_DAYS} days/call)"
+        )
     return unders, start, end
 
 
@@ -523,16 +604,18 @@ def futures_series(
     points: list[dict] = []
     if df is not None and len(df):
         for _, row in df.iterrows():
-            points.append({
-                "date": _iso(row.get("trade_date")),
-                "open": _num(row.get("open")),
-                "high": _num(row.get("high")),
-                "low": _num(row.get("low")),
-                "close": _num(row.get("close")),
-                "settle": _num(row.get("settle_price")),
-                "oi": _int(row.get("open_interest")),
-                "expiry": _iso(row.get("expiry_date")),
-            })
+            points.append(
+                {
+                    "date": _iso(row.get("trade_date")),
+                    "open": _num(row.get("open")),
+                    "high": _num(row.get("high")),
+                    "low": _num(row.get("low")),
+                    "close": _num(row.get("close")),
+                    "settle": _num(row.get("settle_price")),
+                    "oi": _int(row.get("open_interest")),
+                    "expiry": _iso(row.get("expiry_date")),
+                }
+            )
     return {"underlying": underlying.upper(), "points": points}
 
 

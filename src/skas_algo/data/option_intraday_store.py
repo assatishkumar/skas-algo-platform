@@ -32,7 +32,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 OPTION_INTRADAY_DIR = Path.home() / ".skas_data" / "option_intraday" / "1min"
-_THROTTLE_S = 0.35      # ~3 historical requests/sec allowed (intraday_bars.py precedent)
+_THROTTLE_S = 0.35  # ~3 historical requests/sec allowed (intraday_bars.py precedent)
 _SESSION_OPEN = time(9, 15)
 _SESSION_CLOSE = time(15, 30)
 COLUMNS = ["symbol", "start", "open", "high", "low", "close", "volume", "oi"]
@@ -81,8 +81,9 @@ def write_day(day: date | str, df: pd.DataFrame) -> None:
     tmp.rename(path)
 
 
-def load_day(day: date | str, underlying: str | None = None,
-             columns: list[str] | None = None) -> pd.DataFrame:
+def load_day(
+    day: date | str, underlying: str | None = None, columns: list[str] | None = None
+) -> pd.DataFrame:
     """All bars of one day (all contracts), or an empty frame if the day isn't captured.
 
     ``underlying`` pushes a ``symbol LIKE 'U|%'`` predicate into the Parquet scan and
@@ -98,10 +99,12 @@ def load_day(day: date | str, underlying: str | None = None,
         if underlying:
             df = con.execute(
                 f"SELECT {cols} FROM read_parquet(?) WHERE symbol LIKE ? ORDER BY symbol, start",
-                [str(path), f"{underlying}|%"]).df()
+                [str(path), f"{underlying}|%"],
+            ).df()
         else:
             df = con.execute(
-                f"SELECT {cols} FROM read_parquet(?) ORDER BY symbol, start", [str(path)]).df()
+                f"SELECT {cols} FROM read_parquet(?) ORDER BY symbol, start", [str(path)]
+            ).df()
     finally:
         con.close()
     return df
@@ -146,8 +149,14 @@ def resample_bars(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
     out = df.copy()
     out["start"] = pd.to_datetime(out["start"])
     g = out.set_index("start").groupby(pd.Grouper(freq=f"{minutes}min"))
-    agg = g.agg(open=("open", "first"), high=("high", "max"), low=("low", "min"),
-                close=("close", "last"), volume=("volume", "sum"), oi=("oi", "last"))
+    agg = g.agg(
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        volume=("volume", "sum"),
+        oi=("oi", "last"),
+    )
     return agg.dropna(subset=["open"]).reset_index()
 
 
@@ -178,6 +187,24 @@ def mirror_store(dest_dir: str | Path) -> dict:
     return {"dir": str(dest), "copied": copied, "skipped": skipped}
 
 
+def prune_store(keep_days: int) -> dict:
+    """Rolling retention: keep only the newest ``keep_days`` day-files, delete the older ones.
+    ``keep_days <= 0`` → no-op (keep forever — the Mac data box). Deletes ONLY the local store
+    (never a mirror dest), so the VPS trading box can capture every day yet stay bounded (~7 files).
+    Modeled on services/backup.py::_prune."""
+    days = captured_days()  # sorted ascending (oldest first)
+    if keep_days <= 0 or len(days) <= keep_days:
+        return {"kept": len(days), "deleted": []}
+    deleted: list[str] = []
+    for d in days[:-keep_days]:
+        try:
+            day_path(d).unlink()
+            deleted.append(d)
+        except OSError as exc:  # pragma: no cover - retention must never break the capture
+            logger.warning("prune_store: could not delete %s: %s", d, exc)
+    return {"kept": len(captured_days()), "deleted": deleted}
+
+
 def store_summary(days_limit: int = 30) -> dict:
     """Inventory of the store for the Data page: totals over ALL day-files (cheap — parquet
     row counts come from metadata, sizes from stat) + per-day detail for the most recent
@@ -185,16 +212,21 @@ def store_summary(days_limit: int = 30) -> dict:
     minute, file size)."""
     all_days = captured_days()
     if not all_days:
-        return {"days_total": 0, "rows_total": 0, "bytes_total": 0,
-                "first_day": None, "last_day": None, "days": []}
+        return {
+            "days_total": 0,
+            "rows_total": 0,
+            "bytes_total": 0,
+            "first_day": None,
+            "last_day": None,
+            "days": [],
+        }
     all_files = [str(day_path(d)) for d in all_days]
     bytes_total = sum(day_path(d).stat().st_size for d in all_days)
-    recent = all_days[-max(1, days_limit):]
+    recent = all_days[-max(1, days_limit) :]
     files = [str(day_path(d)) for d in recent]
     con = duckdb.connect()
     try:
-        rows_total = con.execute(
-            "SELECT count(*) FROM read_parquet(?)", [all_files]).fetchone()[0]
+        rows_total = con.execute("SELECT count(*) FROM read_parquet(?)", [all_files]).fetchone()[0]
         # Per (day, underlying): row + contract counts and the day's bar window.
         detail = con.execute(
             "SELECT regexp_extract(filename, '(\\d{4}-\\d{2}-\\d{2})', 1) AS day, "
@@ -202,24 +234,38 @@ def store_summary(days_limit: int = 30) -> dict:
             "       count(*) AS rows, count(DISTINCT symbol) AS contracts, "
             "       min(start) AS first_bar, max(start) AS last_bar "
             "FROM read_parquet(?, filename=true) GROUP BY 1, 2 ORDER BY 1, 2",
-            [files]).fetchall()
+            [files],
+        ).fetchall()
     finally:
         con.close()
     by_day: dict[str, dict] = {}
     for day, u, rows, contracts, first_bar, last_bar in detail:
-        d = by_day.setdefault(day, {"day": day, "rows": 0, "contracts": 0,
-                                    "underlyings": {}, "first_bar": None, "last_bar": None,
-                                    "bytes": day_path(day).stat().st_size})
+        d = by_day.setdefault(
+            day,
+            {
+                "day": day,
+                "rows": 0,
+                "contracts": 0,
+                "underlyings": {},
+                "first_bar": None,
+                "last_bar": None,
+                "bytes": day_path(day).stat().st_size,
+            },
+        )
         d["rows"] += int(rows)
         d["contracts"] += int(contracts)
         d["underlyings"][u] = int(contracts)
         fb, lb = str(first_bar), str(last_bar)
         d["first_bar"] = fb if d["first_bar"] is None else min(d["first_bar"], fb)
         d["last_bar"] = lb if d["last_bar"] is None else max(d["last_bar"], lb)
-    return {"days_total": len(all_days), "rows_total": int(rows_total),
-            "bytes_total": int(bytes_total),
-            "first_day": all_days[0], "last_day": all_days[-1],
-            "days": sorted(by_day.values(), key=lambda d: d["day"], reverse=True)}
+    return {
+        "days_total": len(all_days),
+        "rows_total": int(rows_total),
+        "bytes_total": int(bytes_total),
+        "first_day": all_days[0],
+        "last_day": all_days[-1],
+        "days": sorted(by_day.values(), key=lambda d: d["day"], reverse=True),
+    }
 
 
 # ------------------------------------------------------------------ capture
@@ -255,8 +301,9 @@ def capture_day(
     todo: list[tuple[str, str, float, str, int]] = []  # (u, expiry_iso, strike, right, token)
     for u in [x.upper() for x in underlyings]:
         by_expiry = adapter._nfo_index.get(u, {})
-        exps = sorted(e for e in by_expiry
-                      if 0 <= (date.fromisoformat(e) - day).days <= expiry_days)
+        exps = sorted(
+            e for e in by_expiry if 0 <= (date.fromisoformat(e) - day).days <= expiry_days
+        )
         if not exps:
             continue
         try:
@@ -294,8 +341,14 @@ def capture_day(
         if progress is not None:
             progress(i, total)
         if i % 250 == 0:
-            logger.info("option-bar capture %s: %d/%d contracts (%d with data, %d errors)",
-                        day, i, total, with_data, errors)
+            logger.info(
+                "option-bar capture %s: %d/%d contracts (%d with data, %d errors)",
+                day,
+                i,
+                total,
+                with_data,
+                errors,
+            )
         if not bars:
             continue
         with_data += 1
@@ -303,15 +356,25 @@ def capture_day(
         for b in bars:
             ts = b.get("date")
             start = ts.replace(tzinfo=None) if hasattr(ts, "replace") else pd.to_datetime(ts)
-            rows.append({
-                "symbol": sym, "start": start,
-                "open": float(b["open"]), "high": float(b["high"]),
-                "low": float(b["low"]), "close": float(b["close"]),
-                "volume": float(b.get("volume") or 0.0),
-                "oi": float(b.get("oi") or 0.0),
-            })
-    summary = {"day": day.isoformat(), "contracts": total, "with_data": with_data,
-               "rows": len(rows), "errors": errors}
+            rows.append(
+                {
+                    "symbol": sym,
+                    "start": start,
+                    "open": float(b["open"]),
+                    "high": float(b["high"]),
+                    "low": float(b["low"]),
+                    "close": float(b["close"]),
+                    "volume": float(b.get("volume") or 0.0),
+                    "oi": float(b.get("oi") or 0.0),
+                }
+            )
+    summary = {
+        "day": day.isoformat(),
+        "contracts": total,
+        "with_data": with_data,
+        "rows": len(rows),
+        "errors": errors,
+    }
     if rows:
         write_day(day, pd.DataFrame(rows))
     else:

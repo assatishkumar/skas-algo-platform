@@ -76,6 +76,7 @@ WebSocket upgrades to `wss` automatically.
 | `SKAS_API_HOST=127.0.0.1`, `SKAS_DEBUG=false` | Localhost bind; no `--reload`. |
 | `SKAS_LIVE_TRADING_ENABLED` | **Master real-order switch. Leave `false` until you're ready**, then restart. |
 | `SKAS_BACKUP_REMOTE_CMD` | Off-box nightly backup, e.g. `aws s3 cp {path} s3://bucket/{name}`. Strongly recommended on a VPS. |
+| `SKAS_OPTION_BARS_CAPTURE_ENABLED=true` + `SKAS_OPTION_BARS_KEEP_DAYS=7` | Have the VPS ALSO capture the 1-min option store as a **rolling 7-day backup** (keeps only the newest 7 day-files) so the Mac can restore days it missed. See *Option-bar rolling backup* below. |
 | `SKAS_TELEGRAM_BOT_TOKEN` + `SKAS_TELEGRAM_CHAT_ID` | Alerts (arm/halt/order/fill). **Both** required or it's log-only. Reuse your Mac's bot/chat; alerts are labelled by run name. |
 | `SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY` | Whether a real-order run resumes on the broker (`true`) or as paper (`false`) after a restart. `false` for bring-up, `true` in steady state — see the note below. |
 
@@ -130,6 +131,25 @@ WebSocket upgrades to `wss` automatically.
   before market open (the run self-heals to real quotes on a valid session).
 - **Backups:** startup + nightly (~16:30 IST) SQLite `VACUUM INTO` snapshots to `backups/`
   (retain 7); set `SKAS_BACKUP_REMOTE_CMD` so a nightly copy also lands off-box.
+
+### Option-bar rolling backup (cover Mac-outage days)
+
+The 1-min option store is captured once/day (≥15:45 IST) on **one** box (`SKAS_OPTION_BARS_CAPTURE_ENABLED`).
+The Mac data box holds the full history; a missed day is normally re-fetched by its 3-day sweep — **but an
+expiry day can't be recovered** (the expired weekly vanishes from Kite's instruments dump). Since the VPS
+runs 24/7 it can capture every day. Enable it there as a rolling backup:
+
+- **On the VPS `.env`:** `SKAS_OPTION_BARS_CAPTURE_ENABLED=true` and `SKAS_OPTION_BARS_KEEP_DAYS=7`, then
+  restart. It captures read-only after close (no trading interference) and prunes to the newest 7 day-files
+  (≈1.5 weeks of trading — bump `KEEP_DAYS` for a longer trip; **the window must exceed your longest Mac
+  outage**). The Mac keeps `KEEP_DAYS` unset/`0` = keep-forever.
+- **When you're back, on the Mac:** pull the days you missed from the VPS over Tailscale —
+  ```bash
+  skas-algo restore-option-bars --from https://<vps>.<tailnet>.ts.net
+  ```
+  It logs in (VPS operator password — `--password`, `$SKAS_RESTORE_PASSWORD`, or a prompt), lists the VPS's
+  days, and downloads only the ones your Mac lacks (gap-fill; never overwrites a local day unless
+  `--overwrite`). Confirm on **Data → Options** that the missing days appear.
 
 ## Hard constraints (do not skip)
 

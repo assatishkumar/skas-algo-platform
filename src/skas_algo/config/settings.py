@@ -51,9 +51,9 @@ class Settings(BaseSettings):
     # frontend uses a relative /api base + window.location WS, so a TLS front (tailscale
     # serve / a reverse proxy) gives wss with zero config. `webapp_dist` overrides the path
     # (default: the repo's web/dist, resolved relative to this package).
-    serve_webapp: bool = False              # SKAS_SERVE_WEBAPP
-    webapp_dist: str | None = None          # SKAS_WEBAPP_DIST (absolute path override)
-    mobile_dist: str | None = None          # SKAS_MOBILE_DIST (web-mobile/dist override)
+    serve_webapp: bool = False  # SKAS_SERVE_WEBAPP
+    webapp_dist: str | None = None  # SKAS_WEBAPP_DIST (absolute path override)
+    mobile_dist: str | None = None  # SKAS_MOBILE_DIST (web-mobile/dist override)
 
     # --- Secrets / encryption ---
     # Fernet key used to encrypt broker credentials & TOTP secrets at rest.
@@ -67,9 +67,9 @@ class Settings(BaseSettings):
     # host (the VPS) MUST set both, or it is unauthenticated.
     #   hash:   venv/bin/skas-algo hash-password
     #   secret: python -c "import secrets; print(secrets.token_urlsafe(48))"
-    auth_password_hash: str | None = None   # SKAS_AUTH_PASSWORD_HASH (bcrypt)
-    auth_jwt_secret: str | None = None      # SKAS_AUTH_JWT_SECRET (HS256 signing key)
-    auth_token_ttl_hours: int = 24          # SKAS_AUTH_TOKEN_TTL_HOURS (login token lifetime)
+    auth_password_hash: str | None = None  # SKAS_AUTH_PASSWORD_HASH (bcrypt)
+    auth_jwt_secret: str | None = None  # SKAS_AUTH_JWT_SECRET (HS256 signing key)
+    auth_token_ttl_hours: int = 24  # SKAS_AUTH_TOKEN_TTL_HOURS (login token lifetime)
 
     # --- Alerts (Telegram) ---
     telegram_bot_token: str | None = None
@@ -85,9 +85,9 @@ class Settings(BaseSettings):
     # is True. Defaults False so paper/dev never fires real orders by accident.
     live_trading_enabled: bool = False
     # Real-order safety rails (LiveBroker pre-flight; see brokers/live_broker.py).
-    live_max_order_notional: float = 500_000.0   # SKAS_LIVE_MAX_ORDER_NOTIONAL
-    live_max_orders_per_day: int = 20            # SKAS_LIVE_MAX_ORDERS_PER_DAY
-    live_order_timeout_s: float = 10.0           # SKAS_LIVE_ORDER_TIMEOUT_S (LIMIT→MARKET)
+    live_max_order_notional: float = 500_000.0  # SKAS_LIVE_MAX_ORDER_NOTIONAL
+    live_max_orders_per_day: int = 20  # SKAS_LIVE_MAX_ORDERS_PER_DAY
+    live_order_timeout_s: float = 10.0  # SKAS_LIVE_ORDER_TIMEOUT_S (LIMIT→MARKET)
     # Resume REAL-order management for a LIVE run after a restart/recovery. Default False =
     # fail-safe: a recovered live run keeps PaperBroker (a restart PAUSES real orders until
     # the owner re-activates). When True, recovery re-injects the LiveBroker — but the 4-key
@@ -100,33 +100,38 @@ class Settings(BaseSettings):
     # WebSocket feed (push) with a REST fallback on any staleness; False forces the legacy
     # per-run REST polling. Broker-agnostic surface — Dhan/cache paths are unaffected.
     ws_feed_enabled: bool = True
-    ws_feed_stale_s: float = 10.0        # in-market: a mark older than this → REST fallback
+    ws_feed_stale_s: float = 10.0  # in-market: a mark older than this → REST fallback
 
     # --- Option intraday-bar capture (the self-built GFD replacement) ---
     # Once per trading day after close, fetch 1-min bars (+volume+OI) for the in-universe
     # option contracts via Kite historical and persist them to the local Parquet store
     # (~/.skas_data/option_intraday/1min/). Read-only / arm-independent. Default OFF —
     # the owner enables it on ONE box (the Mac data box) to avoid duplicate capture.
-    option_bars_capture_enabled: bool = False    # SKAS_OPTION_BARS_CAPTURE_ENABLED
+    option_bars_capture_enabled: bool = False  # SKAS_OPTION_BARS_CAPTURE_ENABLED
     option_bars_underlyings: str = "NIFTY,BANKNIFTY,SENSEX"  # SKAS_OPTION_BARS_UNDERLYINGS
-    option_bars_expiry_days: int = 40            # capture expiries within this many days
-    option_bars_strike_pct: float = 10.0         # strikes within ±this % of spot
-    option_bars_capture_after: str = "15:45"     # IST; bars are final after the close
-    option_bars_days_back: int = 3               # sweep this many prior trading days for gaps
+    option_bars_expiry_days: int = 40  # capture expiries within this many days
+    option_bars_strike_pct: float = 10.0  # strikes within ±this % of spot
+    option_bars_capture_after: str = "15:45"  # IST; bars are final after the close
+    option_bars_days_back: int = 3  # sweep this many prior trading days for gaps
+    # Rolling retention: keep only the newest N day-files (prune older after each capture).
+    # 0 = keep forever — the Mac data box (the full multi-year store). The VPS trading box
+    # sets 7 so it captures every day (incl. expiry days the Mac can miss) yet stays bounded;
+    # the Mac restores its gaps from the VPS (skas-algo restore-option-bars).
+    option_bars_keep_days: int = 0  # SKAS_OPTION_BARS_KEEP_DAYS (0 = keep forever)
     # Off-box durability: a local dir the store is MIRRORED into after every capture/import
     # (copy new/changed day-files, never delete). Point it at a Google Drive for Desktop
     # folder and the Drive app ships it to the cloud. Unset → local-only.
-    option_bars_backup_dir: str | None = None    # SKAS_OPTION_BARS_BACKUP_DIR
+    option_bars_backup_dir: str | None = None  # SKAS_OPTION_BARS_BACKUP_DIR
 
     # --- Backups ---
-    db_backup_keep: int = 7              # rolling on-box snapshots of the sqlite DB to retain
+    db_backup_keep: int = 7  # rolling on-box snapshots of the sqlite DB to retain
     # OFF-BOX durability: a shell command run AFTER the nightly snapshot to ship it off the
     # box (disk-failure protection). ``{path}`` = the snapshot's absolute path, ``{name}`` =
     # its filename. Unset → on-box only (unchanged). Destination-agnostic, e.g.:
     #   rsync -az {path} user@backup-host:/skas-backups/
     #   rclone copy {path} b2:my-bucket/skas-backups/
     #   aws s3 cp {path} s3://my-bucket/skas-backups/
-    backup_remote_cmd: str | None = None   # SKAS_BACKUP_REMOTE_CMD
+    backup_remote_cmd: str | None = None  # SKAS_BACKUP_REMOTE_CMD
 
     # --- Logging ---
     log_level: str = "INFO"

@@ -46,8 +46,10 @@ def _import_gfd(args) -> None:
     from skas_algo.data.gfd_import import import_gfd
 
     summary = import_gfd(args.paths)
-    print(f"imported {summary['files']} file(s) → {summary['rows']} rows "
-          f"({summary['skipped_tickers']} non-option tickers skipped)")
+    print(
+        f"imported {summary['files']} file(s) → {summary['rows']} rows "
+        f"({summary['skipped_tickers']} non-option tickers skipped)"
+    )
     for day, rows in sorted(summary["days"].items()):
         print(f"  {day}: {rows} rows in store")
     backup_dir = get_settings().option_bars_backup_dir
@@ -58,19 +60,87 @@ def _import_gfd(args) -> None:
         print(f"mirrored to backup: {b['copied']} copied, {b['skipped']} unchanged → {b['dir']}")
 
 
+def _restore_option_bars(args) -> None:
+    """`skas-algo restore-option-bars --from <vps-url>` — pull the 1-min option-bar days this
+    box missed from a remote (VPS) store over Tailscale. Gap-fill by default; --overwrite re-pulls
+    all remote days. Auth = the VPS operator password (--password / $SKAS_RESTORE_PASSWORD /
+    prompt); --no-auth for an open remote."""
+    import getpass
+    import os
+
+    from skas_algo.services.option_restore import login, restore_from
+
+    token = None
+    if not args.no_auth:
+        pw = (
+            args.password
+            or os.environ.get("SKAS_RESTORE_PASSWORD")
+            or getpass.getpass("VPS password: ")
+        )
+        if pw:
+            try:
+                token = login(args.base_url, pw)
+            except Exception as exc:  # noqa: BLE001 — fall back to an open endpoint
+                print(f"login failed ({exc}); trying without auth…")
+    result = restore_from(
+        args.base_url,
+        token=token,
+        days=args.days,
+        overwrite=args.overwrite,
+        progress=lambda d, i, n: print(f"  [{i}/{n}] {d}"),
+    )
+    print(
+        f"remote days: {result['remote']} · already had: {result['already']} · "
+        f"restored: {len(result['restored'])} · skipped: {len(result['skipped'])} · "
+        f"errors: {len(result['errors'])}"
+    )
+    if result["restored"]:
+        print("  restored:", ", ".join(result["restored"]))
+    if result["skipped"]:
+        print("  skipped (pruned off the remote):", ", ".join(result["skipped"]))
+    if result["errors"]:
+        print("  errors:", ", ".join(result["errors"]))
+
+
 def main() -> None:
     """CLI entry point (``skas-algo``): run the API server, or export the Obsidian vault."""
     import argparse
 
     parser = argparse.ArgumentParser(prog="skas-algo")
     sub = parser.add_subparsers(dest="cmd")
-    ev = sub.add_parser("export-vault", help="Export run-cards into the Obsidian trading-brain vault")
-    ev.add_argument("--backfill", action="store_true", help="write a run-card for every existing run")
+    ev = sub.add_parser(
+        "export-vault", help="Export run-cards into the Obsidian trading-brain vault"
+    )
+    ev.add_argument(
+        "--backfill", action="store_true", help="write a run-card for every existing run"
+    )
     ev.add_argument("--scaffold", action="store_true", help="write the vault dashboards/templates")
     sub.add_parser("hash-password", help="Hash an operator password for SKAS_AUTH_PASSWORD_HASH")
-    ig = sub.add_parser("import-gfd",
-                        help="Import GlobalDataFeeds 1-min CSVs into the option-bar store")
+    ig = sub.add_parser(
+        "import-gfd", help="Import GlobalDataFeeds 1-min CSVs into the option-bar store"
+    )
     ig.add_argument("paths", nargs="+", help="GFD csv files and/or directories of them")
+    rb = sub.add_parser(
+        "restore-option-bars", help="Pull missed 1-min option-bar days from a remote (VPS) store"
+    )
+    rb.add_argument(
+        "--from",
+        dest="base_url",
+        required=True,
+        help="remote base URL, e.g. https://<vps>.<tailnet>.ts.net",
+    )
+    rb.add_argument("--days", type=int, default=30, help="recent days to consider (default 30)")
+    rb.add_argument(
+        "--password",
+        default=None,
+        help="VPS operator password (else $SKAS_RESTORE_PASSWORD, else prompt)",
+    )
+    rb.add_argument("--no-auth", action="store_true", help="remote has auth disabled — skip login")
+    rb.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="re-pull ALL remote days (default: only days this box is missing)",
+    )
     args = parser.parse_args()
 
     if args.cmd == "hash-password":
@@ -84,6 +154,9 @@ def main() -> None:
         return
     if args.cmd == "import-gfd":
         _import_gfd(args)
+        return
+    if args.cmd == "restore-option-bars":
+        _restore_option_bars(args)
         return
     uvicorn.run(
         "skas_algo.api.app:app",
