@@ -17,6 +17,17 @@ const kindColor = (k: string) =>
   : k === "exit" ? { bg: "var(--ok-bg)", fg: "var(--ok-text)" }
   : { bg: "var(--opt-bg)", fg: "var(--opt-text)" };
 const signCls = (n: number) => (n >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]");
+// Position size: "N lots" only when units is an EXACT multiple of the contract size (always so
+// for a live run — it entered at that size); else exact units (×N) so an old backtest whose era
+// lot size differs from today's is never misrepresented.
+const lotsLabel = (units: number, lotSize?: number | null) => {
+  const n = Math.round(units);
+  if (lotSize && lotSize > 0 && n % lotSize === 0) {
+    const lots = n / lotSize;
+    return `${lots} lot${lots === 1 ? "" : "s"}`;
+  }
+  return `×${n}`;
+};
 const dΔ = (v: number | null) => (v == null ? "—" : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1));
 const shortDate = (iso: string) =>
   new Date(iso.replace(" ", "T")).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
@@ -322,8 +333,8 @@ function EventTimeline({ m, active, toggle }: {
                   </div>
                   <div className="text-[12.5px] text-[var(--muted)] font-semibold leading-[1.55] mt-1.5">{e.reason}</div>
                   <div className="flex flex-col gap-[5px] mt-2.5">
-                    {e.closed.map((l, i) => <EvLine key={`c${i}`} tag="CLOSE" l={l} realized />)}
-                    {e.opened.map((l, i) => <EvLine key={`o${i}`} tag={l.side === "long" ? "HEDGE" : "OPEN"} l={l} />)}
+                    {e.closed.map((l, i) => <EvLine key={`c${i}`} tag="CLOSE" l={l} lotSize={m.lot_size} realized />)}
+                    {e.opened.map((l, i) => <EvLine key={`o${i}`} tag={l.side === "long" ? "HEDGE" : "OPEN"} l={l} lotSize={m.lot_size} />)}
                   </div>
                   <div className="flex gap-3 mt-2.5 border-t border-[var(--divider)] pt-2.5 text-[11.5px] font-bold text-[var(--faint)] tabular-nums">
                     <span>spot {e.spot?.toLocaleString("en-IN") ?? "—"}</span>
@@ -340,7 +351,7 @@ function EventTimeline({ m, active, toggle }: {
   );
 }
 
-function EvLine({ tag, l, realized }: { tag: string; l: CycleDetail["events"][0]["opened"][0]; realized?: boolean }) {
+function EvLine({ tag, l, lotSize, realized }: { tag: string; l: CycleDetail["events"][0]["opened"][0]; lotSize?: number | null; realized?: boolean }) {
   const tone = tag === "CLOSE" ? { bg: "var(--chip)", fg: "var(--chip-text)" }
     : tag === "HEDGE" ? { bg: "var(--warn-bg)", fg: "var(--warn-text)" }
     : { bg: "var(--tint)", fg: "var(--accent-deep)" };
@@ -348,7 +359,7 @@ function EvLine({ tag, l, realized }: { tag: string; l: CycleDetail["events"][0]
   return (
     <div className="flex items-center gap-2.5">
       <span className="flex-none w-[46px] text-center py-[2.5px] rounded-md font-extrabold text-[9.5px] tracking-wide" style={{ backgroundColor: tone.bg, color: tone.fg }}>{tag}</span>
-      <span className="font-[700] text-[13px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.side === "long" ? "BUY" : "SELL"} {l.right} {l.strike.toLocaleString("en-IN")}</span>
+      <span className="font-[700] text-[13px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.side === "long" ? "BUY" : "SELL"} {l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">· {lotsLabel(l.units, lotSize)}</span></span>
       <span className="text-[12.5px] text-[var(--muted)] font-semibold tabular-nums">@{l.price?.toFixed(2)}{cash}</span>
       {realized && l.realized != null && <span className={`ml-auto font-[700] text-[12.5px] font-['Space_Grotesk'] tabular-nums ${signCls(l.realized)}`}>{formatInr(l.realized)}</span>}
     </div>
@@ -372,7 +383,7 @@ function LegsTable({ m, toggle, legInActive }: {
       <div className="bg-[var(--card)] border border-[var(--border)] rounded-[18px] overflow-x-auto">
         <div className="flex items-baseline gap-2.5 px-5 pt-[18px] pb-3.5">
           <span className="font-[700] text-[16px] font-['Space_Grotesk'] text-[var(--strong)]">Legs · {m.legs.length}</span>
-          <span className="text-[12.5px] text-[var(--faint)] font-semibold">opened / closed by event · Δ at open</span>
+          <span className="text-[12.5px] text-[var(--faint)] font-semibold">opened / closed by event · Δ at open{m.lot_size ? ` · lot ${m.lot_size}` : ""}</span>
         </div>
         <div className="grid gap-2.5 px-5 py-2.5 bg-[var(--stat)] border-y border-[var(--divider)] text-[10.5px] font-extrabold tracking-wider text-[var(--faint)]" style={{ gridTemplateColumns: cols }}>
           <span>SIDE</span><span>LEG · Δ</span><span>OPENED</span><span>CLOSED</span><span>ENTRY → EXIT</span><span className="text-right">DAYS</span><span className="text-right">P&L</span>
@@ -383,7 +394,7 @@ function LegsTable({ m, toggle, legInActive }: {
           return (
             <div key={l.ref} onClick={toggle(l.open_event)} className="grid gap-2.5 items-center px-5 py-[11px] border-b border-[var(--divider)] cursor-pointer" style={{ gridTemplateColumns: cols, opacity: legInActive(l) ? 1 : 0.18 }}>
               <span className="text-center py-[2.5px] rounded-md font-extrabold text-[10px]" style={{ backgroundColor: l.side === "long" ? "var(--ok-bg)" : "var(--danger-bg)", color: l.side === "long" ? "var(--ok-text)" : "var(--danger)" }}>{l.side === "long" ? "BUY" : "SELL"}</span>
-              <span className="font-[700] text-[13.5px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">Δ{l.open_delta != null ? (l.open_delta >= 0 ? "+" : "−") + Math.abs(l.open_delta).toFixed(2) : "—"}</span></span>
+              <span className="font-[700] text-[13.5px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">· {lotsLabel(l.units, m.lot_size)} · Δ{l.open_delta != null ? (l.open_delta >= 0 ? "+" : "−") + Math.abs(l.open_delta).toFixed(2) : "—"}</span></span>
               <EvBadge id={l.open_event} date={l.open_ts} c={oc} />
               <EvBadge id={l.close_event} date={l.close_ts} c={cc} />
               <span className="text-[12.5px] font-semibold text-[var(--muted)] tabular-nums">{l.open_price?.toFixed(2)} → {l.close_price != null ? l.close_price.toFixed(2) : "—"}</span>

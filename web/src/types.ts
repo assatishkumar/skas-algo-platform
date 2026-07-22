@@ -878,7 +878,8 @@ export interface CycleDetailLeg {
 export interface CycleDetail {
   run_id: number; index: number; strategy_id: string; run_name: string; live?: boolean;
   is_deployment?: boolean; // the RUN is paper/live (→ breadcrumb to /live), vs a backtest
-  underlying: string; expiry: string; entered_at: string; exited_at: string | null;
+  underlying: string; expiry: string; lot_size?: number | null; // contract lot size (lots = units / lot_size)
+  entered_at: string; exited_at: string | null;
   exit_reason: string | null; entry_spot: number | null; exit_spot: number | null;
   entry_vix: number | null; exit_vix: number | null; underlying_pct: number | null;
   pnl: number | null; premium_traded: number; days_held: number | null;
