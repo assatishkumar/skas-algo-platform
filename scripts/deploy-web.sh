@@ -9,7 +9,10 @@
 # update, which goes via scripts/vps-update.sh on the VPS: pull + pip + restart).
 #
 # Usage:  scripts/deploy-web.sh <vps-ssh-host> [remote-repo-path]
-#   e.g.  scripts/deploy-web.sh ubuntu@myvps.tailnet.ts.net
+#   Prefer a ~/.ssh/config Host ALIAS — it carries the User + IdentityFile, e.g.:
+#         scripts/deploy-web.sh algo
+#   A raw hostname (ubuntu@<vps>.<tailnet>.ts.net) only works if ssh already offers the right key
+#   for that exact name (a config alias is the reliable way).
 #   remote-repo-path defaults to git/skas-algo-platform (relative to the remote login's ~).
 #
 # After it runs: hard-refresh the browser (Cmd/Ctrl+Shift+R) — the PWA service worker caches the
@@ -17,8 +20,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOST="${1:?usage: deploy-web.sh <vps-ssh-host> [remote-repo-path]}"
+HOST="${1:?usage: deploy-web.sh <vps-ssh-host>  (prefer a ~/.ssh/config alias, e.g. algo)}"
 REMOTE="${2:-git/skas-algo-platform}"   # relative to the remote login home (~)
+
+# Fail fast BEFORE building if we can't reach the box (don't waste a 30s build on a bad host/key).
+echo "▶ checking ssh ${HOST} …"
+if ! ssh -o BatchMode=yes -o ConnectTimeout=8 "${HOST}" true 2>/dev/null; then
+  echo "✗ can't ssh to '${HOST}'. Use your ~/.ssh/config Host alias (it carries the User +" >&2
+  echo "  IdentityFile) — e.g.  scripts/deploy-web.sh algo.  Verify with:  ssh ${HOST} true" >&2
+  exit 1
+fi
 
 build() {  # $1 = workspace dir (web | web-mobile)
   echo "▶ building $1 …"
