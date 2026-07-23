@@ -200,6 +200,25 @@ def test_capture_day_all_errors_writes_no_file():
     assert not store.day_path(DAY).exists()  # no file → tomorrow's sweep retries this day
 
 
+def test_capture_day_batched_matches_unbatched_and_cleans_parts():
+    """The small-box memory guard: batch_contracts>0 flushes to part-files + merges, producing a
+    day-file IDENTICAL to the accumulate-then-write-once path, and leaves no .tmp parts behind."""
+    a0, _ = _adapter()
+    store.capture_day(a0, DAY, underlyings=["NIFTY"])  # batch=0 (Mac): write once
+    df0 = store.load_day(DAY).sort_values(["symbol", "start"]).reset_index(drop=True)
+    store.day_path(DAY).unlink()
+
+    # A stale part from a crashed prior run must be cleared at the start.
+    (store.OPTION_INTRADAY_DIR / f"{DAY.isoformat()}.part9.parquet.tmp").write_bytes(b"junk")
+    a1, _ = _adapter()
+    summary = store.capture_day(a1, DAY, underlyings=["NIFTY"], batch_contracts=2)  # 4 → 2 parts
+    df1 = store.load_day(DAY).sort_values(["symbol", "start"]).reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(df0, df1)               # identical output either path
+    assert summary["rows"] == len(df1) == 4 and summary["with_data"] == 4
+    assert list(store.OPTION_INTRADAY_DIR.glob("*.tmp")) == []   # parts merged + cleaned
+
+
 # ---------------------------------------------------------- cross-day contract load
 def test_load_contract_bars_across_days_and_5min():
     sym = "NIFTY|2026-07-21|24000|CE"

@@ -1748,6 +1748,7 @@ class LiveRunManager:
                         underlyings=unders,
                         expiry_days=int(settings.option_bars_expiry_days),
                         strike_pct=float(settings.option_bars_strike_pct),
+                        batch_contracts=int(settings.option_bars_batch_contracts),
                         progress=_progress,
                     )
                 )

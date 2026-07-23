@@ -81,6 +81,58 @@ def write_day(day: date | str, df: pd.DataFrame) -> None:
     tmp.rename(path)
 
 
+def _part_path(day: date | str, n: int) -> Path:
+    """A temp part-file for one incremental batch (batched capture). Named ``*.parquet.tmp`` so
+    it never matches the ``*.parquet`` day-file glob and a crash mid-capture leaves the day
+    UN-captured (re-tried) rather than a half day-file."""
+    d = day.isoformat() if hasattr(day, "isoformat") else str(day)[:10]
+    return OPTION_INTRADAY_DIR / f"{d}.part{n}.parquet.tmp"
+
+
+def _clear_parts(day: date | str) -> None:
+    """Remove any leftover part-files for ``day`` (from a crashed prior batched run)."""
+    d = day.isoformat() if hasattr(day, "isoformat") else str(day)[:10]
+    for p in OPTION_INTRADAY_DIR.glob(f"{d}.part*.parquet.tmp"):
+        p.unlink(missing_ok=True)
+
+
+def _write_part(day: date | str, n: int, df: pd.DataFrame) -> Path:
+    """Write one incremental batch to its own part-file (no rename — parts are transient)."""
+    OPTION_INTRADAY_DIR.mkdir(parents=True, exist_ok=True)
+    part = _part_path(day, n)
+    out = df[COLUMNS].copy()
+    out["start"] = pd.to_datetime(out["start"])
+    con = duckdb.connect()
+    try:
+        con.register("bars", out)
+        dest = str(part).replace("'", "''")
+        con.execute(f"COPY bars TO '{dest}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+    finally:
+        con.close()
+    return part
+
+
+def _merge_parts(day: date | str, parts: list[Path]) -> None:
+    """Merge the incremental part-files into the final day-file (atomically, sorted like
+    write_day), then delete the parts. duckdb streams the parquet reads, so peak memory stays
+    at one batch — the whole point on the small box."""
+    path = day_path(day)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".parquet.tmp")
+    files = "[" + ", ".join("'" + str(p).replace("'", "''") + "'" for p in parts) + "]"
+    con = duckdb.connect()
+    try:
+        con.execute(
+            f"COPY (SELECT * FROM read_parquet({files}) ORDER BY symbol, start) "
+            f"TO '{str(tmp).replace(chr(39), chr(39) * 2)}' (FORMAT PARQUET, COMPRESSION ZSTD)"
+        )
+    finally:
+        con.close()
+    tmp.rename(path)
+    for p in parts:
+        p.unlink(missing_ok=True)
+
+
 def load_day(
     day: date | str, underlying: str | None = None, columns: list[str] | None = None
 ) -> pd.DataFrame:
@@ -277,6 +329,7 @@ def capture_day(
     expiry_days: int = 40,
     strike_pct: float = 10.0,
     minutes: int = 1,
+    batch_contracts: int = 0,
     progress=None,
 ) -> dict:
     """Fetch + persist one trading day's option bars for the configured universe.
@@ -288,10 +341,17 @@ def capture_day(
     day-file already exists. The file is only written when at least one bar came back —
     an all-errors day (dead subscription) leaves no file, so the sweep retries it.
     ``progress(done, total)`` (optional) is called per contract — the universe is
-    enumerated UP FRONT so total is known from the first call (the Data-page indicator)."""
+    enumerated UP FRONT so total is known from the first call (the Data-page indicator).
+
+    ``batch_contracts`` > 0 (the small VPS box) flushes accumulated rows to disk every N
+    contracts-with-data and merges at the end, so peak memory stays at one batch instead of the
+    whole day (~1M+ rows) — a backup job must never OOM the real-money trader. 0 (the roomy Mac)
+    accumulates everything and writes once. The OUTPUT day-file is identical either way."""
     path = day_path(day)
     if path.exists():
         return {"day": day.isoformat(), "skipped": "exists"}
+    if batch_contracts and batch_contracts > 0:
+        _clear_parts(day)  # discard any leftover parts from a crashed prior run
     adapter._build_nfo()
     kite = adapter._kite_client()
     frm = datetime.combine(day, _SESSION_OPEN)
@@ -329,7 +389,11 @@ def capture_day(
     # Kite's 1-min interval is named "minute" (NOT "1minute" — that string is rejected and
     # silently failed EVERY call on the first live run, 2026-07-15).
     interval = "minute" if minutes == 1 else f"{minutes}minute"
+    batched = bool(batch_contracts and batch_contracts > 0)
     rows: list[dict] = []
+    parts: list[Path] = []      # incremental part-files (batched only)
+    total_rows = 0              # accumulates across flushes (rows is cleared per batch)
+    since_flush = 0            # contracts-with-data since the last flush
     with_data = errors = 0
     for i, (u, e, k, right, token) in enumerate(todo, 1):
         try:
@@ -352,6 +416,7 @@ def capture_day(
         if not bars:
             continue
         with_data += 1
+        since_flush += 1
         sym = option_symbol(u, e, k, right)
         for b in bars:
             ts = b.get("date")
@@ -368,14 +433,24 @@ def capture_day(
                     "oi": float(b.get("oi") or 0.0),
                 }
             )
+        # Flush to a part-file so peak memory stays at one batch (small-box guard).
+        if batched and since_flush >= batch_contracts and rows:
+            total_rows += len(rows)
+            parts.append(_write_part(day, len(parts), pd.DataFrame(rows)))
+            rows, since_flush = [], 0
+    total_rows += len(rows)  # the tail (unbatched, or the last partial batch)
     summary = {
         "day": day.isoformat(),
         "contracts": total,
         "with_data": with_data,
-        "rows": len(rows),
+        "rows": total_rows,
         "errors": errors,
     }
-    if rows:
+    if parts:
+        if rows:
+            parts.append(_write_part(day, len(parts), pd.DataFrame(rows)))
+        _merge_parts(day, parts)
+    elif rows:
         write_day(day, pd.DataFrame(rows))
     else:
         logger.warning("option-bar capture wrote nothing for %s (%s)", day, summary)

@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     option_bars_strike_pct: float = 10.0  # strikes within ±this % of spot
     option_bars_capture_after: str = "15:45"  # IST; bars are final after the close
     option_bars_days_back: int = 3  # sweep this many prior trading days for gaps
+    # Memory guard for a SMALL box (the VPS): flush the day's rows to disk every N contracts
+    # instead of holding the whole day (~1M+ rows) in memory, then merge at the end. 0 = off =
+    # accumulate-then-write-once (the roomy Mac data box, fastest). The VPS sets ~200 so the
+    # daily capture can't OOM/hang the real-money trader (2026-07-23 incident).
+    option_bars_batch_contracts: int = 0  # SKAS_OPTION_BARS_BATCH_CONTRACTS (0 = off)
     # Rolling retention: keep only the newest N day-files (prune older after each capture).
     # 0 = keep forever — the Mac data box (the full multi-year store). The VPS trading box
     # sets 7 so it captures every day (incl. expiry days the Mac can miss) yet stays bounded;

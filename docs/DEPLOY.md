@@ -145,10 +145,17 @@ The Mac data box holds the full history; a missed day is normally re-fetched by 
 expiry day can't be recovered** (the expired weekly vanishes from Kite's instruments dump). Since the VPS
 runs 24/7 it can capture every day. Enable it there as a rolling backup:
 
-- **On the VPS `.env`:** `SKAS_OPTION_BARS_CAPTURE_ENABLED=true` and `SKAS_OPTION_BARS_KEEP_DAYS=7`, then
-  restart. It captures read-only after close (no trading interference) and prunes to the newest 7 day-files
-  (≈1.5 weeks of trading — bump `KEEP_DAYS` for a longer trip; **the window must exceed your longest Mac
-  outage**). The Mac keeps `KEEP_DAYS` unset/`0` = keep-forever.
+- **On the VPS `.env`:** `SKAS_OPTION_BARS_CAPTURE_ENABLED=true`, `SKAS_OPTION_BARS_KEEP_DAYS=7`, **and
+  `SKAS_OPTION_BARS_BATCH_CONTRACTS=200`**, then restart. It captures read-only after close (no trading
+  interference) and prunes to the newest 7 day-files (≈1.5 weeks of trading — bump `KEEP_DAYS` for a longer
+  trip; **the window must exceed your longest Mac outage**). The Mac keeps `KEEP_DAYS` unset/`0` =
+  keep-forever.
+  - **`SKAS_OPTION_BARS_BATCH_CONTRACTS` is a memory guard for the small box.** The capture would otherwise
+    hold the whole day (~1M+ rows across ~3k contracts) in RAM and write once at the end — on a ~1 GB
+    Lightsail box that OOM-hangs the instance and takes the real-money trader down with it (2026-07-23
+    incident). With it set, rows flush to disk every N contracts and merge at the end, so peak memory stays
+    at one batch; the output day-file is identical. **Leave it unset (`0`) on the roomy Mac** (accumulate +
+    write once, fastest). Also add a swapfile on the VPS as a second net (2 GB, `vm.swappiness=10`).
 - **When you're back, on the Mac:** pull the days you missed from the VPS over Tailscale —
   ```bash
   skas-algo restore-option-bars --from https://<vps>.<tailnet>.ts.net
