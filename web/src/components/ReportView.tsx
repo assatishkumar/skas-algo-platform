@@ -400,7 +400,7 @@ export default function ReportView({
           )}
         </div>
       )}
-      {report.options && <OptionsReport options={report.options} runId={runId} />}
+      {report.options && <OptionsReport options={report.options} runId={runId} trades={trades} />}
       <EquityChart report={report} runId={runId} defaultBenchmark={defaultBenchmark} />
       <YearlyTable report={report} />
       <MonthlyGrid

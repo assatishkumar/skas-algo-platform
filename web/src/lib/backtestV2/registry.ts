@@ -45,8 +45,9 @@ export interface ExitSpec {
   /** Static statement of what the %s apply to — no basis param exists to bind. */
   basisNote: string;
   fields: FieldSpec[];
-  /** Only intraday_straddle has a real trail. */
-  trail?: { trigger: string; step: string; mode: string; defaultMode?: string };
+  /** Profit-protecting trailing stop. `unit: "fraction"` when the strategy's trail params are
+   *  fractions (the ratio family); omit for whole-percent (straddles, delta_neutral). */
+  trail?: { trigger: string; step: string; mode: string; defaultMode?: string; unit?: Unit };
   emptyNote?: string;            // strategies with no %-exits (ema21, mtg)
 }
 
@@ -97,6 +98,24 @@ const cadenceFields = (profitDef: string, stopDef: string, eodDef: string): Fiel
   f("stop_check", "STOP/EXIT CHECK", "select", stopDef,
     { options: CADENCE_OPTS, hint: "how often the SL/exit decision samples" }),
   TIME("eod_time", "EOD CHECK TIME", eodDef, "what \"eod\" cadence means"),
+];
+
+// Which P&L the %-of-margin target/stop/trail measure (delta_neutral / iron_fly, which roll +
+// bank realized). Form defaults to "total" (realized+unrealized — owner 2026-07-22); the strategy
+// ctor default stays "open_legs" so a recovered deploy is unchanged (§1).
+const PNL_BASIS = f("pnl_basis", "P&L BASIS", "select", "total", {
+  options: [
+    { value: "total", label: "Realized + unrealized" },
+    { value: "open_legs", label: "Open legs only" },
+  ],
+  hint: "which P&L the %-of-margin target / stop / trail compare against",
+});
+// Adjustment (roll/hedge) timing, decoupled from the profit cadence (delta_neutral / iron_fly).
+const adjustTimingFields = (): FieldSpec[] => [
+  f("adjust_check", "ADJUST CHECK", "select", "5min",
+    { options: CADENCE_OPTS, hint: "how often the roll/hedge decision samples (own cadence)" }),
+  f("adjust_after_open_min", "NO ADJUST — FIRST N MIN", "number", 5,
+    { hint: "no roll/hedge in the first N min after 09:15 (deep-OTM wing strikes untraded)" }),
 ];
 
 export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
@@ -230,13 +249,17 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any", hint: "0 = off" }),
+        PNL_BASIS,
         ...cadenceFields("1min", "1min", "15:20"),
       ],
+      trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode",
+               defaultMode: "off" },
     },
     extras: [
       FIFTY,
       f("adjust_threshold_pct", "ADJUST THRESHOLD %", "number", 40, { step: "any", hint: "|CE−PE| vs (CE+PE)" }),
       f("adjust_cooldown_min", "ADJUST COOLDOWN (MIN)", "number", 15),
+      ...adjustTimingFields(),
       f("ironfly_adjust", "IRON-FLY ADJUSTMENT", "toggle", false,
         { hint: "on a breakeven breach, sell ~15-20Δ on the untested side" }),
       f("adjust_target_delta", "ADJUST Δ TARGET", "number", 0.175,
@@ -271,14 +294,18 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any", hint: "0 = off" }),
+        PNL_BASIS,
         ...cadenceFields("1min", "1min", "15:20"),
       ],
+      trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode",
+               defaultMode: "off" },
     },
     extras: [
       FIFTY,
       f("adjust_target_delta", "ADJUST Δ TARGET", "number", 0.175, { step: "any" }),
       f("adjust_close_delta", "ADJUST CLOSE Δ", "number", 0.1, { step: "any" }),
       f("adjust_cooldown_min", "ADJUST COOLDOWN (MIN)", "number", 15),
+      ...adjustTimingFields(),
       f("min_leg_oi", "MIN LEG OI", "number", 1),
     ],
     fixed: { ironfly_adjust: true },   // the whole point of this subclass
@@ -411,6 +438,8 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         f("max_holding_days", "MAX HOLDING DAYS", "number", 20),
         ...cadenceFields("1min", "eod", "15:20"),
       ],
+      trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode",
+               defaultMode: "off", unit: "fraction" },
     },
     extras: [
       FIFTY,
@@ -479,6 +508,8 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         f("max_holding_days", "MAX HOLDING DAYS", "number", 20),
         ...cadenceFields("1min", "eod", "15:20"),
       ],
+      trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode",
+               defaultMode: "off", unit: "fraction" },
     },
     extras: [
       FIFTY,
@@ -547,6 +578,8 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         f("max_holding_days", "MAX HOLDING DAYS", "number", 20),
         ...cadenceFields("1min", "eod", "15:20"),
       ],
+      trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode",
+               defaultMode: "off", unit: "fraction" },
     },
     extras: [
       FIFTY,
@@ -607,6 +640,8 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         }),
         ...cadenceFields("1min", "eod", "15:20"),
       ],
+      trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode",
+               defaultMode: "off", unit: "fraction" },
     },
     extras: [
       FIFTY,
@@ -633,9 +668,9 @@ export function allFields(spec: StrategyFormSpec): FieldSpec[] {
   const trail: FieldSpec[] = t
     ? [
         { param: t.trigger, label: "TRIGGER %", kind: "number", default: 1, step: "any",
-          showIf: (p) => p[TRAIL_UI] !== "off" },
+          unit: t.unit, showIf: (p) => p[TRAIL_UI] !== "off" },
         { param: t.step, label: "STEP %", kind: "number", default: 0.5, step: "any",
-          showIf: (p) => p[TRAIL_UI] !== "off" },
+          unit: t.unit, showIf: (p) => p[TRAIL_UI] !== "off" },
         { param: t.mode, label: "TRAIL MODE", kind: "select", default: "ratchet",
           options: [{ value: "ratchet", label: "Ratchet" }, { value: "below_peak", label: "Trail" }],
           showIf: (p) => p[TRAIL_UI] !== "off" },

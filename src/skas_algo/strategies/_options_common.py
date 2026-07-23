@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
+from math import floor
 
 
 def bad_close(x) -> bool:
@@ -81,6 +82,49 @@ class ExitCadenceMixin:
         if cadence == "tick":
             return "checked every tick"
         return f"checked every {cadence.replace('min', ' min')}"
+
+
+class TrailingStopMixin:
+    """A profit-protecting trailing stop, extracted from IntradayStraddleStrategy (2026-07-22)
+    so every %-of-margin seller can share ONE implementation. The trail sits ABOVE a fixed
+    floor and only ratchets UP as a high-water P&L (`peak_pct`, in % of the strategy's
+    `margin_base`) grows — the fixed stop remains the hard backstop.
+
+    Two modes (mirroring the deploy forms):
+      * ``ratchet``    — each +``trail_trigger_pct`` of PEAK profit lifts the stop by
+                         +``trail_step_pct`` (peak +4% w/ 2/1 → stop −stop+2%; +6% → −stop+3%).
+      * ``below_peak`` — once ``peak_pct`` ≥ ``trail_trigger_pct``, stop = ``peak_pct`` −
+                         ``trail_step_pct``.
+    Trailing is OFF (returns just the fixed floor) when either trail pct is 0 — the §1 default,
+    so a strategy that doesn't set them behaves exactly as before.
+
+    Consumers add the three ctor params (`trail_trigger_pct`/`trail_step_pct`/`trail_mode`,
+    default 0/0/"ratchet"), init `self.peak_pct = 0.0` (persist it in export_state), lift it on
+    the PROFIT cadence via ``_update_peak`` and compare on the STOP cadence via
+    ``_trail_stop_level`` — passing their own fixed stop level (in signed % of margin)."""
+
+    def _update_peak(self, pnl_pct: float) -> None:
+        """Raise the high-water P&L% (call on the profit cadence, after the pnl is computed)."""
+        if pnl_pct > getattr(self, "peak_pct", 0.0):
+            self.peak_pct = float(pnl_pct)
+
+    def _trail_stop_level(self, fixed_pct: float) -> float:
+        """Current stop as a signed % of margin_base (negative = a loss floor). ``fixed_pct`` is
+        the strategy's fixed stop level (e.g. ``-stop_pct``, or ``-inf``/very-negative when no
+        fixed stop is set). Ratchets up from there per ``trail_mode``; trailing off (either trail
+        pct ≤ 0) → just ``fixed_pct``."""
+        trig = float(getattr(self, "trail_trigger_pct", 0.0) or 0.0)
+        step = float(getattr(self, "trail_step_pct", 0.0) or 0.0)
+        peak = float(getattr(self, "peak_pct", 0.0) or 0.0)
+        if trig <= 0 or step <= 0:
+            return fixed_pct
+        if str(getattr(self, "trail_mode", "ratchet")) == "below_peak":
+            if peak < trig:
+                return fixed_pct
+            return max(fixed_pct, peak - step)
+        # ratchet (default): each trail_trigger_pct of peak profit lifts the stop by trail_step_pct
+        steps = floor(peak / trig) if peak > 0 else 0
+        return max(fixed_pct, fixed_pct + step * steps)
 
 
 class EntryVolFilterMixin:

@@ -459,3 +459,136 @@ def test_open_untested_never_reuses_a_held_strike():
     assert st._pick_delta_strike(rows, "pe", spot, t, 0.18, exclude=set(rows)) is None
     # A CE already at the pick's strike does NOT block a PE pick (different symbol/right).
     assert not math.isnan(picked)
+
+
+# --------------------------------------------------------------- 2026-07-22 additions
+
+
+def _enter_broker(st):
+    """Enter a strategy at the entry day 11:00 with the broker margin frozen (500k)."""
+    ctx = FakeCtx(FakeMarket(bs_chain()))
+    sigs = tick(st, ctx, datetime(2026, 7, 2, 11, 0))
+    for s in sigs:
+        ctx.positions[s.symbol] = s.quantity
+    for leg in st.legs:
+        ctx.market.prices[leg["symbol"]] = leg["entry"]
+    st.set_broker_margin(500_000.0)
+    return st, ctx
+
+
+def test_ironfly_wing_skipped_when_strike_untraded():
+    """Run #233 fix: a straddle cap where the far wing strike has NO tradeable premium must NOT
+    create a phantom entry=0 leg — that wing is skipped, and the priceable wing still forms."""
+    st, ctx = _enter_broker(DeltaNeutralMonthlyStrategy())
+    ce = next(leg for leg in st.legs if leg["right"] == "CE")
+    pe = next(leg for leg in st.legs if leg["right"] == "PE")
+    ce_k = float(ce["symbol"].split("|")[2])
+    pe_k = float(pe["symbol"].split("|")[2])
+    rich_mark = round(ce["entry"] * 1.45, 2)
+    cheap_mark = round(pe["entry"] * 0.55, 2)         # held PE cheap → premium imbalance → roll
+    cap_pe_mark = rich_mark - 5.0                     # the cap strike's PE ≈ rich (roll lands here)
+    combined = rich_mark + cap_pe_mark
+    hedge_up = round((ce_k + combined) / 100) * 100
+
+    def row(k, ce_ltp, pe_ltp, pe_oi=9000):
+        return {"strike": float(k), "ce": {"ltp": ce_ltp, "oi": 9000},
+                "pe": {"ltp": pe_ltp, "oi": pe_oi}}
+
+    # The PE wing target (ce_k − combined) has NO priceable strike below the cap — the only PE
+    # under it is the old cheap strike, made oi=0 (untraded at this minute). The CE wing IS priced.
+    ctx.market.chain = {
+        "spot": SPOT, "atm_strike": 57000.0, "lot_size": 35,
+        "rows": [
+            row(ce_k, rich_mark, cap_pe_mark),        # roll target + straddle strike (PE ≈ rich)
+            row(pe_k, 5.0, cheap_mark, pe_oi=0),      # the old cheap PE — now untraded (oi=0)
+            row(hedge_up, 40.0, 900.0),               # CE wing (priced)
+        ],
+    }
+    ctx.market.prices[ce["symbol"]] = rich_mark
+    ctx.market.prices[pe["symbol"]] = cheap_mark      # PE is cheap → rolls up to ce_k
+    sigs = tick(st, ctx, datetime(2026, 7, 6, 12, 0))
+    # roll (EXIT_ALL + ENTER_SHORT) + exactly ONE wing (the CE), never two, never a phantom
+    assert [s.action.name for s in sigs] == ["EXIT_ALL", "ENTER_SHORT", "ENTER_LONG"]
+    assert st.phase == "ironfly"
+    assert all(leg["entry"] > 0 for leg in st.legs)            # no entry=0 phantom leg
+    longs = [leg for leg in st.legs if leg["dir"] > 0]
+    assert len(longs) == 1 and longs[0]["right"] == "CE"
+
+
+def _roll_once(st, ctx):
+    """Drive the strategy through one premium-imbalance roll; returns (pe_entry, pe_units, mark)."""
+    ce = next(leg for leg in st.legs if leg["right"] == "CE")
+    pe = next(leg for leg in st.legs if leg["right"] == "PE")
+    ce_k, pe_k = float(ce["symbol"].split("|")[2]), float(pe["symbol"].split("|")[2])
+    rich_mark, cheap_mark = round(ce["entry"] * 1.5, 2), round(pe["entry"] * 0.6, 2)
+    target_pe_k = pe_k + 800
+    pe_entry, pe_units = pe["entry"], pe["units"]
+    ctx.market.chain = bs_chain(overrides={
+        (ce_k, "ce"): rich_mark, (pe_k, "pe"): cheap_mark, (target_pe_k, "pe"): rich_mark})
+    ctx.market.prices[ce["symbol"]] = rich_mark
+    ctx.market.prices[pe["symbol"]] = cheap_mark
+    tick(st, ctx, datetime(2026, 7, 6, 11, 30))
+    return pe_entry, pe_units, cheap_mark
+
+
+def test_pnl_basis_total_folds_in_roll_realized():
+    """A roll banks the closed short's realized into realized_rolls; under pnl_basis="total" the
+    decision P&L = open-leg MTM + that banked realized. "open_legs" ignores it (§1 default)."""
+    st, ctx = _enter_broker(DeltaNeutralMonthlyStrategy(pnl_basis="total"))
+    pe_entry, pe_units, cover = _roll_once(st, ctx)
+    assert round(st.realized_rolls, 2) == round((pe_entry - cover) * pe_units, 2)
+    assert st.realized_rolls > 0
+    # Mark the open legs flat (MTM 0) → strategy_pnl == the banked roll realized under "total".
+    closes = {leg["symbol"]: leg["entry"] for leg in st.legs}
+    assert round(st.strategy_pnl(closes), 2) == round(st.realized_rolls, 2)
+    st.pnl_basis = "open_legs"
+    assert st.strategy_pnl(closes) == 0.0     # same state, banked realized excluded
+
+
+def test_trailing_stop_levels():
+    st = DeltaNeutralMonthlyStrategy(stop_loss_pct=2.0, trail_trigger_pct=1.0,
+                                     trail_step_pct=0.5, trail_mode="ratchet")
+    st.peak_pct = 0.0
+    assert st._trail_stop_level(-2.0) == -2.0        # no peak → the fixed floor
+    st.peak_pct = 3.5                                 # 3 whole steps → +1.5% lift off −2%
+    assert st._trail_stop_level(-2.0) == -0.5
+    st.trail_mode = "below_peak"
+    st.peak_pct = 0.5                                 # below trigger → still the fixed floor
+    assert st._trail_stop_level(-2.0) == -2.0
+    st.peak_pct = 4.0
+    assert st._trail_stop_level(-2.0) == 3.5          # peak − step
+    st.trail_trigger_pct = 0.0                        # trailing off → just the fixed floor
+    assert st._trail_stop_level(-2.0) == -2.0
+
+
+def test_trailing_stop_exit_fires():
+    """Peak +3% ratchets the stop up to +2% (fixed −1 + 1×3 steps); a fall to +1.5% trips it."""
+    st, ctx = _enter_broker(DeltaNeutralMonthlyStrategy(
+        stop_loss_pct=1.0, trail_trigger_pct=1.0, trail_step_pct=1.0, trail_mode="ratchet",
+        profit_target_pct=100.0, adjust_threshold_pct=200.0))  # target/roll never interfere
+    base, tot = 500_000.0, sum(leg["units"] for leg in st.legs)
+    for leg in st.legs:                               # +3% of base → peak 3.0
+        ctx.market.prices[leg["symbol"]] = leg["entry"] - base * 0.03 / tot
+    assert tick(st, ctx, datetime(2026, 7, 3, 12, 0)) == []
+    assert round(st.peak_pct, 2) == 3.0
+    for leg in st.legs:                               # fall to +1.5% < the ratcheted +2% stop
+        ctx.market.prices[leg["symbol"]] = leg["entry"] - base * 0.015 / tot
+    out = tick(st, ctx, datetime(2026, 7, 3, 12, 1))
+    assert out and all(s.reason == "trail" for s in out)
+
+
+def test_adjust_after_open_min_blocks_the_open():
+    """No roll/hedge decision inside the first N min after 09:15; the same roll fires once past."""
+    st, ctx = _enter_broker(DeltaNeutralMonthlyStrategy(adjust_after_open_min=5))
+    ce = next(leg for leg in st.legs if leg["right"] == "CE")
+    pe = next(leg for leg in st.legs if leg["right"] == "PE")
+    ce_k, pe_k = float(ce["symbol"].split("|")[2]), float(pe["symbol"].split("|")[2])
+    rich_mark, cheap_mark = round(ce["entry"] * 1.5, 2), round(pe["entry"] * 0.6, 2)
+    target_pe_k = pe_k + 800
+    ctx.market.chain = bs_chain(overrides={
+        (ce_k, "ce"): rich_mark, (pe_k, "pe"): cheap_mark, (target_pe_k, "pe"): rich_mark})
+    ctx.market.prices[ce["symbol"]] = rich_mark
+    ctx.market.prices[pe["symbol"]] = cheap_mark
+    assert tick(st, ctx, datetime(2026, 7, 6, 9, 17)) == []       # inside the first 5 min → blocked
+    sigs = tick(st, ctx, datetime(2026, 7, 6, 9, 21))            # past 09:20 → the roll runs
+    assert [s.action.name for s in sigs] == ["EXIT_ALL", "ENTER_SHORT"]

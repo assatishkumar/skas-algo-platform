@@ -103,3 +103,79 @@ def test_reconstruct_cycles_open_and_closed():
                                strategy_id="delta_neutral_monthly", name="dnm")
     assert model["live"] is True
     assert [e["kind"] for e in model["events"]] == ["entry"]   # only opened, nothing closed yet
+
+
+def test_preview_cycle_detail_endpoint(client, monkeypatch):
+    """POST /backtest/cycle-detail rebuilds the lifecycle from an UNSAVED preview's report+trades
+    (no run_id) — the report's 'click the entry date ↗' popup works before saving. Stub the
+    cache so the test never touches the DuckDB store."""
+    import skas_algo.data.options_provider as op
+    import skas_algo.data.provider as provider
+
+    monkeypatch.setattr(provider, "get_data_cache", lambda: object())
+    monkeypatch.setattr(op, "_ffill_lookup", lambda sd, sym: (lambda d: None))
+
+    cycle = {
+        "underlying": "NIFTY", "expiry": "2026-02-26",
+        "entry_date": "2026-02-02 09:30", "exit_date": "2026-02-20 15:20",
+        "exit_reason": "time", "net_pnl": 5000.0, "holding_days": 18,
+        "underlying_entry": 24000.0, "underlying_exit": 24100.0, "daily_pnl": [],
+        "legs_detail": [
+            _leg(24300, "CE", "short", 75, "2026-02-02 09:30", 100, "2026-02-20 15:20", 60, 3000, "time"),
+            _leg(23700, "PE", "short", 75, "2026-02-02 09:30", 100, "2026-02-20 15:20", 70, 2000, "time"),
+        ],
+    }
+    report = {"strategy_id": "batman_ratio_monthly",
+              "options": {"cycles": [cycle], "margin_series": []}}
+    resp = client.post("/api/v1/backtest/cycle-detail",
+                       json={"report": report, "trades": [], "index": 0})
+    assert resp.status_code == 200
+    m = resp.json()
+    assert [e["id"] for e in m["events"]] == ["E", "T"]   # fixed structure → entry + exit only
+    assert m["run_id"] == 0 and m["is_deployment"] is False
+    assert m["pnl"] == 5000.0
+
+    # index out of range → 404 (not a 500)
+    assert client.post("/api/v1/backtest/cycle-detail",
+                       json={"report": report, "trades": [], "index": 9}).status_code == 404
+
+
+def test_mtm_series_extends_to_intraday_exit():
+    """A cycle exiting INTRADAY (last EOD mark is the prior day) gets its MTM line connected to
+    the exit: the final point is (exit_date, net_pnl) so the strip reaches the 'exit' figure."""
+    cycle = {
+        "underlying": "NIFTY", "expiry": "2026-02-26",
+        "entry_date": "2026-02-02 09:30", "exit_date": "2026-02-20 09:15",
+        "exit_reason": "target", "net_pnl": 5000.0, "holding_days": 18,
+        "underlying_entry": 24000.0, "underlying_exit": 24100.0,
+        "daily_pnl": [{"date": "2026-02-18", "pnl": -1000.0}, {"date": "2026-02-19", "pnl": 2500.0}],
+        "legs_detail": [
+            _leg(24300, "CE", "short", 75, "2026-02-02 09:30", 100, "2026-02-20 09:15", 60, 3000, "target"),
+            _leg(23700, "PE", "short", 75, "2026-02-02 09:30", 100, "2026-02-20 09:15", 70, 2000, "target"),
+        ],
+    }
+    model = build_cycle_detail(cycle, [], lambda d: None, [], index=0, run_id=4,
+                               strategy_id="delta_neutral_monthly", name="dnm")
+    assert model["mtm_series"][-1] == {"date": "2026-02-20", "value": 5000.0}
+    # the EOD marks are untouched before the appended exit point
+    assert model["mtm_series"][:-1] == [
+        {"date": "2026-02-18", "value": -1000.0}, {"date": "2026-02-19", "value": 2500.0}]
+
+
+def test_mtm_series_no_duplicate_when_exit_is_an_eod_day():
+    """If the last EOD mark already IS the exit day, no duplicate point is appended."""
+    cycle = {
+        "underlying": "NIFTY", "expiry": "2026-02-26",
+        "entry_date": "2026-02-02 09:30", "exit_date": "2026-02-20 15:20",
+        "exit_reason": "time", "net_pnl": 5000.0, "holding_days": 18,
+        "underlying_entry": 24000.0, "underlying_exit": 24100.0,
+        "daily_pnl": [{"date": "2026-02-19", "pnl": 2500.0}, {"date": "2026-02-20", "pnl": 5000.0}],
+        "legs_detail": [
+            _leg(24300, "CE", "short", 75, "2026-02-02 09:30", 100, "2026-02-20 15:20", 60, 3000, "time"),
+            _leg(23700, "PE", "short", 75, "2026-02-02 09:30", 100, "2026-02-20 15:20", 70, 2000, "time"),
+        ],
+    }
+    model = build_cycle_detail(cycle, [], lambda d: None, [], index=0, run_id=5,
+                               strategy_id="batman_ratio_monthly", name="b")
+    assert len(model["mtm_series"]) == 2
+    assert model["mtm_series"][-1] == {"date": "2026-02-20", "value": 5000.0}

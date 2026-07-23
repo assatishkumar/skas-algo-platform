@@ -165,6 +165,13 @@ export const api = {
     }>(`/runs/${id}`),
   cycleDetail: (runId: number, index: number) =>
     request<CycleDetail>(`/runs/${runId}/cycles/${index}/detail`),
+  // Cycle detail for an UNSAVED backtest preview — the report+trades are already in the
+  // browser, so no run_id is needed (the saved-run version above uses the persisted run).
+  cycleDetailPreview: (report: unknown, trades: unknown[], index: number) =>
+    request<CycleDetail>(`/backtest/cycle-detail`, {
+      method: "POST",
+      body: JSON.stringify({ report, trades, index }),
+    }),
   backtest: (body: BacktestRequest) =>
     request<BacktestResponse>("/backtest", {
       method: "POST",

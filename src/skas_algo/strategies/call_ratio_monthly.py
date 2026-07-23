@@ -34,6 +34,7 @@ from skas_algo.engine.types import Signal, SignalAction
 from ._options_common import (
     EntryVolFilterMixin,
     ExitCadenceMixin,
+    TrailingStopMixin,
     legs_mtm_pnl,
     next_monthly_expiry,
 )
@@ -46,7 +47,7 @@ def _last_weekday_of_month(d: date, weekday: int) -> date:
     return last - timedelta(days=(last.weekday() - weekday) % 7)
 
 
-class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
+class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin, TrailingStopMixin):
     strategy_id = "call_ratio_monthly"
     right = "CE"  # PutRatioMonthlyStrategy flips this to "PE" (the downside mirror)
     entry_reason = "call_ratio"
@@ -111,6 +112,15 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         profit_check: str = "eod",  # how often to evaluate the profit target
         stop_check: str = "eod",  # how often to evaluate the stop loss
         time_check: str = "eod",  # how often to evaluate the time exit
+        # Profit-protecting trailing stop (TrailingStopMixin), in the SAME fraction-of-base units
+        # as profit_target_pct/stop_loss_pct (0.01 = 1% of base). 0/0 = OFF = old behaviour (§1).
+        # Additive to the fixed stop (which stays the hard floor).
+        trail_trigger_pct: float = 0.0,
+        trail_step_pct: float = 0.0,
+        trail_mode: str = "ratchet",  # "ratchet" | "below_peak"
+        # Informational for the fixed-structure ratio family (no mid-cycle closes ⇒ open-leg MTM
+        # already IS the whole cycle's realized+unrealized P&L) — kept for a uniform interface.
+        pnl_basis: str = "open_legs",
         eod_time: str = "15:15",  # what "eod" means (at/after this IST time)
         margin_per_lotset: float = 130_000.0,  # ~SPAN+exposure margin per ratio lot-set
         lot_overrides: dict | None = None,
@@ -163,6 +173,12 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         self.profit_check = str(profit_check)
         self.stop_check = str(stop_check)
         self.time_check = str(time_check)
+        self.trail_trigger_pct = float(trail_trigger_pct)
+        self.trail_step_pct = float(trail_step_pct)
+        self.trail_mode = str(trail_mode or "ratchet")
+        self.pnl_basis = str(pnl_basis or "open_legs")
+        # high-water P&L (fraction of base) — drives the trail (persisted)
+        self.peak_pct: float = 0.0
         self.eod_time = str(eod_time)
         self.margin_per_lotset = float(margin_per_lotset)
         self.lot_overrides = lot_overrides
@@ -278,6 +294,20 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
     def _time_exit(self, today: date) -> bool:
         return bool(self.entry_date) and (today - self.entry_date).days >= self.max_holding_days
 
+    def _stop_or_trail_reason(self, pnl_frac: float) -> str | None:
+        """Fixed stop (−stop_loss_pct of base) AND the trailing stop (which only ratchets ABOVE
+        the fixed floor), both in fraction-of-base units. None = not breached. Equivalent to the
+        old fixed-stop check when trailing is off (§1)."""
+        fixed = -self.stop_loss_pct  # 0.0 when no fixed stop
+        trailing_on = self.trail_trigger_pct > 0 and self.trail_step_pct > 0
+        engaged = trailing_on and self.peak_pct >= self.trail_trigger_pct
+        if self.stop_loss_pct <= 0 and not engaged:
+            return None  # nothing to enforce yet
+        level = self._trail_stop_level(fixed)
+        if pnl_frac <= level:
+            return "trail" if level > fixed else "stop"
+        return None
+
     # ------------------------------------------------- intraday exit cadence
     # The _due/_eod_reached/_entry_time_ok/_cadence_phrase machinery originated here and
     # now lives in ExitCadenceMixin (_options_common) — shared by EVERY options strategy
@@ -291,6 +321,12 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
             f"({self._cadence_phrase('profit')})",
             f"Stop out at −{self.stop_loss_pct * 100:g}% ({self._cadence_phrase('stop')})",
         ]
+        if self.trail_trigger_pct > 0 and self.trail_step_pct > 0:
+            rules.append(
+                f"Trailing stop ({self.trail_mode}): every +{self.trail_trigger_pct * 100:g}% peak "
+                f"lifts the stop by {self.trail_step_pct * 100:g}% of margin "
+                f"({self._cadence_phrase('stop')})"
+            )
         ew = getattr(self, "exit_weekday", None)
         if ew is not None:  # the weekly variants (HNI)
             days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -694,12 +730,20 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         base = self._risk_base(ctx)
         today = ctx.today()
         now = self._now(ctx)
+        # Sample each cadence once (mixin rule #1). Eager sampling is equivalent to the old
+        # short-circuit chain: the only divergence is on the exit slice, which ends the cycle.
+        due_profit = self._due("profit", now)
+        due_stop = self._due("stop", now)
+        due_time = self._due("time", now)
+        pnl_frac = pnl / base if base else 0.0  # fraction of base, same units as the pct thresholds
         reason = None
-        if self._due("profit", now) and pnl >= self.profit_target_pct * base:
-            reason = "target"
-        elif self._due("stop", now) and pnl <= -self.stop_loss_pct * base:
-            reason = "stop"
-        elif self._due("time", now) and self._time_exit(today):
+        if due_profit:
+            self._update_peak(pnl_frac)  # lift the trail high-water on the profit cadence
+            if pnl >= self.profit_target_pct * base:
+                reason = "target"
+        if reason is None and due_stop:
+            reason = self._stop_or_trail_reason(pnl_frac)
+        if reason is None and due_time and self._time_exit(today):
             reason = "time"
         if reason is None:
             return []
@@ -712,6 +756,7 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         self.entry_expiry = None
         self.entry_date = None
         self._frozen_margin = None  # re-frozen from the broker push after the next entry
+        self.peak_pct = 0.0  # per-cycle trail high-water resets with the cycle
 
     # ------------------------------------------------------- (de)serialize
     def export_state(self) -> dict:
@@ -726,6 +771,7 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
             ),
             "frozen_margin": self._frozen_margin,
             "manual_done": self._manual_done,
+            "peak_pct": self.peak_pct,  # trail high-water (0 for a pre-2026-07-22 state)
         }
 
     def load_state(self, state: dict) -> None:
@@ -743,6 +789,7 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin):
         self._entered_after_expiry = date.fromisoformat(eae) if eae else None
         self._frozen_margin = state.get("frozen_margin")
         self._manual_done = bool(state.get("manual_done", False))
+        self.peak_pct = float(state.get("peak_pct", 0.0))
 
 
 class PutRatioMonthlyStrategy(CallRatioMonthlyStrategy):

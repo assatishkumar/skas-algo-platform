@@ -844,3 +844,27 @@ def test_maybe_refresh_margin_skips_off_hours(monkeypatch):
     monkeypatch.setattr(mgr, "is_market_open", lambda: True)
     LiveRun._maybe_refresh_margin(make_self())
     assert calls["basket_margin"] == 1  # in-market → recomputes
+
+
+def test_ratio_trailing_stop_reason():
+    """Trailing stop in fraction-of-base units (2026-07-22): ratchets ABOVE the fixed floor and
+    only enforces once a fixed stop exists or the trail has engaged."""
+    from skas_algo.strategies.call_ratio_monthly import CallRatioMonthlyStrategy
+
+    st = CallRatioMonthlyStrategy(universe=["NIFTY"], stop_loss_pct=0.03,
+                                  trail_trigger_pct=0.01, trail_step_pct=0.01, trail_mode="ratchet")
+    assert st._stop_or_trail_reason(-0.02) is None          # above the −3% floor, no peak yet
+    assert st._stop_or_trail_reason(-0.03) == "stop"        # the fixed floor
+    st._update_peak(0.03)                                    # peak +3% → 3 ratchet steps → stop 0%
+    assert st.peak_pct == 0.03
+    assert st._stop_or_trail_reason(0.005) is None          # still above the lifted stop
+    assert st._stop_or_trail_reason(-0.001) == "trail"      # dipped below the ratcheted 0 → trail
+
+    st.trail_mode = "below_peak"
+    st.peak_pct = 0.05                                       # stop = max(−0.03, 0.05−0.01) = 0.04
+    assert st._stop_or_trail_reason(0.03) == "trail"
+
+    # No fixed stop AND trailing off → nothing to enforce (a delta-family run defaults to no stop).
+    st2 = CallRatioMonthlyStrategy(universe=["NIFTY"], stop_loss_pct=0.0,
+                                   trail_trigger_pct=0.0, trail_step_pct=0.0)
+    assert st2._stop_or_trail_reason(-0.5) is None

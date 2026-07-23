@@ -39,7 +39,11 @@ from skas_algo.engine.options.contract_specs import lot_size_for, selection_step
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import ExitCadenceMixin, bad_close, legs_mtm_pnl
+from ._options_common import ExitCadenceMixin, TrailingStopMixin, bad_close, legs_mtm_pnl
+
+# NSE / BSE derivatives open at 09:15 IST — the reference for ``adjust_after_open_min`` (no
+# adjustment decision inside the first N minutes, when deep-OTM wing strikes are still untraded).
+MARKET_OPEN = time(9, 15)
 
 # Grid used to SNAP the iron-fly wing/breakeven-hedge strikes (round((K±credit)/step)*step). NIFTY
 # routes through selection_step → 100 (owner rule: NIFTY trades round 100s only), so the snapped
@@ -56,7 +60,7 @@ def _hhmm(s: str, fallback: time) -> time:
         return fallback
 
 
-class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
+class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
     strategy_id = "delta_neutral_monthly"
     intraday = True  # ticks every refresh; entry window / adjustments / exits self-gate
 
@@ -90,6 +94,23 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         # every call — the pre-cadence behavior (§1); forms default to "1min".
         profit_check: str = "tick",
         stop_check: str = "tick",
+        # Adjustment cadence, DECOUPLED from profit (owner ask 2026-07-22). None → falls back to
+        # profit_check, so a recovered deploy that never set it keeps riding the profit cadence
+        # exactly as before (§1). Forms default to an explicit value.
+        adjust_check: str | None = None,
+        # Never take a ROLL/HEDGE decision inside the first N minutes after the 09:15 open — at the
+        # open the deep-OTM wing strikes haven't traded, which is what dropped a hedge wing (a
+        # phantom entry=0 leg). 0 = no delay = the old behaviour (§1); forms default to 5.
+        adjust_after_open_min: int = 0,
+        # Profit-protecting trailing stop (TrailingStopMixin), ADDITIVE to the fixed target/stop.
+        # 0/0 = OFF = old behaviour (§1); forms expose ratchet / below_peak.
+        trail_trigger_pct: float = 0.0,
+        trail_step_pct: float = 0.0,
+        trail_mode: str = "ratchet",
+        # Which P&L the %-of-margin target/stop/trail compare: "open_legs" = open-leg MTM only
+        # (the historical decision-entry basis, §1 default) or "total" = open MTM + banked realized
+        # (rolls + naked-short adjustments), i.e. the WHOLE cycle's realized+unrealized P&L.
+        pnl_basis: str = "open_legs",
         eod_time: str = "15:20",
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
@@ -121,6 +142,13 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         self.r = float(risk_free_rate)
         self.profit_check = str(profit_check)
         self.stop_check = str(stop_check)
+        # Unset adjust_check → ride the profit cadence (old behaviour); _due("adjust") reads this.
+        self.adjust_check = str(adjust_check) if adjust_check else self.profit_check
+        self.adjust_after_open_min = int(adjust_after_open_min)
+        self.trail_trigger_pct = float(trail_trigger_pct)
+        self.trail_step_pct = float(trail_step_pct)
+        self.trail_mode = str(trail_mode or "ratchet")
+        self.pnl_basis = str(pnl_basis or "open_legs")
         self.eod_time = str(eod_time)
         self.min_leg_oi = int(min_leg_oi)
         self.initial_capital = initial_capital
@@ -142,6 +170,10 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             None  # the active untested-side adjustment short (persisted)
         )
         self.adjust_realized: float = 0.0  # banked P&L from CLOSED adjustment legs (persisted)
+        # banked P&L from CLOSED roll legs (persisted; folded in under pnl_basis="total")
+        self.realized_rolls: float = 0.0
+        # high-water total-P&L% of margin_base — drives the trail (persisted)
+        self.peak_pct: float = 0.0
         # Latest broker basket margin pushed by the live manager (NOT persisted — it
         # re-arrives within a tick of recovery). margin_base freezes from this only.
         self._broker_margin: float | None = None
@@ -156,11 +188,22 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         if value and value > 0:
             self._broker_margin = float(value)
 
+    def _realized_banked(self) -> float:
+        """Banked realized P&L from CLOSED legs — rolls (``realized_rolls``) + naked-short
+        adjustments (``adjust_realized``). The part of the cycle P&L NOT in the open legs; folded
+        into the threshold P&L only under ``pnl_basis == "total"``."""
+        return self.realized_rolls + self.adjust_realized
+
     def strategy_pnl(self, closes: dict) -> float | None:
-        """The MTM measure _manage compares against the target/stop: CURRENT legs only,
-        decision-entry basis — the banked adjustment credit (adjust_realized) is NOT part
-        of the threshold check, so it isn't part of this display either."""
-        return legs_mtm_pnl(self.legs, closes)
+        """The P&L measure _manage compares against the target/stop/trail. ``pnl_basis``:
+        "open_legs" = open-leg MTM only (the historical decision-entry basis — banked realized
+        excluded); "total" = open MTM + banked realized (rolls + naked-short adjustments), i.e.
+        the whole cycle's realized+unrealized P&L. Surfaced so the screen shows what the strategy
+        ACTS on."""
+        mtm = legs_mtm_pnl(self.legs, closes)
+        if mtm is None:
+            return None
+        return mtm + (self._realized_banked() if self.pnl_basis == "total" else 0.0)
 
     def request_force_entry(self) -> str:
         """Live-page 'Force entry now': next tick sells the 18Δ strangle into the current
@@ -228,6 +271,9 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             self.cycle_expiry = None
             self.adjust_count = 0
             self.last_adjust_at = None
+            self.realized_rolls = 0.0  # per-cycle accumulators reset with the cycle
+            self.adjust_realized = 0.0
+            self.peak_pct = 0.0
 
         # A force button, or a manual Build-view deploy (explicit entry_legs + force_entry), enters
         # on the NEXT tick — bypassing the entry-day + window gates. The done_expiry gate + the
@@ -493,6 +539,11 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
                 return []
             marks[leg["symbol"]] = cur
             pnl += (cur - leg["entry"]) * leg["units"] * leg["dir"]
+        # "total" basis (owner 2026-07-22): fold in realized banked from closed rolls +
+        # naked-short adjustments so target/stop/trail measure the WHOLE cycle's
+        # realized+unrealized P&L. "open_legs" (§1 default) = open-leg MTM only, as before.
+        if self.pnl_basis == "total":
+            pnl += self._realized_banked()
         # Freeze / re-freeze the threshold base from the latest BROKER margin push.
         # (Also upgrades runs recovered with an old "model" base — e.g. run 203.)
         if self._broker_margin and (self._refreeze or self.margin_source != "broker"):
@@ -500,19 +551,27 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             self.margin_source = "broker"
             self._refreeze = False
         # Cadence-sampled ONCE, here — after the print/pnl/margin-freeze guards above
-        # (mixin rule #1: _due consumes its window; sampling before an early return
-        # would eat a stop slot). due_profit gates the target AND the adjustment
-        # dispatch below (they share the profit/adjust cadence by design).
+        # (mixin rule #1: _due consumes its window; sampling before an early return would eat a
+        # slot). Profit, stop and adjust each have their OWN cadence now — adjust_check is
+        # decoupled from profit (owner 2026-07-22); unset adjust_check == profit_check keeps a
+        # recovered deploy in lockstep (both sampled every slice from the same cadence).
         due_profit = self._due("profit", now)
         due_stop = self._due("stop", now)
+        due_adjust = self._due("adjust", now)
         if self.margin_source == "broker" and self.margin_base > 0:
-            if due_profit and pnl >= self.margin_base * self.target_pct / 100.0:
-                return self._exit_all(live, "target")
-            if due_stop and self.stop_pct > 0 and pnl <= -self.margin_base * self.stop_pct / 100.0:
-                return self._exit_all(live, "stop")
+            pnl_pct = 100.0 * pnl / self.margin_base
+            if due_profit:
+                self._update_peak(pnl_pct)  # lift the trail high-water on the profit cadence
+                if pnl >= self.margin_base * self.target_pct / 100.0:
+                    return self._exit_all(live, "target")
+            if due_stop:
+                exit_sig = self._stop_or_trail(live, pnl_pct)
+                if exit_sig is not None:
+                    return exit_sig
 
-        if not due_profit:
-            return []  # adjustments ride the profit/adjust cadence
+        # ---- adjustments: their OWN cadence + no decision in the first N min after the open ----
+        if not (due_adjust and self._past_open_delay(now)):
+            return []
         # Iron fly: run the post-formation adjustment when enabled (else ride terminal).
         if self.phase == "ironfly":
             if not self.ironfly_adjust or self._in_cooldown(now):
@@ -523,6 +582,33 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         if self._in_cooldown(now):
             return []
         return self._maybe_adjust(ctx, live, marks, now)
+
+    def _past_open_delay(self, now: datetime) -> bool:
+        """True once past MARKET_OPEN + ``adjust_after_open_min`` — the window in which we take NO
+        roll/hedge decision (right at 09:15 the deep-OTM wing strikes are untraded, which is what
+        dropped a hedge wing). 0 min = no delay = the old behaviour (§1)."""
+        if self.adjust_after_open_min <= 0:
+            return True
+        cutoff = (
+            datetime.combine(now.date(), MARKET_OPEN)
+            + timedelta(minutes=self.adjust_after_open_min)
+        ).time()
+        return now.time() >= cutoff
+
+    def _stop_or_trail(self, live: list[dict], pnl_pct: float) -> list[Signal] | None:
+        """Fixed %-of-margin stop AND the trailing stop (which only ratchets ABOVE the fixed
+        floor). Returns exit signals when breached, else None. With NO fixed stop and the trail
+        not yet engaged there is nothing to enforce (delta_neutral defaults to no stop). Equivalent
+        to the old fixed-stop check when trailing is off (§1)."""
+        fixed = -self.stop_pct  # 0.0 when no fixed stop set
+        trailing_on = self.trail_trigger_pct > 0 and self.trail_step_pct > 0
+        engaged = trailing_on and self.peak_pct >= self.trail_trigger_pct
+        if self.stop_pct <= 0 and not engaged:
+            return None  # nothing to enforce yet
+        level = self._trail_stop_level(fixed)
+        if pnl_pct <= level:
+            return self._exit_all(live, "trail" if level > fixed else "stop")
+        return None
 
     def _in_cooldown(self, now: datetime) -> bool:
         if self.last_adjust_at is None:
@@ -581,6 +667,9 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             ),
         ]
         self.legs = [leg for leg in self.legs if leg["symbol"] != cheap["symbol"]]
+        # Bank the CLOSED cheap short's realized (short → entry − cover mark) so the "total"
+        # P&L basis sees the roll's booked loss/gain, not just the new leg's MTM from its entry.
+        self.realized_rolls += (cheap["entry"] - marks[cheap["symbol"]]) * cheap["units"]
         self.legs.append(
             {
                 "symbol": new_sym,
@@ -594,14 +683,21 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         self.last_adjust_at = now.isoformat()
 
         if new_k == rich_strike:
-            # Straddle formed → hedge both breakevens NOW (same decision) → iron fly.
+            # Straddle formed → hedge both breakevens NOW (same decision) → iron fly. Snap each
+            # wing to the NEAREST strike that actually has a tradeable premium (bit run #233: at
+            # the 09:15 open the far PE breakeven strike was untraded, so the wing was added at
+            # entry=0 — a phantom long that never filled AND corrupted the decision P&L). If a
+            # side has NO priceable strike this minute we SKIP that wing (never a phantom leg).
             combined = rich_ltp + new_ltp
             step = _STRIKE_STEP.get(self.underlying, 100)
             up_k = round((rich_strike + combined) / step) * step
             dn_k = round((rich_strike - combined) / step) * step
-            for k, right in ((up_k, "CE"), (dn_k, "PE")):
-                row = rows.get(float(k), {}).get(right.lower())
-                prem = self._ltp(row) or 0.0
+            added = 0
+            for target_k, right in ((up_k, "CE"), (dn_k, "PE")):
+                pick = self._nearest_priceable_strike(rows, right, float(target_k), rich_strike)
+                if pick is None:
+                    continue  # side untraded right now → skip the wing (no phantom entry=0 leg)
+                k, prem = pick
                 hedge_sym = make(
                     self.underlying,
                     expiry,
@@ -628,7 +724,10 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
                         "entry": prem,
                     }
                 )
-            self.phase = "ironfly"
+                added += 1
+            # A real iron fly needs a wing; if BOTH sides were untraded, it's a capped straddle
+            # that rides (phase "straddle") rather than a mislabelled hedgeless "ironfly".
+            self.phase = "ironfly" if added else "straddle"
         else:
             self.phase = "strangle"
 
@@ -636,6 +735,26 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         spot = (spot_fn(self.underlying) if spot_fn else None) or rich_strike
         self._freeze_margin(ctx, float(spot))
         return signals
+
+    def _nearest_priceable_strike(
+        self, rows: dict[float, dict], right: str, target_k: float, beyond: float
+    ):
+        """(strike, ltp) nearest ``target_k`` on ``right`` that has a TRADEABLE premium (valid LTP
+        + OI) and sits strictly OTM beyond the straddle strike (CE > ``beyond``, PE < ``beyond`` —
+        so a wing can never merge into the short it hedges). None if the side is untraded here."""
+        side = right.lower()
+        best = None
+        for k, r in rows.items():
+            if (right == "CE" and k <= beyond) or (right == "PE" and k >= beyond):
+                continue
+            leg = r.get(side)
+            prem = self._ltp(leg)
+            if prem is None or not self._oi_ok(leg):
+                continue
+            err = abs(k - target_k)
+            if best is None or err < best[0]:
+                best = (err, k, prem)
+        return (best[1], best[2]) if best else None
 
     def _match_premium_strike(
         self, rows: dict[float, dict], side: str, target_ltp: float, cap_strike: float
@@ -815,6 +934,8 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         self.cycle_expiry = None
         self.adjust_symbol = None
         self.adjust_realized = 0.0
+        self.realized_rolls = 0.0
+        self.peak_pct = 0.0
         return sigs
 
     # ------------------------------------------------------------ snapshot hooks
@@ -827,19 +948,27 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
         return target, stop
 
     def exit_rules(self) -> list[str]:
+        basis = "realized+unrealized P&L" if self.pnl_basis == "total" else "open-leg MTM"
         rules = [
-            f"Book profit at +{self.target_pct:g}% of broker margin "
+            f"Book profit at +{self.target_pct:g}% of broker margin, on {basis} "
             f"({self._cadence_phrase('profit')})"
         ]
         if self.stop_pct > 0:
             rules.append(
-                f"Stop out at −{self.stop_pct:g}% of broker margin "
+                f"Stop out at −{self.stop_pct:g}% of broker margin, on {basis} "
                 f"({self._cadence_phrase('stop')})"
             )
-        rules.append(
-            f"Adjust when |CE−PE| > {self.adjust_threshold_pct:g}% of combined "
-            "(cheap side rolls; straddle max → iron fly)"
-        )
+        if self.trail_trigger_pct > 0 and self.trail_step_pct > 0:
+            rules.append(
+                f"Trailing stop ({self.trail_mode}): every +{self.trail_trigger_pct:g}% peak "
+                f"lifts the stop by {self.trail_step_pct:g}% of broker margin "
+                f"({self._cadence_phrase('stop')})"
+            )
+        adj = f"Adjust when |CE−PE| > {self.adjust_threshold_pct:g}% of combined " \
+              "(cheap side rolls; straddle max → iron fly)"
+        if self.adjust_after_open_min > 0:
+            adj += f", no earlier than {self.adjust_after_open_min} min after the open"
+        rules.append(adj + f" ({self._cadence_phrase('adjust')})")
         if self.ironfly_adjust:
             rules.append(
                 "Iron fly: on a breakeven breach, sell ~15-20Δ on the untested side "
@@ -892,6 +1021,9 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             "ironfly_adjust": self.ironfly_adjust,
             "adjust_symbol": self.adjust_symbol,
             "adjust_realized": self.adjust_realized,
+            # total-P&L basis + trailing high-water (default to 0 for a pre-2026-07-22 state).
+            "realized_rolls": self.realized_rolls,
+            "peak_pct": self.peak_pct,
         }
 
     def load_state(self, state: dict) -> None:
@@ -913,3 +1045,5 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin):
             self.ironfly_adjust = bool(state.get("ironfly_adjust"))
         self.adjust_symbol = state.get("adjust_symbol")
         self.adjust_realized = float(state.get("adjust_realized", 0.0))
+        self.realized_rolls = float(state.get("realized_rolls", 0.0))
+        self.peak_pct = float(state.get("peak_pct", 0.0))

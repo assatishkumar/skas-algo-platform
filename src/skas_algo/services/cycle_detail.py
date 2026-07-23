@@ -338,6 +338,18 @@ def build_cycle_detail(
     n_hedge = sum(1 for e in events if e["kind"] == "hedge")
     max_margin = _max_margin(margin_series, entry_ts.date(), (exit_ts or entry_ts).date())
 
+    # EOD-MTM path → connect it to the EXIT. A cycle usually exits INTRADAY (e.g. 09:15 on the
+    # last day), so the final realized P&L is not an EOD mark and the line would stop a day short
+    # of the "exit" figure on the right of the strip. For a CLOSED cycle whose exit day is past
+    # the last EOD mark, append (exit_date, net_pnl) — the same cumulative-MTM scale as `daily`.
+    mtm_series = [{"date": d["date"], "value": d["pnl"]} for d in daily]
+    exit_dt = cycle.get("exit_date")
+    net_pnl = cycle.get("net_pnl")
+    if exit_dt and not cycle.get("live") and net_pnl is not None:
+        last_day = daily[-1]["date"] if daily else None
+        if last_day is None or str(exit_dt)[:10] > str(last_day)[:10]:
+            mtm_series.append({"date": str(exit_dt)[:10], "value": round(float(net_pnl), 2)})
+
     return {
         "run_id": run_id,
         "index": index,
@@ -364,7 +376,7 @@ def build_cycle_detail(
         "worst_mtm": round(min((d["pnl"] for d in daily), default=0.0)),
         "events": events,
         "legs": [_leg_row(lg, ev_of_open[lg["ref"]], ev_of_close[lg["ref"]]) for lg in legs],
-        "mtm_series": [{"date": d["date"], "value": d["pnl"]} for d in daily],
+        "mtm_series": mtm_series,
         "spot_path": _spot_path(
             spot_fn,
             entry_ts.date(),

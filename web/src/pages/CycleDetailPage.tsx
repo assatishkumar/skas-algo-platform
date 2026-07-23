@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -48,9 +49,10 @@ export default function CycleDetailPage() {
   return <CycleDetail m={data} active={active} toggle={toggle} setActive={setActive} />;
 }
 
-function CycleDetail({ m, active, toggle, setActive }: {
+export function CycleDetail({ m, active, toggle, setActive, onClose }: {
   m: CycleDetail; active: string | null;
   toggle: (id: string | null) => () => void; setActive: (v: string | null) => void;
+  onClose?: () => void;   // when set → modal mode: breadcrumb becomes a close button, no routing
 }) {
   const geo = useMemo(() => computeGeometry(m), [m]);
   const legInActive = (l: CycleDetailLeg) =>
@@ -60,7 +62,8 @@ function CycleDetail({ m, active, toggle, setActive }: {
   // per-cycle `live` flag is NOT this: a CLOSED cycle on a live run is `live=false` yet still
   // belongs on /live. Authoritative signal is the backend `is_deployment`; until a backend
   // that serves it, fall back to membership in the live-deployments list (works immediately,
-  // no restart), then the open-cycle flag.
+  // no restart), then the open-cycle flag. (In modal mode there's nowhere to route — the
+  // caller owns the context — so the query is harmless and the breadcrumb closes instead.)
   const { data: deps } = useQuery({ queryKey: ["deployments"], queryFn: () => api.liveDeployments() });
   const inLiveList = deps?.some((d) => d.run_id === m.run_id);
   // Deterministic <Link>, independent of browser history.
@@ -69,11 +72,17 @@ function CycleDetail({ m, active, toggle, setActive }: {
 
   const move = m.underlying_pct ?? 0;
   return (
-    <div className="max-w-[1280px] mx-auto px-8 py-6 pb-16">
+    <div className={onClose ? "px-6 py-5 pb-10" : "max-w-[1280px] mx-auto px-8 py-6 pb-16"}>
       {/* breadcrumb + title */}
-      <Link to={backTo} className="text-sm font-bold text-[var(--muted)] mb-3 inline-block">
-        ← {onLive ? "Live" : "Runs"} · <span className="text-[var(--accent-deep)]">{m.run_name} #{m.run_id}</span> · positions
-      </Link>
+      {onClose ? (
+        <button onClick={onClose} className="text-sm font-bold text-[var(--muted)] mb-3 inline-flex items-center gap-1">
+          ✕ Close · <span className="text-[var(--accent-deep)]">back to the report</span>
+        </button>
+      ) : (
+        <Link to={backTo} className="text-sm font-bold text-[var(--muted)] mb-3 inline-block">
+          ← {onLive ? "Live" : "Runs"} · <span className="text-[var(--accent-deep)]">{m.run_name} #{m.run_id}</span> · positions
+        </Link>
+      )}
       <div className="flex items-center gap-3 mb-2 flex-wrap">
         <h1 className="font-[700] text-[26px] font-['Space_Grotesk'] text-[var(--strong)]">
           Cycle {m.index + 1} · {shortDate(m.entered_at)} → {m.exited_at ? shortDate(m.exited_at) : "open"}
@@ -453,4 +462,50 @@ function eventTitle(e: CycleDetailEvent) {
 }
 function expiryLabel(iso: string) {
   return new Date(iso + "T00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short" }).toUpperCase();
+}
+
+/** Cycle Detail in a modal overlay — the "click the entry date ↗" popup on the backtest report.
+ *  Fetches by `runId` for a saved run, or by `preview` (report+trades already in the browser) for
+ *  an UNSAVED backtest — so the lifecycle view works BEFORE you save the run. Same render as the
+ *  full page, just framed and Esc/backdrop-dismissable. */
+export function CycleDetailModal({ runId, preview, index, onClose }: {
+  runId?: number;
+  preview?: { report: unknown; trades: unknown[] };   // for an unsaved backtest (no run_id)
+  index: number;
+  onClose: () => void;
+}) {
+  const [active, setActive] = useState<string | null>(null);
+  const toggle = (evId: string | null) => () => setActive((a) => (a === evId ? null : evId));
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["cycle-detail-modal", runId ?? "preview", index],
+    queryFn: () =>
+      runId != null
+        ? api.cycleDetail(runId, index)
+        : api.cycleDetailPreview(preview!.report, preview!.trades, index),
+  });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";   // lock the page scroll behind the modal
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
+  }, [onClose]);
+
+  return createPortal(
+    <div className="fixed inset-0 z-[200] overflow-y-auto bg-[var(--overlay)] backdrop-blur-[2px] p-3 md:p-6"
+      onClick={onClose}>
+      <div className="relative mx-auto my-2 w-full max-w-[1220px] bg-[var(--page)] border border-[var(--border)] rounded-[20px] shadow-2xl"
+        onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} aria-label="Close"
+          className="absolute top-3.5 right-4 z-10 w-8 h-8 rounded-full bg-[var(--card)] border border-[var(--border)] text-[var(--muted)] font-bold hover:text-[var(--strong)]">✕</button>
+        {isLoading ? (
+          <div className="p-16 text-center text-[var(--muted)]">Loading cycle…</div>
+        ) : error || !data ? (
+          <div className="p-16 text-center text-[var(--danger)]">Couldn't load this cycle.</div>
+        ) : (
+          <CycleDetail m={data} active={active} toggle={toggle} setActive={setActive} onClose={onClose} />
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
 }

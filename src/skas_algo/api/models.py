@@ -273,6 +273,16 @@ class DeltaNeutralDeploy(BaseModel):
     # keep their recorded behavior (recovery binds params_snapshot, not these).
     profit_check: str = "1min"
     stop_check: str = "1min"
+    # Adjustment (roll/hedge) cadence decoupled from profit + no decision in the first N min
+    # after the open (2026-07-22). Deploy defaults carry the policy; ctor defaults preserve old.
+    adjust_check: str = "5min"
+    adjust_after_open_min: int = 5
+    # Profit-protecting trailing stop (additive to the fixed stop). 0/0 = off.
+    trail_trigger_pct: float = 0.0  # % of margin (whole percent)
+    trail_step_pct: float = 0.0
+    trail_mode: str = "ratchet"  # "ratchet" | "below_peak"
+    # Which P&L the target/stop/trail measure: "total" (realized+unrealized) | "open_legs".
+    pnl_basis: str = "total"
     eod_time: str = "15:20"
     # Build-view manual deploy: explicit entry legs — enter these verbatim, then run the roll.
     entry_legs: list[dict] | None = None
@@ -307,6 +317,12 @@ class IronFlyDeploy(BaseModel):
     # keep their recorded behavior (recovery binds params_snapshot, not these).
     profit_check: str = "1min"
     stop_check: str = "1min"
+    adjust_check: str = "5min"  # roll/hedge cadence (own, decoupled from profit) — 2026-07-22
+    adjust_after_open_min: int = 5  # no roll/hedge in the first N min after the open
+    trail_trigger_pct: float = 0.0  # trailing stop (% of margin, whole percent); 0/0 = off
+    trail_step_pct: float = 0.0
+    trail_mode: str = "ratchet"  # "ratchet" | "below_peak"
+    pnl_basis: str = "total"  # "total" (realized+unrealized) | "open_legs"
     eod_time: str = "15:20"
     # Build-view manual deploy: explicit entry legs — enter these verbatim, then run the adjustment.
     entry_legs: list[dict] | None = None
@@ -334,6 +350,10 @@ class RatioManualDeploy(BaseModel):
     profit_target_pct: float = 2.5  # % of margin (whole percent)
     stop_loss_pct: float = 3.0  # % of margin (whole percent; 0 = off)
     max_holding_days: int = 20  # batman time exit (HNI uses its Friday exit_weekday)
+    # Trailing stop, whole-percent here → fractions at the strategy (like profit/stop). 0/0 = off.
+    trail_trigger_pct: float = 0.0
+    trail_step_pct: float = 0.0
+    trail_mode: str = "ratchet"  # "ratchet" | "below_peak"
     profit_check: str = "1min"
     stop_check: str = "eod"
     time_check: str = "eod"

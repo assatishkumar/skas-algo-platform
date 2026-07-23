@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -16,7 +15,8 @@ import {
   YAxis,
 } from "recharts";
 import { formatInr, pct } from "../lib/format";
-import type { OptionCycle, OptionPosition, OptionsReportData } from "../types";
+import type { OptionCycle, OptionPosition, OptionsReportData, Trade } from "../types";
+import { CycleDetailModal } from "../pages/CycleDetailPage";
 import BasketCyclesReport from "./BasketCyclesReport";
 import CoveredCallReport from "./CoveredCallReport";
 import PayoffChart from "./PayoffChart";
@@ -248,7 +248,7 @@ function PerExpiryBars({ options }: { options: OptionsReportData }) {
   );
 }
 
-function CycleRow({ c, runId, index }: { c: OptionCycle; runId?: number; index?: number }) {
+function CycleRow({ c, index, onOpen }: { c: OptionCycle; index: number; onOpen: (i: number) => void }) {
   const [open, setOpen] = useState(false);
   const legs = c.legs_detail ?? [c.ce, c.pe].filter(Boolean) as OptionPosition[];
   const strikes = [c.ce?.strike, c.pe?.strike].filter((s) => s != null);
@@ -262,12 +262,12 @@ function CycleRow({ c, runId, index }: { c: OptionCycle; runId?: number; index?:
       <tr className="border-t border-slate-800 cursor-pointer hover:bg-slate-800/40" onClick={() => setOpen((v) => !v)}>
         <td className="py-1 pr-3 whitespace-nowrap text-slate-500">{open ? "▾" : "▸"}</td>
         <td className="py-1 pr-4 whitespace-nowrap">
-          {runId != null && index != null ? (
-            <Link to={`/runs/${runId}/cycle/${index}`} onClick={(e) => e.stopPropagation()}
-              className="text-brand hover:underline" title="Open the full cycle lifecycle view">
-              {c.entry_date} ↗
-            </Link>
-          ) : c.entry_date}
+          {/* Popup the full cycle lifecycle — works for a SAVED run and an UNSAVED preview
+              alike (the modal fetches by run_id or from the in-browser report+trades). */}
+          <button onClick={(e) => { e.stopPropagation(); onOpen(index); }}
+            className="text-brand hover:underline" title="Open the full cycle lifecycle (popup)">
+            {c.entry_date} ↗
+          </button>
         </td>
         <td className="py-1 pr-4 whitespace-nowrap">{c.expiry}</td>
         <td className="py-1 pr-4"><SpotCell c={c} /></td>
@@ -390,8 +390,12 @@ function VixCell({ c }: { c: OptionCycle }) {
   );
 }
 
-function PositionsTable({ options, runId }: { options: OptionsReportData; runId?: number }) {
+function PositionsTable({ options, runId, trades }: {
+  options: OptionsReportData; runId?: number; trades?: Trade[];
+}) {
   const [reason, setReason] = useState<string>("ALL");
+  // The cycle whose lifecycle popup is open (index into options.cycles), or null.
+  const [cycleIdx, setCycleIdx] = useState<number | null>(null);
   const reasons = useMemo(
     () => ["ALL", ...Object.keys(options.exit_reasons)],
     [options],
@@ -405,7 +409,7 @@ function PositionsTable({ options, runId }: { options: OptionsReportData; runId?
     <Card>
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm font-medium text-slate-300">
-          Positions <span className="text-slate-500">({options.cycles.length} cycles · click the entry date ↗ for the full lifecycle, or a row for legs &amp; payoff)</span>
+          Positions <span className="text-slate-500">({options.cycles.length} cycles · click the entry date ↗ for the full lifecycle popup, or a row for legs &amp; payoff)</span>
         </div>
         <div className="flex gap-1">
           {reasons.map((r) => (
@@ -439,16 +443,28 @@ function PositionsTable({ options, runId }: { options: OptionsReportData; runId?
           <tbody>
             {rows.map((c, i) => (
               <CycleRow key={`${c.entry_date}-${c.expiry}-${i}`} c={c}
-                runId={runId} index={options.cycles.indexOf(c)} />
+                index={options.cycles.indexOf(c)} onOpen={setCycleIdx} />
             ))}
           </tbody>
         </table>
       </div>
+      {cycleIdx != null && (
+        <CycleDetailModal
+          index={cycleIdx}
+          runId={runId ?? undefined}
+          // Unsaved backtest → feed the report+trades already in the browser (the backend needs
+          // only options.cycles + margin_series, so a minimal {options} report is enough).
+          preview={runId == null ? { report: { options }, trades: trades ?? [] } : undefined}
+          onClose={() => setCycleIdx(null)}
+        />
+      )}
     </Card>
   );
 }
 
-export default function OptionsReport({ options, runId }: { options: OptionsReportData; runId?: number }) {
+export default function OptionsReport({ options, runId, trades }: {
+  options: OptionsReportData; runId?: number; trades?: Trade[];
+}) {
   const isCoveredCall = (options.campaigns?.length ?? 0) > 0;
   const isBasket = (options.basket_cycles?.length ?? 0) > 0;
   return (
@@ -468,7 +484,7 @@ export default function OptionsReport({ options, runId }: { options: OptionsRepo
         <BasketCyclesReport cycles={options.basket_cycles!} />
       ) : (
         <>
-          <PositionsTable options={options} runId={runId} />
+          <PositionsTable options={options} runId={runId} trades={trades} />
           <PremiumDecayChart options={options} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <ExitReasonDonut options={options} />

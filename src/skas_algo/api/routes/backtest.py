@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import io
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -501,26 +501,23 @@ def _resolve_run_trades(run: AlgoRun, db: Session) -> list[dict]:
     return []
 
 
-@router.get("/runs/{run_id}/cycles/{index}/detail")
-def get_cycle_detail(run_id: int, index: int, db: Session = Depends(get_db)) -> dict:
-    """The position-lifecycle model for ONE options cycle (entry → rolls/hedges → exit) with
-    reconstructed per-event net delta — powers the Cycle Detail page. Cache-only, read-only."""
+def _cycle_detail_model(
+    cycles: list[dict],
+    trades: list[dict],
+    index: int,
+    *,
+    run_id: int,
+    strategy_id: str,
+    name: str,
+    margin_series: list,
+) -> dict:
+    """Build the position-lifecycle model for ONE options cycle — the shared core behind both
+    the saved-run GET and the unsaved-preview POST. Cache-only, read-only."""
     from skas_algo.data.options_provider import INDEX_SYMBOL, _ffill_lookup
     from skas_algo.data.provider import get_data_cache
     from skas_algo.engine.jsonutil import to_native
-    from skas_algo.services.cycle_detail import build_cycle_detail, reconstruct_cycles
+    from skas_algo.services.cycle_detail import build_cycle_detail
 
-    run = db.get(AlgoRun, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="run not found")
-    algo = db.get(Algo, run.algo_id)
-    trades = _resolve_run_trades(run, db)
-    # Backtests + stopped runs have the options cycles in the stored report; a RUNNING live
-    # options deployment has none yet → reconstruct from its live trades (same newest-first
-    # order the live page displays, so the index the UI links matches).
-    cycles = ((_run_report(run, algo) or {}).get("options") or {}).get("cycles") or []
-    if not cycles:
-        cycles = reconstruct_cycles(trades)
     if not (0 <= index < len(cycles)):
         raise HTTPException(status_code=404, detail="cycle index out of range")
     cycle = cycles[index]
@@ -530,17 +527,57 @@ def get_cycle_detail(run_id: int, index: int, db: Session = Depends(get_db)) -> 
             and lo <= str(t.get("date"))[:10] <= hi]
     sd = get_data_cache()
     sym = INDEX_SYMBOL.get(str(cycle.get("underlying", "")).upper()) or cycle.get("underlying")
-    margin_series = (((_run_report(run, algo) or {}).get("options") or {})
-                     .get("margin_series")) or []
     model = build_cycle_detail(
-        cycle, rows, _ffill_lookup(sd, sym), margin_series,
-        index=index, run_id=run_id, strategy_id=(algo.strategy_id if algo else ""),
-        name=(algo.name if algo else f"run #{run_id}"))
+        cycle, rows, _ffill_lookup(sd, sym), margin_series or [],
+        index=index, run_id=run_id, strategy_id=strategy_id, name=name)
+    return to_native(model)
+
+
+@router.get("/runs/{run_id}/cycles/{index}/detail")
+def get_cycle_detail(run_id: int, index: int, db: Session = Depends(get_db)) -> dict:
+    """The position-lifecycle model for ONE options cycle (entry → rolls/hedges → exit) with
+    reconstructed per-event net delta — powers the Cycle Detail page. Cache-only, read-only."""
+    from skas_algo.services.cycle_detail import reconstruct_cycles
+
+    run = db.get(AlgoRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    algo = db.get(Algo, run.algo_id)
+    trades = _resolve_run_trades(run, db)
+    report = _run_report(run, algo) or {}
+    # Backtests + stopped runs have the options cycles in the stored report; a RUNNING live
+    # options deployment has none yet → reconstruct from its live trades (same newest-first
+    # order the live page displays, so the index the UI links matches).
+    cycles = (report.get("options") or {}).get("cycles") or reconstruct_cycles(trades)
+    model = _cycle_detail_model(
+        cycles, trades, index,
+        run_id=run_id, strategy_id=(algo.strategy_id if algo else ""),
+        name=(algo.name if algo else f"run #{run_id}"),
+        margin_series=(report.get("options") or {}).get("margin_series") or [])
     # Whether the RUN is a deployment (paper/live) vs a backtest — drives the breadcrumb
     # target. Distinct from the per-cycle ``live`` flag (a CLOSED cycle on a live run is
     # ``live=False`` but still belongs on /live, not /runs).
     model["is_deployment"] = run.mode in (TradingMode.PAPER, TradingMode.LIVE)
-    return to_native(model)
+    return model
+
+
+@router.post("/backtest/cycle-detail")
+def preview_cycle_detail(body: dict = Body(...)) -> dict:
+    """Cycle-detail model for an UNSAVED backtest preview — fed the in-browser ``report`` +
+    ``trades`` (no run_id, nothing persisted), so the report's 'click the entry date ↗'
+    lifecycle works BEFORE the run is saved. Same cache-only reconstruction as the GET."""
+    from skas_algo.services.cycle_detail import reconstruct_cycles
+
+    report = body.get("report") or {}
+    trades = body.get("trades") or []
+    index = int(body.get("index") or 0)
+    cycles = (report.get("options") or {}).get("cycles") or reconstruct_cycles(trades)
+    model = _cycle_detail_model(
+        cycles, trades, index,
+        run_id=0, strategy_id=str(report.get("strategy_id") or ""), name="preview",
+        margin_series=(report.get("options") or {}).get("margin_series") or [])
+    model["is_deployment"] = False
+    return model
 
 
 @router.get("/runs/{run_id}/analysis")
