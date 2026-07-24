@@ -1062,6 +1062,92 @@ class LiveRunManager:
             "REAL-ORDER broker injected for %s (account %s)", config.name, config.broker_account_id
         )
 
+    def _rebind_order_adapter(self, live: "LiveRun") -> None:
+        """Keep the ORDER path on the same Kite session as the READ path.
+
+        A LiveBroker freezes the adapter it was injected with; a quote-source rebuild
+        (login promotion, the post-rollover quote self-heal) repoints reads at a FRESH
+        adapter but used to leave orders holding the DEAD overnight token — 2026-07-24:
+        hourly reconcile read green all day while the 15:15 calendar exit's place_order
+        failed auth and halted hni_weekly. Rebind through the SAME keys as injection
+        (armed + full order surface — never widened); an adapter that fails them leaves
+        the old broker in place, which still halts safely on its next order. After a
+        rebind the book is re-verified before the next decision (reconcile_pending),
+        exactly like a fresh injection."""
+        from skas_algo.brokers.live_broker import LiveBroker, adapter_can_execute
+
+        broker = getattr(live.session, "broker", None)
+        if not isinstance(broker, LiveBroker):
+            return
+        adapter = getattr(live.quote_source, "adapter", None)
+        if adapter is None or adapter is broker.adapter:
+            return
+        if not getattr(adapter, "armed", False) or not adapter_can_execute(adapter):
+            logger.warning(
+                "run %s: rebuilt quote adapter fails the order gate — LiveBroker keeps "
+                "its old adapter (next order halts safely)",
+                live.run_id,
+            )
+            return
+        broker.rebind_adapter(adapter)
+        live.reconcile_pending = True
+        logger.warning(
+            "run %s (%s): order adapter rebound to the fresh broker session "
+            "(reconcile pending)",
+            live.run_id,
+            live.config.name,
+        )
+
+    def _rebind_order_sweep(self) -> None:
+        """Safety net behind the rebuild-site hooks: converge every real-order run's
+        LiveBroker onto its CURRENT quote adapter, so a future code path that swaps a
+        quote_source without calling _rebind_order_adapter still self-heals within one
+        maintenance tick instead of sitting on a dead token until the next order."""
+        for live in list(self.runs.values()):
+            try:
+                self._rebind_order_adapter(live)
+                self._maybe_remint_order_adapter(live)
+            except Exception:  # pragma: no cover - maintenance must never die
+                logger.exception("order-adapter sweep failed for run %s", live.run_id)
+
+    def _maybe_remint_order_adapter(self, live: "LiveRun") -> None:
+        """Close the WS-masked rollover hole: _rebind_order_adapter converges the order
+        path onto the QUOTE adapter, which only helps once the read path has noticed the
+        ~06:00 token kill. A KiteTicker that keeps serving marks (auto-reconnect, an
+        index-only book) means no quote_error, no rebuild — stale→stale convergence is a
+        no-op while the first real order still dies on auth. So detect the rollover
+        INDEPENDENTLY of read-path health: when the order adapter's token no longer
+        matches the CURRENT DB token (and a valid session exists), rebuild the quote
+        source and rebind — the same path _retry_quotes takes, minus the error trigger."""
+        from skas_algo.brokers.live_broker import LiveBroker
+        from skas_algo.db.models import BrokerAccount
+        from skas_algo.security import decrypt
+        from skas_algo.services import broker as broker_svc
+
+        broker = getattr(live.session, "broker", None)
+        if not isinstance(broker, LiveBroker) or not live.config.broker_account_id:
+            return
+        held = getattr(broker.adapter, "access_token", None)
+        with session_scope() as db:
+            account = db.get(BrokerAccount, live.config.broker_account_id)
+            if account is None or not broker_svc.has_valid_session(account):
+                return  # nothing live to rebind onto — the next login promotion handles it
+            if decrypt(account.session_token) == held:
+                return  # order path already rides the current token
+            from skas_algo.live.pricefeed import build_quote_source
+
+            logger.warning(
+                "run %s (%s): DB token rotated under a healthy-looking feed — re-minting "
+                "quote + order adapters",
+                live.run_id,
+                live.config.name,
+            )
+            live.quote_source = build_quote_source(account, broker_svc.make_adapter(account))
+        live.on_cache_fallback = False
+        live.quote_error = None
+        live._wire_quote_source()  # repoint marks + live chain + strategy hooks
+        self._rebind_order_adapter(live)
+
     def reconcile_account_book(
         self, account_id: int, adapter, details: dict | None = None
     ) -> str | None:
@@ -1324,6 +1410,7 @@ class LiveRunManager:
         live.on_cache_fallback = False
         live.quote_error = None
         live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter
+        self._rebind_order_adapter(live)  # …and the ORDER path (2026-07-24 dead-token halt)
         live._last_offhours_refresh = None  # re-price immediately (next tick) — even off-hours
         self._maybe_resume_orders(live)
         return True
@@ -1356,6 +1443,7 @@ class LiveRunManager:
         live.on_cache_fallback = False
         live.quote_error = None
         live._wire_quote_source()  # repoint marks + live chain at the rebuilt adapter
+        self._rebind_order_adapter(live)  # …and the ORDER path (2026-07-24 dead-token halt)
         live._last_offhours_refresh = None  # the loop re-prices on the next tick — even off-hours
         self._maybe_resume_orders(live)
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
@@ -1479,6 +1567,7 @@ class LiveRunManager:
             try:
                 await asyncio.sleep(300)
                 self._watchdog_scan()
+                self._rebind_order_sweep()
                 await self._maybe_daily_cache_refresh()
                 await self._maybe_daily_option_capture()
                 await self._maybe_daily_backup()

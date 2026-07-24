@@ -98,6 +98,108 @@ def test_login_promotion_respects_the_gate(monkeypatch):
     assert s.session.broker == "PAPER-SENTINEL" and s.resume_orders_pending is True
 
 
+def test_quote_rebuild_rebinds_the_order_adapter():
+    """The 2026-07-24 halt: after the ~06:00 Kite token rollover the login promotion
+    rebuilt the QUOTE adapter but the LiveBroker kept yesterday's dead token — hourly
+    reconcile read green all day while the 15:15 calendar exit's place_order failed
+    auth. A quote-source rebuild must repoint the ORDER path too, reconcile-first."""
+    from skas_algo.brokers.live_broker import LiveBroker
+
+    old, fresh = _ExecAdapter(), _ExecAdapter()
+    s = _live(pending=False, adapter=fresh)
+    s.session.broker = LiveBroker(old, account_id=1, run_name="t")
+    manager._rebind_order_adapter(s)
+    assert s.session.broker.adapter is fresh
+    assert s.reconcile_pending is True                  # book verified BEFORE next order
+
+
+def test_rebind_respects_the_gate_and_identity():
+    from skas_algo.brokers.live_broker import LiveBroker
+
+    # Fresh adapter fails the gate (disarmed) → old adapter kept (halts safely later).
+    old = _ExecAdapter()
+    s = _live(pending=False, adapter=_ExecAdapter(armed=False))
+    s.session.broker = LiveBroker(old, account_id=1, run_name="t")
+    manager._rebind_order_adapter(s)
+    assert s.session.broker.adapter is old and s.reconcile_pending is False
+
+    # Same adapter object (nothing was rebuilt) → no spurious reconcile churn.
+    s2 = _live(pending=False)
+    s2.session.broker = LiveBroker(s2.quote_source.adapter, account_id=1, run_name="t")
+    manager._rebind_order_adapter(s2)
+    assert s2.reconcile_pending is False
+
+    # Paper-broker run → untouched (rebind is a real-order concern only).
+    s3 = _live(pending=False)
+    manager._rebind_order_adapter(s3)
+    assert s3.session.broker == "PAPER-SENTINEL" and s3.reconcile_pending is False
+
+
+def test_rebind_sweep_covers_running_real_order_runs(monkeypatch):
+    """The 5-min maintenance sweep is the safety net: even if a future quote-source
+    swap forgets the rebind hook, the sweep converges the order path within a tick."""
+    from skas_algo.brokers.live_broker import LiveBroker
+
+    old, fresh = _ExecAdapter(), _ExecAdapter()
+    s = _live(pending=False, adapter=fresh)
+    s.session.broker = LiveBroker(old, account_id=1, run_name="t")
+    monkeypatch.setattr(manager, "runs", {s.run_id: s})
+    manager._rebind_order_sweep()
+    assert s.session.broker.adapter is fresh and s.reconcile_pending is True
+
+
+def test_sweep_remints_on_db_token_drift(monkeypatch):
+    """The WS-masked rollover hole (2026-07-24 review): if the KiteTicker keeps serving
+    marks after the ~06:00 token kill, no quote_error fires, the quote source is never
+    rebuilt, and rebind converges stale→stale. The sweep must detect DB-token drift
+    directly and re-mint BOTH adapters, without waiting for a read to fail."""
+    from skas_algo.brokers.live_broker import LiveBroker
+    from skas_algo.db.base import session_scope as scope
+    from skas_algo.db.models import BrokerAccount
+    from skas_algo.security import encrypt
+    from skas_algo.services import broker as broker_svc
+
+    with scope() as s_db:
+        acct = BrokerAccount(broker="zerodha", label="drift", user_id="AB2",
+                             enc_api_secret=encrypt("sec"), api_key="k",
+                             session_token=encrypt("FRESH-TOKEN"))
+        s_db.add(acct)
+        s_db.flush()
+        acct_id = acct.id
+
+    stale, fresh = _ExecAdapter(), _ExecAdapter()
+    stale.access_token, fresh.access_token = "DEAD-TOKEN", "FRESH-TOKEN"
+    s = _live(pending=False, adapter=stale)  # quote adapter ALSO stale — the masked case
+    s.config.broker_account_id = acct_id
+    s.session.broker = LiveBroker(stale, account_id=acct_id, run_name="t")
+    s.on_cache_fallback = False
+    s.quote_error = None
+    s._wire_quote_source = lambda: None
+
+    monkeypatch.setattr(broker_svc, "has_valid_session", lambda a: True)
+    monkeypatch.setattr(broker_svc, "make_adapter", lambda a: fresh)
+    monkeypatch.setattr("skas_algo.live.pricefeed.build_quote_source",
+                        lambda account, adapter: SimpleNamespace(adapter=adapter))
+
+    manager._maybe_remint_order_adapter(s)
+    assert s.quote_source.adapter is fresh              # read path re-minted…
+    assert s.session.broker.adapter is fresh            # …and the ORDER path with it
+    assert s.reconcile_pending is True
+
+    # No drift (DB token == held token) → nothing rebuilt, no reconcile churn.
+    s2 = _live(pending=False, adapter=stale)
+    s2.config.broker_account_id = acct_id
+    fresh2 = _ExecAdapter()
+    fresh2.access_token = "FRESH-TOKEN"
+    s2.session.broker = LiveBroker(fresh2, account_id=acct_id, run_name="t")
+    s2.on_cache_fallback = False
+    s2.quote_error = None
+    s2._wire_quote_source = lambda: None
+    q_before = s2.quote_source
+    manager._maybe_remint_order_adapter(s2)
+    assert s2.quote_source is q_before and s2.reconcile_pending is False
+
+
 def test_strategy_pnl_is_the_decision_basis_measure():
     """legs_mtm_pnl marks from the strategy's OWN entries (decision premiums), the exact
     sum its exit checks compare — run-7's short leg filled 0.49 better than its decision

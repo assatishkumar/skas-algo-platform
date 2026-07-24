@@ -113,6 +113,18 @@ class LiveBroker:
         self._orders_count = 0
         self._governor = governor_for(account_id)
 
+    def rebind_adapter(self, adapter) -> None:
+        """Swap to a freshly-built adapter (same account, CURRENT Kite token).
+
+        The broker freezes ``self.adapter`` at injection; the daily ~06:00 Kite token
+        rollover rebuilds the QUOTE adapter but used to leave this one holding the dead
+        token — reads reconciled green all day while the first real order was rejected
+        with "Incorrect api_key or access_token" (the 2026-07-24 hni_weekly halt). The
+        manager rebinds through the same armed+order-surface keys as injection; nothing
+        else moves (rails, caps and the rate governor are per-account, not per-adapter).
+        """
+        self.adapter = adapter
+
     # ------------------------------------------------------------------ rails
     def _check_rails(self, order: BrokerOrder, ref_price: float | None) -> None:
         from skas_algo.live.holidays import is_nse_holiday

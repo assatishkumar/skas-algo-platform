@@ -482,7 +482,19 @@ fresh deploy or resumed — reconciles its broker book before its first decision
 Zerodha book stayed open, with "live" on the tile. With the resume flag on but NO session at
 restart (the daily VPS pattern: restart ~08:30, Kite login ~08:35) recovery can't inject —
 the run is marked `resume_orders_pending` and the login promotion (`_maybe_resume_orders`)
-finishes the injection through the same gate, reconcile-first. Options snapshots also carry
+finishes the injection through the same gate, reconcile-first. **Order-adapter rebind
+(2026-07-24):** a LiveBroker freezes the adapter it was injected with, and every
+`make_adapter` call mints a NEW adapter holding a COPY of the DB token — so when the daily
+~06:00 Kite rollover + morning login rebuilt the quote source, READS rode the fresh token
+while ORDERS kept the dead one (reconcile green all day, the 15:15 calendar exit rejected
+"Incorrect api_key or access_token" → halt). Now every quote-source rebuild
+(`promote_quote_source` / `_retry_quotes`) calls `_rebind_order_adapter` — repoints the
+LiveBroker at the current quote adapter through the SAME armed+order-surface keys,
+reconcile-first — and a 5-min maintenance sweep (`_rebind_order_sweep`) converges any run a
+future path misses AND detects DB-token drift directly (`_maybe_remint_order_adapter`:
+order-adapter token ≠ current DB token → re-mint both adapters — covers the WS-masked case
+where the KiteTicker keeps serving marks so no quote_error ever fires and the quote adapter
+itself stays stale). If you add a new place that swaps `live.quote_source`, call the rebind. Options snapshots also carry
 `strategy_pnl` — the DECISION-entry-basis MTM the exit checks actually compare (live it sits
 fill-slippage away from the book P&L; the UI shows both), and `exit_rules` now state each
 check's sampling cadence ("checked every 15 min"); the deploy form defaults `profit_check`
