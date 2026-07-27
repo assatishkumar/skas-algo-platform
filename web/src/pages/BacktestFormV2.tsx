@@ -321,7 +321,9 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
           </div>
           {saveMutation.error && <ErrorBox message={(saveMutation.error as Error).message} />}
           <ReportView report={result.report} trades={result.trades}
-            runId={result.run_id ?? undefined} />
+            runId={result.run_id ?? undefined}
+            cycleMeta={lastBody ? { params: lastBody.params, strategyId: lastBody.strategy_id }
+              : undefined} />
         </div>
       )}
     </div>

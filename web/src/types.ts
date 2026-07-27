@@ -867,6 +867,8 @@ export interface CycleDetailEventLeg {
 export interface CycleDetailEvent {
   id: string; kind: "entry" | "roll" | "hedge" | "exit"; at: string; spot: number | null;
   net_delta: number | null; reason: string; realized_so_far: number;
+  unrealized_eod?: number | null; // open-book MTM at the event day's EOD mark (0 on a flat exit)
+  open_refs?: number[];           // legs still OPEN right after this event (held-through book)
   closed: CycleDetailEventLeg[]; opened: CycleDetailEventLeg[];
 }
 export interface CycleDetailLeg {
@@ -884,6 +886,9 @@ export interface CycleDetail {
   entry_vix: number | null; exit_vix: number | null; underlying_pct: number | null;
   pnl: number | null; premium_traded: number; days_held: number | null;
   n_rolls: number; n_hedges: number; max_margin: number | null; worst_mtm: number;
+  // absolute ₹ thresholds for THIS cycle, off its entry margin (absent when unknowable)
+  entry_margin?: number; target_amount?: number | null; stop_amount?: number | null;
+  threshold_basis?: string; // "entry" (frozen once) | "current" (delta family, re-based)
   events: CycleDetailEvent[]; legs: CycleDetailLeg[];
   mtm_series: { date: string; value: number }[]; spot_path: { date: string; spot: number }[];
 }

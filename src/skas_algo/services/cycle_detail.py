@@ -222,10 +222,12 @@ def build_cycle_detail(
     strategy_id: str,
     name: str,
     r: float = 0.065,
+    params: dict | None = None,
 ) -> dict:
     """Assemble the cycle-detail model. ``spot_fn(date) -> underlying close`` (cache, ffilled);
     ``trade_rows`` = the run trade-log rows belonging to this cycle (for the entry-side tag /
-    event kind); ``margin_series`` = the run's per-day [{date, margin/value}] (for max margin)."""
+    event kind); ``margin_series`` = the run's per-day [{date, margin/value}] (for max margin);
+    ``params`` = the run's strategy params (for the absolute ₹ target/stop tile)."""
     underlying = cycle.get("underlying") or "NIFTY"
     expiry = cycle.get("expiry")
     entry_ts = _parse_ts(cycle["entry_date"])
@@ -270,9 +272,12 @@ def build_cycle_detail(
         lg["iv"], lg["open_delta"] = iv, dlt
 
     # tag lookup: (timestamp, symbol) -> reason tag, from the trade log (entry side included).
+    # CLOSE rows carry the strategy's Signal.reason as ``exit_reason`` (dnm_roll /
+    # ifm_adjust_roll / target / stop / …) — that's the honest event classifier; ``tag`` is
+    # rarely set on options rows. Prefer exit_reason.
     tag_at = {}
     for t in trade_rows:
-        tag_at[(_parse_ts(t["date"]), t.get("ticker"))] = t.get("tag")
+        tag_at[(_parse_ts(t["date"]), t.get("ticker"))] = t.get("exit_reason") or t.get("tag")
 
     # ---- events: distinct timestamps where legs opened and/or closed ----
     stamps = sorted(
@@ -284,6 +289,7 @@ def build_cycle_detail(
     # and the legs-table order on live delta-neutral run #203, 2026-07).
     is_flat = all(lg["close_ts"] is not None for lg in legs)
     n_stamps = len(stamps)
+    daily = cycle.get("daily_pnl") or []  # EOD cumulative cycle-MTM path (also feeds the strip)
     events = []
     roll_n = 0
     realized = 0.0
@@ -312,6 +318,16 @@ def build_cycle_detail(
             if lg["open_ts"] <= ts and (lg["close_ts"] is None or lg["close_ts"] > ts)
         ]
         net_delta = _net_delta(open_now, spot, expiry, ts, r)
+        # Unrealized on the open book, marked at the EOD of the event's day (the only mark
+        # path we have — the daily MTM series): cumulative EOD MTM − realized so far. The
+        # final flat event is exactly 0 by construction. Honest label: it's an EOD mark,
+        # not the mark at the event's minute.
+        if is_last and is_flat:
+            unrealized = 0.0
+        else:
+            day = ts.strftime("%Y-%m-%d")
+            mtm_eod = next((d["pnl"] for d in reversed(daily) if str(d["date"])[:10] <= day), None)
+            unrealized = round(mtm_eod - realized, 2) if mtm_eod is not None else None
         events.append(
             {
                 "id": eid,
@@ -319,8 +335,12 @@ def build_cycle_detail(
                 "at": ts.strftime("%Y-%m-%d %H:%M"),
                 "spot": round(spot) if spot else None,
                 "net_delta": round(net_delta, 2) if net_delta is not None else None,
-                "reason": _reason(kind, tags, cycle),
+                "reason": _reason(kind, tags, cycle, opened, closed),
                 "realized_so_far": round(realized, 2),
+                "unrealized_eod": unrealized,
+                # the standing book right AFTER this event — lets the UI show which legs were
+                # simply HELD through the event vs touched by it (owner ask, 2026-07-27)
+                "open_refs": [lg["ref"] for lg in open_now],
                 "closed": [_event_leg(lg, "close") for lg in closed],
                 "opened": [_event_leg(lg, "open") for lg in opened],
             }
@@ -332,7 +352,6 @@ def build_cycle_detail(
     }
 
     # ---- KPIs ----
-    daily = cycle.get("daily_pnl") or []
     premium_traded = sum(abs(lg["units"] * lg["open_price"]) for lg in legs)
     n_roll = sum(1 for e in events if e["kind"] == "roll")
     n_hedge = sum(1 for e in events if e["kind"] == "hedge")
@@ -374,6 +393,9 @@ def build_cycle_detail(
         "n_hedges": n_hedge,
         "max_margin": round(max_margin) if max_margin else None,
         "worst_mtm": round(min((d["pnl"] for d in daily), default=0.0)),
+        # absolute ₹ profit-target / stop for THIS cycle, off its entry margin (None-safe)
+        **(_threshold_info(params, strategy_id, margin_series, entry_ts.date(),
+                           (exit_ts or entry_ts).date()) or {}),
         "events": events,
         "legs": [_leg_row(lg, ev_of_open[lg["ref"]], ev_of_close[lg["ref"]]) for lg in legs],
         "mtm_series": mtm_series,
@@ -388,26 +410,56 @@ def build_cycle_detail(
     }
 
 
-def _reason(kind: str, tags: set, cycle: dict) -> str:
+_EXIT_COPY = {
+    "target": "Profit target hit — MTM crossed the target, all legs booked.",
+    "stop": "Stop-loss hit — MTM breached the stop, all legs closed.",
+    "trail": "Trailing stop hit — gave back the allowed slice of peak profit, all legs closed.",
+    "time": "Held to the max-holding / time exit — all legs booked.",
+    "expiry": "Held to expiry — settled to intrinsic.",
+    "ironfly_payoff_neg": "The whole expiry payoff turned negative — abandoned the iron fly.",
+    "reverse": "Opposite signal fired — closed to reverse.",
+    "roll": "Rolled to the next expiry.",
+    "manual": "Closed manually by the owner.",
+    "flatten": "Closed manually (flatten).",
+}
+
+
+def _reason(kind: str, tags: set, cycle: dict, opened: list, closed: list) -> str:
+    """Honest per-event copy. Classified from the trade rows' reason tags where present
+    (a CLOSE row carries the strategy's Signal.reason), else from the event's SHAPE —
+    run #23x showed the old single-copy version narrating a post-iron-fly naked ADD as a
+    'premium imbalance roll' when nothing was closed at all."""
     if kind == "entry":
         return "Opened the initial position."
-    if kind == "roll":
+    if kind in ("roll", "hedge"):
+        if "ifm_adjust_roll" in tags:
+            return (
+                "The adjustment short decayed — banked its premium and re-sold a fresh "
+                "short nearer the money (post-iron-fly adjustment roll)."
+            )
+        if kind == "hedge" or "dnm_ironfly" in tags:
+            return (
+                "Rolled onto the opposite strike — capped at a straddle and hedged at "
+                "breakeven (iron fly)."
+            )
+        if opened and not closed:
+            # nothing closed → this is an ADD, not a roll (the post-iron-fly untested-side
+            # short, or any future add-leg event). Never narrate it as a roll.
+            return (
+                "Sold a NEW short on the untested side after a breakeven breach "
+                "(post-iron-fly adjustment) — nothing was closed; the original legs stay on."
+            )
+        if closed and not opened:
+            return "Closed leg(s) — nothing new was opened at this step."
         return (
             "Premium imbalance passed the threshold — rolled the cheap side to the "
             "strike whose premium matches the rich side."
         )
-    if kind == "hedge":
-        return (
-            "Rolled onto the opposite strike — capped at a straddle and hedged at "
-            "breakeven (iron fly)."
-        )
-    er = cycle.get("exit_reason") or ""
-    return {
-        "target": "MTM crossed the profit target — all legs booked.",
-        "stop": "MTM hit the stop — all legs booked.",
-        "time": "Held to the max-holding / time exit — all legs booked.",
-        "expiry": "Held to expiry — settled to intrinsic.",
-    }.get(er, "Position closed.")
+    # exit: prefer the exit event's OWN close-row reason over the cycle-level field
+    er = next((t for t in tags if t in _EXIT_COPY), None) or (cycle.get("exit_reason") or "")
+    if er in _EXIT_COPY:
+        return _EXIT_COPY[er]
+    return f'Position closed — "{er}".' if er else "Position closed."
 
 
 def _net_delta(open_legs, spot, expiry, when, r) -> float | None:
@@ -464,6 +516,60 @@ def _event_id_at(events, ts):
         return None
     key = ts.strftime("%Y-%m-%d %H:%M")
     return next((e["id"] for e in events if e["at"] == key), None)
+
+
+# %-thresholds are FRACTIONS in the ratio family (0.025 = 2.5%) but WHOLE percents everywhere
+# else — the registry's unit trap, mirrored server-side for the absolute-₹ tile.
+_FRACTION_PCT_IDS = {"batman_ratio_monthly", "call_ratio_monthly", "put_ratio_monthly",
+                     "hni_weekly"}
+# Only the delta family can re-base thresholds mid-cycle (exit_margin_basis="current");
+# every other %-of-margin strategy freezes its base at entry by construction.
+_DELTA_IDS = {"delta_neutral_monthly", "iron_fly_monthly", "double_diagonal_calendar"}
+
+
+def _threshold_info(params, strategy_id, margin_series, d1: date, d2: date) -> dict | None:
+    """The cycle's ABSOLUTE ₹ profit-target / stop, anchored to its ENTRY margin (owner ask
+    2026-07-27: each cycle should state its fixed ₹ thresholds, not just percentages).
+    Entry margin = the first margin-series point inside the cycle window — live that's the
+    first broker push after entry, in the replay the first model/margin_per_lot push; under
+    the two-margin scheme it IS the frozen threshold base. None when the run's params or the
+    margin series can't support an honest number (tile hidden, never guessed)."""
+    if not params:
+        return None
+    sid = str(strategy_id or "")
+
+    def _whole(v):
+        if v is None:
+            return None
+        v = float(v)
+        # fraction families store 0.025 for 2.5%; unknown strategy + sub-1 value → fraction
+        if sid in _FRACTION_PCT_IDS or (not sid and 0 < v < 1):
+            return v * 100.0
+        return v
+
+    tp, sp = _whole(params.get("profit_target_pct")), _whole(params.get("stop_loss_pct"))
+    if not tp and not sp:
+        return None
+    entry_margin = None
+    for m in sorted(margin_series or [], key=lambda m: str(m.get("date"))):
+        try:
+            md = _parse_ts(m.get("date")).date()
+        except (ValueError, TypeError):
+            continue
+        if d1 <= md <= d2:
+            entry_margin = float(m.get("margin", m.get("value", 0)) or 0)
+            break
+    if not entry_margin:
+        return None
+    basis = "entry"
+    if sid in _DELTA_IDS:
+        basis = str(params.get("exit_margin_basis") or "current")
+    return {
+        "entry_margin": round(entry_margin),
+        "target_amount": round(entry_margin * tp / 100.0) if tp and tp > 0 else None,
+        "stop_amount": round(entry_margin * sp / 100.0) if sp and sp > 0 else None,
+        "threshold_basis": basis,
+    }
 
 
 def _max_margin(margin_series, d1: date, d2: date) -> float | None:

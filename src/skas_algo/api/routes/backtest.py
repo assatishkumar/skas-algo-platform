@@ -426,13 +426,35 @@ def _instrument_class(algo: Algo | None, trades: list[dict] | None = None) -> st
     return "STOCK"
 
 
+def _backfill_period_tables(report: dict | None, algo: Algo | None) -> dict | None:
+    """Intraday-replay runs saved before 2026-07-17 stored their report WITHOUT the
+    yearly / monthly-profit / monthly-equity tables — the replay only started emitting
+    them that day. The daily equity curve was always stored, so derive the tables at
+    READ time (same `_periodic_breakdowns` the replay now uses) instead of asking the
+    owner to re-run (#215-#217 were the affected runs). Reports that already carry
+    `yearly` (every EOD-engine run, every post-fix replay) pass through untouched.
+    Returns a NEW dict — never mutates the stored row."""
+    if not report or report.get("yearly") or not report.get("equity_curve"):
+        return report
+    from skas_algo.services.intraday_replay import _periodic_breakdowns
+
+    curve = report["equity_curve"]
+    capital = float(algo.capital) if algo and algo.capital else float(curve[0].get("equity") or 0)
+    yearly, monthly_profit, monthly_equity = _periodic_breakdowns(curve, capital)
+    if not yearly:
+        return report
+    return {**report, "yearly": yearly, "monthly_profit": monthly_profit,
+            "monthly_equity": monthly_equity}
+
+
 def _run_report(run: AlgoRun, algo: Algo | None) -> dict | None:
     """The run's full report. For a still-running EQUITY (paper) deployment it's built on-demand from
     the live session's history/transactions so the report view (equity curve, yearly, monthly booked,
     capital utilization) shows live at backtest parity — the stored ``metrics`` are only written on
-    stop. Backtests / stopped / options runs return the stored report unchanged."""
+    stop. Backtests / stopped / options runs return the stored report unchanged (old pre-2026-07-17
+    replay reports get their missing period tables derived from the stored equity curve)."""
     if _instrument_class(algo) != "STOCK":
-        return run.metrics
+        return _backfill_period_tables(run.metrics, algo)
     from skas_algo.engine.jsonutil import to_native
     from skas_algo.engine.report import build_report
     from skas_algo.engine.runner import RunResult
@@ -440,7 +462,7 @@ def _run_report(run: AlgoRun, algo: Algo | None) -> dict | None:
 
     live = manager.get(run.id)
     if live is None or not live.session.history:
-        return run.metrics
+        return _backfill_period_tables(run.metrics, algo)
     rr = RunResult(
         history=live.session.history,
         transactions=live.session.transactions,
@@ -510,6 +532,7 @@ def _cycle_detail_model(
     strategy_id: str,
     name: str,
     margin_series: list,
+    params: dict | None = None,
 ) -> dict:
     """Build the position-lifecycle model for ONE options cycle — the shared core behind both
     the saved-run GET and the unsaved-preview POST. Cache-only, read-only."""
@@ -529,7 +552,7 @@ def _cycle_detail_model(
     sym = INDEX_SYMBOL.get(str(cycle.get("underlying", "")).upper()) or cycle.get("underlying")
     model = build_cycle_detail(
         cycle, rows, _ffill_lookup(sd, sym), margin_series or [],
-        index=index, run_id=run_id, strategy_id=strategy_id, name=name)
+        index=index, run_id=run_id, strategy_id=strategy_id, name=name, params=params)
     return to_native(model)
 
 
@@ -553,7 +576,8 @@ def get_cycle_detail(run_id: int, index: int, db: Session = Depends(get_db)) -> 
         cycles, trades, index,
         run_id=run_id, strategy_id=(algo.strategy_id if algo else ""),
         name=(algo.name if algo else f"run #{run_id}"),
-        margin_series=(report.get("options") or {}).get("margin_series") or [])
+        margin_series=(report.get("options") or {}).get("margin_series") or [],
+        params=(algo.params if algo else None))
     # Whether the RUN is a deployment (paper/live) vs a backtest — drives the breadcrumb
     # target. Distinct from the per-cycle ``live`` flag (a CLOSED cycle on a live run is
     # ``live=False`` but still belongs on /live, not /runs).
@@ -574,8 +598,10 @@ def preview_cycle_detail(body: dict = Body(...)) -> dict:
     cycles = (report.get("options") or {}).get("cycles") or reconstruct_cycles(trades)
     model = _cycle_detail_model(
         cycles, trades, index,
-        run_id=0, strategy_id=str(report.get("strategy_id") or ""), name="preview",
-        margin_series=(report.get("options") or {}).get("margin_series") or [])
+        run_id=0, name="preview",
+        strategy_id=str(body.get("strategy_id") or report.get("strategy_id") or ""),
+        margin_series=(report.get("options") or {}).get("margin_series") or [],
+        params=body.get("params"))
     model["is_deployment"] = False
     return model
 

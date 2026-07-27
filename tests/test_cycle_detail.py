@@ -179,3 +179,93 @@ def test_mtm_series_no_duplicate_when_exit_is_an_eod_day():
                                strategy_id="batman_ratio_monthly", name="b")
     assert len(model["mtm_series"]) == 2
     assert model["mtm_series"][-1] == {"date": "2026-02-20", "value": 5000.0}
+
+
+def test_add_event_and_exit_reason_and_unrealized(monkeypatch=None):
+    """The run-#23x iron-fly cycle complaints (owner, 2026-07-27): an event that OPENS a
+    short with NOTHING closed must not narrate a 'premium imbalance roll'; the exit copy
+    must name the reason; every event carries the standing book (open_refs) and the
+    EOD-marked unrealized P&L."""
+    cycle = {
+        "underlying": "NIFTY", "expiry": "2026-09-30",
+        "entry_date": "2026-08-29 11:00", "exit_date": "2026-09-18 15:20",
+        "exit_reason": None, "net_pnl": -11923.0, "holding_days": 21,
+        "underlying_entry": 24542.0, "underlying_exit": 25451.0,
+        "vix_entry": None, "vix_exit": None, "underlying_pct": 3.7,
+        "daily_pnl": [{"date": "2026-08-29", "pnl": -1000.0},
+                      {"date": "2026-09-04", "pnl": 4000.0},
+                      {"date": "2026-09-17", "pnl": -9000.0}],
+        "legs_detail": [
+            # the iron fly held E→T…
+            _leg(24500, "CE", "short", 225, "2026-08-29 11:00", 409.95,
+                 "2026-09-18 15:20", 1023.10, -138085, "stop"),
+            _leg(24500, "PE", "short", 225, "2026-08-29 11:00", 239.65,
+                 "2026-09-18 15:20", 9.85, 51680, "stop"),
+            _leg(25100, "CE", "long", 225, "2026-08-29 11:00", 136.75,
+                 "2026-09-18 15:20", 449.85, 70281, "stop"),
+            # …plus a naked ADD (nothing closed with it) later rolled once
+            _leg(24400, "PE", "short", 225, "2026-09-04 09:35", 78.00,
+                 "2026-09-12 10:40", 29.15, 10965, "ifm_adjust_roll"),
+            _leg(24700, "PE", "short", 225, "2026-09-12 10:40", 57.90,
+                 "2026-09-18 15:20", 25.25, 7320, "stop"),
+        ],
+    }
+    trade_rows = [
+        {"date": "2026-09-12 10:40", "ticker": cycle["legs_detail"][3]["symbol"],
+         "exit_reason": "ifm_adjust_roll"},
+        {"date": "2026-09-18 15:20", "ticker": cycle["legs_detail"][0]["symbol"],
+         "exit_reason": "stop"},
+    ]
+    model = build_cycle_detail(cycle, trade_rows, lambda d: 25000.0, [],
+                               index=0, run_id=1, strategy_id="iron_fly_monthly", name="ifm")
+    ev = {e["id"]: e for e in model["events"]}
+    # R1 = the naked ADD: honest copy + title material (opened, nothing closed)
+    assert not ev["R1"]["closed"] and ev["R1"]["opened"]
+    assert "NEW short" in ev["R1"]["reason"] and "nothing was closed" in ev["R1"]["reason"]
+    # R2 = the adjustment roll, classified from the close row's exit_reason tag
+    assert "adjustment roll" in ev["R2"]["reason"]
+    # T = exit names the reason (close-row tag wins even with cycle exit_reason unset)
+    assert "Stop-loss hit" in ev["T"]["reason"]
+    # standing book after R1 = the 3 fly legs + the new short (4 legs, by ref)
+    assert len(ev["R1"]["open_refs"]) == 4
+    assert len(ev["E"]["open_refs"]) == 3
+    # unrealized (EOD mark − realized so far): R1 day EOD mtm=4000, realized 0 → 4000
+    assert ev["R1"]["unrealized_eod"] == 4000.0
+    # R2: last EOD ≤ 09-12 is 4000, realized so far = 10965 → −6965
+    assert ev["R2"]["unrealized_eod"] == 4000.0 - 10965.0
+    # flat exit → exactly 0
+    assert ev["T"]["unrealized_eod"] == 0.0
+
+
+def test_cycle_absolute_target_and_stop_tile():
+    """Owner ask 2026-07-27: each cycle states its ABSOLUTE ₹ target/SL, anchored to the
+    cycle's ENTRY margin (the first margin-series point in its window). Fraction-unit
+    families (ratio) convert; the delta family's basis label follows exit_margin_basis."""
+    from skas_algo.services.cycle_detail import _threshold_info
+    from datetime import date
+
+    series = [{"date": "2026-02-01", "margin": 900_000.0},   # before the cycle — ignored
+              {"date": "2026-02-02", "margin": 1_000_000.0},  # entry day → the anchor
+              {"date": "2026-02-10", "margin": 2_500_000.0}]  # naked-add jump — NOT the anchor
+    d1, d2 = date(2026, 2, 2), date(2026, 2, 20)
+
+    # delta family, whole percents, entry basis
+    info = _threshold_info({"profit_target_pct": 2.5, "stop_loss_pct": 1.0,
+                            "exit_margin_basis": "entry"},
+                           "iron_fly_monthly", series, d1, d2)
+    assert info == {"entry_margin": 1_000_000, "target_amount": 25_000,
+                    "stop_amount": 10_000, "threshold_basis": "entry"}
+
+    # ratio family: fractions ×100; always entry-frozen by construction
+    info = _threshold_info({"profit_target_pct": 0.025, "stop_loss_pct": 0.03},
+                           "hni_weekly", series, d1, d2)
+    assert info["target_amount"] == 25_000 and info["stop_amount"] == 30_000
+    assert info["threshold_basis"] == "entry"
+
+    # delta family without the param → historical re-base, labeled honestly
+    info = _threshold_info({"profit_target_pct": 2.5}, "delta_neutral_monthly", series, d1, d2)
+    assert info["threshold_basis"] == "current" and info["stop_amount"] is None
+
+    # unknowable → hidden, never guessed
+    assert _threshold_info(None, "iron_fly_monthly", series, d1, d2) is None
+    assert _threshold_info({"profit_target_pct": 2.5}, "iron_fly_monthly", [], d1, d2) is None

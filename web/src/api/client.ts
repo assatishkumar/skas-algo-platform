@@ -167,10 +167,12 @@ export const api = {
     request<CycleDetail>(`/runs/${runId}/cycles/${index}/detail`),
   // Cycle detail for an UNSAVED backtest preview — the report+trades are already in the
   // browser, so no run_id is needed (the saved-run version above uses the persisted run).
-  cycleDetailPreview: (report: unknown, trades: unknown[], index: number) =>
+  cycleDetailPreview: (report: unknown, trades: unknown[], index: number,
+                       params?: unknown, strategyId?: string) =>
     request<CycleDetail>(`/backtest/cycle-detail`, {
       method: "POST",
-      body: JSON.stringify({ report, trades, index }),
+      // params + strategy_id feed the absolute ₹ target/SL tile (entry-margin thresholds)
+      body: JSON.stringify({ report, trades, index, params, strategy_id: strategyId }),
     }),
   backtest: (body: BacktestRequest) =>
     request<BacktestResponse>("/backtest", {

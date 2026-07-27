@@ -390,8 +390,9 @@ function VixCell({ c }: { c: OptionCycle }) {
   );
 }
 
-function PositionsTable({ options, runId, trades }: {
+function PositionsTable({ options, runId, trades, cycleMeta }: {
   options: OptionsReportData; runId?: number; trades?: Trade[];
+  cycleMeta?: { params?: unknown; strategyId?: string };
 }) {
   const [reason, setReason] = useState<string>("ALL");
   // The cycle whose lifecycle popup is open (index into options.cycles), or null.
@@ -454,7 +455,8 @@ function PositionsTable({ options, runId, trades }: {
           runId={runId ?? undefined}
           // Unsaved backtest → feed the report+trades already in the browser (the backend needs
           // only options.cycles + margin_series, so a minimal {options} report is enough).
-          preview={runId == null ? { report: { options }, trades: trades ?? [] } : undefined}
+          preview={runId == null ? { report: { options }, trades: trades ?? [],
+            params: cycleMeta?.params, strategyId: cycleMeta?.strategyId } : undefined}
           onClose={() => setCycleIdx(null)}
         />
       )}
@@ -462,8 +464,9 @@ function PositionsTable({ options, runId, trades }: {
   );
 }
 
-export default function OptionsReport({ options, runId, trades }: {
+export default function OptionsReport({ options, runId, trades, cycleMeta }: {
   options: OptionsReportData; runId?: number; trades?: Trade[];
+  cycleMeta?: { params?: unknown; strategyId?: string };
 }) {
   const isCoveredCall = (options.campaigns?.length ?? 0) > 0;
   const isBasket = (options.basket_cycles?.length ?? 0) > 0;
@@ -484,7 +487,7 @@ export default function OptionsReport({ options, runId, trades }: {
         <BasketCyclesReport cycles={options.basket_cycles!} />
       ) : (
         <>
-          <PositionsTable options={options} runId={runId} trades={trades} />
+          <PositionsTable options={options} runId={runId} trades={trades} cycleMeta={cycleMeta} />
           <PremiumDecayChart options={options} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <ExitReasonDonut options={options} />

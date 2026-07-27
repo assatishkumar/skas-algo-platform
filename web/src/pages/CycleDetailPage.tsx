@@ -55,8 +55,16 @@ export function CycleDetail({ m, active, toggle, setActive, onClose }: {
   onClose?: () => void;   // when set → modal mode: breadcrumb becomes a close button, no routing
 }) {
   const geo = useMemo(() => computeGeometry(m), [m]);
-  const legInActive = (l: CycleDetailLeg) =>
-    !active || l.open_event === active || l.close_event === active;
+  // Tri-state per leg when an event is selected: touched by the event ("on"), simply HELD
+  // through it ("held" — the standing book, from the event's open_refs), or not in the book
+  // at that moment ("off"). Binary on/dim mixed the held book into the dimmed noise and made
+  // an ADD event look like the whole position was 5 legs smaller (owner, 2026-07-27).
+  const activeEv = active ? m.events.find((e) => e.id === active) : undefined;
+  const legState = (l: CycleDetailLeg): "on" | "held" | "off" => {
+    if (!active) return "on";
+    if (l.open_event === active || l.close_event === active) return "on";
+    return activeEv?.open_refs?.includes(l.ref) ? "held" : "off";
+  };
 
   // Whether the RUN is a deployment (→ breadcrumb to /live) vs a backtest (→ /runs). The
   // per-cycle `live` flag is NOT this: a CLOSED cycle on a live run is `live=false` yet still
@@ -112,6 +120,13 @@ export function CycleDetail({ m, active, toggle, setActive, onClose }: {
         <Kpi label="ADJUSTMENTS" value={`${m.n_rolls} roll${m.n_rolls === 1 ? "" : "s"}${m.n_hedges ? ` · ${m.n_hedges} hedge` : ""}`} cls="text-[var(--opt-text)]" small />
         <Kpi label="MAX MARGIN" value={m.max_margin != null ? formatInr(m.max_margin) : "—"} />
         <Kpi label="WORST EOD MTM" value={formatInr(m.worst_mtm)} cls="text-[var(--danger)]" />
+        {(m.target_amount != null || m.stop_amount != null) && (
+          <Kpi small
+            label={m.threshold_basis === "current" ? "TARGET / SL · AT ENTRY (RE-BASED LATER)"
+              : `TARGET / SL · OF ENTRY MARGIN${m.entry_margin != null ? ` ${formatInr(m.entry_margin)}` : ""}`}
+            value={`${m.target_amount != null ? `+${formatInr(m.target_amount)}` : "—"} / ${
+              m.stop_amount != null ? `−${formatInr(m.stop_amount)}` : "no SL"}`} />
+        )}
       </div>
 
       {/* lifecycle ladder */}
@@ -126,7 +141,7 @@ export function CycleDetail({ m, active, toggle, setActive, onClose }: {
             {active ? "✕ clear trace" : "nothing traced"}
           </span>
         </div>
-        <Ladder m={m} geo={geo} active={active} toggle={toggle} legInActive={legInActive} />
+        <Ladder m={m} geo={geo} active={active} toggle={toggle} legState={legState} />
         <MtmStrip m={m} geo={geo} />
         <div className="flex gap-[18px] mt-2.5 text-xs font-bold text-[var(--muted)] flex-wrap">
           <Legend swatch={<span className="inline-block w-[18px] h-2 rounded bg-[var(--opt-text)] align-middle mr-1.5" />}>sell CE</Legend>
@@ -140,7 +155,7 @@ export function CycleDetail({ m, active, toggle, setActive, onClose }: {
       {/* timeline + legs table */}
       <div className="grid gap-[18px] items-start" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(460px,1fr))" }}>
         <EventTimeline m={m} active={active} toggle={toggle} />
-        <LegsTable m={m} toggle={toggle} legInActive={legInActive} />
+        <LegsTable m={m} toggle={toggle} legState={legState} active={active} />
       </div>
     </div>
   );
@@ -175,9 +190,10 @@ function niceStep(range: number) {
 }
 
 // ---------------------------------------------------------------- ladder svg
-function Ladder({ m, geo, active, toggle, legInActive }: {
+function Ladder({ m, geo, active, toggle, legState }: {
   m: CycleDetail; geo: ReturnType<typeof computeGeometry>; active: string | null;
-  toggle: (id: string | null) => () => void; legInActive: (l: CycleDetailLeg) => boolean;
+  toggle: (id: string | null) => () => void;
+  legState: (l: CycleDetailLeg) => "on" | "held" | "off";
 }) {
   const { x, y, expX, gridStrikes } = geo;
   const evX: Record<string, number> = {};
@@ -226,7 +242,7 @@ function Ladder({ m, geo, active, toggle, legInActive }: {
         const x1 = x(l.open_ts), x2 = x(l.close_ts), yy = y(l.strike) + yOff[l.ref] - 5;
         const col = l.right === "CE" ? "var(--opt-text)" : "var(--pe)";
         const buy = l.side === "long";
-        const op = legInActive(l) ? 1 : 0.18;
+        const op = legState(l) === "on" ? 1 : legState(l) === "held" ? 0.62 : 0.18;
         return (
           <g key={l.ref} style={{ cursor: "pointer" }} onClick={toggle(l.open_event)} opacity={op}>
             <rect x={x1} y={yy} width={Math.max(x2 - x1, 3)} height={10} rx={5}
@@ -349,6 +365,12 @@ function EventTimeline({ m, active, toggle }: {
                     <span>spot {e.spot?.toLocaleString("en-IN") ?? "—"}</span>
                     <span>net Δ {dΔ(e.net_delta)}</span>
                     <span className={`ml-auto ${e.realized_so_far > 0 ? "text-[var(--pos)]" : ""}`}>realized so far {formatInr(e.realized_so_far)}</span>
+                    {e.unrealized_eod != null && e.kind !== "exit" && (
+                      <span title="open-book MTM at that day's EOD mark (not the event minute)"
+                        className={e.unrealized_eod > 0 ? "text-[var(--pos)]" : e.unrealized_eod < 0 ? "text-[var(--danger)]" : ""}>
+                        unrealized {formatInr(e.unrealized_eod)} <span className="opacity-60">EOD</span>
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -376,9 +398,10 @@ function EvLine({ tag, l, lotSize, realized }: { tag: string; l: CycleDetail["ev
 }
 
 // ---------------------------------------------------------------- legs table
-function LegsTable({ m, toggle, legInActive }: {
+function LegsTable({ m, toggle, legState, active }: {
   m: CycleDetail; toggle: (id: string | null) => () => void;
-  legInActive: (l: CycleDetailLeg) => boolean;
+  legState: (l: CycleDetailLeg) => "on" | "held" | "off";
+  active: string | null;
 }) {
   // Chronological by when the leg was OPENED (the timestamp is the source of truth — event
   // ids can repeat across a live campaign); shorts before the hedge within the same instant.
@@ -392,7 +415,9 @@ function LegsTable({ m, toggle, legInActive }: {
       <div className="bg-[var(--card)] border border-[var(--border)] rounded-[18px] overflow-x-auto">
         <div className="flex items-baseline gap-2.5 px-5 pt-[18px] pb-3.5">
           <span className="font-[700] text-[16px] font-['Space_Grotesk'] text-[var(--strong)]">Legs · {m.legs.length}</span>
-          <span className="text-[12.5px] text-[var(--faint)] font-semibold">opened / closed by event · Δ at open{m.lot_size ? ` · lot ${m.lot_size}` : ""}</span>
+          <span className="text-[12.5px] text-[var(--faint)] font-semibold">{active
+            ? "bright = this event · normal = held through it · dim = not in the book"
+            : `opened / closed by event · Δ at open${m.lot_size ? ` · lot ${m.lot_size}` : ""}`}</span>
         </div>
         <div className="grid gap-2.5 px-5 py-2.5 bg-[var(--stat)] border-y border-[var(--divider)] text-[10.5px] font-extrabold tracking-wider text-[var(--faint)]" style={{ gridTemplateColumns: cols }}>
           <span>SIDE</span><span>LEG · Δ</span><span>OPENED</span><span>CLOSED</span><span>ENTRY → EXIT</span><span className="text-right">DAYS</span><span className="text-right">P&L</span>
@@ -401,7 +426,13 @@ function LegsTable({ m, toggle, legInActive }: {
           const oc = l.open_event ? kindColor(m.events.find((e) => e.id === l.open_event)?.kind ?? "roll") : { bg: "var(--chip)", fg: "var(--chip-text)" };
           const cc = l.close_event ? kindColor(m.events.find((e) => e.id === l.close_event)?.kind ?? "roll") : { bg: "var(--chip)", fg: "var(--chip-text)" };
           return (
-            <div key={l.ref} onClick={toggle(l.open_event)} className="grid gap-2.5 items-center px-5 py-[11px] border-b border-[var(--divider)] cursor-pointer" style={{ gridTemplateColumns: cols, opacity: legInActive(l) ? 1 : 0.18 }}>
+            <div key={l.ref} onClick={toggle(l.open_event)} className="grid gap-2.5 items-center px-5 py-[11px] border-b border-[var(--divider)] cursor-pointer" style={{
+              gridTemplateColumns: cols,
+              // tri-state: touched by the selected event = bright; held through it = normal
+              // (the standing book — visibly distinct from the dimmed not-in-book legs)
+              opacity: legState(l) === "on" ? 1 : legState(l) === "held" ? 0.62 : 0.15,
+              backgroundColor: active && legState(l) === "on" ? "var(--stat)" : undefined,
+            }}>
               <span className="text-center py-[2.5px] rounded-md font-extrabold text-[10px]" style={{ backgroundColor: l.side === "long" ? "var(--ok-bg)" : "var(--danger-bg)", color: l.side === "long" ? "var(--ok-text)" : "var(--danger)" }}>{l.side === "long" ? "BUY" : "SELL"}</span>
               <span className="font-[700] text-[13.5px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">· {lotsLabel(l.units, m.lot_size)} · Δ{l.open_delta != null ? (l.open_delta >= 0 ? "+" : "−") + Math.abs(l.open_delta).toFixed(2) : "—"}</span></span>
               <EvBadge id={l.open_event} date={l.open_ts} c={oc} />
@@ -458,6 +489,9 @@ function eventTitle(e: CycleDetailEvent) {
   if (e.kind === "exit") return "Exit — closed all legs";
   const op = e.opened[0], cl = e.closed[0];
   if (op && cl) return `Roll — ${op.right === "CE" ? "call" : "put"} side ${op.strike < cl.strike ? "down" : "up"}`;
+  // opened with NOTHING closed = an ADD (post-iron-fly untested-side short) — never call it a roll
+  if (op) return `Adjustment — new ${op.right} ${op.strike.toLocaleString("en-IN")} short`;
+  if (cl) return "Partial close";
   return "Roll";
 }
 function expiryLabel(iso: string) {
@@ -470,7 +504,8 @@ function expiryLabel(iso: string) {
  *  full page, just framed and Esc/backdrop-dismissable. */
 export function CycleDetailModal({ runId, preview, index, onClose }: {
   runId?: number;
-  preview?: { report: unknown; trades: unknown[] };   // for an unsaved backtest (no run_id)
+  // for an unsaved backtest (no run_id); params/strategyId power the ₹ target/SL tile
+  preview?: { report: unknown; trades: unknown[]; params?: unknown; strategyId?: string };
   index: number;
   onClose: () => void;
 }) {
@@ -481,7 +516,8 @@ export function CycleDetailModal({ runId, preview, index, onClose }: {
     queryFn: () =>
       runId != null
         ? api.cycleDetail(runId, index)
-        : api.cycleDetailPreview(preview!.report, preview!.trades, index),
+        : api.cycleDetailPreview(preview!.report, preview!.trades, index,
+                                 preview!.params, preview!.strategyId),
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };

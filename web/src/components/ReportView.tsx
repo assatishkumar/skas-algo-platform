@@ -322,12 +322,15 @@ export default function ReportView({
   onDownloadCsv,
   runId,
   defaultBenchmark,
+  cycleMeta,
 }: {
   report: Report;
   trades: Trade[];
   onDownloadCsv?: () => void;
   runId?: number;
   defaultBenchmark?: string;
+  /** unsaved-preview only: the request's params/strategy_id — powers the cycle popup's ₹ tile */
+  cycleMeta?: { params?: unknown; strategyId?: string };
 }) {
   const m = report.metrics ?? {};   // a not-yet-finalised run can carry {} — never crash on it
   const netMonthly = m["Avg Monthly Net P&L (Post-Tax)"] ?? 0;
@@ -400,7 +403,8 @@ export default function ReportView({
           )}
         </div>
       )}
-      {report.options && <OptionsReport options={report.options} runId={runId} trades={trades} />}
+      {report.options && <OptionsReport options={report.options} runId={runId} trades={trades}
+        cycleMeta={cycleMeta} />}
       <EquityChart report={report} runId={runId} defaultBenchmark={defaultBenchmark} />
       <YearlyTable report={report} />
       <MonthlyGrid

@@ -489,3 +489,31 @@ def test_intraday_backtest_no_coverage_is_422(api_client):
             "capital": 1_000_000, "params": {}, "persist": False}
     r = api_client.post("/api/v1/backtest/intraday", json=body)
     assert r.status_code == 422 and "no captured days" in r.json()["detail"]
+
+
+def test_backfill_period_tables_derives_missing_tables():
+    """Runs #215-#217 (replays saved before 2026-07-17) stored reports WITHOUT the
+    yearly/monthly tables; the equity curve was always there. get_run now derives them
+    at read time — no re-run needed — and never mutates the stored report dict."""
+    from types import SimpleNamespace
+
+    from skas_algo.api.routes.backtest import _backfill_period_tables
+
+    curve = [
+        {"date": "2026-01-10", "equity": 1_000_000.0},
+        {"date": "2026-01-31", "equity": 1_050_000.0},
+        {"date": "2026-02-15", "equity": 1_020_000.0},
+    ]
+    stored = {"metrics": {}, "equity_curve": curve}
+    out = _backfill_period_tables(stored, SimpleNamespace(capital=1_000_000.0))
+    assert out is not stored and "yearly" not in stored          # stored row untouched
+    assert out["yearly"]["2026"]["Return (Abs)"] == 20_000.0
+    assert out["monthly_profit"]["2026"] == {"1": 50_000.0, "2": -30_000.0}
+    assert out["monthly_equity"]["2026"]["2"] == 1_020_000.0
+
+    # A report that already has the tables (EOD engine / post-fix replay) passes through.
+    has = {"equity_curve": curve, "yearly": {"2026": {}}}
+    assert _backfill_period_tables(has, None) is has
+    # No curve / empty report → passthrough, never raises.
+    assert _backfill_period_tables({"metrics": {}}, None) == {"metrics": {}}
+    assert _backfill_period_tables(None, None) is None
