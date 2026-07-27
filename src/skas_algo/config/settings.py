@@ -87,7 +87,10 @@ class Settings(BaseSettings):
     # Real-order safety rails (LiveBroker pre-flight; see brokers/live_broker.py).
     live_max_order_notional: float = 500_000.0  # SKAS_LIVE_MAX_ORDER_NOTIONAL
     live_max_orders_per_day: int = 20  # SKAS_LIVE_MAX_ORDERS_PER_DAY
-    live_order_timeout_s: float = 10.0  # SKAS_LIVE_ORDER_TIMEOUT_S (LIMIT→MARKET)
+    live_order_timeout_s: float = 10.0  # SKAS_LIVE_ORDER_TIMEOUT_S (LIMIT→escalation)
+    # Escalation crosses the touch by this % as a PROTECTED LIMIT (Zerodha rejects naked
+    # MARKET option orders via API — the 2026-07-27 square-off cancel/halt).
+    live_order_protect_pct: float = 3.0  # SKAS_LIVE_ORDER_PROTECT_PCT
     # Resume REAL-order management for a LIVE run after a restart/recovery. Default False =
     # fail-safe: a recovered live run keeps PaperBroker (a restart PAUSES real orders until
     # the owner re-activates). When True, recovery re-injects the LiveBroker — but the 4-key
@@ -137,6 +140,13 @@ class Settings(BaseSettings):
     #   rclone copy {path} b2:my-bucket/skas-backups/
     #   aws s3 cp {path} s3://my-bucket/skas-backups/
     backup_remote_cmd: str | None = None  # SKAS_BACKUP_REMOTE_CMD
+    # Native DIRECTORY destination (e.g. a Google Drive for Desktop folder) with per-series
+    # retention — the retention story backup_remote_cmd can't have (its destination is an
+    # opaque shell command). Every box that lands snapshots in this folder gets its own
+    # series (the VPS ships via scp prefixed ``vps-``); each series is pruned to the last
+    # ``backup_offbox_keep`` (owner decision 2026-07-27: 30). 0 = keep everything.
+    backup_offbox_dir: str | None = None  # SKAS_BACKUP_OFFBOX_DIR
+    backup_offbox_keep: int = 30  # SKAS_BACKUP_OFFBOX_KEEP (per snapshot series)
 
     # --- Logging ---
     log_level: str = "INFO"

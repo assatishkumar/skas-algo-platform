@@ -175,6 +175,43 @@ def test_backup_no_offbox_when_unconfigured(tmp_path, monkeypatch):
     assert backup_db(database_url=f"sqlite:///{db}", keep=3, offbox=True) is not None  # no-op push
 
 
+def test_backup_offbox_dir_copies_and_prunes_per_series(tmp_path, monkeypatch):
+    """The native directory destination (Google Drive folder): the nightly snapshot is
+    copied in, then EACH series is pruned to backup_offbox_keep — per-series, so the
+    VPS's scp'd ``vps-*`` snapshots get their own retention instead of competing with
+    the Mac's (owner decision 2026-07-27: keep last 30; here keep=2 for brevity)."""
+    from skas_algo.config import get_settings
+    from skas_algo.services.backup import backup_db
+
+    db = tmp_path / "s.db"
+    _make_sqlite(db)
+    offbox = tmp_path / "drive"
+    offbox.mkdir()
+    # Pre-existing history: 3 old Mac-series snapshots + 2 VPS-series ones.
+    for stamp in ("20260701-163000-000001", "20260702-163000-000001", "20260703-163000-000001"):
+        (offbox / f"s-{stamp}.db").write_bytes(b"old")
+    for stamp in ("20260701-163000-000002", "20260702-163000-000002"):
+        (offbox / f"vps-s-{stamp}.db").write_bytes(b"vps")
+    (offbox / "not-a-snapshot.db").write_bytes(b"keep me")  # no stamp → never touched
+
+    monkeypatch.setattr(get_settings(), "backup_remote_cmd", None)
+    monkeypatch.setattr(get_settings(), "backup_offbox_dir", str(offbox))
+    monkeypatch.setattr(get_settings(), "backup_offbox_keep", 2)
+
+    p = backup_db(database_url=f"sqlite:///{db}", keep=3, offbox=True)
+    assert p is not None
+    mac = sorted(f.name for f in offbox.glob("s-*.db"))
+    assert len(mac) == 2 and mac[-1] == p.name          # newest 2 kept, fresh one included
+    assert len(list(offbox.glob("vps-s-*.db"))) == 2    # other series untouched by our prune
+    assert (offbox / "not-a-snapshot.db").exists()      # non-snapshot .db never pruned
+    assert not list(offbox.glob("*.tmp"))               # tmp+rename left nothing behind
+
+    # keep=0 → append-only (the pre-2026-07-27 behaviour).
+    monkeypatch.setattr(get_settings(), "backup_offbox_keep", 0)
+    backup_db(database_url=f"sqlite:///{db}", keep=3, offbox=True)
+    assert len(list(offbox.glob("s-*.db"))) == 3        # 2 kept + 1 new, nothing pruned
+
+
 # --- Part 3: daily background cache refresh + quiet indication ---
 
 def test_daily_refresh_symbols_indices_plus_equity():

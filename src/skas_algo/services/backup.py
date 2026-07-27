@@ -16,6 +16,7 @@ Postgres URLs are skipped (managed backups belong to the DB server).
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 import sqlite3
 import subprocess
@@ -73,6 +74,7 @@ def backup_db(database_url: str | None = None, keep: int | None = None,
         logger.info("db backup written: %s", dest.name)
         if offbox:
             _push_offbox(dest)
+            _copy_offbox_dir(dest)
         return dest
     except Exception:  # pragma: no cover - backups are best-effort
         logger.exception("db backup failed")
@@ -86,6 +88,53 @@ def _prune(backups: Path, stem: str, keep: int) -> None:
             old.unlink()
         except OSError:  # pragma: no cover
             pass
+
+
+# Snapshot filenames are ``<series>-YYYYMMDD-HHMMSS-ffffff.db``; the series prefix is
+# per-box (the Mac's own ``skas_algo``, the VPS's scp'd ``vps-skas_algo``, …).
+_STAMP_RE = re.compile(r"^(?P<series>.+)-\d{8}-\d{6}-\d{6}\.db$")
+
+
+def _copy_offbox_dir(snapshot: Path) -> None:
+    """Native off-box copy + retention for a DIRECTORY destination (a Google Drive for
+    Desktop folder — the Drive app ships it to the cloud). Copies tmp+rename so the Drive
+    uploader never sees a half-written file, then prunes EVERY snapshot series in the
+    folder to the last ``backup_offbox_keep`` — per-series, so the VPS snapshots the box
+    scp's into the same folder (``vps-`` prefix) get their own retention instead of
+    competing with ours. Best-effort like the rest of this module."""
+    import shutil
+
+    settings = get_settings()
+    if not settings.backup_offbox_dir:
+        return
+    try:
+        dest_dir = Path(settings.backup_offbox_dir).expanduser()
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        tmp = dest_dir / (snapshot.name + ".tmp")
+        shutil.copy2(snapshot, tmp)
+        tmp.rename(dest_dir / snapshot.name)
+        logger.info("off-box dir backup ok: %s", snapshot.name)
+        _prune_offbox_dir(dest_dir, int(settings.backup_offbox_keep))
+    except Exception as exc:  # pragma: no cover - same surfacing as the cmd path
+        _alert_offbox_failure(snapshot.name, str(exc))
+
+
+def _prune_offbox_dir(dest_dir: Path, keep: int) -> None:
+    """Prune each snapshot SERIES in ``dest_dir`` to its newest ``keep`` files.
+    ``keep <= 0`` → keep everything (the pre-2026-07-27 append-only behaviour)."""
+    if keep <= 0:
+        return
+    series: dict[str, list[Path]] = {}
+    for f in dest_dir.glob("*.db"):
+        m = _STAMP_RE.match(f.name)
+        if m:  # non-snapshot .db files are never touched
+            series.setdefault(m.group("series"), []).append(f)
+    for snaps in series.values():
+        for old in sorted(snaps)[:-keep]:  # timestamped names sort chronologically
+            try:
+                old.unlink()
+            except OSError:  # pragma: no cover
+                pass
 
 
 def _push_offbox(snapshot: Path) -> None:
