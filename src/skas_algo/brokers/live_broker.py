@@ -29,12 +29,13 @@ problem, and a WARNING notification flags it.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time as _time
 import uuid
 from datetime import date, datetime
 
-from skas_algo.db.enums import OrderType
+from skas_algo.db.enums import OrderSide, OrderType
 from skas_algo.notify import Alert, AlertLevel, build_notifier
 
 from .base import BrokerOrder, Fill
@@ -96,6 +97,7 @@ class LiveBroker:
         max_orders_per_day: int = 20,
         order_timeout_s: float = 10.0,
         poll_interval_s: float = 2.0,
+        protect_pct: float = 3.0,           # escalation crosses the touch by this %
         notifier=None,
         clock=None,                          # injectable for tests (datetime-like)
     ):
@@ -107,6 +109,7 @@ class LiveBroker:
         self.max_orders_per_day = int(max_orders_per_day)
         self.order_timeout_s = float(order_timeout_s)
         self.poll_interval_s = float(poll_interval_s)
+        self.protect_pct = float(protect_pct)
         self.notifier = notifier or build_notifier()
         self._clock = clock or datetime
         self._orders_day: date | None = None
@@ -175,12 +178,32 @@ class LiveBroker:
 
         st = self._await_terminal(broker_id, deadline_s=self.order_timeout_s)
         if st["status"] not in _TERMINAL and req.order_type is OrderType.LIMIT:
-            # Escalate: unfilled at the touch → take the market.
+            # Escalate: unfilled at the touch → re-price to a PROTECTED crossing LIMIT
+            # (touch re-read, pushed protect_pct THROUGH the spread). NOT a MARKET modify:
+            # Zerodha rejects naked MARKET orders on options via API ("Market orders
+            # without market protection are not allowed") — on 2026-07-27 that rejection
+            # left run 10's PE square-off resting at a stale touch until it CANCELLED and
+            # halted the run. A limit through the touch is the same thing a market order
+            # with protection does, and is accepted.
+            fresh = None
+            if self.touch_fn is not None:
+                try:
+                    fresh = self.touch_fn(order.symbol, order.side)
+                except Exception:  # pragma: no cover - no book → fall back below
+                    fresh = None
+            base = float(fresh or touch or 0.0)
             try:
                 self._governor.wait()
-                self.adapter.modify_order(broker_id, order_type=OrderType.MARKET)
+                if base > 0:
+                    self.adapter.modify_order(
+                        broker_id, order_type=OrderType.LIMIT,
+                        price=self._protected_price(base, order.side))
+                else:
+                    # no price basis at all (book vanished) — MARKET is the only lever
+                    # left; equities accept it, and an option order always had a touch.
+                    self.adapter.modify_order(broker_id, order_type=OrderType.MARKET)
             except Exception as exc:  # pragma: no cover - modify raced a fill
-                logger.warning("modify→MARKET failed for %s: %s", broker_id, exc)
+                logger.warning("escalation modify failed for %s: %s", broker_id, exc)
             st = self._await_terminal(broker_id, deadline_s=self.order_timeout_s)
 
         if st["status"] == "COMPLETE":
@@ -211,6 +234,16 @@ class LiveBroker:
                      f"{order.side.value} {order.quantity} {order.symbol}: {detail}")
         raise OrderExecutionError(
             f"{order.side.value} {order.quantity} {order.symbol} → {detail}")
+
+    def _protected_price(self, touch: float, side) -> float:
+        """The escalation limit: cross the touch by ``protect_pct`` — BUY pays up, SELL
+        gives way — snapped OUTWARD to the ₹0.05 tick so the price stays marketable."""
+        frac = self.protect_pct / 100.0
+        mult = 1 + frac if side is OrderSide.BUY else 1 - frac
+        raw = touch * mult
+        ticks = raw / 0.05
+        snapped = (math.ceil(ticks) if side is OrderSide.BUY else math.floor(ticks)) * 0.05
+        return max(0.05, round(snapped, 2))
 
     def _await_terminal(self, broker_id: str, deadline_s: float) -> dict:
         deadline = _time.monotonic() + deadline_s

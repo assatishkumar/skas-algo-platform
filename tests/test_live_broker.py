@@ -94,12 +94,28 @@ def test_limit_at_touch_fills():
     assert a.modified == []  # no escalation needed
 
 
-def test_timeout_escalates_to_market_then_fills():
+def test_timeout_escalates_to_protected_limit_then_fills():
+    """Zerodha rejects naked MARKET option orders via API ("Market orders without market
+    protection are not allowed") — the 2026-07-27 square-off cancel/halt. Escalation now
+    re-prices to a LIMIT through the touch by protect_pct (default 3%), tick-snapped
+    outward: SELL gives way (100 → 97.00), BUY pays up (100 → 103.00). Never MARKET
+    while a touch exists."""
     a = FakeAdapter(initial=PENDING, after_modify=COMPLETE)
     lb = make(a)
     fill = lb.execute(BrokerOrder("NIFTY|2026-07-07|24500|CE", OrderSide.SELL, 65))
     assert fill.price == 101.5
-    assert a.modified and a.modified[0][1] is OrderType.MARKET
+    assert a.modified == [("KITE-1", OrderType.LIMIT, 97.0)]
+
+    a2 = FakeAdapter(initial=PENDING, after_modify=COMPLETE)
+    lb2 = make(a2)
+    lb2.execute(BrokerOrder("NIFTY|2026-07-07|24500|CE", OrderSide.BUY, 65))
+    assert a2.modified == [("KITE-1", OrderType.LIMIT, 103.0)]
+
+    # non-tick touch snaps OUTWARD (stays marketable): BUY 102.45 ×1.03 = 105.5235 → 105.55
+    a3 = FakeAdapter(initial=PENDING, after_modify=COMPLETE)
+    lb3 = make(a3, touch_fn=lambda s, side: 102.45)
+    lb3.execute(BrokerOrder("NIFTY|2026-07-07|24500|CE", OrderSide.BUY, 65))
+    assert a3.modified == [("KITE-1", OrderType.LIMIT, 105.55)]
 
 
 def test_rejection_raises_order_execution_error():

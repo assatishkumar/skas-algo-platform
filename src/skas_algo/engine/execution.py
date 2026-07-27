@@ -134,10 +134,7 @@ class SliceExecutor:
     def decide_and_execute(self, ts: date | datetime, strategy, ctx: AlgoContext) -> list[dict]:
         """Run the strategy for this slice, resolve overrides, execute in order."""
         lots_at_start = {s: len(self.portfolio.lots(s)) for s in self.portfolio.lot_symbols()}
-        events: list[dict] = []
-        for action in self.resolver.resolve(strategy.on_slice(ctx), ctx):
-            events.extend(self._execute(ts, action, lots_at_start))
-        return self._charge(events)
+        return self._run(ts, self.resolver.resolve(strategy.on_slice(ctx), ctx), lots_at_start)
 
     def execute_actions(self, ts: date | datetime, actions: list) -> list[dict]:
         """Execute pre-resolved actions directly (flatten / manual intervention).
@@ -147,9 +144,24 @@ class SliceExecutor:
         and F&O charges go through the exact same path as a normal slice.
         """
         lots_at_start = {s: len(self.portfolio.lots(s)) for s in self.portfolio.lot_symbols()}
+        return self._run(ts, actions, lots_at_start)
+
+    def _run(self, ts, actions, lots_at_start) -> list[dict]:
+        """Execute actions in order, NEVER losing the events of legs that already filled.
+
+        A REAL order can fail mid-list (LiveBroker raise — sim brokers never raise, so the
+        backtest path is byte-identical). The legs that DID fill are already in the
+        portfolio; discarding their trade events desynced the trade log from the book on
+        2026-07-27 (run 10's CE cover vanished when the PE cover was rejected → realized
+        overstated by its loss, cycle stuck "open"). Attach the charged partial events to
+        the exception so the caller persists them before halting."""
         events: list[dict] = []
-        for action in actions:
-            events.extend(self._execute(ts, action, lots_at_start))
+        try:
+            for action in actions:
+                events.extend(self._execute(ts, action, lots_at_start))
+        except Exception as exc:
+            exc.partial_events = self._charge(events)  # type: ignore[attr-defined]
+            raise
         return self._charge(events)
 
     # ------------------------------------------------------------ internals

@@ -205,3 +205,41 @@ def test_market_view_equity_loader_fallback():
         raise AssertionError("expected KeyError without equity_loader")
     except KeyError:
         pass
+
+
+def test_partial_events_survive_a_mid_list_order_failure():
+    """2026-07-27 run-10 incident: the CE cover FILLED, then the PE cover's real order
+    failed — the raise discarded the CE's trade event, desyncing the trade log from the
+    book (realized overstated, cycle stuck open). The executor must attach the already-
+    charged partial events to the exception so the manager can persist them."""
+    import pytest
+
+    class _SecondFails(_StubBroker):
+        def __init__(self, prices):
+            super().__init__(prices)
+            self.calls = 0
+
+        def execute(self, order):
+            self.calls += 1
+            if self.calls >= 2:
+                raise RuntimeError("BUY 195 → CANCELLED")   # LiveBroker's OrderExecutionError shape
+            return super().execute(order)
+
+    ex = SliceExecutor(Portfolio(cash=2_000_000), StopBook(), OverrideResolver(),
+                       _SecondFails({CE: 100.0, PE: 50.0}))
+    # open two shorts (both fill: fresh broker) …
+    ex.broker.calls = -1  # allow 2 fills for the setup
+    ex.execute_actions(EXPIRY, [OpenShort(CE, units=75, multiplier=1),
+                                OpenShort(PE, units=75, multiplier=1)])
+    ce_lot, pe_lot = ex.portfolio.lots(CE)[0], ex.portfolio.lots(PE)[0]
+    # … then square off: CE cover fills, PE cover raises mid-list.
+    ex.broker.calls = 0
+    ex.broker.prices[CE] = 40.0
+    with pytest.raises(RuntimeError) as ei:
+        ex.execute_actions(EXPIRY, [CloseShort(CE, ce_lot.id), CloseShort(PE, pe_lot.id)])
+    partial = getattr(ei.value, "partial_events", None)
+    assert partial and len(partial) == 1
+    assert partial[0]["action"] == "COVER" and partial[0]["ticker"] == CE
+    assert partial[0]["profit"] == (100 - 40) * 75      # the filled leg's realized, preserved
+    assert ex.portfolio.lots(CE) == []                   # book closed it …
+    assert len(ex.portfolio.lots(PE)) == 1               # … the failed leg still open

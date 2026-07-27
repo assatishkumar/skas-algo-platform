@@ -803,7 +803,10 @@ class LiveRun:
                 )
             except Exception:  # pragma: no cover
                 pass
-            events = []
+            # The legs that DID fill before the failure — persist their trade events, or
+            # the log desyncs from the book (2026-07-27: run 10's filled CE cover vanished
+            # → realized overstated by its loss, cycle stuck "open").
+            events = list(getattr(exc, "partial_events", []) or [])
         self._tag_underlying_spot(events)
         snap = self.snapshot()  # wrapper: real margin override + greeks + target/stop, etc.
         with session_scope() as db:
@@ -824,13 +827,30 @@ class LiveRun:
 
     def flatten(self) -> list[dict]:
         """Exit-all: close every open leg now; persist trades + positions; broadcast."""
-        events = self.session.flatten(datetime.now(IST))
-        self._after_manual(events)
-        return events
+        return self._manual_guarded(lambda: self.session.flatten(datetime.now(IST)))
 
     def manual_order(self, *, closes=None, opens=None) -> list[dict]:
         """Option-aware intervention: close selected legs/lots and/or open new legs now."""
-        events = self.session.manual_order(datetime.now(IST), closes=closes, opens=opens)
+        return self._manual_guarded(
+            lambda: self.session.manual_order(datetime.now(IST), closes=closes, opens=opens)
+        )
+
+    def _manual_guarded(self, fn) -> list[dict]:
+        """Run a manual action; if a REAL order fails mid-way, persist the legs that DID
+        fill, halt the run (order_error), and re-raise — the same book-vs-log guarantee
+        run_decision has. Before this a failed flatten leg 500'd the route and silently
+        dropped the filled legs' trade events."""
+        from skas_algo.brokers.live_broker import OrderExecutionError
+
+        try:
+            events = fn()
+        except OrderExecutionError as exc:
+            self.order_error = str(exc)
+            logger.error("run %s halted on manual-order failure: %s", self.run_id, exc)
+            partial = list(getattr(exc, "partial_events", []) or [])
+            if partial:
+                self._after_manual(partial)
+            raise
         self._after_manual(events)
         return events
 
@@ -1057,6 +1077,7 @@ class LiveRunManager:
             max_order_notional=settings.live_max_order_notional,
             max_orders_per_day=settings.live_max_orders_per_day,
             order_timeout_s=settings.live_order_timeout_s,
+            protect_pct=settings.live_order_protect_pct,
         )
         logger.warning(
             "REAL-ORDER broker injected for %s (account %s)", config.name, config.broker_account_id

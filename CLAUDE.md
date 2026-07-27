@@ -16,7 +16,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 
 ## 1. This is a real, live trading system with real money
 - **The real-order path is LIVE-CAPABLE (Phase B, 2026-07).** `brokers/live_broker.py::LiveBroker`
-  is the ONLY code that places real orders (LIMIT-at-touch → 10s → MARKET escalation, via
+  is the ONLY code that places real orders (LIMIT-at-touch → 10s → PROTECTED-LIMIT escalation
+  — re-priced 3% through the fresh touch, `SKAS_LIVE_ORDER_PROTECT_PCT`; NEVER a naked MARKET
+  modify: Zerodha's API rejects those on options ("market orders without market protection"),
+  which cancelled a straddle square-off leg and halted run 10 on 2026-07-27 — via
   `ZerodhaAdapter.place_order/modify/status/cancel`, all behind `_ensure_armed`). It is injected by
   `live/manager._maybe_inject_live_broker` ONLY when ALL of: mode=="LIVE" ∧ account.armed ∧
   `SKAS_LIVE_TRADING_ENABLED` ∧ adapter has the full order surface — every other cell keeps
@@ -167,7 +170,7 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   2026-07-03 on the owner's account. quote_source ∈ {cache, zerodha, dhan} — the
   broker sources are gated by `live/quotes.is_broker_source`, and the source must match
   `account.broker`. **No broker places real orders yet** — even LIVE mode fills via
-  PaperBroker; the real order path (LiveBroker, LIMIT-at-touch→market, double-gated) is the
+  PaperBroker; the real order path (LiveBroker, LIMIT-at-touch→protected-limit, double-gated) is the
   planned Phase B and the only place order code may ever be added.
 - **21_ema_momentum** (`strategies/ema21_momentum.py`, NIFTY): daily EMA(21)-on-high/low
   channel; fresh close beyond the band at 15:20 → OTM 100-pt credit spread (bull put /
@@ -234,9 +237,16 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   LTP matches the rich side, hard-capped at the other strike (straddle max, never
   crossing); straddle → breakeven hedges (K ± combined) in the SAME decision → ironfly.
   margin_base tracks the BROKER basket margin ONLY (manager `set_broker_margin` push;
-  thresholds WAIT while "pending"; re-frozen after every roll/hedge — so once it's an iron fly
-  the 2.5% target is of the fly's much SMALLER margin, not the straddle's); stop param default
-  OFF; recurring monthly (done_expiry gates same-month re-entry). Deploy-only + broker source
+  thresholds WAIT while "pending"). **Two-margin scheme (owner 2026-07-27):**
+  `exit_margin_basis` picks the ₹-threshold anchor — ctor default `"current"` (§1: re-frozen
+  after every roll/hedge/naked-add, so an iron fly targets 2.5% of the fly's SMALLER margin and
+  the ₹1L→₹2.5L naked-add SPAN jump re-bases the stop) vs `"entry"` (FORM+deploy default:
+  frozen ONCE at cycle entry → absolute ₹ target/stop fixed from day one; cleared in `_exit_all`
+  so the next cycle freezes its own; the dynamic push still feeds margin_used/sizing/reports —
+  the "strategy margin"). `"entry"` + `margin_per_lot` keyed to the real broker entry margin
+  makes replay exit ₹ == live exit ₹ exactly (the replay's model margin is shorts-only,
+  wings-blind, linear-in-short-count — fine for reporting, wrong for thresholds). Stop param
+  default OFF; recurring monthly (done_expiry gates same-month re-entry). Deploy-only + broker source
   required (live-chain delta solve); NO backtest — BANKNIFTY chain history ≈ 2 months in cache.
 - **Post-iron-fly adjustment (shared, 2026-07)** — on the BASE class, GATED by `ironfly_adjust`
   (**default False in delta_neutral_monthly** per §1 — a running deploy is unchanged on recovery;
@@ -320,7 +330,9 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   day's P&L sign; no-op on expiry day so settlement intrinsic stays exact. `_to_report`
   also emits `yearly`/`monthly_profit`/`monthly_equity` from the equity curve (the EOD
   contract keys → ReportView's existing tables just render; runs saved before 2026-07-17
-  lack them — re-run).
+  stored reports without them — `get_run` now derives the missing tables from the stored
+  curve at READ time, `_backfill_period_tables` in `api/routes/backtest.py`, never
+  mutating the row).
 - **Two-cadence model + ALL index options on the store (2026-07-18, owner design):**
   every options strategy samples its PROFIT/ADJUST decision on `profit_check` and its
   STOP/EXIT on `stop_check` (tick/1..60min/eod@`eod_time`) via `ExitCadenceMixin`
@@ -350,7 +362,7 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   a stock (default ITC), hold ~60s, SELL, then the run **stops itself** (`stop_requested` →
   `manager._maybe_self_stop`, honored on the EVENT LOOP side only — `manager.stop` cancels
   the loop task — and hard-guarded on a FLAT book: a run holding positions never self-stops).
-  One cycle exercises place → poll → LIMIT-at-touch→MARKET escalation (the wide OTM spread
+  One cycle exercises place → poll → LIMIT-at-touch→protected-limit escalation (the wide OTM spread
   triggers it naturally) → fill → book-sync → reconcile (+ the per-recon Telegram) → exit.
   Sizes are hard-coded 1 lot / 1 share (not params). Deploy-only, no backtest (paper fills
   always "work"); `POST /trade/smoke-test/deploy`; one class, two deploy modes (DERIV option
