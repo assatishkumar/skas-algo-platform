@@ -111,6 +111,14 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
         # (the historical decision-entry basis, §1 default) or "total" = open MTM + banked realized
         # (rolls + naked-short adjustments), i.e. the WHOLE cycle's realized+unrealized P&L.
         pnl_basis: str = "open_legs",
+        # Which MARGIN the %-thresholds are ₹-anchored to (owner design 2026-07-27, the
+        # "two-margin scheme"): "current" = re-freeze after every structural change (the
+        # historical behaviour, §1 default — the iron-fly targets 2.5% of the fly's smaller
+        # margin, and a naked add re-bases to the bigger one) or "entry" = freeze ONCE at
+        # cycle entry → absolute ₹ target/stop fixed from day one; the dynamic broker/model
+        # margin keeps flowing to margin_used / sizing / reports (the "strategy margin"),
+        # it just never moves the exit thresholds. Forms/deploys default to "entry".
+        exit_margin_basis: str = "current",
         eod_time: str = "15:20",
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
@@ -149,6 +157,7 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
         self.trail_step_pct = float(trail_step_pct)
         self.trail_mode = str(trail_mode or "ratchet")
         self.pnl_basis = str(pnl_basis or "open_legs")
+        self.exit_margin_basis = str(exit_margin_basis or "current")
         self.eod_time = str(eod_time)
         self.min_leg_oi = int(min_leg_oi)
         self.initial_capital = initial_capital
@@ -375,7 +384,18 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
         """Mark the rupee base for target/stop as awaiting the BROKER basket margin (the
         only base we track — owner rule; the model reads ~2× real). The manager pushes
         the number via set_broker_margin within ~a tick of the fill; _manage freezes it
-        then. spot/ctx kept for signature stability."""
+        then. spot/ctx kept for signature stability.
+
+        Under ``exit_margin_basis="entry"`` the base freezes ONCE per cycle — the ENTRY
+        margin (owner 2026-07-27: absolute ₹ thresholds fixed at entry; the naked-add's
+        ₹1L→₹2.5L SPAN jump must not move the target/stop mid-cycle) — so the six
+        structural-change call sites re-arm only while no broker base is frozen yet."""
+        if (
+            self.exit_margin_basis == "entry"
+            and self.margin_source == "broker"
+            and self.margin_base > 0
+        ):
+            return  # entry base already frozen for this cycle — hold it
         self._refreeze = True
         if self.margin_source != "broker":
             self.margin_source = "pending"
@@ -936,6 +956,11 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
         self.adjust_realized = 0.0
         self.realized_rolls = 0.0
         self.peak_pct = 0.0
+        if self.exit_margin_basis == "entry":
+            # next cycle freezes ITS OWN entry margin (the freeze-once gate would
+            # otherwise hold this cycle's base forever)
+            self.margin_base = 0.0
+            self.margin_source = ""
         return sigs
 
     # ------------------------------------------------------------ snapshot hooks
@@ -949,19 +974,22 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
 
     def exit_rules(self) -> list[str]:
         basis = "realized+unrealized P&L" if self.pnl_basis == "total" else "open-leg MTM"
+        # "entry margin" = frozen once at cycle entry (absolute ₹ thresholds);
+        # "broker margin" = re-frozen after every structural change (historical).
+        mlabel = "entry margin" if self.exit_margin_basis == "entry" else "broker margin"
         rules = [
-            f"Book profit at +{self.target_pct:g}% of broker margin, on {basis} "
+            f"Book profit at +{self.target_pct:g}% of {mlabel}, on {basis} "
             f"({self._cadence_phrase('profit')})"
         ]
         if self.stop_pct > 0:
             rules.append(
-                f"Stop out at −{self.stop_pct:g}% of broker margin, on {basis} "
+                f"Stop out at −{self.stop_pct:g}% of {mlabel}, on {basis} "
                 f"({self._cadence_phrase('stop')})"
             )
         if self.trail_trigger_pct > 0 and self.trail_step_pct > 0:
             rules.append(
                 f"Trailing stop ({self.trail_mode}): every +{self.trail_trigger_pct:g}% peak "
-                f"lifts the stop by {self.trail_step_pct:g}% of broker margin "
+                f"lifts the stop by {self.trail_step_pct:g}% of {mlabel} "
                 f"({self._cadence_phrase('stop')})"
             )
         adj = f"Adjust when |CE−PE| > {self.adjust_threshold_pct:g}% of combined " \
@@ -985,6 +1013,7 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
             "legs": [dict(leg) for leg in self.legs],
             "margin_base": self.margin_base,
             "margin_source": self.margin_source,
+            "exit_margin_basis": self.exit_margin_basis,
             "target_amt": self.margin_base * self.target_pct / 100.0,
             "stop_amt": (self.margin_base * self.stop_pct / 100.0) if self.stop_pct > 0 else None,
             "adjust_count": self.adjust_count,

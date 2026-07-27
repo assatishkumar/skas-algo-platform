@@ -219,3 +219,14 @@ def test_whole_percent_strategies_are_not_fraction_tagged():
                 "intraday_straddle", "weekly_intraday_straddle"):
         tagged = {p for p, _d, frac in _fields(_specs()[sid]) if frac}
         assert not tagged, f"{sid} takes whole percents but tags {tagged} as fractions"
+
+
+def test_exit_margin_basis_on_the_delta_family_specs():
+    """The two-margin scheme (owner 2026-07-27): the shared EXIT_MARGIN_BASIS field defaults
+    the FORM to "entry" (₹ thresholds frozen at cycle entry) and is wired into both delta-family
+    specs. The ctor default stays "current" (§1) — pinned by the strategy tests."""
+    src = REGISTRY_TS.read_text()
+    assert '"exit_margin_basis", "THRESHOLD MARGIN", "select", "entry"' in src
+    specs = _specs()
+    for sid in ("delta_neutral_monthly", "iron_fly_monthly"):
+        assert "EXIT_MARGIN_BASIS" in specs[sid], sid

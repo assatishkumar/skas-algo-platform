@@ -202,3 +202,18 @@ def test_state_round_trip_preserves_adjustment():
     assert st2.adjust_symbol == st.adjust_symbol
     assert st2.adjust_realized == 4321.0
     assert st2.phase == "ironfly" and len(st2.legs) == len(st.legs)
+
+
+def test_exit_margin_basis_entry_is_inherited():
+    """iron_fly rides the base's freeze-once gate: with basis="entry" and a broker base
+    already frozen, a structural change (the naked add / adjustment roll call sites) does
+    NOT re-arm the freeze; the ctor default ("current") still does (§1)."""
+    st = IronFlyMonthlyStrategy(exit_margin_basis="entry")
+    st.margin_base, st.margin_source = 100_000.0, "broker"   # the ₹1L entry fly margin
+    st._freeze_margin(None, 0.0)                             # e.g. the ₹2.5L naked-add moment
+    assert st._refreeze is False and st.margin_base == 100_000.0
+
+    st2 = IronFlyMonthlyStrategy()
+    st2.margin_base, st2.margin_source = 100_000.0, "broker"
+    st2._freeze_margin(None, 0.0)
+    assert st2._refreeze is True                             # historical re-base behaviour

@@ -90,6 +90,14 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   month, zero adjustments. FULL backtest. **Sizing** — `fixed` (default) or `margin`: refit
   `lots = ⌊equity × capital_utilization_pct ÷ model-margin-per-lot-set⌋` at each entry (model
   margin ≈2× broker, so util 95 ≈ ~50% broker margin — the live calibration knob).
+  **2026-07 additions (whole ratio family incl. hni/batman/put):** an optional **trailing stop**
+  — `trail_trigger_pct`/`trail_step_pct`/`trail_mode` (`ratchet` lifts the stop one step per
+  trigger-of-peak-profit; `below_peak` trails peak − step), off by default, sits ABOVE the fixed
+  stop; `pnl_basis="total"` (form default) measures target/stop/trail on realized+unrealized;
+  an **entry vol-premium filter** (`vol_premium_min`: skip entries when ATM-IV − HV is thin —
+  the /research loss-study's one OOS-robust gate, off by default); **manual Build entry** (Trade
+  → Build deploys the exact legs into the native strategy with its native exits); and the
+  positional family **replays on the 1-min intraday store** (data basis `Intraday`).
 - **`put_ratio_monthly` — downside mirror.** 1:2 put ratio + far put hedge → zero *upside* risk;
   same timing/gate/exits/sizing. FULL backtest.
 - **`batman_ratio_monthly` — both wings ("Batman").** A 6-leg position: call-ratio above +
@@ -146,10 +154,20 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   chain). When |CE−PE| > 40% of the combined premium, roll the *cheap* side to the strike whose
   LTP matches the rich side (capped at the other strike → straddle max); the straddle then buys
   long wings at **K ± (CE+PE premium)** — its two breakevens, snapped to the strike grid, same
-  lots as the shorts → **iron fly**. Exit at 2.5% of the **broker** basket margin (re-frozen after
-  each roll/hedge, so the iron fly targets 2.5% of its *reduced* margin; optional stop default off);
+  lots as the shorts → **iron fly**. Exit at 2.5% of the **entry** broker margin by default — the
+  two-margin scheme (2026-07-27): thresholds freeze ONCE at cycle entry (absolute ₹ from day
+  one; an adjustment's margin jump never moves them) while the dynamic margin keeps feeding
+  margin-used/sizing/reports; `exit_margin_basis="current"` restores the historical
+  re-freeze-per-change (iron fly targets 2.5% of its *reduced* margin; optional stop default off);
   recurring monthly. **Deploy-only, no backtest** (live-chain delta solve; only ~2 months of
-  BANKNIFTY chain history cached). `force_entry` deploy flag skips the entry-day wait. An optional
+  BANKNIFTY chain history cached). `force_entry` deploy flag skips the entry-day wait.
+  **Exit/adjust controls (2026-07, from run #233):** adjustments sample on their own cadence
+  `adjust_check` (form default 5min; unset → rides `profit_check`) and never fire in the first
+  `adjust_after_open_min` minutes after 09:15 (form default 5 — deep-OTM wing strikes don't
+  print at the open; iron-fly wings also resolve to the nearest strike with a real premium, so
+  a phantom ₹0 hedge can never enter the book); optional **trailing stop** (ratchet /
+  below-peak, % of frozen margin); `pnl_basis="total"` (form default) folds roll-banked
+  realized P&L into the target/stop/trail measure. Manual Build entry supported. An optional
   **post-iron-fly adjustment** (off by default here, on for `iron_fly_monthly`) is togglable on a
   running deploy — see below.
 - **`iron_fly_monthly` — NIFTY / BANKNIFTY / SENSEX monthly iron fly + active repair.** Enters the iron fly directly
@@ -160,6 +178,17 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   uncapped tail → an optional hard MTM stop is the backstop. Togglable live via
   `POST /live/{id}/ironfly-adjust` (persisted; survives restart). Deploy-only, broker source
   required, no backtest.
+- **`double_diagonal_calendar` — NIFTY double diagonal (the first two-expiry position).**
+  SELL a near-weekly ~20-25Δ strangle, BUY a farther-expiry ~15-20Δ strangle as the calendar
+  hedge (its residual time value rounds the payoff tent). VIX regime (High ≥20 / Med 13-19 /
+  Low 9-12) labels the *expected* net-premium band — display only, selection is delta-first;
+  a manual **bias** knob (up/neutral/down) skews the short/hedge deltas asymmetrically. ONE
+  cycle per deploy (manual; no auto re-entry): exit at ±1.5% of the frozen broker basket
+  margin; when the UNTESTED near short decays (≤10Δ or ≤¼ of its sold premium) it rolls back
+  toward delta-neutral and drags its far hedge along, never crossing the other short; no
+  adjustments inside 3 DTE; at the near expiry the WHOLE structure squares — far hedges are
+  never left naked. Subclasses `delta_neutral_monthly` (margin freeze / cadences / exits /
+  persistence spine). Deploy-only, broker source required, no backtest.
 - **`momentum_theta_gainer_intra` — 15-min SuperTrend + pivot ATM seller.** Builds its OWN
   15-min candles from live spot ticks; on a closed candle, close > SuperTrend(7,3) AND > pivot
   R1 → SELL the ATM PUT of the nearest weekly (0DTE allowed); the mirror → SELL the ATM CALL.
@@ -178,11 +207,23 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   `donchian_strangle_bt` re-enters expiry-anchored cycles from a schedule and prices stock
   options with **synthetic Black-Scholes** (σ = HV20 × `vol_multiplier`, calibrated on /research
   ~1.1; NIFTY uses the real chain), adding backtest-only VIX rules + notional-per-name sizing.
+- **`broker_smoke_test` — the end-to-end REAL-order probe (Brokers page card).** BUY 1 lot of a
+  cheap OTM weekly option (premium ₹5-20, OI floor) or 1 share of a stock (default ITC), hold
+  ~60s, SELL, then the run **stops itself** (only ever on a FLAT book). One cycle exercises the
+  full order path: place → poll → LIMIT-at-touch→MARKET escalation (the wide OTM spread triggers
+  it naturally) → fill → book-sync → reconcile (+ Telegram) → exit. Sizes hard-coded (1 lot /
+  1 share, not params); the UI gates a LIVE deploy behind a typed "REAL" confirm; on a disarmed
+  account it paper-fills and wears the "orders PAPER" chip — a useful negative test. Deploy-only,
+  no backtest (paper fills always "work").
 
 ### 3.4 Shared strategy machinery
 
 `base.py::Strategy` (the `on_slice(ctx) → [Signal]` protocol) · `_options_common.py`
-(premium-sanity guard, nearest-strike snap, most-liquid monthly-expiry picker) ·
+(premium-sanity guard, nearest-strike snap, most-liquid monthly-expiry picker, plus three
+mixins: `ExitCadenceMixin` — every options strategy samples its profit/adjust decision on
+`profit_check` and its stop/exit on `stop_check`, each tick/1..60min/eod, hard time exits never
+gated; `TrailingStopMixin` — the shared ratchet/below-peak trail; `EntryVolFilterMixin` — the
+ATM-IV−HV vol-premium entry gate any option seller can inherit) ·
 `call_ratio_monthly.py` (the ratio-family base: strike-mode resolution in points/percent/delta/
 SD, the credit-gated leg-shift search, margin-auto sizing, intraday exit cadences, force-entry,
 BS delta/IV helpers) · engine services: `black_scholes.py` (IV/delta), `contract_specs.py`

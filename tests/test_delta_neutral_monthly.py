@@ -592,3 +592,55 @@ def test_adjust_after_open_min_blocks_the_open():
     assert tick(st, ctx, datetime(2026, 7, 6, 9, 17)) == []       # inside the first 5 min → blocked
     sigs = tick(st, ctx, datetime(2026, 7, 6, 9, 21))            # past 09:20 → the roll runs
     assert [s.action.name for s in sigs] == ["EXIT_ALL", "ENTER_SHORT"]
+
+
+def test_entry_margin_basis_freezes_once_and_holds_through_a_roll():
+    """The two-margin scheme (owner 2026-07-27): under exit_margin_basis="entry" the ₹
+    target/stop base freezes ONCE at cycle entry — a structural change (roll/hedge/naked
+    add all route through _freeze_margin) plus a HIGHER margin push must not re-base it.
+    The ctor default ("current") keeps the historical re-freeze (§1)."""
+    def roll_then_push(st, ctx):
+        _roll_once(st, ctx)                                # structural change re-arms…
+        for leg in st.legs:                                # price the post-roll book (the
+            ctx.market.prices[leg["symbol"]] = leg["entry"]  # latch sits after the prints guard)
+        st.set_broker_margin(800_000.0)                    # …and a bigger margin arrives
+        tick(st, ctx, datetime(2026, 7, 6, 11, 35))
+
+    st, ctx = _enter_broker(DeltaNeutralMonthlyStrategy(
+        exit_margin_basis="entry", profit_target_pct=100.0))
+    tick(st, ctx, datetime(2026, 7, 3, 12, 0))            # latch the entry freeze
+    assert st.margin_base == 500_000.0 and st.margin_source == "broker"
+    roll_then_push(st, ctx)
+    assert st.margin_base == 500_000.0                     # …but the ENTRY base holds
+
+    # Mirror: the default basis still re-bases to the post-roll margin (old behaviour).
+    st2, ctx2 = _enter_broker(DeltaNeutralMonthlyStrategy(profit_target_pct=100.0))
+    tick(st2, ctx2, datetime(2026, 7, 3, 12, 0))
+    roll_then_push(st2, ctx2)
+    assert st2.margin_base == 800_000.0
+
+
+def test_entry_margin_survives_recovery_and_resets_on_exit():
+    """The entry-frozen base persists via export_state (a restart must not re-anchor a
+    running cycle to the CURRENT margin), and _exit_all clears it so the NEXT cycle
+    freezes its own entry margin."""
+    st, ctx = _enter_broker(DeltaNeutralMonthlyStrategy(exit_margin_basis="entry"))
+    tick(st, ctx, datetime(2026, 7, 3, 12, 0))
+    assert st.margin_base == 500_000.0
+
+    # recovery round-trip: rebuilt from params_snapshot + persisted state
+    st2 = DeltaNeutralMonthlyStrategy(exit_margin_basis="entry")
+    st2.load_state(st.export_state())
+    assert st2.margin_base == 500_000.0 and st2.margin_source == "broker"
+    st2._freeze_margin(None, 0.0)                          # post-recovery structural change
+    st2.set_broker_margin(900_000.0)
+    assert st2._refreeze is False                          # freeze-once gate held
+
+    # cycle end → base cleared, next cycle re-freezes fresh
+    st.legs and st._exit_all(list(st.legs), "target")
+    assert st.margin_base == 0.0 and st.margin_source == ""
+    # the historical basis keeps the base across the flat gap (§1: unchanged)
+    st3, ctx3 = _enter_broker(DeltaNeutralMonthlyStrategy())
+    tick(st3, ctx3, datetime(2026, 7, 3, 12, 0))
+    st3._exit_all(list(st3.legs), "target")
+    assert st3.margin_base == 500_000.0

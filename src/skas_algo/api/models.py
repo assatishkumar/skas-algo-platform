@@ -283,6 +283,9 @@ class DeltaNeutralDeploy(BaseModel):
     trail_mode: str = "ratchet"  # "ratchet" | "below_peak"
     # Which P&L the target/stop/trail measure: "total" (realized+unrealized) | "open_legs".
     pnl_basis: str = "total"
+    # Which MARGIN anchors the ₹ thresholds: "entry" = frozen once at cycle entry (absolute ₹,
+    # owner's two-margin scheme 2026-07-27) | "current" = re-frozen after every roll/hedge/add.
+    exit_margin_basis: str = "entry"
     eod_time: str = "15:20"
     # Build-view manual deploy: explicit entry legs — enter these verbatim, then run the roll.
     entry_legs: list[dict] | None = None
@@ -323,6 +326,7 @@ class IronFlyDeploy(BaseModel):
     trail_step_pct: float = 0.0
     trail_mode: str = "ratchet"  # "ratchet" | "below_peak"
     pnl_basis: str = "total"  # "total" (realized+unrealized) | "open_legs"
+    exit_margin_basis: str = "entry"  # ₹-threshold anchor: "entry" (frozen once) | "current"
     eod_time: str = "15:20"
     # Build-view manual deploy: explicit entry legs — enter these verbatim, then run the adjustment.
     entry_legs: list[dict] | None = None
@@ -399,6 +403,7 @@ class DoubleDiagonalDeploy(BaseModel):
     # runs unchanged — §1). eod_time squares the structure at the near expiry.
     profit_check: str = "1min"
     stop_check: str = "1min"
+    exit_margin_basis: str = "entry"  # ₹-threshold anchor: "entry" (frozen once) | "current"
     eod_time: str = "15:20"
     entry_legs: list[dict] | None = None  # manual Build-view override (explicit legs)
     capital: float = 1_000_000

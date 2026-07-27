@@ -110,6 +110,17 @@ const PNL_BASIS = f("pnl_basis", "P&L BASIS", "select", "total", {
   ],
   hint: "which P&L the %-of-margin target / stop / trail compare against",
 });
+// Which MARGIN anchors the ₹ thresholds (delta_neutral / iron_fly). "entry" = frozen once at
+// cycle entry → absolute ₹ target/stop fixed from day one (owner's two-margin scheme,
+// 2026-07-27 — the naked add's SPAN jump doesn't move the thresholds); "current" = re-frozen
+// after every roll/hedge/add (the ctor default, so recovered deploys are unchanged — §1).
+const EXIT_MARGIN_BASIS = f("exit_margin_basis", "THRESHOLD MARGIN", "select", "entry", {
+  options: [
+    { value: "entry", label: "Entry margin (frozen once)" },
+    { value: "current", label: "Current margin (re-frozen on change)" },
+  ],
+  hint: "the ₹ base for target/stop/trail — frozen at entry, or re-based after each adjustment",
+});
 // Adjustment (roll/hedge) timing, decoupled from the profit cadence (delta_neutral / iron_fly).
 const adjustTimingFields = (): FieldSpec[] => [
   f("adjust_check", "ADJUST CHECK", "select", "5min",
@@ -245,11 +256,12 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     exit: {
-      basisNote: "% of the broker basket margin (re-frozen after each roll/hedge)",
+      basisNote: "% of the entry margin by default (frozen once — absolute ₹ thresholds)",
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any", hint: "0 = off" }),
         PNL_BASIS,
+        EXIT_MARGIN_BASIS,
         ...cadenceFields("1min", "1min", "15:20"),
       ],
       trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode",
@@ -290,11 +302,12 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     exit: {
-      basisNote: "% of the FLY's margin — much smaller than the straddle's, so 2.5% is a tighter ₹ target",
+      basisNote: "% of the ENTRY fly margin by default (frozen once — the naked add's margin jump never moves the ₹ thresholds)",
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any", hint: "0 = off" }),
         PNL_BASIS,
+        EXIT_MARGIN_BASIS,
         ...cadenceFields("1min", "1min", "15:20"),
       ],
       trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode",
