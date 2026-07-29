@@ -18,7 +18,7 @@ import PositionsGreeksTable from "../components/PositionsGreeksTable";
 import GreeksHistoryCard from "../components/GreeksHistoryCard";
 import WeeklyStraddlePanel from "../components/WeeklyStraddlePanel";
 import { formatInr } from "../lib/format";
-import { isOptionsStrategy } from "../lib/params";
+import { isOptionsStrategy, PARAM_ENUMS } from "../lib/params";
 import { LIVE_CATEGORIES, liveCategoryOf } from "../lib/strategyMeta";
 import { compareOptionSymbol, formatOptionSymbol } from "../lib/symbol";
 import { KebabMenu, Sparkline, Segmented, Tag, type MenuItem } from "../components/redesign";
@@ -1484,13 +1484,20 @@ function EditParamsPanel({ dep, busy, onClose, onSave }: {
             return (
               <label key={k} className="flex items-center justify-between gap-2">
                 <span className={`truncate ${dirty ? "text-[var(--accent-deep)] font-medium" : "text-[var(--muted)]"}`} title={k}>{k}</span>
-                {typeof v === "boolean" ? (
+                {typeof v === "boolean" || PARAM_ENUMS[k] ? (
                   <select
-                    className="rounded bg-[var(--card)] border border-[var(--field-border)] px-1.5 py-0.5"
+                    className={`rounded bg-[var(--card)] border px-1.5 py-0.5 ${dirty ? "border-[var(--accent-deep)]" : "border-[var(--field-border)]"}`}
                     value={cur}
                     onChange={(e) => setEdits((s) => ({ ...s, [k]: e.target.value }))}>
-                    <option value="true">true</option>
-                    <option value="false">false</option>
+                    {(typeof v === "boolean"
+                      ? ["true", "false"]
+                      // keep a legacy/off-list current value selectable, never blank it out
+                      : PARAM_ENUMS[k].includes(String(v))
+                        ? PARAM_ENUMS[k]
+                        : [String(v), ...PARAM_ENUMS[k]]
+                    ).map((opt) => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
                   </select>
                 ) : (
                   <input

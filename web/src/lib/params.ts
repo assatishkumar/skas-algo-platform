@@ -202,6 +202,23 @@ const PCT_KEYS = new Set([
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+/** Enum-valued STRATEGY-CTOR params → their legal values, as the live strategies accept
+ *  them. Renders as dropdowns wherever a raw param is edited (free text invites a typo'd
+ *  value the ctor would silently fall back from). NOTE: the backtest form's harness-level
+ *  `sizing` is a DIFFERENT knob (fixed|capital, intraday-replay sizing) — this map carries
+ *  the ratio-family ctor's fixed|margin. */
+export const PARAM_ENUMS: Record<string, string[]> = {
+  trail_mode: ["ratchet", "below_peak"],
+  sizing: ["fixed", "margin"],
+  allocation_mode: ["fixed", "equity_scaled"],
+  rsi_source: ["ema", "close"],
+  exit_margin_basis: ["current", "entry"],
+  portfolio_basis: ["notional", "margin"],
+  breach_basis: ["close", "touch"],
+  profit_check: ["tick", "1min", "5min", "15min", "30min", "60min", "eod"],
+  stop_check: ["tick", "1min", "5min", "15min", "30min", "60min", "eod"],
+};
+
 /** Strategy ids that trade options (DERIV) — share one source of truth across the UI. */
 export const OPTIONS_STRATEGIES = [
   "hni_weekly",
