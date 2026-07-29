@@ -589,3 +589,108 @@ def test_lot_sets_attr_routes_dict_lot_sizing():
     assert _lot_sets_attr(cp) == "sets"
     assert _lot_sets_attr(type("Scalar", (), {"lots": 10})()) is None
     assert _lot_sets_attr(None) is None
+
+
+def test_update_params_hot_edits_running_strategy():
+    """Edit-params: rebuild the strategy with ctor logic re-run, state carried over,
+    snapshot persisted (a restart keeps the edit); infra + unknown keys rejected."""
+    from skas_algo.db.models import Algo
+
+    fake = FakeQuoteSource()
+    config = LiveConfig(
+        name="edit-params-test",
+        strategy_id="sst_lifo",
+        symbols=["AAA"],
+        capital=100_000,
+        params={"capital_parts": 10, "profit_target": 0.06},
+        lookback=5,
+        tax_rate=0.0,
+        ignore_market_hours=True,
+    )
+    live = manager.start(config, _flat_loader, fake)
+    try:
+        # Build some in-flight state: dip → tracking, breakout → BUY.
+        fake.price = 95.0
+        live.refresh()
+        live.run_decision(date(2024, 1, 2))
+        live.end_day()
+        fake.price = 110.0
+        live.refresh()
+        buys = live.run_decision(date(2024, 1, 3))
+        live.end_day()
+        assert any(e["action"] == "BUY" for e in buys)
+        old_strategy = live.session.strategy
+        old_tracking = dict(old_strategy.tracking)
+
+        # Infra keys are refused outright…
+        with pytest.raises(ValueError):
+            live.update_params({"mode": "LIVE", "capital": 1})
+        # …and so are typos (strategy_kwargs would silently drop them → phantom "applied").
+        with pytest.raises(ValueError):
+            live.update_params({"profit_targett": 0.09})
+
+        result = live.update_params({"profit_target": 0.09, "capital_parts": 8})
+        assert sorted(result["applied"]) == ["capital_parts", "profit_target"]
+
+        s = live.session.strategy
+        assert s is not old_strategy  # rebuilt, not mutated
+        assert s.profit_target == 0.09
+        # Ctor-derived field recomputed — proves ctor logic re-ran (setattr would miss it).
+        assert s.allocation_amount == pytest.approx(100_000 / 8)
+        # State carried over: the tracked/held book survives the swap.
+        assert s.tracking == old_tracking
+
+        # Persisted: recovery would rebuild with the SAME edited params.
+        with session_scope() as db:
+            run = db.get(AlgoRun, live.run_id)
+            assert run.params_snapshot["profit_target"] == 0.09
+            assert run.params_snapshot["capital_parts"] == 8
+            algo = db.get(Algo, live.algo_id)
+            assert algo.params["profit_target"] == 0.09
+
+        # The new target actually drives decisions: +8% (< old 6%→sell? no — NEW 9%) holds…
+        fake.price = 118.0  # +~7.3% from the 110 entry
+        live.refresh()
+        events = live.run_decision(date(2024, 1, 4))
+        live.end_day()
+        assert not any(e["action"] == "SELL" for e in events)
+        # …and +10% sells under the new 9% target.
+        fake.price = 122.0
+        live.refresh()
+        events = live.run_decision(date(2024, 1, 5))
+        live.end_day()
+        assert any(e["action"] == "SELL" for e in events)
+    finally:
+        manager.stop(live.run_id)
+
+
+def test_update_params_route():
+    fake = FakeQuoteSource()
+    config = LiveConfig(
+        name="edit-params-route",
+        strategy_id="sst_lifo",
+        symbols=["AAA"],
+        capital=100_000,
+        params={"capital_parts": 10, "profit_target": 0.06},
+        lookback=5,
+        tax_rate=0.0,
+        ignore_market_hours=True,
+    )
+    live = manager.start(config, _flat_loader, fake)
+    try:
+        client = TestClient(create_app())
+        r = client.post(f"/api/v1/live/{live.run_id}/params",
+                        json={"params": {"profit_target": 0.08}})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["applied"] == ["profit_target"]
+        assert live.session.strategy.profit_target == 0.08
+        # Snapshot (the modal's data source) carries the updated params.
+        snap = client.get(f"/api/v1/live/{live.run_id}").json()
+        assert snap["params"]["profit_target"] == 0.08
+        # Infra key → 422, not silently ignored.
+        r = client.post(f"/api/v1/live/{live.run_id}/params",
+                        json={"params": {"quote_source": "zerodha"}})
+        assert r.status_code == 422
+    finally:
+        manager.stop(live.run_id)

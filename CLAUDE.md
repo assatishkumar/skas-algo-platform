@@ -386,9 +386,17 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   **once per name per day** (`last_flip_day` guard), up to `max_flips=3` (two rolls, then close the
   name on the next breach). Defaults live in the deploy layer (`api/models.py:DonchianDeploy`); the
   strategy **constructor** stays `close`/2 as the conservative backstop for a param-less recovery
-  (CLAUDE.md §1). To change a **running** deploy's config, edit its `params_snapshot` in the DB and
-  restart — `live/recovery.py` rebuilds the strategy from it (persisted `flip_count`/`last_flip_day`
-  are preserved via `state`). There's no in-place param-edit endpoint.
+  (CLAUDE.md §1). To change a **running** deploy's config: `POST /live/{id}/params` (the Live
+  tile's "Edit params" menu, 2026-07-29) hot-edits strategy knobs in place —
+  `LiveRun.update_params` rebuilds the strategy **recovery-style** (ctor logic re-runs, so
+  derived fields recompute; `export_state`→`load_state` carries positions/latches/peaks), re-runs
+  `_wire_quote_source`, and **MERGES** the changes into `Algo.params` + `AlgoRun.params_snapshot`
+  (never replaces — a recovered run's `config.params` is stripped of infra keys, and overwriting
+  the snapshot with it would break the next recovery). Infra keys
+  (`LiveRun._PARAM_EDIT_BLOCKLIST`: mode/capital/symbols/quote_source/…) are rejected → stop +
+  redeploy; unknown ctor kwargs are rejected too (strategy_kwargs would silently drop them —
+  a typo'd knob must not report "applied"). Coverage: `test_update_params_*` in tests/test_live.py.
+  The old edit-`params_snapshot`-in-DB-and-restart route still works for stopped backends.
 
 ## 8b. Mobile app (`web-mobile/` + its `ios/` Capacitor shell)
 A dedicated 7-screen iPhone companion (see `docs/MOBILE.md`) that monitors + acts on the

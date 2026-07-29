@@ -519,6 +519,7 @@ export interface LiveRunSnapshot {
   status: string;
   name: string;
   strategy_id: string;
+  params?: Record<string, unknown>; // current strategy params (Edit-params modal)
   cash: number;
   holdings_value: number;
   equity: number;

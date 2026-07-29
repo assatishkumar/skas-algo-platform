@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as _dt
+
 import pytest
 
 from skas_algo.brokers.base import BrokerOrder
@@ -230,6 +232,12 @@ def test_basket_margin_none_when_nothing_maps():
     ) is None
 
 
+# option_expiries filters to >= today — fixture expiries must be dynamic or the test
+# rots the morning after the hard-coded date passes (bit us 2026-07-29).
+_NFO_EXP = _dt.date.today() + _dt.timedelta(days=30)
+_BFO_EXP = _dt.date.today() + _dt.timedelta(days=32)
+
+
 class _NfoBfoKite(_FakeKite):
     """instruments() serves NFO always, BFO only after ``bfo_ready`` flips — models a
     transient BFO 'Too many requests' that later clears. Records the call sequence."""
@@ -243,12 +251,12 @@ class _NfoBfoKite(_FakeKite):
         from datetime import date
         self.calls.append(exchange)
         if exchange == "NFO":
-            return [{"name": "NIFTY", "expiry": date(2026, 7, 28), "strike": 24000.0,
+            return [{"name": "NIFTY", "expiry": _NFO_EXP, "strike": 24000.0,
                      "instrument_type": "CE", "tradingsymbol": "NIFTY2672824000CE", "lot_size": 65}]
         if exchange == "BFO":
             if not self.bfo_ready:
                 raise RuntimeError("Too many requests")
-            return [{"name": "SENSEX", "expiry": date(2026, 7, 30), "strike": 77500.0,
+            return [{"name": "SENSEX", "expiry": _BFO_EXP, "strike": 77500.0,
                      "instrument_type": "CE", "tradingsymbol": "SENSEX2673077500CE",
                      "lot_size": 20}]
         return []
@@ -261,12 +269,12 @@ def test_bfo_failure_is_retried_not_permanently_cached():
     adapter = ZerodhaAdapter(CREDS, kite=kite)
 
     # BFO down: NFO works, SENSEX has no expiries yet, only NFO marked loaded.
-    assert adapter.option_expiries("NIFTY") == ["2026-07-28"]
+    assert adapter.option_expiries("NIFTY") == [_NFO_EXP.isoformat()]
     assert adapter.option_expiries("SENSEX") == []
     assert adapter._loaded_exchanges == {"NFO"}
 
     # Kite recovers → next call retries BFO and SENSEX self-heals; NFO is fetched only once.
     kite.bfo_ready = True
-    assert adapter.option_expiries("SENSEX") == ["2026-07-30"]
+    assert adapter.option_expiries("SENSEX") == [_BFO_EXP.isoformat()]
     assert adapter._loaded_exchanges == {"NFO", "BFO"}
     assert kite.calls.count("NFO") == 1 and "BFO" in kite.calls

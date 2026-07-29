@@ -1020,6 +1020,7 @@ function DeploymentTile({
   const [showGoLive, setShowGoLive] = useState(false);
   const [keepPaper, setKeepPaper] = useState(true);
   const [goLiveAcct, setGoLiveAcct] = useState<number | null>(null);
+  const [showParams, setShowParams] = useState(false);
 
   // Pulse a "live" dot each time a fresh WS snapshot bumps the version for this run.
   const [flash, setFlash] = useState(false);
@@ -1125,6 +1126,7 @@ function DeploymentTile({
           ...(dep.mode === "PAPER" ? [{ label: "⚡ Go LIVE", onClick: () => setShowGoLive(true) }] : []),
           { label: "Exit positions", tone: "warn", onClick: () => { if (positions > 0 && confirm("Exit ALL open positions for this strategy now, at live prices?")) act(() => api.liveFlatten(dep.run_id)); } },
           { label: "Stop deployment", tone: "danger", onClick: () => act(() => api.liveStop(dep.run_id)) },
+          { label: "Edit params", onClick: () => setShowParams(true) },
           { label: "Edit name / notes", onClick: () => setEditing(true) },
         ]
       : dep.status === "stopped"
@@ -1395,11 +1397,126 @@ function DeploymentTile({
         </div>
       )}
 
+      {/* Edit params — hot-edit strategy knobs on a RUNNING deployment. The backend
+          rebuilds the strategy recovery-style (state carried over) and persists the
+          merged snapshot, so a restart keeps the edit. Infra keys are server-rejected. */}
+      {showParams && dep.status === "active" && (
+        <EditParamsPanel dep={dep} busy={busy}
+          onClose={() => setShowParams(false)}
+          onSave={async (changes) => {
+            await act(() => api.liveUpdateParams(dep.run_id, changes));
+            setShowParams(false);
+          }} />
+      )}
+
       {/* Inline live detail for an expanded active deployment.
           Minimize is the chevron icon at the card's top-right. */}
       {expanded && dep.status === "active" && snapshot && (
         <RunCard run={snapshot} version={version} onChanged={onChanged} />
       )}
+    </div>
+  );
+}
+
+// Params the server refuses to hot-edit (infra — stop + redeploy to change). Mirrored
+// client-side so the panel doesn't offer inputs that would only 422. Arrays/objects
+// (symbols, entry_legs…) are also hidden — only scalar knobs are editable in place.
+const PARAM_EDIT_HIDDEN = new Set([
+  "strategy_id", "underlying", "symbols", "instrument_class", "mode", "quote_source",
+  "broker_account_id", "name", "notes", "auto", "capital", "data_basis", "lookback",
+  "refresh_seconds", "decision_time", "ignore_market_hours", "excluded_symbols",
+  "entry_legs", "warm_from_date", "tax_rate", "withdrawal_rate",
+]);
+
+function EditParamsPanel({ dep, busy, onClose, onSave }: {
+  dep: Deployment;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (changes: Record<string, unknown>) => Promise<void>;
+}) {
+  // Current params come off the run snapshot (GET /live/{id} → config.params).
+  const { data: snap, isLoading } = useQuery({
+    queryKey: ["liveparams", dep.run_id],
+    queryFn: () => api.liveGet(dep.run_id),
+    staleTime: 0,
+  });
+  const [edits, setEdits] = useState<Record<string, string>>({});
+
+  const entries = Object.entries(snap?.params ?? {})
+    .filter(([k, v]) =>
+      !PARAM_EDIT_HIDDEN.has(k) &&
+      (typeof v === "number" || typeof v === "boolean" ||
+        (typeof v === "string" && v.length <= 40)))
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  // Parse an edited text value back to the original's type (number stays number,
+  // "true"/"false" stays boolean) so the backend ctor gets what it expects.
+  const parse = (raw: string, orig: unknown): unknown => {
+    if (typeof orig === "boolean") return raw === "true";
+    if (typeof orig === "number") { const n = Number(raw); return Number.isFinite(n) ? n : orig; }
+    return raw;
+  };
+  const changes: Record<string, unknown> = {};
+  for (const [k, orig] of entries) {
+    if (k in edits && edits[k] !== String(orig)) changes[k] = parse(edits[k], orig);
+  }
+  const nChanged = Object.keys(changes).length;
+
+  return (
+    <div className="mt-3 rounded-md border border-[var(--border)] bg-[var(--field)] p-3 text-xs space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="font-medium text-[var(--strong)]">Edit params — applied immediately{dep.mode === "LIVE" ? " (REAL-MONEY run)" : ""}</div>
+        <button onClick={onClose} className="rounded px-1.5 hover:opacity-60" aria-label="close">✕</button>
+      </div>
+      <div className="text-[var(--muted)]">
+        The strategy is rebuilt with its state carried over (positions, peaks, latches survive);
+        the change also persists across restarts. Capital, symbols and mode need a redeploy.
+      </div>
+      {isLoading ? (
+        <div className="text-[var(--muted)]">Loading current params…</div>
+      ) : entries.length === 0 ? (
+        <div className="text-[var(--muted)]">No editable params on this run.</div>
+      ) : (
+        <div className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+          {entries.map(([k, v]) => {
+            const cur = k in edits ? edits[k] : String(v);
+            const dirty = k in edits && edits[k] !== String(v);
+            return (
+              <label key={k} className="flex items-center justify-between gap-2">
+                <span className={`truncate ${dirty ? "text-[var(--accent-deep)] font-medium" : "text-[var(--muted)]"}`} title={k}>{k}</span>
+                {typeof v === "boolean" ? (
+                  <select
+                    className="rounded bg-[var(--card)] border border-[var(--field-border)] px-1.5 py-0.5"
+                    value={cur}
+                    onChange={(e) => setEdits((s) => ({ ...s, [k]: e.target.value }))}>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                ) : (
+                  <input
+                    className={`w-28 rounded bg-[var(--card)] border px-1.5 py-0.5 text-right tabular-nums ${dirty ? "border-[var(--accent-deep)]" : "border-[var(--field-border)]"}`}
+                    inputMode={typeof v === "number" ? "decimal" : "text"}
+                    value={cur}
+                    onChange={(e) => setEdits((s) => ({ ...s, [k]: e.target.value }))}
+                  />
+                )}
+              </label>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={() => {
+            const summary = Object.entries(changes).map(([k, v]) => `${k} → ${v}`).join("\n");
+            if (confirm(`Apply ${nChanged} change${nChanged === 1 ? "" : "s"} to the RUNNING deployment?\n\n${summary}`)) void onSave(changes);
+          }}
+          disabled={busy || nChanged === 0}
+          className="rounded bg-[var(--accent-deep)] text-white px-3 py-1.5 disabled:opacity-50">
+          Apply {nChanged > 0 ? `${nChanged} change${nChanged === 1 ? "" : "s"}` : "changes"}
+        </button>
+        <button onClick={onClose} className="rounded border border-[var(--border)] px-3 py-1.5">Cancel</button>
+      </div>
     </div>
   );
 }

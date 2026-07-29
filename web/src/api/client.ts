@@ -325,6 +325,11 @@ export const api = {
   // --- live / paper ---
   liveList: () => request<LiveRunSnapshot[]>("/live"),
   liveGet: (id: number) => request<LiveRunSnapshot>(`/live/${id}`),
+  liveUpdateParams: (id: number, params: Record<string, unknown>) =>
+    request<{ run_id: number; applied: string[]; params: Record<string, unknown> }>(
+      `/live/${id}/params`,
+      { method: "POST", body: JSON.stringify({ params }) },
+    ),
   liveStart: (body: StartLiveRequest) =>
     request<LiveRunSnapshot>("/live/start", { method: "POST", body: JSON.stringify(body) }),
   liveRefresh: (id: number, decide = false) =>

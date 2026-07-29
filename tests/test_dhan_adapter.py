@@ -6,12 +6,17 @@ from __future__ import annotations
 import base64
 import json
 import time
+from datetime import date, timedelta
 
 import pytest
 
 import skas_algo.brokers.dhan as dhan_mod
 from skas_algo.brokers.dhan import DhanAdapter, DhanCredentials
 from skas_algo.brokers.zerodha import BrokerLoginError
+
+# Adapters filter expiries to >= today, so fixture expiries must stay in the future —
+# hard-coded dates rotted the suite the morning after they passed (2026-07-29).
+_STK_EXP = (date.today() + timedelta(days=60)).isoformat()
 
 _HDR = ("SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,"
         "SEM_EXPIRY_CODE,SEM_TRADING_SYMBOL,SEM_LOT_UNITS,SEM_CUSTOM_SYMBOL,"
@@ -26,10 +31,10 @@ MASTER_CSV = "\n".join([
      "2026-07-28 14:30:00,24500.00000,CE,0.05,M,OP,,"),
     ("NSE,D,49082,OPTIDX,0,NIFTY-Jul2026-24500-PE,65.0,NIFTY 28 JUL 24500 PUT,"
      "2026-07-28 14:30:00,24500.00000,PE,0.05,M,OP,,"),
-    ("NSE,D,50001,OPTSTK,0,BAJAJ-AUTO-Jul2026-9000-CE,75.0,BAJAJ AUTO CALL,"
-     "2026-07-30 15:30:00,9000.00000,CE,0.05,M,OPTSTK,,BAJOPT"),
-    ("BSE,D,1136715,OPTSTK,0,RELIANCE-Jul2026-1490-CE,500.0,BSE twin - ignore,"
-     "2026-07-30 15:30:00,1490.00000,CE,0.05,M,OPTSTK,,RELIOPT"),
+    (f"NSE,D,50001,OPTSTK,0,BAJAJ-AUTO-Jul2026-9000-CE,75.0,BAJAJ AUTO CALL,"
+     f"{_STK_EXP} 15:30:00,9000.00000,CE,0.05,M,OPTSTK,,BAJOPT"),
+    (f"BSE,D,1136715,OPTSTK,0,RELIANCE-Jul2026-1490-CE,500.0,BSE twin - ignore,"
+     f"{_STK_EXP} 15:30:00,1490.00000,CE,0.05,M,OPTSTK,,RELIOPT"),
 ])
 
 
@@ -80,8 +85,8 @@ def test_master_parse_hyphenated_underlying_and_bse_filter():
     a, _ = _adapter()
     m = a._master()
     # rsplit keeps BAJAJ-AUTO whole; BSE twin rows never land.
-    assert ("BAJAJ-AUTO", "2026-07-30", 9000.0, "CE") in m.option
-    assert ("RELIANCE", "2026-07-30", 1490.0, "CE") not in m.option
+    assert ("BAJAJ-AUTO", _STK_EXP, 9000.0, "CE") in m.option
+    assert ("RELIANCE", _STK_EXP, 1490.0, "CE") not in m.option
     assert m.index["NIFTY"] == "13" and m.index["INDIA VIX"] == "21"
     assert m.equity["RELIANCE"] == "2885"
     assert m.lot["NIFTY"] == 65 and m.lot["BAJAJ-AUTO"] == 75
@@ -137,10 +142,12 @@ def test_live_option_chain_adapts_to_zerodha_shape():
 
 
 def test_option_expiries_endpoint_then_master_fallback():
-    a, _ = _adapter(responses={"/optionchain/expirylist": {"data": ["2026-07-28", "2026-08-25"]}})
-    assert a.option_expiries("NIFTY") == ["2026-07-28", "2026-08-25"]
+    e1 = (date.today() + timedelta(days=7)).isoformat()
+    e2 = (date.today() + timedelta(days=35)).isoformat()
+    a, _ = _adapter(responses={"/optionchain/expirylist": {"data": [e1, e2]}})
+    assert a.option_expiries("NIFTY") == [e1, e2]
     b, _ = _adapter()  # endpoint returns {} → falls back to the master's contracts
-    assert b.option_expiries("BAJAJ-AUTO") == ["2026-07-30"]
+    assert b.option_expiries("BAJAJ-AUTO") == [_STK_EXP]
 
 
 def test_basket_margin_sums_short_legs_only():

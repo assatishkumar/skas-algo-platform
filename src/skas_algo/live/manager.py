@@ -825,6 +825,78 @@ class LiveRun:
         self._persist_state()
         return events
 
+    # Infra keys are NEVER hot-editable — several would silently desync the running
+    # session (change them by stopping + redeploying). Everything else follows the
+    # documented edit-params_snapshot-and-restart semantics, done in place.
+    _PARAM_EDIT_BLOCKLIST = frozenset({
+        "strategy_id", "underlying", "symbols", "instrument_class", "mode",
+        "quote_source", "broker_account_id", "name", "notes", "auto", "capital",
+        "data_basis", "lookback", "refresh_seconds", "decision_time",
+        "ignore_market_hours", "excluded_symbols", "entry_legs", "warm_from_date",
+        "tax_rate", "withdrawal_rate",
+    })
+
+    def update_params(self, changes: dict) -> dict:
+        """Hot-edit strategy params on a RUNNING deployment (owner ask 2026-07-29:
+        tweak profit target / SL without redeploying). Same semantics as the blessed
+        edit-params_snapshot-and-restart procedure, in place: merge the accepted keys,
+        REBUILD the strategy exactly like recovery (the ctor's unit conversions and
+        derived fields run properly — setattr would skip them), restore the exported
+        state, re-wire the live hooks, and persist the merged snapshot so the next
+        restart rebuilds identically. The snapshot is MERGED, never replaced — a
+        recovered run's config.params is stripped of infra keys, and overwriting the
+        stored snapshot with it would break the next recovery."""
+        from skas_algo.db.models import Algo
+        from skas_algo.strategies.registry import get_strategy
+
+        accepted = {k: v for k, v in (changes or {}).items()
+                    if k not in self._PARAM_EDIT_BLOCKLIST and not str(k).startswith("_")}
+        if not accepted:
+            raise ValueError("no editable params in the request (infra keys are "
+                             "blocked — stop + redeploy to change them)")
+        # Reject keys the ctor wouldn't take — strategy_kwargs silently DROPS unknowns
+        # (right for recovery, wrong here: a typo'd knob would report "applied" as a no-op).
+        import inspect
+        factory = get_strategy(self.config.strategy_id)
+        try:
+            sig = inspect.signature(factory.__init__ if isinstance(factory, type) else factory)
+        except TypeError:  # pragma: no cover - unsignaturable factory
+            sig = None
+        if sig is not None and not any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        ):
+            unknown = sorted(k for k in accepted if k not in sig.parameters)
+            if unknown:
+                raise ValueError(f"unknown strategy params: {', '.join(unknown)}")
+        new_params = {**self.config.params, **accepted}
+        is_deriv = self.config.instrument_class.upper() == "DERIV"
+        underlying = (self.config.underlying
+                      or (self.config.symbols[0] if self.config.symbols else "NIFTY")).upper()
+        strategy = factory(
+            universe=[underlying] if is_deriv else self.config.symbols,
+            initial_capital=self.config.capital,
+            **strategy_kwargs(factory, new_params),
+        )
+        old_strategy = getattr(self.session, "strategy", None)
+        state = old_strategy.export_state() if hasattr(old_strategy, "export_state") else None
+        if state and hasattr(strategy, "load_state"):
+            strategy.load_state(state)
+        self.session.strategy = strategy
+        self.config.params = new_params
+        self._wire_quote_source()   # re-point the data hooks at the new instance
+        with session_scope() as db:
+            run = db.get(AlgoRun, self.run_id)
+            if run is not None:
+                run.params_snapshot = {**(run.params_snapshot or {}), **accepted}
+            algo = db.get(Algo, self.algo_id)
+            if algo is not None:
+                algo.params = {**(algo.params or {}), **accepted}
+        self._persist_state()
+        logger.warning("run %s params hot-edited: %s", self.run_id, sorted(accepted))
+        self.broadcaster.publish({"type": "snapshot", "run_id": self.run_id,
+                                  **self.snapshot()})
+        return {"applied": sorted(accepted), "params": new_params}
+
     def flatten(self) -> list[dict]:
         """Exit-all: close every open leg now; persist trades + positions; broadcast."""
         return self._manual_guarded(lambda: self.session.flatten(datetime.now(IST)))
@@ -930,6 +1002,8 @@ class LiveRun:
             "order_broker": self.order_broker(),
             "resume_orders_pending": self.resume_orders_pending,
             "strategy_id": self.config.strategy_id,
+            # Current strategy params (the Edit-params modal reads these; additive).
+            "params": dict(self.config.params),
             "instrument_class": self.config.instrument_class,
             "underlying": self.config.underlying,
             "quote_source": self.config.quote_source,

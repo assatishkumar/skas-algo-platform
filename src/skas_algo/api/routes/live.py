@@ -536,6 +536,29 @@ async def flatten(run_id: int) -> dict:
     return {"run_id": run_id, "closed": len(events), "snapshot": live.snapshot()}
 
 
+@router.post("/{run_id}/params")
+async def update_run_params(run_id: int, body: dict) -> dict:
+    """Hot-edit strategy params on a running deployment (profit target / SL / trail…).
+
+    Accepts {"params": {...}} (or a bare dict). Infra keys (mode, symbols, capital,
+    quote_source…) are rejected — those require stop + redeploy. The strategy is rebuilt
+    recovery-style with its state carried over, and the merged params are persisted to
+    Algo.params + AlgoRun.params_snapshot so a restart keeps the edit."""
+    live = _get(run_id)
+    changes = body.get("params") if isinstance(body.get("params"), dict) else body
+    try:
+        result = live.update_params(changes or {})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except TypeError as exc:  # unknown kwarg never reaches the ctor (strategy_kwargs
+        raise HTTPException(status_code=422, detail=str(exc)) from exc  # filters), but be safe
+    from skas_algo.services.vault_export import journal_safe
+    journal_safe("intervene", f"Edited params on {live.config.name}",
+                 strategy=live.config.strategy_id, run_id=run_id,
+                 detail=f"changed {', '.join(result['applied'])}")
+    return {"run_id": run_id, **result, "snapshot": live.snapshot()}
+
+
 @router.post("/{run_id}/manual-order")
 async def manual_order(run_id: int, body: ManualOrderInput) -> dict:
     """Option-aware live intervention: close selected legs/lots and/or open new legs now.
