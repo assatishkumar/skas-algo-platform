@@ -182,6 +182,7 @@ export default function App() {
             <NavItem to="/backtest" label="Backtest" />
             <NavItem to="/trade" label="Trade" />
             <NavItem to="/live" label="Live" />
+            <NavItem to="/analyze" label="Analyze" />
             <NavItem to="/docs" label="Docs" />
             <NavItem to="/research" label="Research" />
             <NavItem to="/data" label="Data" />

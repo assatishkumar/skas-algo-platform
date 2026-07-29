@@ -75,6 +75,17 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   managed exit via `target_pct` / hard `stop_pct` / trailing (`trail_pct`). One-shot, CNC
   long-only, `intraday=True` (reacts to trigger/stop/trailing each tick). FULL backtest.
 
+- **`gap_reversal` — gap-up oversold reversal (long-only).** A rare, high-conviction daily
+  setup: the stock GAPS UP over the previous close (min-gap % knob), still closes above its
+  21 EMA, and the RSI(10) **of the EMA series** is under 10 — through a downtrend the
+  smoothed RSI pins near 0, so the first gap-up recovery that retakes the EMA is the entry
+  (rsi_source knob: ema = chart spec / close = classic). Hold until the close falls back
+  below the EMA. Capital-parts sizing (fixed or equity-scaled), Nifty 500. FULL backtest via
+  the new generic indicator precompute (the first equity-engine consumer of the day's OPEN
+  price); live deploys fail closed until the live indicator seeding lands. The spec's short
+  leg (gap-down + RSI>90) awaits a sell-CE options variant — cash equity can't hold
+  overnight shorts.
+
 ### 3.2 Options strategies with a FULL backtest (real cached chain)
 
 - **`short_premium` — index premium seller.** Near `dte_target` (2), sell an ATM straddle or an
@@ -465,6 +476,17 @@ blanked in the test bootstrap).
 ---
 
 ## 13. Web application (`web/`)
+
+- **Analyze workbench (`/analyze`, 2026-07)**: per-run backtest analytics for options runs —
+  KPI tiles (report-exact), a Stop/Target Simulator replaying every trade's stored 5-min MTM
+  path (margin or credit basis, fixed stop/target + ratchet/below-peak trail), a Conditioner
+  Explorer (11 entry-condition slices with CI-aware bucket stats), a Premium-Melt × Position
+  hero (time-of-day decay from the traded straddles), and drill-ins: conditioning cross-tabs,
+  skew, melt, trade lifecycle (MAE/MFE, spaghetti), execution quality (breakeven slippage,
+  cost decomposition, phantom-fill check vs store volumes) and risk & robustness (underwater,
+  streaks, rolling Sharpe, autocorrelation, bootstrap CIs, regime boundaries) + the trade
+  ledger. Bundle computed on first open (background job, disk-cached); equity runs keep the
+  candle-chart trade analysis.
 
 React + React Router + React Query + Recharts + Tailwind. Desktop top-nav (Home / Backtest /
 Trade / Live / Docs / Research / Data / Brokers) and a mobile PWA bottom tab bar; light/dark

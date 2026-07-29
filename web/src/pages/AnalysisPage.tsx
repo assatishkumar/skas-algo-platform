@@ -5,7 +5,7 @@ import { api } from "../api/client";
 import { Card } from "../components/ui";
 import { formatParamValue, orderedParamKeys, paramLabel } from "../lib/params";
 import EquityTradeAnalysis from "../components/analysis/EquityTradeAnalysis";
-import OptionsTradeAnalysis from "../components/analysis/OptionsTradeAnalysis";
+import AnalyzeWorkbench from "../components/analyze/AnalyzeWorkbench";
 
 function RunParams({ params, capital }: { params: Record<string, unknown>; capital: number | null }) {
   const merged: Record<string, unknown> = { ...(capital != null ? { capital } : {}), ...params };
@@ -103,10 +103,14 @@ export default function AnalysisPage() {
         <Card><div className="text-slate-400 text-sm">Select a run above to see its trade analysis.</div></Card>
       )}
       {runId != null && isLoading && <Card><div className="text-slate-400 text-sm">Loading…</div></Card>}
-      {analysis && <RunParams params={analysis.params ?? {}} capital={analysis.capital} />}
+      {analysis && analysis.instrument_class !== "DERIV" && (
+        <RunParams params={analysis.params ?? {}} capital={analysis.capital} />
+      )}
       {analysis && (
         analysis.instrument_class === "DERIV" ? (
-          <OptionsTradeAnalysis analysis={analysis} />
+          // The analytics workbench (design_handoff_analyze) — DERIV runs only; equity
+          // runs keep the candle-chart trade analysis below (owner decision 2026-07-28).
+          <AnalyzeWorkbench runId={analysis.run_id} />
         ) : (
           <EquityTradeAnalysis analysis={analysis} />
         )

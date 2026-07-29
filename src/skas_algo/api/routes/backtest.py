@@ -489,6 +489,7 @@ def analysis_runs(db: Session = Depends(get_db)) -> list[dict]:
             status = "stopped"
         else:
             status = "active"
+        params = (algo.params if algo else None) or {}
         out.append({
             "run_id": run.id,
             "name": algo.name if algo else None,
@@ -496,8 +497,59 @@ def analysis_runs(db: Session = Depends(get_db)) -> list[dict]:
             "instrument_class": _instrument_class(algo),
             "mode": mode,
             "status": status,
+            # the Analyze workbench needs the data basis + underlying WITHOUT an N+1
+            # per-run fetch: intraday (1-min store replay) | live (paper/live) | eod
+            "data_basis": ("live" if mode != TradingMode.BACKTEST.value
+                           else str(params.get("data_basis") or "eod")),
+            "underlying": params.get("underlying"),
         })
     return out
+
+
+# ---------------------------------------------------------- Analyze workbench bundle
+@router.get("/runs/{run_id}/analytics")
+def get_run_analytics(run_id: int, db: Session = Depends(get_db)) -> dict:
+    """The cached analytics bundle for a run, or 404 (client then POSTs /compute)."""
+    from skas_algo.services import run_analytics
+
+    run = db.get(AlgoRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    bundle = run_analytics.load_cached(run_id, len(run.trade_log or []))
+    if bundle is None:
+        raise HTTPException(status_code=404, detail="analytics not computed")
+    return bundle
+
+
+@router.post("/runs/{run_id}/analytics/compute")
+def compute_run_analytics(run_id: int, db: Session = Depends(get_db)) -> dict:
+    """Kick the bundle build as a background job on the ``analytics`` slot (single-flight;
+    never contends with an intraday replay / loss study). 409 while one is running."""
+    from skas_algo.services import replay_jobs, run_analytics
+
+    run = db.get(AlgoRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    cached = run_analytics.load_cached(run_id, len(run.trade_log or []))
+    if cached is not None:
+        return {"status": "cached"}
+    try:
+        job_id = replay_jobs.start(
+            lambda progress: {"run_id": run_analytics.build_bundle(run_id, progress)["run_id"]},
+            slot="analytics",
+            busy_msg="an analytics build is already running — wait for it to finish",
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"job_id": job_id}
+
+
+@router.get("/analytics/progress")
+def analytics_progress() -> dict:
+    """Progress of the analytics slot ({"status":"idle"} when nothing ever ran)."""
+    from skas_algo.services import replay_jobs
+
+    return replay_jobs.snapshot(slot="analytics")
 
 
 def _resolve_run_trades(run: AlgoRun, db: Session) -> list[dict]:

@@ -1,4 +1,5 @@
 import type {
+  AnalyticsBundle,
   BacktestRequest,
   BacktestResponse,
   ReplayJobSnapshot,
@@ -205,6 +206,12 @@ export const api = {
   // --- trade analysis ---
   analysisRuns: () => request<AnalysisRunItem[]>("/analysis/runs"),
   runAnalysis: (id: number) => request<RunAnalysis>(`/runs/${id}/analysis`),
+  // Analyze workbench: cached analytics bundle (404 until computed), the compute job,
+  // and its progress (analytics slot — independent of the intraday-replay job).
+  runAnalytics: (id: number) => request<AnalyticsBundle>(`/runs/${id}/analytics`),
+  computeAnalytics: (id: number) =>
+    request<{ job_id?: string; status?: string }>(`/runs/${id}/analytics/compute`, { method: "POST" }),
+  analyticsProgress: () => request<ReplayJobSnapshot>(`/analytics/progress`),
   stockSeries: (
     symbol: string,
     opts: { start?: string; end?: string; st_period?: number; st_multiplier?: number; st_timeframe?: string } = {},

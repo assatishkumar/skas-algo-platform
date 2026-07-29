@@ -172,6 +172,18 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   `account.broker`. **No broker places real orders yet** — even LIVE mode fills via
   PaperBroker; the real order path (LiveBroker, LIMIT-at-touch→protected-limit, double-gated) is the
   planned Phase B and the only place order code may ever be added.
+- **gap_reversal** (`strategies/gap_reversal.py`, Nifty 500 equity, 2026-07-28): daily LONG-only
+  mean-reversion — gap-up open (≥`min_gap_pct`) + close above EMA(21) + RSI(10) **of the EMA
+  series** < 10 (`rsi_source="ema"` default — the owner's TradingView "RSI 10 EMA:EMA": the
+  smoothed RSI SATURATES near 0/100 through trends, so the band fires on the first gap-up
+  recovery; `"close"` = classic Wilder, rare at <10); exit on close < EMA. The spec's short leg is DEFERRED (cash equity can't hold overnight
+  shorts) to a future sell-CE/sell-PE options variant. It rides the NEW **generic indicator
+  precompute** (`needs_indicators`/`indicator_config()` → `MarketView(indicators=...)` computes
+  per-date ema/rsi/gap_pct from the RAW OHLC frame — the ONLY reader of the day's OPEN, which
+  the equity ctx otherwise never sees; mirror of the SuperTrend precompute, default None =
+  byte-identical). LIVE: `LiveMarketView.set_indicators` is EMPTY until the Phase-2 manager
+  seeding lands → deploys FAIL CLOSED (no entries, no blind exits). Backtest-first.
+  Coverage: `tests/test_gap_reversal.py`.
 - **21_ema_momentum** (`strategies/ema21_momentum.py`, NIFTY): daily EMA(21)-on-high/low
   channel; fresh close beyond the band at 15:20 → OTM 100-pt credit spread (bull put /
   bear call), width 300-500, credit ₹80-140 (ideal 90-130 preferred; miss → SKIP and
@@ -406,6 +418,17 @@ the app is the OWNER's hand, never Claude's.
   Tables persist via `localStorage`, so data can show even with the backend down. Use the shared
   `SessionBanner` (`components/redesign.tsx`) on any new broker-session-gated screener/deploy page —
   it distinguishes backend-down from no-session — and give disabled action buttons a `title` reason.
+- **The Analyze page (`/analyze`, 2026-07-28)** is the backtest-analytics workbench
+  (design_handoff_analyze): a per-run **analytics bundle** (`services/run_analytics.py`,
+  background job on the `analytics` slot of `replay_jobs` — never the replay slot; cached
+  `~/.skas_data/analytics/run_<id>.v<V>.json.gz`, bump BUNDLE_VERSION on shape changes) feeds
+  KPI tiles, the Stop/Target Simulator (margin-basis default + ratchet/below-peak trail —
+  mirrors intraday_straddle._stop_level), the Conditioner Explorer, the Premium-Melt hero and
+  6 drill-in sections + a Trade-ledger. INVARIANTS: full-run headline KPIs are COPIED from the
+  run's report (Analyze == Run Detail to the rupee); melt/MAE/MFE come from
+  `loss_study.reconstruct_path` over the 1-min store (intraday basis only — other bases fail
+  closed with amber notices, never fake); the melt MTM overlay is SURVIVOR-tilted by
+  construction (help text says so). STOCK runs keep `EquityTradeAnalysis`.
 - **Option tickers are `UNDERLYING|YYYY-MM-DD|STRIKE|RIGHT`** — never render the raw form: the `|`
   reads as an `I` (`NIFTYI2026-07-07I24500ICE`). Display option symbols through
   `formatOptionSymbol()` (`lib/symbol.ts`) → `NIFTY 24500 CE · 7 Jul '26`; it passes equity tickers

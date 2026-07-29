@@ -134,6 +134,64 @@ export interface AnalysisRunItem {
   instrument_class: string; // "STOCK" | "DERIV"
   mode: string;
   status: string; // "backtest" | "active" | "stopped" | "archived"
+  data_basis?: string; // "intraday" | "eod" | "live"
+  underlying?: string | null;
+}
+
+// ---- Analyze workbench (per-run analytics bundle, services/run_analytics.py) ----
+export interface AnalyticsTrade {
+  id: number; entry: string; exit: string;
+  dte: number | null; weekday: number; entry_slot: string;
+  credit_rs: number; credit_pts: number;
+  pnl_rs: number; pnl_pct_credit: number | null;
+  pnl_pe_rs: number; pnl_ce_rs: number;
+  skew_entry: number | null; skew_exit: number | null;
+  vix_entry: number | null; vix_exit: number | null;
+  u_move_pct: number | null; exit_reason: string | null; hold_min: number;
+  margin_rs: number | null; // the strategy's frozen margin base that day (risk denominator)
+  charge_rs?: number; // F&O charges allocated to this trade (net = pnl_rs − charge_rs)
+  ivhv?: number | null; // IV−HV spread at entry, vol points (BS-implied vs HV20)
+  n_legs?: number; units?: number | null; // structure size (breakeven-slippage curve)
+  mae_pct: number | null; mfe_pct: number | null; t_mfe_min: number | null;
+  path5: [number, number][]; // [minutes-since-entry, MTM % of credit] every 5 min
+}
+
+export interface AnalyticsBundle {
+  version: number; run_id: number; trade_count: number;
+  name: string; strategy_id: string; basis: string; // intraday | eod | live
+  underlying: string; start: string | null; end: string | null; capital: number;
+  kpis: {
+    total_pnl: number; cagr: number | null; sharpe: number | null;
+    win_rate: number; wins: number; trades: number; max_dd: number;
+    margin_ref: number; rom_annual: number | null; premium_capture: number | null;
+    avg_credit_rs: number | null; avg_credit_pts: number | null; avg_hold_min: number | null;
+  };
+  coverage: Record<string, "full" | "partial" | "none">;
+  paths_missing: number;
+  trades: AnalyticsTrade[];
+  melt?: {
+    slots: string[]; trades: number;
+    premium_by_dte: Record<string, (number | null)[]>;
+    premium_0dte_by_vix: Record<string, (number | null)[]>;
+    mtm_by_dte: Record<string, (number | null)[]>;
+    entries: number[]; exits: number[];
+  } | null;
+  daily: { date: string; pnl: number; equity: number; dd: number; margin?: number | null }[];
+  series: {
+    rolling_sharpe: { date: string; v: number }[];
+    autocorr: { lag: number; v: number }[];
+    sig_band: number | null;
+    correlations: { nifty: number | null; vix: number | null };
+  };
+  costs: {
+    charges: number; net: number; gross: number;
+    breakdown?: Record<string, number> | null;
+  };
+  liquidity?: {
+    checked: number; flagged: number;
+    rows: { date: string; which: string; leg: string; size: number; volume: number; ratio: number }[];
+  };
+  regimes?: { date: string; label: string }[];
 }
 
 export interface RunAnalysis {
