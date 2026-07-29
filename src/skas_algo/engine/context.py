@@ -92,6 +92,14 @@ class AlgoContext:
         fn = getattr(self.market, "supertrend_dir", None)
         return fn(symbol) if fn is not None else None
 
+    def indicator(self, symbol: str, name: str) -> float | None:
+        """Named precomputed daily indicator (ema / rsi / gap_pct — see MarketView), or None
+        when unavailable (view built without indicators, warmup, live not yet seeded).
+        Strategies MUST fail closed on None — in live the store is empty until the manager
+        seeds it, so an unseeded deploy trades nothing rather than trading blind."""
+        fn = getattr(self.market, "indicator", None)
+        return fn(symbol, name) if fn is not None else None
+
     # ----- options (no-ops / None for non-options runs) -----
     def today(self):
         """Current trading date (a ``datetime.date``). Used by options strategies."""

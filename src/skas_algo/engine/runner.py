@@ -57,6 +57,7 @@ class BacktestRunner:
         margin_model=None,
         charge_model=None,
         supertrend=None,
+        indicators=None,
     ):
         self.strategy = strategy
         self.universe = universe
@@ -77,6 +78,9 @@ class BacktestRunner:
         # Optional SuperTrend precompute config ({"period","multiplier","timeframe"}); the
         # feed builds the equity view with SuperTrend when set.
         self.supertrend = supertrend
+        # Optional generic indicator precompute (ema/rsi/gap_pct — gap_reversal); None =
+        # nothing computed, existing runs byte-identical.
+        self.indicators = indicators
 
     def run(self, start_date: date, end_date: date, *, warmup_days: int = 0) -> RunResult:
         """Replay from ``start_date`` to ``end_date``.
@@ -88,7 +92,7 @@ class BacktestRunner:
         to before (regular backtests + the mode-equivalence parity path are untouched)."""
         data_start = start_date - timedelta(days=warmup_days) if warmup_days > 0 else start_date
         view = self.market_view or HistoricalReplayFeed(
-            self.loader, self.lookback, supertrend=self.supertrend
+            self.loader, self.lookback, supertrend=self.supertrend, indicators=self.indicators
         ).build(self.universe, data_start, end_date, verbose=self.verbose)
         portfolio = Portfolio(cash=self.initial_capital)
         stops = StopBook()

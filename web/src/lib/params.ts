@@ -99,6 +99,11 @@ const LABELS: Record<string, string> = {
   entry_mode: "Entry",
   pullback_pct: "Min pullback %",
   idle_return: "Idle cash return %/yr",
+  // gap_reversal (ema_period already labeled above for 21_ema_momentum)
+  min_gap_pct: "Min gap-up %",
+  rsi_period: "RSI period",
+  rsi_source: "RSI source",
+  rsi_entry_below: "Enter when RSI below",
   // nifty_shop
   allocation_pct: "Allocation % / trade",
   num_candidates: "Candidates (below DMA)",

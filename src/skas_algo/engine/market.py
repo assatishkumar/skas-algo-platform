@@ -39,7 +39,9 @@ class MarketLike(Protocol):
 class MarketView:
     """Per-symbol price series with a movable 'current date' cursor."""
 
-    def __init__(self, lookback: int, supertrend: dict | None = None):
+    def __init__(
+        self, lookback: int, supertrend: dict | None = None, indicators: dict | None = None
+    ):
         self.lookback = lookback
         self.unified_dates: list[pd.Timestamp] = []
         self._current: pd.Timestamp | None = None
@@ -52,6 +54,13 @@ class MarketView:
         # daily-mapped direction (+1/−1). Only computed when requested (equity supertrend).
         self._st_cfg = supertrend
         self._supertrend: dict[str, dict[pd.Timestamp, float]] = {}
+        # Generic per-date indicator precompute (the OPEN-price plumbing, 2026-07-28):
+        # {"ema": {"span": 21}, "rsi": {"period": 10}, "gap_pct": {}} → per-symbol
+        # {date: {name: value}}. add_symbol has the RAW OHLC frame (incl. ``open``, which
+        # the ctx otherwise never sees) — same precompute-then-scalar shape as SuperTrend.
+        # None (the default) computes nothing → every existing path stays byte-identical.
+        self._ind_cfg = indicators
+        self._indicators: dict[str, dict[pd.Timestamp, dict[str, float]]] = {}
 
     # ------------------------------------------------------------- building
     def add_symbol(self, symbol: str, df: pd.DataFrame) -> None:
@@ -75,7 +84,40 @@ class MarketView:
                 timeframe=str(self._st_cfg.get("timeframe", "daily")),
             )
             self._supertrend[symbol] = {ts: float(v) for ts, v in sd.items() if pd.notna(v)}
+        if self._ind_cfg:
+            self._indicators[symbol] = self._compute_indicators(df)
         self._universe_order.append(symbol)
+
+    def _compute_indicators(self, df: pd.DataFrame) -> dict[pd.Timestamp, dict[str, float]]:
+        """Per-date named indicator values from the RAW (date-indexed) OHLC frame.
+        Supported: ``ema`` ({"span"}), ``rsi`` ({"period"}), ``gap_pct`` (today's open vs the
+        previous close, as a FRACTION — the only reader of ``open`` in the equity engine).
+        NaNs (warmup / missing open) are simply absent → ctx.indicator() returns None and
+        strategies fail closed."""
+        from skas_algo.engine.indicators import ema, rsi
+
+        close = df["close"]
+        series: dict[str, pd.Series] = {}
+        if "ema" in self._ind_cfg:
+            series["ema"] = ema(close, int(self._ind_cfg["ema"].get("span", 21)))
+        if "rsi" in self._ind_cfg:
+            cfg = self._ind_cfg["rsi"]
+            # source "ema": RSI of the EMA(source_span) series (the TradingView "RSI 10
+            # EMA:EMA" setup — gap_reversal's true spec). The smoothed source SATURATES
+            # near 0/100 through trends (every EMA delta shares a sign), which is what
+            # makes the <10 band fire routinely; raw-close RSI there is rare.
+            src = close
+            if str(cfg.get("source", "close")) == "ema":
+                src = ema(close, int(cfg.get("source_span", 21)))
+            series["rsi"] = rsi(src, int(cfg.get("period", 10)))
+        if "gap_pct" in self._ind_cfg and "open" in df.columns:
+            series["gap_pct"] = df["open"] / close.shift(1) - 1.0
+        out: dict[pd.Timestamp, dict[str, float]] = {}
+        for name, s in series.items():
+            for ts, v in s.items():
+                if pd.notna(v):
+                    out.setdefault(ts, {})[name] = float(v)
+        return out
 
     def finalize(self) -> None:
         all_dates: set[pd.Timestamp] = set()
@@ -132,6 +174,11 @@ class MarketView:
         / not yet warmed up. Present only when the view was built with supertrend params."""
         return self._supertrend.get(symbol, {}).get(self._current)
 
+    def indicator(self, symbol: str, name: str) -> float | None:
+        """Named precomputed indicator value at the cursor date (ema / rsi / gap_pct), or
+        None when the view wasn't built with indicators / the value isn't warmed up yet."""
+        return self._indicators.get(symbol, {}).get(self._current, {}).get(name)
+
     def closes_today(self) -> dict[str, float]:
         """Prices actually printed today (for stop evaluation / fills)."""
         out: dict[str, float] = {}
@@ -153,15 +200,22 @@ class MarketView:
 class HistoricalReplayFeed:
     """Loads history for a universe and replays the unified calendar (BACKTEST)."""
 
-    def __init__(self, loader: PriceLoader, lookback: int, supertrend: dict | None = None):
+    def __init__(
+        self,
+        loader: PriceLoader,
+        lookback: int,
+        supertrend: dict | None = None,
+        indicators: dict | None = None,
+    ):
         self.loader = loader
         self.lookback = lookback
         self.supertrend = supertrend
+        self.indicators = indicators
 
     def build(
         self, universe: list[str], start_date: date, end_date: date, verbose: bool = False
     ) -> MarketView:
-        view = MarketView(self.lookback, supertrend=self.supertrend)
+        view = MarketView(self.lookback, supertrend=self.supertrend, indicators=self.indicators)
         for symbol in universe:
             df = self.loader(symbol, start_date, end_date)
             if df is not None and not df.empty:

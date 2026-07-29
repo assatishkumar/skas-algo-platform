@@ -25,6 +25,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   staggered_covered_call: "Staggered Covered Call (options)",
   custom_options: "Custom options",
   supertrend_momentum: "supertrend_momentum",
+  gap_reversal: "Gap Reversal (equity)",
 };
 const strategyLabel = (id: string) => STRATEGY_LABELS[id] ?? id;
 // Tiles/ranking show CAGR — comparable across runs of different lengths (a 16-year

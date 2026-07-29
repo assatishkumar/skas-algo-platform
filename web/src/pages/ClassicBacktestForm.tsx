@@ -198,6 +198,13 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   const [stPullbackPct, setStPullbackPct] = useState(0); // min dip below the post-flip peak
   const [stIdleReturn, setStIdleReturn] = useState(6); // assumed idle-cash yield %/yr (reporting)
 
+  // Gap Reversal params (gap-up + 21-EMA + oversold-RSI long)
+  const [grMinGap, setGrMinGap] = useState(0); // min gap-up %, 0 = any gap
+  const [grEma, setGrEma] = useState(21);
+  const [grRsi, setGrRsi] = useState(10);
+  const [grRsiBand, setGrRsiBand] = useState(10); // enter only when RSI is below this
+  const [grRsiSource, setGrRsiSource] = useState("ema"); // RSI of the EMA (chart spec) | raw close
+
   // Nifty_Shop params (DMA-dip accumulator; the Lookback field is the DMA window)
   const [nsAllocPct, setNsAllocPct] = useState(4); // % of equity per trade (compounds)
   const [nsTarget, setNsTarget] = useState(5); // exit a name at +this% over avg cost
@@ -328,6 +335,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   const isSstWeekly = strategyId === "sst_weekly";
   const isSstWeeklyFifo = strategyId === "sst_weekly_fifo";
   const isSupertrend = strategyId === "supertrend_momentum";
+  const isGapReversal = strategyId === "gap_reversal";
   const isWeeklyDonchian = isSstWeekly || isSstWeeklyFifo; // both expose donchian_weeks
   const isTiered = isFifo || isSstWeeklyFifo; // FIFO-style tiered profit targets
   const isCallRatio = ["call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly"].includes(strategyId);
@@ -791,6 +799,16 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
             num_candidates: nsCandidates,
             new_buys_per_day: nsNewBuys,
             avg_down_pct: nsAvgDown / 100,
+          }
+        : isGapReversal
+        ? {
+            capital_parts: parts,
+            allocation_mode: allocationMode,
+            min_gap_pct: grMinGap,
+            ema_period: grEma,
+            rsi_period: grRsi,
+            rsi_source: grRsiSource,
+            rsi_entry_below: grRsiBand,
           }
         : {
             capital_parts: parts,
@@ -1611,12 +1629,12 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                       <NumberInput step="0.1" className={inputClass} value={target3} onChange={setTarget3} />
                     </Field>
                   </>
-                ) : (
+                ) : !isGapReversal ? (
                   <Field label="Profit target %">
                     <NumberInput step="0.1" className={inputClass} value={target} onChange={setTarget} />
                   </Field>
-                )}
-                {!isSupertrend && (
+                ) : null}
+                {!isSupertrend && !isGapReversal && (
                   <Field label="Max lots (0 = unlimited)">
                     <NumberInput className={inputClass} value={maxLots} onChange={setMaxLots} />
                   </Field>
@@ -1657,6 +1675,28 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                     )}
                     <Field label="Idle cash return %/yr">
                       <NumberInput step="0.5" className={inputClass} value={stIdleReturn} onChange={setStIdleReturn} />
+                    </Field>
+                  </>
+                )}
+                {isGapReversal && (
+                  <>
+                    <Field label="Min gap-up % (0 = any gap)">
+                      <NumberInput step="0.1" className={inputClass} value={grMinGap} onChange={setGrMinGap} />
+                    </Field>
+                    <Field label="EMA period">
+                      <NumberInput className={inputClass} value={grEma} onChange={setGrEma} />
+                    </Field>
+                    <Field label="RSI period">
+                      <NumberInput className={inputClass} value={grRsi} onChange={setGrRsi} />
+                    </Field>
+                    <Field label="RSI source">
+                      <select className={inputClass} value={grRsiSource} onChange={(e) => setGrRsiSource(e.target.value)}>
+                        <option value="ema">EMA (RSI of the EMA — chart spec)</option>
+                        <option value="close">Close (classic Wilder RSI)</option>
+                      </select>
+                    </Field>
+                    <Field label="Enter when RSI below">
+                      <NumberInput step="1" className={inputClass} value={grRsiBand} onChange={setGrRsiBand} />
                     </Field>
                   </>
                 )}

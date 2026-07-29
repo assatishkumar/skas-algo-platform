@@ -164,6 +164,7 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
             market_view=market_view, settler=settler, margin_model=margin_model,
             charge_model=ChargeModel(),
         )
+        warmup = 0  # options path: prebuilt market view, no indicator warmup
     else:
         # SuperTrend strategies precompute their direction from OHLC in the market view.
         supertrend = (
@@ -171,6 +172,21 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
             if getattr(strategy, "needs_supertrend", False) and hasattr(strategy, "supertrend_config")
             else None
         )
+        # Generic indicator precompute (ema/rsi/gap_pct) — same opt-in shape (gap_reversal).
+        indicators = (
+            strategy.indicator_config()
+            if getattr(strategy, "needs_indicators", False)
+            and hasattr(strategy, "indicator_config")
+            else None
+        )
+        # Indicator strategies load ~8 months of PRE-start bars so EMA/RSI are CONVERGED at
+        # start_date. Without this the run's first emitted RSI is seeded from ~10 deltas and
+        # reads spurious extremes: run #237 (start 2020-01-04) put MCX's 2020-02-14
+        # RSI-of-EMA at 1.14 where the converged value is 42.19 (TradingView 42.83) → four
+        # phantom entries on the first indicator-valid day. The runner's warmup loop drives
+        # the strategy through the buffer bars but executes/records nothing (byte-identical
+        # for every warmup_days=0 run).
+        warmup = 250 if indicators is not None else 0
         runner = BacktestRunner(
             strategy=strategy,
             universe=list(req.symbols),
@@ -181,8 +197,9 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
             withdrawal_rate=req.withdrawal_rate,
             overrides=overrides,
             supertrend=supertrend,
+            indicators=indicators,
         )
-    result = runner.run(req.start_date, req.end_date)
+    result = runner.run(req.start_date, req.end_date, warmup_days=warmup)
     # Strategies that opt in (e.g. SuperTrend Momentum) get the deployed-capital + idle-cash
     # CAGR overlay; idle rate is configurable (default 6%). Other strategies are unchanged.
     want_deployed = getattr(strategy, "report_deployed_metrics", False)

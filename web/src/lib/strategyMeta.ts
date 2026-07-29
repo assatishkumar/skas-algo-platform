@@ -56,6 +56,7 @@ const CATEGORY_OF: Record<string, LiveCategoryId> = {
   delta_neutral_monthly: "positional",
   iron_fly_monthly: "positional",
   supertrend_momentum: "equity",
+  gap_reversal: "equity",
   nifty_shop: "equity",
   custom_equity: "equity",
   sst_lifo: "equity",

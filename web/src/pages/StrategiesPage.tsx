@@ -391,6 +391,21 @@ const STRATEGIES: Rule[] = [
     risk: "Equity long-only; managed by per-lot targets and any configured stops.",
   },
   {
+    id: "gap_reversal",
+    name: "Gap Reversal",
+    kind: "Equity",
+    bias: "Mean-reversion · gap continuation",
+    summary:
+      "Bottom-reversal longs: through a downtrend the RSI(10) OF THE EMA pins near 0 — the first gap-up that retakes the 21 EMA while it's still under 10 is the entry; ride until the close falls back below the EMA.",
+    structure: ["One position per name; capital split into equal parts (fixed or equity-scaled)."],
+    entry: [
+      "Today gapped UP over the previous close (min gap % configurable, 0 = any gap).",
+      "Close above the 21 EMA AND RSI(10) of the EMA below 10 — all three or nothing.",
+    ],
+    exit: ["Close below the 21 EMA exits the whole position."],
+    risk: "Long-only cash equity (the short leg needs the future options variant). Catches trend reversals off bottoms — early entries into failed recoveries exit quickly via the EMA cross.",
+  },
+  {
     id: "supertrend_momentum",
     name: "SuperTrend Momentum",
     kind: "Equity",
@@ -590,6 +605,13 @@ const META: Record<string, Meta> = {
     facts: [["Bias", "Trend-following"], ["Universe", "Nifty 50"], ["Signal", "20d Donchian breakout"],
             ["Booking", "LIFO"], ["Cadence", "Daily EOD"], ["Kind", "Cash equity"]],
     deployNote: "The founding parity strategy — byte-identical backtest and paper replay.",
+    deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
+  gap_reversal: {
+    group: "Equity trend", biasKind: "bull",
+    facts: [["Bias", "Mean-reversion"], ["Universe", "Nifty 500"], ["Signal", "Gap up + RSI(10)-of-EMA<10 + >21 EMA"],
+            ["Exit", "Close < 21 EMA"], ["Cadence", "Daily EOD"], ["Kind", "Cash equity · long-only"]],
+    deployNote: "Backtest-first: live deploys fail closed (no entries) until the live indicator seeding lands (Phase 2).",
     deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
   },
   supertrend_momentum: {

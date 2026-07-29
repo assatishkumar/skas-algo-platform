@@ -23,6 +23,8 @@ class LiveMarketView:
         # from cached OHLC). direction +1 green / −1 red; line = the trailing band; None until set.
         self._supertrend_dir: dict[str, float] = {}
         self._supertrend_line: dict[str, float] = {}
+        # Today's named indicator values per symbol (set_indicators) — empty until seeded.
+        self._indicators: dict[str, dict[str, float]] = {}
 
     # ----------------------------------------------------------- building
     def seed(self, symbol: str, closes: list[float]) -> None:
@@ -86,6 +88,20 @@ class LiveMarketView:
     def supertrend_line(self, symbol: str) -> float | None:
         """Latest completed-bar SuperTrend line (the trailing band), or None."""
         return self._supertrend_line.get(symbol)
+
+    def set_indicators(self, symbol: str, values: dict[str, float] | None) -> None:
+        """Manager push of today's named indicator values (ema / rsi / gap_pct) — the live
+        analogue of the backtest precompute (Phase-2 seeding target, gap_reversal). None
+        clears the symbol."""
+        if values is None:
+            self._indicators.pop(symbol, None)
+        else:
+            self._indicators[symbol] = {k: float(v) for k, v in values.items()}
+
+    def indicator(self, symbol: str, name: str) -> float | None:
+        """Named indicator for today, or None until the manager seeds it — an unseeded run
+        therefore FAILS CLOSED (strategies skip on None) instead of trading blind."""
+        return self._indicators.get(symbol, {}).get(name)
 
     def closes_today(self) -> dict[str, float]:
         return dict(self._quotes)
