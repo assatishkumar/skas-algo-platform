@@ -160,3 +160,23 @@ def test_refresh_cache_endpoint(client: TestClient, monkeypatch):
     assert add.status_code == 200, add.text
     assert add.json()["refreshed"]["NEWSYM"]["rows"] == 1
     app.dependency_overrides.pop(get_available_symbols, None)
+
+
+def test_universe_symbols_cached_only_flag(client: TestClient):
+    """cached_only=false returns the FULL static list even on an EMPTY cache — the
+    Brokers refresh flow needs it (an empty VPS cache 404'd the very button that
+    populates the cache, 2026-07-30). Default stays the cached intersection."""
+    app = client.app
+    app.dependency_overrides[get_available_symbols] = lambda: set()  # fresh box
+    try:
+        # Default (cached intersection) on an empty cache → 404, the old behaviour.
+        assert client.get("/api/v1/universes/nifty500/symbols").status_code == 404
+        # Full list: the refresh flow's path — works on an empty cache.
+        r = client.get("/api/v1/universes/nifty500/symbols?cached_only=false")
+        assert r.status_code == 200
+        syms = r.json()["symbols"]
+        assert len(syms) > 400 and "RELIANCE" in syms
+        # Unknown universe stays a 404 either way.
+        assert client.get("/api/v1/universes/nope/symbols?cached_only=false").status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_available_symbols, None)

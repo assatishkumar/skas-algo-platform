@@ -136,8 +136,12 @@ export const api = {
     request<{ job_id: string }>("/backtest/intraday", { method: "POST", body: JSON.stringify(body) }),
   backtestIntradayProgress: () => request<ReplayJobSnapshot>("/backtest/intraday/progress"),
   universes: () => request<Universe[]>("/universes"),
-  universeSymbols: (name: string) =>
-    request<{ name: string; symbols: string[] }>(`/universes/${encodeURIComponent(name)}/symbols`),
+  // cachedOnly=false → the FULL static list (the cache-refresh flow: an empty cache must
+  // not 404 the button that populates it).
+  universeSymbols: (name: string, cachedOnly = true) =>
+    request<{ name: string; symbols: string[] }>(
+      `/universes/${encodeURIComponent(name)}/symbols${cachedOnly ? "" : "?cached_only=false"}`,
+    ),
   runs: (status?: string) =>
     request<RunSummary[]>(`/runs${status ? `?status=${status}` : ""}`),
   runUpdate: (id: number, body: { name?: string; notes?: string }) =>

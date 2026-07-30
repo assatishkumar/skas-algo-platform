@@ -90,12 +90,17 @@ def list_universes(
 
 @router.get("/universes/{name}/symbols")
 def universe_symbols(
-    name: str, avail: set[str] = Depends(get_available_symbols)
+    name: str, cached_only: bool = True, avail: set[str] = Depends(get_available_symbols)
 ) -> dict:
-    """The cached symbols a named universe resolves to — lets the client chunk a cache refresh
-    into small batches (with a progress indicator) instead of one long blocking call."""
+    """The symbols a named universe resolves to — lets the client chunk a cache refresh
+    into small batches (with a progress indicator) instead of one long blocking call.
+
+    ``cached_only=false`` returns the FULL static list, uncut by the cache — the refresh
+    flow needs this: intersecting with the cache made an EMPTY cache (a fresh VPS box)
+    404 on the very button that would populate it (chicken-and-egg, 2026-07-30), and on
+    a warm box it silently skipped constituents not yet cached."""
     try:
-        syms = universes.resolve(name, avail)
+        syms = universes.resolve(name, avail if cached_only else None)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if not syms:

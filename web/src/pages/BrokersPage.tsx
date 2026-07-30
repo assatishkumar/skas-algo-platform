@@ -433,7 +433,10 @@ function AccountCard({ a, loginOpen, onToggleLogin, onAction, onLoggedIn }: {
     setProgress(null);
     try {
       const [{ symbols: stocks }, cached] = await Promise.all([
-        api.universeSymbols("nifty500"),
+        // Full static Nifty-500 list, NOT the cached intersection — a fresh box (empty
+        // cache) 404'd the very button that populates the cache, and a warm box silently
+        // skipped constituents not yet cached (VPS bug, 2026-07-30).
+        api.universeSymbols("nifty500", false),
         api.dataSymbols(),
       ]);
       const symbols = Array.from(
