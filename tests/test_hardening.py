@@ -176,10 +176,14 @@ def test_backup_no_offbox_when_unconfigured(tmp_path, monkeypatch):
 
 
 def test_backup_offbox_dir_copies_and_prunes_per_series(tmp_path, monkeypatch):
-    """The native directory destination (Google Drive folder): the nightly snapshot is
-    copied in, then EACH series is pruned to backup_offbox_keep — per-series, so the
-    VPS's scp'd ``vps-*`` snapshots get their own retention instead of competing with
-    the Mac's (owner decision 2026-07-27: keep last 30; here keep=2 for brevity)."""
+    """The native directory destination (Google Drive folder): the nightly snapshot lands
+    GZIPPED under its FINAL name (no tmp+rename — Drive started uploading the .tmp and the
+    rename orphaned every nightly into lost_and_found, fixed 2026-07-30), then EACH series
+    is pruned to backup_offbox_keep — per-series, so the VPS's scp'd ``vps-*`` snapshots
+    get their own retention instead of competing with the Mac's; pre-gzip raw ``.db``
+    history prunes within the same series (keep=2 here for brevity)."""
+    import gzip
+
     from skas_algo.config import get_settings
     from skas_algo.services.backup import backup_db
 
@@ -187,7 +191,7 @@ def test_backup_offbox_dir_copies_and_prunes_per_series(tmp_path, monkeypatch):
     _make_sqlite(db)
     offbox = tmp_path / "drive"
     offbox.mkdir()
-    # Pre-existing history: 3 old Mac-series snapshots + 2 VPS-series ones.
+    # Pre-existing history: 3 old raw Mac-series snapshots + 2 VPS-series ones.
     for stamp in ("20260701-163000-000001", "20260702-163000-000001", "20260703-163000-000001"):
         (offbox / f"s-{stamp}.db").write_bytes(b"old")
     for stamp in ("20260701-163000-000002", "20260702-163000-000002"):
@@ -200,16 +204,18 @@ def test_backup_offbox_dir_copies_and_prunes_per_series(tmp_path, monkeypatch):
 
     p = backup_db(database_url=f"sqlite:///{db}", keep=3, offbox=True)
     assert p is not None
-    mac = sorted(f.name for f in offbox.glob("s-*.db"))
-    assert len(mac) == 2 and mac[-1] == p.name          # newest 2 kept, fresh one included
+    mac = sorted(f.name for f in offbox.glob("s-*.db*"))
+    assert len(mac) == 2 and mac[-1] == p.name + ".gz"  # newest 2 kept, fresh gz included
+    # The shipped copy is a faithful gzip of the snapshot (restore = gunzip).
+    assert gzip.decompress((offbox / (p.name + ".gz")).read_bytes()) == p.read_bytes()
     assert len(list(offbox.glob("vps-s-*.db"))) == 2    # other series untouched by our prune
     assert (offbox / "not-a-snapshot.db").exists()      # non-snapshot .db never pruned
-    assert not list(offbox.glob("*.tmp"))               # tmp+rename left nothing behind
+    assert not list(offbox.glob("*.tmp"))               # nothing staged in the synced folder
 
     # keep=0 → append-only (the pre-2026-07-27 behaviour).
     monkeypatch.setattr(get_settings(), "backup_offbox_keep", 0)
     backup_db(database_url=f"sqlite:///{db}", keep=3, offbox=True)
-    assert len(list(offbox.glob("s-*.db"))) == 3        # 2 kept + 1 new, nothing pruned
+    assert len(list(offbox.glob("s-*.db*"))) == 3       # 2 kept + 1 new, nothing pruned
 
 
 # --- Part 3: daily background cache refresh + quiet indication ---
@@ -279,3 +285,25 @@ def test_daily_cache_refresh_skips_weekend_and_retries_without_session(monkeypat
     monkeypatch.setattr(m2.broadcaster, "publish", lambda msg: pub.append(msg))
     asyncio.run(m2._maybe_daily_cache_refresh())
     assert pub == [] and m2._last_cache_refresh_day is None
+
+
+def test_last_backup_at_reads_newest_stamp(tmp_path):
+    """The nightly latch survives restarts by trusting on-disk stamps (an evening
+    restart used to re-fire the nightly + offbox ship on every boot, 2026-07-30)."""
+    from skas_algo.services.backup import last_backup_at
+
+    db = tmp_path / "s.db"
+    _make_sqlite(db)
+    url = f"sqlite:///{db}"
+    assert last_backup_at(url) is None  # no backups dir yet
+
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    (backups / "s-20260728-083012-000001.db").write_bytes(b"startup")
+    (backups / "s-20260728-163025-000001.db").write_bytes(b"nightly")
+    (backups / "s-20260727-163025-000001.db").write_bytes(b"older day")
+    (backups / "not-a-snapshot.db").write_bytes(b"ignored")
+
+    at = last_backup_at(url)
+    assert at is not None
+    assert (at.year, at.month, at.day, at.hour, at.minute) == (2026, 7, 28, 16, 30)

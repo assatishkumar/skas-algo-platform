@@ -20,6 +20,13 @@ os.environ["SKAS_TELEGRAM_CHAT_ID"] = ""
 # KiteTicker WebSocket in tests. The feed's own logic is covered by tests/test_pricefeed.py
 # with a fake ticker; here we force the legacy REST path (same reasoning as the notifiers).
 os.environ["SKAS_WS_FEED_ENABLED"] = "false"
+# Tests must NEVER touch the owner's real off-box backup destinations: the dev .env
+# points SKAS_BACKUP_OFFBOX_DIR at the real Google Drive folder, and the backup tests'
+# offbox=True calls copied ~30 junk `s-*.db` test snapshots into it (found 2026-07-30).
+# Env vars beat .env in pydantic-settings; tests that exercise offbox set their own
+# tmp_path destination via monkeypatch.
+os.environ["SKAS_BACKUP_OFFBOX_DIR"] = ""
+os.environ["SKAS_BACKUP_REMOTE_CMD"] = ""
 
 # A throwaway Fernet key so credential-encryption tests work in isolation.
 from cryptography.fernet import Fernet  # noqa: E402

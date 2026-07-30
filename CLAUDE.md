@@ -458,7 +458,15 @@ Health check: `curl http://localhost:8080/api/v1/health`. The DB schema is creat
 (idempotent); Alembic migrations are in `alembic/` for evolving an existing DB. Startup also
 takes a pre-recovery DB backup (`services/backup.py` → `backups/`, retain 7) and starts the
 manager maintenance task (5-min: loop watchdog + a once-per-trading-day background cache refresh
-+ daily ~16:30 backup).
++ daily ~16:30 backup). The nightly also ships **off-box** (`SKAS_BACKUP_OFFBOX_DIR` — a Google
+Drive for Desktop folder — and/or `SKAS_BACKUP_REMOTE_CMD`): Drive copies land **gzipped, written
+straight to their final name** — NEVER stage a tmp+rename inside a Drive-synced folder (Drive
+starts uploading the .tmp within seconds and the rename orphans it into lost_and_found — daily
+complaint until 2026-07-30) — pruned per-series to `SKAS_BACKUP_OFFBOX_KEEP` (30). The nightly
+latch is disk-derived on the first pass after boot (`last_backup_at`, stamp ≥16:30 today), so an
+evening restart no longer re-ships ~270MB per boot. Tests must never touch real offbox
+destinations — `tests/conftest.py` blanks both env keys (before that, every preflight copied
+junk `s-*.db` snapshots into the owner's real Drive).
 
 **Preflight before any restart/deploy:** `./scripts/preflight.sh` — ruff (advisory) + the FULL
 test suite incl. the parity/mode-equivalence suites + web typecheck. Green = the change didn't

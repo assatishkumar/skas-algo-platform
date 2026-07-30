@@ -1707,8 +1707,19 @@ class LiveRunManager:
         now = datetime.now(IST)
         if now.time() < time(16, 30) or self._last_backup_day == now.date():
             return
+        from skas_algo.services.backup import backup_db, last_backup_at
+
+        # The in-memory latch dies with the process, so an evening restart used to
+        # re-fire the nightly + offbox ship on every boot (5 extra ~265MB Drive copies
+        # on 2026-07-28 alone). First pass after boot: trust the on-disk stamps — a
+        # snapshot from ≥16:30 today means tonight's backup already ran. The time check
+        # matters: a MORNING pre-recovery startup backup must not satisfy the nightly.
+        if self._last_backup_day is None:
+            last = await asyncio.to_thread(last_backup_at)
+            if last is not None and last.date() == now.date() and last.time() >= time(16, 30):
+                self._last_backup_day = now.date()
+                return
         self._last_backup_day = now.date()
-        from skas_algo.services.backup import backup_db
 
         # offbox=True → also ship this nightly snapshot off the machine (if configured).
         await asyncio.to_thread(backup_db, None, None, True)

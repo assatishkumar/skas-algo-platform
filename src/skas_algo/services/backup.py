@@ -92,16 +92,56 @@ def _prune(backups: Path, stem: str, keep: int) -> None:
 
 # Snapshot filenames are ``<series>-YYYYMMDD-HHMMSS-ffffff.db``; the series prefix is
 # per-box (the Mac's own ``skas_algo``, the VPS's scp'd ``vps-skas_algo``, …).
-_STAMP_RE = re.compile(r"^(?P<series>.+)-\d{8}-\d{6}-\d{6}\.db$")
+# Optional .gz: offbox snapshots gzip since 2026-07-30; raw pre-gzip ones prune alongside.
+_STAMP_RE = re.compile(r"^(?P<series>.+)-\d{8}-\d{6}-\d{6}\.db(\.gz)?$")
+
+
+def last_backup_at(database_url: str | None = None) -> datetime | None:
+    """Timestamp (from the filename stamp) of the newest on-box snapshot, or None.
+
+    Lets the manager's nightly latch survive restarts: the latch was in-memory only, so
+    every dev-evening restart after 16:30 re-fired the "nightly" and shipped another
+    ~265MB snapshot to the Drive folder (5 extra on 2026-07-28 alone). The caller checks
+    the TIME too — a morning pre-recovery startup backup is stamped before 16:30 and
+    must not satisfy the nightly."""
+    settings = get_settings()
+    try:
+        src = _sqlite_path(database_url or settings.database_url)
+        if src is None:
+            return None
+        newest: datetime | None = None
+        for f in (src.parent / "backups").glob(f"{src.stem}-*.db"):
+            m = _STAMP_RE.match(f.name)
+            if not m:
+                continue
+            try:
+                stamp = f.name[len(src.stem) + 1 : -3]  # YYYYMMDD-HHMMSS-ffffff
+                at = datetime.strptime(stamp, "%Y%m%d-%H%M%S-%f")
+            except ValueError:  # pragma: no cover - foreign name that matched the regex
+                continue
+            if newest is None or at > newest:
+                newest = at
+        return newest
+    except Exception:  # pragma: no cover - best-effort like the rest of this module
+        return None
 
 
 def _copy_offbox_dir(snapshot: Path) -> None:
     """Native off-box copy + retention for a DIRECTORY destination (a Google Drive for
-    Desktop folder — the Drive app ships it to the cloud). Copies tmp+rename so the Drive
-    uploader never sees a half-written file, then prunes EVERY snapshot series in the
+    Desktop folder — the Drive app ships it to the cloud). Copies STRAIGHT to the final
+    name: the old tmp+rename backfired here — Drive starts uploading the ~265MB ``.tmp``
+    within seconds, the rename yanked it mid-upload, and Drive orphaned every nightly
+    into its lost_and_found (daily complaint, fixed 2026-07-30). A direct copy at worst
+    re-uploads once when the file settles; a failed copy unlinks the partial so a
+    truncated snapshot can't pose as a backup. Then prunes EVERY snapshot series in the
     folder to the last ``backup_offbox_keep`` — per-series, so the VPS snapshots the box
     scp's into the same folder (``vps-`` prefix) get their own retention instead of
-    competing with ours. Best-effort like the rest of this module."""
+    competing with ours. Best-effort like the rest of this module.
+
+    Snapshots land GZIPPED (``<name>.db.gz``, ~4x smaller — owner choice 2026-07-30:
+    30 days × ~270MB raw was heading for ~8GB of Drive); restore = ``gunzip`` first.
+    Pre-gzip raw ``.db`` snapshots prune within the same series."""
+    import gzip
     import shutil
 
     settings = get_settings()
@@ -110,10 +150,14 @@ def _copy_offbox_dir(snapshot: Path) -> None:
     try:
         dest_dir = Path(settings.backup_offbox_dir).expanduser()
         dest_dir.mkdir(parents=True, exist_ok=True)
-        tmp = dest_dir / (snapshot.name + ".tmp")
-        shutil.copy2(snapshot, tmp)
-        tmp.rename(dest_dir / snapshot.name)
-        logger.info("off-box dir backup ok: %s", snapshot.name)
+        dest = dest_dir / (snapshot.name + ".gz")
+        try:
+            with open(snapshot, "rb") as fin, gzip.open(dest, "wb", compresslevel=6) as fout:
+                shutil.copyfileobj(fin, fout, length=1 << 20)
+        except BaseException:
+            dest.unlink(missing_ok=True)
+            raise
+        logger.info("off-box dir backup ok: %s", dest.name)
         _prune_offbox_dir(dest_dir, int(settings.backup_offbox_keep))
     except Exception as exc:  # pragma: no cover - same surfacing as the cmd path
         _alert_offbox_failure(snapshot.name, str(exc))
@@ -125,7 +169,7 @@ def _prune_offbox_dir(dest_dir: Path, keep: int) -> None:
     if keep <= 0:
         return
     series: dict[str, list[Path]] = {}
-    for f in dest_dir.glob("*.db"):
+    for f in list(dest_dir.glob("*.db")) + list(dest_dir.glob("*.db.gz")):
         m = _STAMP_RE.match(f.name)
         if m:  # non-snapshot .db files are never touched
             series.setdefault(m.group("series"), []).append(f)
