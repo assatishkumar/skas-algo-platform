@@ -253,15 +253,20 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
 
 @router.get("/summary")
 def live_summary() -> dict:
-    """Home dashboard aggregates across ACTIVE PAPER deployments: win rate (booked round-trips), a
-    daily equity series for the last ~30 days + its annualized Sharpe. The series/Sharpe build from
-    the runs' daily history, so they fill in as history accumulates (and are null until ≥ 2 days)."""
+    """Home dashboard aggregates: win rate (booked round-trips), a daily equity series for
+    the last ~30 days + its annualized Sharpe. The series/Sharpe build from the runs' daily
+    history, so they fill in as history accumulates (and are null until ≥ 2 days).
+
+    Basis: REAL (LIVE-mode) deployments when any are running — the VPS Home page showed
+    paper stats while real money traded (owner, 2026-07-31) — else the paper fleet. The
+    chosen basis rides the response so the Home page can label the hero honestly."""
     import math
     import statistics
     from datetime import date as _date
     from datetime import timedelta
 
-    lives = [lr for lr in manager.list() if str(lr.config.mode).upper() == "PAPER"]
+    real = [lr for lr in manager.list() if str(lr.config.mode).upper() == "LIVE"]
+    lives = real or [lr for lr in manager.list() if str(lr.config.mode).upper() == "PAPER"]
     wins = total = 0
     per_run_day: list[dict[_date, float]] = []  # each run's last total_equity per calendar day
     for lr in lives:
@@ -313,6 +318,8 @@ def live_summary() -> dict:
                 sharpe = statistics.mean(rets) / sd * math.sqrt(252)  # annualized (daily)
 
     return {
+        # Which fleet the numbers describe — "live" (real money) when any LIVE run exists.
+        "basis": "live" if real else "paper",
         "win_rate": win_rate,
         "total_trades": total,
         "equity_series": series,

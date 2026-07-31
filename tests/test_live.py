@@ -694,3 +694,32 @@ def test_update_params_route():
         assert r.status_code == 422
     finally:
         manager.stop(live.run_id)
+
+
+def test_summary_prefers_real_runs():
+    """/live/summary aggregates the REAL (LIVE-mode) fleet when any is running — the VPS
+    Home page showed paper stats while real money traded (2026-07-31) — else paper."""
+    fake = FakeQuoteSource()
+    base = dict(symbols=["AAA"], capital=100_000,
+                params={"capital_parts": 10, "profit_target": 0.06},
+                lookback=5, tax_rate=0.0, ignore_market_hours=True)
+    paper = manager.start(
+        LiveConfig(name="sum-paper", strategy_id="sst_lifo", mode="PAPER", **base),
+        _flat_loader, fake)
+    # LIVE mode WITHOUT an armed account keeps PaperBroker (the §1 gate) — safe in tests.
+    real = manager.start(
+        LiveConfig(name="sum-real", strategy_id="sst_lifo", mode="LIVE", **base),
+        _flat_loader, fake)
+    client = TestClient(create_app())
+    try:
+        s = client.get("/api/v1/live/summary").json()
+        assert s["basis"] == "live"
+        manager.stop(real.run_id)
+        s = client.get("/api/v1/live/summary").json()
+        assert s["basis"] == "paper"
+    finally:
+        for lr in (paper, real):
+            try:
+                manager.stop(lr.run_id)
+            except Exception:
+                pass

@@ -1248,7 +1248,8 @@ export interface DeploymentMetrics {
 }
 
 export interface LiveSummary {
-  win_rate: number | null; // % of closed round-trips that booked a profit (paper)
+  basis?: "live" | "paper"; // which fleet the numbers describe — "live" when real runs exist
+  win_rate: number | null; // % of closed round-trips that booked a profit
   total_trades: number;
   equity_series: number[]; // ~30d aggregated daily paper equity (sparkline)
   equity_change_pct_30d: number | null;

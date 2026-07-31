@@ -110,21 +110,25 @@ function StatCard({ label, value, tone }: { label: string; value: string; tone?:
 }
 
 export default function HomePage() {
-  // Real aggregates across ACTIVE PAPER deployments (same source the Live page sums) — replaces the
-  // old hardcoded hero/stat numbers.
+  // Aggregates across ACTIVE deployments (same source the Live page sums) — REAL (LIVE-mode)
+  // runs take precedence when any exist (the VPS Home showed paper stats while real money
+  // traded, owner 2026-07-31); an all-paper box (the Mac) is unchanged. The backend's
+  // /live/summary applies the same preference, so win rate / Sharpe / sparkline match.
   const { data: deps } = useQuery({
     queryKey: ["deployments", "active"],
     queryFn: () => api.liveDeployments("active"),
   });
-  const paper = (deps ?? []).filter((d) => (d.mode || "").toUpperCase() === "PAPER");
-  const sum = (pick: (m: (typeof paper)[number]["metrics"]) => number | null | undefined) =>
-    paper.reduce((s, d) => s + (pick(d.metrics) ?? 0), 0);
+  const real = (deps ?? []).filter((d) => (d.mode || "").toUpperCase() === "LIVE");
+  const shown = real.length ? real : (deps ?? []).filter((d) => (d.mode || "").toUpperCase() === "PAPER");
+  const basis = real.length ? "live" : "paper";
+  const sum = (pick: (m: (typeof shown)[number]["metrics"]) => number | null | undefined) =>
+    shown.reduce((s, d) => s + (pick(d.metrics) ?? 0), 0);
   const equity = sum((m) => m.equity);
   const realized = sum((m) => m.realized_pnl);
   const pnl = realized + sum((m) => m.unrealized_pnl);
   const costBasis = equity - pnl;
   const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
-  const activeCount = paper.length;
+  const activeCount = shown.length;
 
   // Win rate, Sharpe and a real 30d equity sparkline (fills in as daily history accumulates).
   const { data: summary } = useQuery({ queryKey: ["live", "summary"], queryFn: api.liveSummary });
@@ -143,7 +147,7 @@ export default function HomePage() {
                 <span className="absolute inline-flex h-full w-full rounded-full bg-[#1eb980] opacity-60 animate-ping" />
                 <span className="relative inline-flex h-[7px] w-[7px] rounded-full bg-[#1eb980]" />
               </span>
-              {activeCount} {activeCount === 1 ? "strategy" : "strategies"} running (paper)
+              {activeCount} {activeCount === 1 ? "strategy" : "strategies"} running ({basis === "live" ? "LIVE · real money" : "paper"})
             </div>
             <h1 className={`${sg} text-[48px] font-bold leading-[1.07] tracking-[-0.02em] mb-[18px] ${textStrong}`}>
               A calm workspace for systematic trading.
@@ -172,7 +176,7 @@ export default function HomePage() {
           <div className={`${cardSurface} rounded-[20px] p-6 shadow-[0_16px_40px_rgba(15,39,35,0.08)] dark:shadow-[0_16px_40px_rgba(0,0,0,0.4)]`}>
             <div className="flex items-start justify-between mb-2.5">
               <div>
-                <div className={`text-[13px] font-semibold ${textMuted}`}>Paper equity</div>
+                <div className={`text-[13px] font-semibold ${textMuted}`}>{basis === "live" ? "Live equity" : "Paper equity"}</div>
                 <div className={`${sg} text-[30px] font-bold tabular-nums ${textStrong}`}>{formatInr(equity)}</div>
               </div>
               <span className={`rounded-full px-[11px] py-[5px] text-[13px] font-bold ${changePct >= 0 ? "bg-[#e6f6ef] dark:bg-[rgba(30,185,128,0.16)] text-[#0f9d63] dark:text-[#5fd8c9]" : "bg-[#fdecea] dark:bg-[rgba(242,119,107,0.16)] text-[#d9544a] dark:text-[#f0766a]"}`}>{changePct >= 0 ? "▲" : "▼"} {Math.abs(changePct).toFixed(1)}%</span>
@@ -192,10 +196,10 @@ export default function HomePage() {
 
         {/* ── Stats strip ── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pt-7 pb-2">
-          <StatCard label="Active paper strategies" value={String(activeCount)} />
+          <StatCard label={basis === "live" ? "Active live strategies" : "Active paper strategies"} value={String(activeCount)} />
           <StatCard label="Win rate" value={summary?.win_rate != null ? `${summary.win_rate.toFixed(0)}%` : "—"} />
           <StatCard label="Sharpe (30d)" value={summary?.sharpe_30d != null ? summary.sharpe_30d.toFixed(2) : "—"} />
-          <StatCard label="Paper P&L" value={formatInr(pnl)} tone={pnl} />
+          <StatCard label={basis === "live" ? "Live P&L" : "Paper P&L"} value={formatInr(pnl)} tone={pnl} />
         </div>
 
         {/* ── Workspace ── */}
