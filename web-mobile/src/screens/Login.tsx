@@ -71,7 +71,7 @@ export default function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
             <path d="M3 14l4-6 4 9 4-12 4 6" />
           </svg>
         </div>
-        <div className="sg" style={{ fontWeight: 700, fontSize: 30 }}>SKAS Algo</div>
+        <div className="sg" style={{ fontWeight: 700, fontSize: 30 }}>Sk<span style={{ color: "#2dd4bf" }}>ai</span>s Algo</div>
         <div style={{ fontWeight: 600, fontSize: 15, color: "var(--muted)" }}>
           Systematic strategies, live.
         </div>

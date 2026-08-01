@@ -18,7 +18,7 @@ const BRAND: Record<string, { bg: string; fg: string; letter: string; sub: strin
 
 const HINTS: Record<string, string> = {
   zerodha:
-    "Enter your Kite Connect app credentials. After connecting, hit Login to paste Kite's request_token — SKAS exchanges it for the daily access token.",
+    "Enter your Kite Connect app credentials. After connecting, hit Login to paste Kite's request_token — Skais exchanges it for the daily access token.",
   dhan:
     "Enter your Dhan client ID and a portal-generated access token (My Profile → DhanHQ Trading APIs). No password or TOTP is ever stored. Live quotes additionally need Dhan's paid Data APIs plan.",
 };
@@ -225,7 +225,7 @@ function SecurityCard() {
   ];
   return (
     <div className="rounded-[18px] border border-[var(--border)] bg-[var(--card)] px-[22px] py-5">
-      <div className="font-['Space_Grotesk'] font-bold text-[16px] text-[var(--strong)]">How SKAS keeps this safe</div>
+      <div className="font-['Space_Grotesk'] font-bold text-[16px] text-[var(--strong)]">How Skais keeps this safe</div>
       <div className="mt-3 space-y-3">
         {rows.map(([t, body]) => (
           <div key={t} className="flex gap-2.5 text-[12.5px] leading-relaxed text-[var(--muted)]">
@@ -645,7 +645,7 @@ export default function BrokersPage() {
             <h1 className="font-['Space_Grotesk'] text-[27px] font-bold m-0">Brokers</h1>
             <p className="mt-1 text-sm text-[var(--muted)]">
               Connect a broker to place live orders. You log in on the broker's own site and paste a
-              token — SKAS never sees your password or TOTP.
+              token — Skais never sees your password or TOTP.
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2.5">

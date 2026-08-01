@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Brand from "../components/Brand";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { setToken } from "../lib/auth";
@@ -36,7 +37,7 @@ export default function LoginPage() {
       >
         <div className="flex items-center gap-2 font-semibold text-brand-light mb-6">
           <span className="w-6 h-6 rounded-[7px] bg-brand inline-block" />
-          SKAS Algo
+          <Brand />
         </div>
         <label className="block text-sm text-slate-400 mb-2">Operator password</label>
         <input

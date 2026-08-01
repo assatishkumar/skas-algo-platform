@@ -9,8 +9,8 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg"],
       manifest: {
-        name: "SKAS Algo Platform",
-        short_name: "SKAS Algo",
+        name: "Skais Algo Platform",
+        short_name: "Skais Algo",
         description: "Backtest, forward-test, and live trading from one engine.",
         theme_color: "#0f766e",
         background_color: "#0b1220",

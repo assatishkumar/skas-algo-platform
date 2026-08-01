@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api/client";
+import Brand from "./components/Brand";
 import { clearToken, isLoggedIn } from "./lib/auth";
 import { applyTheme, getTheme, type Theme } from "./lib/theme";
 import AnalysisPage from "./pages/AnalysisPage";
@@ -174,7 +175,7 @@ export default function App() {
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-2">
           <NavLink to="/" className="flex items-center gap-2 font-semibold text-brand-light mr-4 hover:text-brand">
             <span className="w-6 h-6 rounded-[7px] bg-brand inline-block" />
-            SKAS Algo
+            <Brand />
           </NavLink>
           {/* Desktop nav — the phone gets the bottom tab bar instead. */}
           <nav className="hidden md:flex items-center gap-2">
