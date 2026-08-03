@@ -7,9 +7,9 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["favicon.svg"],
+      includeAssets: ["favicon.svg", "favicon-32.png", "favicon-16.png", "apple-touch-icon.png"],
       manifest: {
-        name: "Skais Algo Platform",
+        name: "Skais Algo",
         short_name: "Skais Algo",
         description: "Backtest, forward-test, and live trading from one engine.",
         theme_color: "#0f766e",
