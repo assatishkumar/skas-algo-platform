@@ -174,7 +174,6 @@ export default function App() {
       <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10 pt-[env(safe-area-inset-top)]">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-2">
           <NavLink to="/" className="flex items-center gap-2 font-semibold text-brand-light mr-4 hover:text-brand">
-            <span className="w-6 h-6 rounded-[7px] bg-brand inline-block" />
             <Brand />
           </NavLink>
           {/* Desktop nav — the phone gets the bottom tab bar instead. */}

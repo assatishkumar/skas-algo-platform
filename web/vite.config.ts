@@ -20,7 +20,9 @@ export default defineConfig({
           { src: "icon-192.png", sizes: "192x192", type: "image/png" },
           { src: "icon-512.png", sizes: "512x512", type: "image/png" },
           {
-            src: "icon-512.png",
+            // Mark scaled to 66% of the field (handoff adaptive-icon rule) so round
+            // masks never clip the brackets; the full-bleed 512 would.
+            src: "icon-maskable-512.png",
             sizes: "512x512",
             type: "image/png",
             purpose: "maskable",

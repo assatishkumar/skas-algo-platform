@@ -36,7 +36,6 @@ export default function LoginPage() {
         className="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-900 p-8 shadow-xl"
       >
         <div className="flex items-center gap-2 font-semibold text-brand-light mb-6">
-          <span className="w-6 h-6 rounded-[7px] bg-brand inline-block" />
           <Brand />
         </div>
         <label className="block text-sm text-slate-400 mb-2">Operator password</label>

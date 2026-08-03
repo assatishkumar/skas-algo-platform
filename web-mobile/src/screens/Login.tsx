@@ -60,18 +60,26 @@ export default function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
       paddingTop: "calc(28px + env(safe-area-inset-top))",
     }}>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+        {/* The Skais app icon (poster variant) + wordmark — exact handoff geometry:
+            butt caps, miter joins, red field #ec3013, ink fork. The OS-style radius is
+            on the tile, never in the artwork. */}
         <div style={{
-          width: 64, height: 64, borderRadius: 18,
-          background: "linear-gradient(135deg, #12b3a4, #0d8a7e)",
-          boxShadow: "0 10px 26px rgba(18,179,164,.32)",
+          width: 64, height: 64, borderRadius: 14, background: "#ec3013",
+          boxShadow: "0 10px 26px rgba(236,48,19,.32)", overflow: "hidden",
           display: "flex", alignItems: "center", justifyContent: "center",
         }}>
-          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fff"
-            strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 14l4-6 4 9 4-12 4 6" />
+          <svg width="64" height="64" viewBox="0 0 120 120" role="img" aria-label="Skais">
+            <g fill="none" strokeLinecap="butt" strokeLinejoin="miter">
+              <path d="M106 24 L34 24 L34 69" stroke="#ffffff" strokeWidth={18} />
+              <path d="M86 51 L86 96 L14 96" stroke="#ffffff" strokeWidth={18} />
+              <path d="M70 44 L54 60 L70 76" stroke="#201e1d" strokeWidth={10} />
+            </g>
           </svg>
         </div>
-        <div className="sg" style={{ fontWeight: 700, fontSize: 30 }}>Sk<span style={{ color: "#2dd4bf" }}>ai</span>s Algo</div>
+        <div style={{
+          fontFamily: "Archivo, 'Space Grotesk', sans-serif", fontWeight: 800,
+          fontSize: 30, letterSpacing: "-0.03em", lineHeight: 1, textTransform: "uppercase",
+        }}>SKA<span style={{ color: "#ec3013" }}>I</span>S</div>
         <div style={{ fontWeight: 600, fontSize: 15, color: "var(--muted)" }}>
           Systematic strategies, live.
         </div>
