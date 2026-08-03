@@ -6,7 +6,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 // sidesteps webview CORS entirely (the backend's SKAS_CORS_ORIGINS entry is the fallback).
 const config: CapacitorConfig = {
   appId: "com.skas.algo",
-  appName: "Skais Algo",
+  appName: "SKAIS Algo",
   webDir: "dist",
   plugins: {
     CapacitorHttp: { enabled: true },

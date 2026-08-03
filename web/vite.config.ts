@@ -9,8 +9,8 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "favicon-32.png", "favicon-16.png", "apple-touch-icon.png"],
       manifest: {
-        name: "Skais Algo",
-        short_name: "Skais Algo",
+        name: "SKAIS Algo",
+        short_name: "SKAIS Algo",
         description: "Backtest, forward-test, and live trading from one engine.",
         theme_color: "#0f766e",
         background_color: "#0b1220",
