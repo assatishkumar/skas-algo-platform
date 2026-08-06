@@ -500,8 +500,11 @@ PROVISIONAL, env-correctable via `NSE_HOLIDAYS_ADD`/`NSE_HOLIDAYS_REMOVE`;
 `data/option_intraday_store.py` → one **Parquet** file per trading day under
 `~/.skas_data/option_intraday/1min/` (written/read via **duckdb** — the venv has NO pyarrow;
 in-memory connections, no locking) with `symbol,start,open,high,low,close,volume,oi` (internal
-option symbols, minute-START, sparse = traded minutes only). Filled two ways: (1)
-`manager._maybe_daily_option_capture` — once/trading-day ≥15:45 IST (`SKAS_OPTION_BARS_*`,
+option symbols, minute-START, sparse = traded minutes only). **Session window is 09:15–15:45** (`_SESSION_CLOSE`; F&O closes 15:45 since the CAS
+extension 2026-08-03 — the old 15:30 cap silently truncated four days at 15:29 before the
+owner caught it 2026-08-06; tails were re-fetched and merged, expired-weekly tails lost).
+Filled two ways: (1)
+`manager._maybe_daily_option_capture` — once/trading-day ≥16:00 IST (`SKAS_OPTION_BARS_*`,
 **default OFF; enabled on ONE box only** — the Mac data box), one Kite `historical_data(...,
 oi=True)` per in-universe contract (NIFTY/BANKNIFTY/SENSEX, expiries ≤40d, strikes ±10% of spot,
 ~0.35s throttle), read-only/arm-independent, + a `days_back=3` sweep for missed days; (2)

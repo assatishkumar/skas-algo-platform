@@ -34,7 +34,10 @@ logger = logging.getLogger(__name__)
 OPTION_INTRADAY_DIR = Path.home() / ".skas_data" / "option_intraday" / "1min"
 _THROTTLE_S = 0.35  # ~3 historical requests/sec allowed (intraday_bars.py precedent)
 _SESSION_OPEN = time(9, 15)
-_SESSION_CLOSE = time(15, 30)
+# F&O trades to 15:45 since the CAS extension (2026-08-03) — a `to` of 15:45 returns
+# candles stamped through 15:44 plus any 15:45 auction print. The old 15:30 cap silently
+# truncated every extended-session day at 15:29 (caught 2026-08-06; tails repaired).
+_SESSION_CLOSE = time(15, 45)
 COLUMNS = ["symbol", "start", "open", "high", "low", "close", "volume", "oi"]
 
 

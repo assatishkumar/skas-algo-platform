@@ -114,7 +114,10 @@ class Settings(BaseSettings):
     option_bars_underlyings: str = "NIFTY,BANKNIFTY,SENSEX"  # SKAS_OPTION_BARS_UNDERLYINGS
     option_bars_expiry_days: int = 40  # capture expiries within this many days
     option_bars_strike_pct: float = 10.0  # strikes within ±this % of spot
-    option_bars_capture_after: str = "15:45"  # IST; bars are final after the close
+    # IST; bars are final after the close. 16:00 since the CAS extension moved the F&O
+    # close to 15:45 — at the old 15:45 default the capture could start mid-final-minute
+    # and permanently truncate the day (the sweep only refills MISSING days, not minutes).
+    option_bars_capture_after: str = "16:00"
     option_bars_days_back: int = 3  # sweep this many prior trading days for gaps
     # Memory guard for a SMALL box (the VPS): flush the day's rows to disk every N contracts
     # instead of holding the whole day (~1M+ rows) in memory, then merge at the end. 0 = off =

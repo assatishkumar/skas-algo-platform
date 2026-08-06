@@ -295,7 +295,7 @@ def test_mirror_store_copies_never_deletes(tmp_path):
 
 # ------------------------------------------------------------- manager gates
 class _FakeDT(datetime):
-    _now = datetime(2026, 7, 15, 16, 0)  # Wed 16:00 IST — past the 15:45 gate
+    _now = datetime(2026, 7, 15, 16, 5)  # Wed 16:05 IST — past the 16:00 gate
 
     @classmethod
     def now(cls, tz=None):
@@ -353,7 +353,7 @@ def test_manual_capture_rejected_before_gate(monkeypatch):
     import pytest as _pytest
 
     m, calls = _capture_manager(monkeypatch, now=datetime(2026, 7, 15, 12, 0))  # trading day
-    with _pytest.raises(ValueError, match="15:45"):
+    with _pytest.raises(ValueError, match="16:00"):
         asyncio.run(m.run_option_capture_now())
     assert calls == []
 
