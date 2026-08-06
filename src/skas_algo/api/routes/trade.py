@@ -843,6 +843,7 @@ async def intraday_straddle_deploy(
         "trail_trigger_pct": body.trail_trigger_pct,
         "trail_step_pct": body.trail_step_pct,
         "trail_mode": body.trail_mode,
+        "leg_book_pct": body.leg_book_pct,
         "profit_check": body.profit_check,
         "stop_check": body.stop_check,
         "eod_time": body.eod_time,

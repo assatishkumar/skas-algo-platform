@@ -191,3 +191,57 @@ def test_state_round_trip_incl_peak():
     st2.load_state(st.export_state())
     assert st2.legs == st.legs and st2.entered_day == "2026-07-13"
     assert st2.peak_pct == 3.5 and st2.margin_base == 100_000.0
+
+
+def test_leg_book_banks_the_melted_leg_and_keeps_the_other_running():
+    """leg_book_pct=80: a short leg at ≤20% of its entry premium is bought back ALONE
+    (reason leg_book); the banked ₹ stays in the day's P&L the stop/trail compare; the
+    surviving leg still honors the 15:25 hard exit."""
+    st, ctx = setup(leg_book_pct=80.0)
+    tick(st, ctx, ENTRY_DT)
+    base = 200_000.0
+    _fill(st, ctx, base)
+    ce, pe = st.legs[0], st.legs[1]
+
+    # CE melts to 25% of entry (below the 80%-captured line is 20%) — not yet.
+    ctx.market.prices[ce["symbol"]] = ce["entry"] * 0.25
+    ctx.market.prices[pe["symbol"]] = pe["entry"]
+    assert tick(st, ctx, datetime(2026, 7, 13, 11, 0)) == []
+    # CE melts to 15% — booked alone.
+    ctx.market.prices[ce["symbol"]] = ce["entry"] * 0.15
+    sigs = tick(st, ctx, datetime(2026, 7, 13, 11, 5))
+    assert len(sigs) == 1 and sigs[0].reason == "leg_book" and sigs[0].symbol == ce["symbol"]
+    assert st.legs == [pe]
+    banked = (ce["entry"] - ce["entry"] * 0.15) * ce["units"]
+    assert abs(st.leg_realized - banked) < 1e-6
+    ctx.positions.pop(ce["symbol"], None)
+
+    # Day P&L = banked + open-leg MTM: push PE 30% ABOVE entry — open MTM is a loss but
+    # the banked CE keeps the total above the −2% stop, so no stop fires…
+    ctx.market.prices[pe["symbol"]] = pe["entry"] * 1.3
+    open_loss = (pe["entry"] * 1.3 - pe["entry"]) * pe["units"]
+    assert banked - open_loss > -base * 0.02  # sanity: total is above the stop line
+    assert tick(st, ctx, datetime(2026, 7, 13, 11, 10)) == []
+    # …and the strategy_pnl hook reports banked + MTM.
+    got = st.strategy_pnl({pe["symbol"]: pe["entry"] * 1.3})
+    assert abs(got - (banked - open_loss)) < 1e-6
+
+    # The surviving leg still hard-exits at 15:25.
+    sigs = tick(st, ctx, datetime(2026, 7, 13, 15, 25))
+    assert len(sigs) == 1 and sigs[0].reason == "eod" and sigs[0].symbol == pe["symbol"]
+
+    # leg_realized survives a state round-trip.
+    st2 = IntradayStraddleStrategy(underlying="NIFTY", leg_book_pct=80.0)
+    st2.load_state(st.export_state())
+    assert abs(st2.leg_realized - banked) < 1e-6
+
+
+def test_leg_book_off_by_default_no_booking():
+    st, ctx = setup()  # default leg_book_pct=0
+    tick(st, ctx, ENTRY_DT)
+    _fill(st, ctx, 200_000.0)
+    ce, pe = st.legs[0], st.legs[1]
+    ctx.market.prices[ce["symbol"]] = ce["entry"] * 0.05  # 95% captured — still no booking
+    ctx.market.prices[pe["symbol"]] = pe["entry"]
+    assert tick(st, ctx, datetime(2026, 7, 13, 11, 0)) == []
+    assert len(st.legs) == 2 and st.leg_realized == 0.0

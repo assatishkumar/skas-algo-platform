@@ -485,6 +485,7 @@ class IntradayStraddleDeploy(BaseModel):
     trail_trigger_pct: float = 1.0  # every this much peak profit moves the stop
     trail_step_pct: float = 0.5  # ...by this much (0 on either disables trailing)
     trail_mode: str = "ratchet"  # "ratchet" | "below_peak"
+    leg_book_pct: float = 0.0  # buy back a leg alone at this % premium captured (0 = off)
     # Two-cadence model (2026-07-18): live decision sampling. Deploy default = the
     # owner policy (1min); the strategy ctor default stays "tick" so RECOVERED runs
     # keep their recorded behavior (recovery binds params_snapshot, not these).

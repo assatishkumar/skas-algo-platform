@@ -20,6 +20,7 @@ export default function IntradayStraddleBuilder() {
   const [entryTime, setEntryTime] = useState("09:18");
   const [exitTime, setExitTime] = useState("15:25");
   const [stopPct, setStopPct] = useState(2);
+  const [legBookPct, setLegBookPct] = useState(0); // 0 = off
   const [trailTrigger, setTrailTrigger] = useState(1);
   const [trailStep, setTrailStep] = useState(0.5);
   const [trailMode, setTrailMode] = useState("ratchet");
@@ -49,6 +50,7 @@ export default function IntradayStraddleBuilder() {
         trail_trigger_pct: trailTrigger,
         trail_step_pct: trailStep,
         trail_mode: trailMode,
+        leg_book_pct: legBookPct,
         capital,
         refresh_seconds: 20,
         mode,
@@ -102,6 +104,7 @@ export default function IntradayStraddleBuilder() {
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
         <label className="block"><span className={lbl}>Trail trigger % (0 = off)</span><NumberInput step="0.1" className={inputClass} value={trailTrigger} onChange={setTrailTrigger} /></label>
         <label className="block"><span className={lbl}>Trail step % (0 = off)</span><NumberInput step="0.1" className={inputClass} value={trailStep} onChange={setTrailStep} /></label>
+        <label className="block"><span className={lbl}>Book leg at % captured (0 = off)</span><NumberInput step="5" className={inputClass} value={legBookPct} onChange={setLegBookPct} /></label>
         <label className="block"><span className={lbl}>Trail mode</span>
           <select className={inputClass} value={trailMode} onChange={(e) => setTrailMode(e.target.value)}>
             <option value="ratchet">Ratchet (step the stop up)</option>

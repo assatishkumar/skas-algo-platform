@@ -1096,6 +1096,7 @@ export interface IntradayStraddleDeploy {
   trail_trigger_pct: number;
   trail_step_pct: number;
   trail_mode: string;
+  leg_book_pct?: number; // buy back a leg alone at this % premium captured (0 = off)
   capital: number;
   refresh_seconds: number;
   mode: string;

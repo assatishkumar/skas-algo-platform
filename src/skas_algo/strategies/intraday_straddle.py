@@ -63,6 +63,12 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
         trail_trigger_pct: float = 1.0,   # every this much PEAK profit moves the stop
         trail_step_pct: float = 0.5,      # ...by this much (0 on either disables trailing)
         trail_mode: str = "ratchet",      # "ratchet" | "below_peak"
+        # Book a WINNING leg on its own: buy back a short leg once it has given up this %
+        # of its entry premium (80 = leg trades at 1/5th of what we sold it for — the
+        # remaining reward is pennies vs its gamma). 0 = OFF (ctor default, §1: recovered
+        # deploys byte-identical). The banked profit stays in the day's P&L, so the
+        # stop/trail keep guarding the TOTAL day, not just the leg still open.
+        leg_book_pct: float = 0.0,
         min_leg_oi: int = 1,
         r: float = 0.065,
         # Two-cadence model (2026-07-18): how often the trail (profit protection) and the
@@ -85,6 +91,7 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
         self.trail_trigger_pct = float(trail_trigger_pct)
         self.trail_step_pct = float(trail_step_pct)
         self.trail_mode = str(trail_mode or "ratchet")
+        self.leg_book_pct = float(leg_book_pct or 0.0)
         self.min_leg_oi = int(min_leg_oi)
         self.r = float(r)
         self.profit_check = str(profit_check)
@@ -99,6 +106,7 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
         self.margin_base: float = 0.0
         self.margin_source: str = ""
         self.peak_pct: float = 0.0        # high-water MTM P&L (% of margin_base) — drives the trail
+        self.leg_realized: float = 0.0    # ₹ banked by per-leg bookings (part of the day's P&L)
         self.force_pending: bool = False
         self._broker_margin: float | None = None  # not persisted; re-pushed after recovery
 
@@ -111,8 +119,12 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
             self._broker_margin = float(value)
 
     def strategy_pnl(self, closes: dict) -> float | None:
-        """The MTM measure the stop/trail compares (decision-entry basis)."""
-        return legs_mtm_pnl(self.legs, closes)
+        """The MTM measure the stop/trail compares (decision-entry basis) — open legs
+        plus anything already banked by per-leg bookings today."""
+        mtm = legs_mtm_pnl(self.legs, closes)
+        if mtm is None:
+            return self.leg_realized if self.leg_realized else None
+        return mtm + self.leg_realized
 
     def request_force_entry(self) -> str:
         """Live-page 'Force entry now': the next tick sells the ATM straddle even outside the
@@ -256,6 +268,7 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
         self.margin_base = 0.0
         self.margin_source = "pending"
         self.peak_pct = 0.0
+        self.leg_realized = 0.0
         self.entered_day = today.isoformat()
         return [
             Signal(leg["symbol"], SignalAction.ENTER_SHORT, quantity=int(leg["units"]),
@@ -276,7 +289,8 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
         if base <= 0:
             return []
         has_print = getattr(ctx.market, "has_print", None)
-        pnl = 0.0
+        pnl = self.leg_realized  # banked leg bookings count toward the day the stop guards
+        marks: list[tuple[dict, float]] = []
         for leg in legs:
             if has_print is not None and not has_print(leg["symbol"]):
                 return []  # a leg hasn't ticked — don't judge on a stale mark
@@ -285,13 +299,26 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
             except KeyError:
                 return []
             pnl += (cur - leg["entry"]) * leg["units"] * leg["dir"]
+            marks.append((leg, cur))
         pnl_pct = 100.0 * pnl / base
-        # Two-cadence sampling: the trail's high-water update rides profit_check, the
-        # stop COMPARISON rides stop_check. Sampled HERE — after the time-exit, margin
-        # and print guards above — because _due consumes its window (mixin rule #1);
-        # sampling before an early return would eat a stop slot. Defaults "tick" keep
-        # this byte-identical to the pre-cadence behavior.
-        if self._due("profit", now) and pnl_pct > self.peak_pct:
+        # Two-cadence sampling: the trail's high-water update AND per-leg booking ride
+        # profit_check (ONE _due consume — mixin rule #1), the stop COMPARISON rides
+        # stop_check. Sampled HERE — after the time-exit, margin and print guards above —
+        # because _due consumes its window; sampling before an early return would eat a
+        # stop slot. Defaults "tick" keep this byte-identical to the pre-cadence behavior.
+        profit_due = self._due("profit", now)
+        if profit_due and self.leg_book_pct > 0:
+            booked = [(leg, cur) for leg, cur in marks
+                      if leg["dir"] < 0 and leg["entry"] > 0
+                      and cur <= leg["entry"] * (1.0 - self.leg_book_pct / 100.0)]
+            if booked:
+                for leg, cur in booked:
+                    self.leg_realized += (leg["entry"] - cur) * leg["units"]
+                keep = {id(leg) for leg, _ in booked}
+                self.legs = [leg for leg in self.legs if id(leg) not in keep]
+                return [Signal(leg["symbol"], SignalAction.EXIT_ALL, reason="leg_book")
+                        for leg, _ in booked]
+        if profit_due and pnl_pct > self.peak_pct:
             self.peak_pct = pnl_pct
         if self._due("stop", now):
             stop_pct = self._stop_level()
@@ -335,6 +362,9 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
             else:
                 rules.append(f"Trail: every +{self.trail_trigger_pct:g}% profit raises the stop "
                              f"+{self.trail_step_pct:g}% ({self._cadence_phrase('profit')})")
+        if self.leg_book_pct > 0:
+            rules.append(f"Book a leg alone once it has melted {self.leg_book_pct:g}% of its "
+                         f"entry premium ({self._cadence_phrase('profit')})")
         rules.append(f"Hard exit {self.exit_time.strftime('%H:%M')} — never carried")
         return rules
 
@@ -349,6 +379,7 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
             "margin_base": self.margin_base,
             "margin_source": self.margin_source,
             "peak_pct": self.peak_pct,
+            "leg_realized": self.leg_realized,
             "stop_pct": self._stop_level(),
             "stop_amt": (self.margin_base or 0) * self.stop_loss_pct / 100,
         }]}
@@ -361,6 +392,7 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
             "margin_base": self.margin_base,
             "margin_source": self.margin_source,
             "peak_pct": self.peak_pct,
+            "leg_realized": self.leg_realized,
             "force_pending": self.force_pending,
         }
 
@@ -370,4 +402,5 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
         self.margin_base = float(state.get("margin_base", 0.0))
         self.margin_source = state.get("margin_source", "")
         self.peak_pct = float(state.get("peak_pct", 0.0))
+        self.leg_realized = float(state.get("leg_realized", 0.0))
         self.force_pending = bool(state.get("force_pending", False))
