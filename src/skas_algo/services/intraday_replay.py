@@ -54,7 +54,7 @@ _CLOSE = time(15, 30)
 # layer by its dedicated BS service — not here. The positional family (ratio/hni/ema21)
 # joined 2026-07-18 via the _Chain cached-chain adapter: ALL index-options strategies now
 # backtest on the 1-min store (the EOD options basis left the UI; equity keeps the cache).
-REPLAYABLE = {"intraday_straddle", "weekly_intraday_straddle", "call_put_ratio_expiry",
+REPLAYABLE = {"intraday_straddle", "straddle_btst", "weekly_intraday_straddle", "call_put_ratio_expiry",
               "delta_neutral_monthly", "iron_fly_monthly", "call_ratio_monthly",
               "put_ratio_monthly", "batman_ratio_monthly", "hni_weekly", "21_ema_momentum"}
 
@@ -299,7 +299,8 @@ def _intrinsic(spot: float, strike: float, right: str) -> float:
 # families keep 2 shorts through their adjustments; ratio wings sell 2 [x2 wings for
 # batman], hni's 1-3-2 body sells 3; ema21's credit spread sells 1). FALLBACK ONLY —
 # the run function prefers the instance's own sell_lots when it has one.
-_SHORT_UNITS_PER_SET = {"intraday_straddle": 2, "weekly_intraday_straddle": 2,
+_SHORT_UNITS_PER_SET = {"intraday_straddle": 2, "straddle_btst": 2,
+                        "weekly_intraday_straddle": 2,
                         "delta_neutral_monthly": 2, "iron_fly_monthly": 2,
                         "call_put_ratio_expiry": 6, "call_ratio_monthly": 2,
                         "put_ratio_monthly": 2, "batman_ratio_monthly": 4,

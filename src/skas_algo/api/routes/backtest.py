@@ -49,13 +49,13 @@ _TRADE_COLUMNS = [
 # Strategies that are only ever deployed live/paper from the Trade UI (a user-built or
 # screener-resolved position) — they have no backtest config form, so keep them out of the
 # New-backtest dropdown. ``donchian_strangle_monthly`` additionally has no backtest path at all.
-_DEPLOY_ONLY = {"custom_options", "call_put_ratio_expiry", "delta_neutral_monthly", "iron_fly_monthly", "momentum_theta_gainer_intra", "custom_equity", "donchian_strangle_monthly", "intraday_straddle", "weekly_intraday_straddle", "broker_smoke_test", "double_diagonal_calendar"}
+_DEPLOY_ONLY = {"custom_options", "call_put_ratio_expiry", "delta_neutral_monthly", "iron_fly_monthly", "momentum_theta_gainer_intra", "custom_equity", "donchian_strangle_monthly", "intraday_straddle", "straddle_btst", "weekly_intraday_straddle", "broker_smoke_test", "double_diagonal_calendar"}
 
 
 # The intraday-basis list of the unified backtest page: deploy-only options strategies the
 # replay harness (services/intraday_replay.py) drives over the 1-min option store, plus
 # momentum_theta (its dedicated BS service, adapted). Order = display order.
-_INTRADAY_REPLAY = ["intraday_straddle", "weekly_intraday_straddle", "call_put_ratio_expiry",
+_INTRADAY_REPLAY = ["intraday_straddle", "straddle_btst", "weekly_intraday_straddle", "call_put_ratio_expiry",
                     "delta_neutral_monthly", "iron_fly_monthly", "momentum_theta_gainer_intra",
                     # The positional family joined the store (2026-07-18): ALL index-options
                     # strategies replay on 1-min data; only stock-option strategies keep EOD.
