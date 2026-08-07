@@ -322,23 +322,37 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
             self.peak_pct = pnl_pct
         if self._due("stop", now):
             stop_pct = self._stop_level()
-            if pnl_pct <= stop_pct:
+            if stop_pct is not None and pnl_pct <= stop_pct:
                 return self._exit_all(legs, "trail" if stop_pct > -self.stop_loss_pct else "stop")
         return []
 
-    def _stop_level(self) -> float:
-        """Current stop as a % of margin_base (negative = loss). Starts at −stop_loss_pct and
-        only ratchets UP as peak_pct grows, per trail_mode. Trailing off if a trail pct is 0."""
-        fixed = -self.stop_loss_pct
+    def _stop_level(self) -> float | None:
+        """Current stop as a % of margin_base (negative = loss), or None when NO stop is
+        armed. Starts at −stop_loss_pct and only ratchets UP as peak_pct grows, per
+        trail_mode. Trailing off if a trail pct is 0.
+
+        ``stop_loss_pct <= 0`` DISABLES the fixed stop — the platform's 0-means-off
+        convention (weekly_intraday_straddle, delta_neutral_monthly). Before this guard
+        it evaluated to −0.0, i.e. a BREAKEVEN stop that cut every day on its first
+        adverse tick: backtest #249 was configured "no SL" and stopped out 467 of 497
+        days at a 6% win rate (owner report 2026-08-07). Byte-identical whenever
+        stop_loss_pct > 0, so no recovered deploy changes (§1)."""
+        fixed = -self.stop_loss_pct if self.stop_loss_pct > 0 else None
         if self.trail_trigger_pct <= 0 or self.trail_step_pct <= 0:
             return fixed
         if self.trail_mode == "below_peak":
             if self.peak_pct < self.trail_trigger_pct:
                 return fixed
-            return max(fixed, self.peak_pct - self.trail_step_pct)
-        # ratchet (default): each trail_trigger_pct of peak profit lifts the stop by trail_step_pct
-        steps = floor(self.peak_pct / self.trail_trigger_pct) if self.peak_pct > 0 else 0
-        return max(fixed, fixed + self.trail_step_pct * steps)
+            lvl = self.peak_pct - self.trail_step_pct
+        else:
+            # ratchet: each trail_trigger_pct of peak profit lifts the stop by trail_step_pct
+            steps = floor(self.peak_pct / self.trail_trigger_pct) if self.peak_pct > 0 else 0
+            if steps <= 0:
+                return fixed
+            # With the fixed stop off there is no floor to lift, so the ratchet arms from
+            # breakeven — it can only ever protect banked profit, never invent a stop.
+            lvl = (fixed if fixed is not None else 0.0) + self.trail_step_pct * steps
+        return lvl if fixed is None else max(fixed, lvl)
 
     def _exit_all(self, legs: list[dict], reason: str) -> list[Signal]:
         sigs = [Signal(leg["symbol"], SignalAction.EXIT_ALL, reason=reason) for leg in legs]
@@ -350,11 +364,15 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
         base = self.margin_base if self.margin_source == "broker" else 0.0
         if base <= 0:
             return None, None
+        if self.stop_loss_pct <= 0:
+            return None, None  # no fixed target, and the fixed stop is switched off
         return None, base * self.stop_loss_pct / 100.0  # no fixed target; trailing is the upside
 
     def exit_rules(self) -> list[str]:
-        rules = [f"Stop out at −{self.stop_loss_pct:g}% of broker margin "
-                 f"({self._cadence_phrase('stop')})"]
+        rules = ([f"Stop out at −{self.stop_loss_pct:g}% of broker margin "
+                  f"({self._cadence_phrase('stop')})"]
+                 if self.stop_loss_pct > 0 else
+                 ["No fixed stop — uncapped short-straddle tails"])
         if self.trail_trigger_pct > 0 and self.trail_step_pct > 0:
             if self.trail_mode == "below_peak":
                 rules.append(f"Trail: once +{self.trail_trigger_pct:g}% up, stop = peak − "
@@ -381,7 +399,8 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
             "peak_pct": self.peak_pct,
             "leg_realized": self.leg_realized,
             "stop_pct": self._stop_level(),
-            "stop_amt": (self.margin_base or 0) * self.stop_loss_pct / 100,
+            "stop_amt": ((self.margin_base or 0) * self.stop_loss_pct / 100
+                         if self.stop_loss_pct > 0 else None),
         }]}
 
     # ------------------------------------------------------- (de)serialize

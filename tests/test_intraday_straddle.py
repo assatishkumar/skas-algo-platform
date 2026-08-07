@@ -311,3 +311,64 @@ def test_trail_high_water_also_counts_banked_profit():
     banked_pct = 100.0 * st.leg_realized / base
     assert st.peak_pct == pytest.approx(banked_pct, abs=1e-6)
     assert st._stop_level() > -2.0, "banked profit should have ratcheted the stop up"
+
+
+def test_stop_loss_pct_zero_means_off_not_breakeven():
+    """stop_loss_pct=0 must DISABLE the fixed stop (platform convention), not read as
+    −0.0 — a breakeven stop that cuts every day on its first adverse tick. Backtest #249
+    was configured "no SL" and stopped 467 of 497 days at a 6% win rate (2026-08-07)."""
+    base = 200_000.0
+    st, ctx = setup(stop_loss_pct=0, trail_trigger_pct=0, trail_step_pct=0)
+    tick(st, ctx, ENTRY_DT)
+    _fill(st, ctx, base)
+    assert st._stop_level() is None
+    # A loss far past what any sane stop would allow must NOT exit before 15:25.
+    _set_pnl_pct(st, ctx, base, -25.0)
+    assert tick(st, ctx, datetime(2026, 7, 13, 11, 0)) == []
+    _set_pnl_pct(st, ctx, base, -60.0)
+    assert tick(st, ctx, datetime(2026, 7, 13, 14, 0)) == []
+    # The hard time exit still applies — "no stop" never means "no exit".
+    sigs = tick(st, ctx, datetime(2026, 7, 13, 15, 25))
+    assert len(sigs) == 2 and all(s.reason == "eod" for s in sigs)
+    # …and nothing claims a stop that doesn't exist.
+    assert st.exit_amounts() == (None, None)
+
+
+def test_stop_off_still_lets_the_trail_protect_profit():
+    """With the fixed stop off but trailing on, the ratchet arms from breakeven: it can
+    protect banked profit but must never invent a stop while the day is still negative."""
+    base = 100_000.0
+    st, ctx = setup(stop_loss_pct=0, trail_trigger_pct=1.0, trail_step_pct=0.5,
+                    trail_mode="ratchet")
+    tick(st, ctx, ENTRY_DT)
+    _fill(st, ctx, base)
+    _set_pnl_pct(st, ctx, base, -5.0)          # deep in the red, no peak yet
+    assert st._stop_level() is None
+    assert tick(st, ctx, datetime(2026, 7, 13, 10, 0)) == []
+    _set_pnl_pct(st, ctx, base, 2.4)           # peak 2.4% -> 2 ratchet steps
+    tick(st, ctx, datetime(2026, 7, 13, 11, 0))
+    assert st.peak_pct == pytest.approx(2.4)
+    assert st._stop_level() == pytest.approx(1.0)   # 0 + 0.5 x 2 — locks in profit
+    _set_pnl_pct(st, ctx, base, 0.5)           # gives back below the locked level
+    sigs = tick(st, ctx, datetime(2026, 7, 13, 11, 5))
+    assert len(sigs) == 2 and all(s.reason == "trail" for s in sigs)
+
+
+def test_fixed_stop_behaviour_unchanged_when_configured():
+    """Byte-identity guard for the 0=off change: with stop_loss_pct > 0 every level the
+    old code produced must be reproduced exactly (§1 — recovered deploys must not move)."""
+    st = IntradayStraddleStrategy(underlying="NIFTY", stop_loss_pct=2.0,
+                                  trail_trigger_pct=1.0, trail_step_pct=0.5)
+    for peak, want in ((0.0, -2.0), (0.9, -2.0), (1.0, -1.5), (2.4, -1.0), (6.0, 1.0)):
+        st.peak_pct = peak
+        assert st._stop_level() == pytest.approx(want), peak
+    bp = IntradayStraddleStrategy(underlying="NIFTY", stop_loss_pct=1.25,
+                                  trail_trigger_pct=1.0, trail_step_pct=0.5,
+                                  trail_mode="below_peak")
+    for peak, want in ((0.0, -1.25), (0.9, -1.25), (1.0, 0.5), (3.0, 2.5)):
+        bp.peak_pct = peak
+        assert bp._stop_level() == pytest.approx(want), peak
+    nt = IntradayStraddleStrategy(underlying="NIFTY", stop_loss_pct=2.0,
+                                  trail_trigger_pct=0, trail_step_pct=0)
+    nt.peak_pct = 9.0
+    assert nt._stop_level() == pytest.approx(-2.0)

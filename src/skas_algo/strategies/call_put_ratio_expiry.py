@@ -305,7 +305,10 @@ class CallPutRatioExpiryStrategy(ExitCadenceMixin):
         # consume NIFTY's evaluation slot (this method runs once per book per tick).
         if self._due(f"profit:{u}", now) and pnl >= base * self.target_pct / 100.0:
             return self._exit_all(u, legs, "target")
-        if self._due(f"stop:{u}", now) and pnl <= -base * self.stop_pct / 100.0:
+        # stop_pct <= 0 = OFF (platform convention). Without the guard this reads
+        # `pnl <= 0` — a breakeven stop, the same trap intraday_straddle hit on 2026-08-07.
+        if (self.stop_pct > 0 and self._due(f"stop:{u}", now)
+                and pnl <= -base * self.stop_pct / 100.0):
             return self._exit_all(u, legs, "stop")
         return []
 
@@ -321,7 +324,8 @@ class CallPutRatioExpiryStrategy(ExitCadenceMixin):
         if not bases:
             return None, None
         base = sum(bases)
-        return base * self.target_pct / 100.0, base * self.stop_pct / 100.0
+        return (base * self.target_pct / 100.0,
+                base * self.stop_pct / 100.0 if self.stop_pct > 0 else None)
 
     def exit_rules(self) -> list[str]:
         return [
