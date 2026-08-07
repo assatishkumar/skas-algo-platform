@@ -836,6 +836,45 @@ class LiveRun:
         "tax_rate", "withdrawal_rate",
     })
 
+    def _editable_param_surface(self) -> dict:
+        """{editable_params, param_defaulted} — every scalar ctor knob of this run's
+        strategy, valued from the run's OWN stored params when it set one, else the
+        ctor default.
+
+        Values come from the stored params rather than getattr on the instance on
+        purpose: the strategy normalises several of them at construction (entry_time
+        becomes a ``time``, not "09:18"), and round-tripping a normalised object back
+        through the form would change its meaning. ``param_defaulted`` names the knobs
+        this run never set, so the UI can say so instead of implying they were chosen.
+        """
+        import inspect
+
+        from skas_algo.strategies.registry import get_strategy
+
+        try:
+            factory = get_strategy(self.config.strategy_id)
+            sig = inspect.signature(factory.__init__ if isinstance(factory, type) else factory)
+        except Exception:  # pragma: no cover - unknown/unsignaturable strategy
+            return {"editable_params": dict(self.config.params), "param_defaulted": []}
+        stored = self.config.params
+        vals, defaulted = {}, []
+        for name, p in sig.parameters.items():
+            if name in ("self", "universe", "initial_capital"):
+                continue
+            if p.kind in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL):
+                continue
+            if name in self._PARAM_EDIT_BLOCKLIST or name.startswith("_"):
+                continue
+            if name in stored:
+                vals[name] = stored[name]
+                continue
+            d = p.default
+            if d is inspect.Parameter.empty or not isinstance(d, (int, float, str, bool)):
+                continue  # no sane default to offer (or a dict/list — not form-editable)
+            vals[name] = d
+            defaulted.append(name)
+        return {"editable_params": vals, "param_defaulted": sorted(defaulted)}
+
     def update_params(self, changes: dict) -> dict:
         """Hot-edit strategy params on a RUNNING deployment (owner ask 2026-07-29:
         tweak profit target / SL without redeploying). Same semantics as the blessed
@@ -1004,6 +1043,12 @@ class LiveRun:
             "strategy_id": self.config.strategy_id,
             # Current strategy params (the Edit-params modal reads these; additive).
             "params": dict(self.config.params),
+            # The FULL editable surface (values + which are still ctor defaults). Without
+            # this the Edit-params panel could only offer keys already in the stored
+            # snapshot, so a knob added to a strategy AFTER a deploy started (e.g.
+            # leg_book_pct, or the cadence params) stayed invisible and uneditable for the
+            # life of that run — exactly the case the owner hit on runs 211/212, 2026-08-07.
+            **self._editable_param_surface(),
             "instrument_class": self.config.instrument_class,
             "underlying": self.config.underlying,
             "quote_source": self.config.quote_source,

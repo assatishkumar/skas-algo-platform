@@ -519,7 +519,12 @@ export interface LiveRunSnapshot {
   status: string;
   name: string;
   strategy_id: string;
-  params?: Record<string, unknown>; // current strategy params (Edit-params modal)
+  params?: Record<string, unknown>; // params this run explicitly stored
+  // Full editable surface: every scalar ctor knob, valued from the run's own params when
+  // it set one, else the ctor default. Lets the panel offer knobs added to a strategy
+  // AFTER this run was deployed.
+  editable_params?: Record<string, unknown>;
+  param_defaulted?: string[]; // knobs this run never set (showing the ctor default)
   cash: number;
   holdings_value: number;
   equity: number;

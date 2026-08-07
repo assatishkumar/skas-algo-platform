@@ -1442,7 +1442,10 @@ function EditParamsPanel({ dep, busy, onClose, onSave }: {
   });
   const [edits, setEdits] = useState<Record<string, string>>({});
 
-  const entries = Object.entries(snap?.params ?? {})
+  // editable_params (full ctor surface) — NOT snap.params, which only holds what this run
+  // stored at deploy time, so a knob added later could never be switched on.
+  const defaulted = new Set(snap?.param_defaulted ?? []);
+  const entries = Object.entries(snap?.editable_params ?? snap?.params ?? {})
     .filter(([k, v]) =>
       !PARAM_EDIT_HIDDEN.has(k) &&
       (typeof v === "number" || typeof v === "boolean" ||
@@ -1471,6 +1474,8 @@ function EditParamsPanel({ dep, busy, onClose, onSave }: {
       <div className="text-[var(--muted)]">
         The strategy is rebuilt with its state carried over (positions, peaks, latches survive);
         the change also persists across restarts. Capital, symbols and mode need a redeploy.
+        Knobs marked <span className="text-[var(--faint)]">·default</span> were added to the
+        strategy after this run was deployed — set one and it takes effect immediately.
       </div>
       {isLoading ? (
         <div className="text-[var(--muted)]">Loading current params…</div>
@@ -1483,7 +1488,10 @@ function EditParamsPanel({ dep, busy, onClose, onSave }: {
             const dirty = k in edits && edits[k] !== String(v);
             return (
               <label key={k} className="flex items-center justify-between gap-2">
-                <span className={`truncate ${dirty ? "text-[var(--accent-deep)] font-medium" : "text-[var(--muted)]"}`} title={k}>{k}</span>
+                <span className={`truncate ${dirty ? "text-[var(--accent-deep)] font-medium" : "text-[var(--muted)]"}`}
+                  title={defaulted.has(k) ? `${k} — this run never set it; showing the strategy default` : k}>
+                  {k}{defaulted.has(k) && <span className="ml-1 text-[var(--faint)]">·default</span>}
+                </span>
                 {typeof v === "boolean" || PARAM_ENUMS[k] ? (
                   <select
                     className={`rounded bg-[var(--card)] border px-1.5 py-0.5 ${dirty ? "border-[var(--accent-deep)]" : "border-[var(--field-border)]"}`}

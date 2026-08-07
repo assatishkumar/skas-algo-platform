@@ -723,3 +723,41 @@ def test_summary_prefers_real_runs():
                 manager.stop(lr.run_id)
             except Exception:
                 pass
+
+
+def test_snapshot_offers_params_added_after_deploy():
+    """The Edit-params surface must include ctor knobs the run never stored — a param
+    added to a strategy AFTER a deploy started was invisible, so it could never be
+    switched on for that run (owner report on runs 211/212, 2026-08-07)."""
+    fake = FakeQuoteSource()
+    config = LiveConfig(
+        name="surface-test",
+        strategy_id="sst_lifo",
+        symbols=["AAA"],
+        capital=100_000,
+        params={"capital_parts": 10},   # profit_target deliberately NOT stored
+        lookback=5,
+        tax_rate=0.0,
+        ignore_market_hours=True,
+    )
+    live = manager.start(config, _flat_loader, fake)
+    try:
+        snap = live.snapshot()
+        # stored params stay exactly what the run set…
+        assert "profit_target" not in snap["params"]
+        # …but the editable surface offers it at the ctor default, flagged as defaulted.
+        assert snap["editable_params"]["capital_parts"] == 10
+        assert snap["editable_params"]["profit_target"] == 0.06
+        assert "profit_target" in snap["param_defaulted"]
+        assert "capital_parts" not in snap["param_defaulted"]
+        # Infra never leaks into the editable surface.
+        for k in ("capital", "symbols", "mode", "quote_source"):
+            assert k not in snap["editable_params"]
+
+        # And the offered knob actually applies.
+        live.update_params({"profit_target": 0.09})
+        assert live.session.strategy.profit_target == 0.09
+        assert live.snapshot()["editable_params"]["profit_target"] == 0.09
+        assert "profit_target" not in live.snapshot()["param_defaulted"]
+    finally:
+        manager.stop(live.run_id)
