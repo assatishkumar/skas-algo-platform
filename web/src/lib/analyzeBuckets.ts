@@ -129,6 +129,7 @@ export interface BucketStats {
   romCycle: number | null;         // mean P&L as % of that trade's margin — always margin
   ci: [number, number];            // ±1.96 SE band on the mean (in the chosen norm)
   meanPctCredit: number | null;    // drives the diverging bar column
+  pnlRs: number;                   // total rupees this bucket produced
 }
 
 export function bucketStats(b: CondBucket, leg: Leg, norm: Norm): BucketStats | null {
@@ -152,5 +153,8 @@ export function bucketStats(b: CondBucket, leg: Leg, norm: Norm): BucketStats | 
     romCycle: roms.length ? roms.reduce((s, v) => s + v, 0) / roms.length : null,
     ci: [mean - 1.96 * se, mean + 1.96 * se],
     meanPctCredit: crs.length ? crs.reduce((s, v) => s + v, 0) / crs.length : null,
+    // Total rupees the bucket actually made — the normalized columns say which condition
+    // is BETTER, this says which one MATTERS (a great mean over 3 trades earns nothing).
+    pnlRs: b.trades.reduce((s, t) => s + legPnl(t, leg), 0),
   };
 }

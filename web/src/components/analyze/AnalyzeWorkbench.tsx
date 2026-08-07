@@ -23,15 +23,32 @@ import RiskSection from "./sections/RiskSection";
 import LedgerSection from "./sections/LedgerSection";
 import type { Leg, Norm } from "../../lib/analyzeBuckets";
 
-type Range = "full" | "2025" | "6m";
+// "custom" carries its own from/to; the presets stay as one-click shortcuts. Every panel
+// downstream reads the FILTERED trade list, so an arbitrary window re-slices the whole page.
+type Range = "full" | "2025" | "6m" | "custom";
+type Span = { from: string; to: string };
 
-function filterTrades(b: AnalyticsBundle, range: Range): AnalyticsTrade[] {
+/** The [from, to] the current selection resolves to — also what the custom inputs seed from. */
+function rangeSpan(b: AnalyticsBundle, range: Range, custom: Span): Span {
+  const first = b.trades.length ? b.trades[0].entry.slice(0, 10) : (b.start ?? "");
+  const last = b.trades.length ? b.trades[b.trades.length - 1].exit.slice(0, 10) : (b.end ?? "");
+  if (range === "custom") return { from: custom.from || first, to: custom.to || last };
+  if (range === "2025") return { from: "2025-01-01", to: last };
+  if (range === "6m") {
+    const d = b.end ? new Date(b.end) : new Date();
+    d.setMonth(d.getMonth() - 6);
+    return { from: d.toISOString().slice(0, 10), to: last };
+  }
+  return { from: first, to: last };
+}
+
+function filterTrades(b: AnalyticsBundle, range: Range, custom: Span): AnalyticsTrade[] {
   if (range === "full") return b.trades;
-  if (range === "2025") return b.trades.filter((t) => t.exit >= "2025-01-01");
-  const end = b.end ? new Date(b.end) : new Date();
-  end.setMonth(end.getMonth() - 6);
-  const cut = end.toISOString().slice(0, 10);
-  return b.trades.filter((t) => t.exit.slice(0, 10) >= cut);
+  const { from, to } = rangeSpan(b, range, custom);
+  return b.trades.filter((t) => {
+    const x = t.exit.slice(0, 10);
+    return x >= from && x <= to;
+  });
 }
 
 function Chip({ text, tone, tip }: { text: string; tone: "ok" | "warn" | "id"; tip?: string }) {
@@ -92,8 +109,11 @@ const fmtHold = (m: number | null) =>
  *  filtered trades + daily series (net of per-trade charges), labeled as range-scoped. */
 function rangeKpis(b: AnalyticsBundle, trades: AnalyticsTrade[], range: Range) {
   if (range === "full") return { ...b.kpis, scoped: false };
+  // Clip the daily series to BOTH ends — Sharpe/CAGR/drawdown are computed off it, and a
+  // custom window with a `to` date would otherwise silently include everything after it.
   const lo = trades.length ? trades[0].entry.slice(0, 10) : "9999";
-  const daily = b.daily.filter((d) => d.date >= lo);
+  const hi = trades.length ? trades[trades.length - 1].exit.slice(0, 10) : "0000";
+  const daily = b.daily.filter((d) => d.date >= lo && d.date <= hi);
   const net = trades.reduce((s, t) => s + t.pnl_rs - (t.charge_rs ?? 0), 0);
   const wins = trades.filter((t) => t.pnl_rs > 0).length;
   const pnl = daily.map((d) => d.pnl);
@@ -131,12 +151,13 @@ function rangeKpis(b: AnalyticsBundle, trades: AnalyticsTrade[], range: Range) {
 export default function AnalyzeWorkbench({ runId }: { runId: number }) {
   const { bundle, computing, progress, error } = useBundle(runId);
   const [range, setRange] = useState<Range>("full");
+  const [custom, setCustom] = useState<Span>({ from: "", to: "" });
   const [norm, setNorm] = useState<Norm>("rs");
   const [leg, setLeg] = useState<Leg>("comb");
   const [view, setView] = useState<"overview" | SectionId>("overview");
 
   const trades = useMemo(
-    () => (bundle ? filterTrades(bundle, range) : []), [bundle, range]);
+    () => (bundle ? filterTrades(bundle, range, custom) : []), [bundle, range, custom]);
 
   if (error) {
     return <div className="rounded-[14px] bg-[var(--warn-bg)] text-[var(--warn-text)] px-4 py-3 text-sm font-bold">{error}</div>;
@@ -160,7 +181,11 @@ export default function AnalyzeWorkbench({ runId }: { runId: number }) {
   }
 
   const k = rangeKpis(bundle, trades, range);
-  const scopedTag = k.scoped ? ({ "2025": " · 2025+", "6m": " · last 6M" } as Record<string, string>)[range] ?? "" : "";
+  const span = rangeSpan(bundle, range, custom);
+  const scopedTag = k.scoped
+    ? ({ "2025": " · 2025+", "6m": " · last 6M" } as Record<string, string>)[range]
+      ?? ` · ${span.from} → ${span.to}`
+    : "";
   const years = bundle.daily.length ? (bundle.daily.length / 252).toFixed(1) : "—";
   const basisLabel = { intraday: "intraday · 1-min store", eod: "EOD daily basis", live: "live fills" }[bundle.basis] ?? bundle.basis;
 
@@ -182,7 +207,8 @@ export default function AnalyzeWorkbench({ runId }: { runId: number }) {
           </button>
           <h2 className="font-['Space_Grotesk'] font-bold text-[24px] text-[var(--strong)] m-0">{card.t}</h2>
           <Chip text={basisLabel} tone="id" />
-          {range !== "full" && <Chip text={`range: ${range === "2025" ? "2025+" : "last 6M"}`} tone="warn" />}
+          {range !== "full" && <Chip tone="warn" text={`range: ${
+            range === "2025" ? "2025+" : range === "6m" ? "last 6M" : `${span.from} → ${span.to}`}`} />}
         </div>
         {section}
       </div>
@@ -235,14 +261,37 @@ export default function AnalyzeWorkbench({ runId }: { runId: number }) {
         </div>
         <span className="text-[11px] text-[var(--faint)] font-extrabold tracking-wider ml-2">RANGE</span>
         <div className="inline-flex rounded-[9px] bg-[var(--seg,var(--chip))] p-[3px]">
-          {([["full", "Full run"], ["2025", "2025+"], ["6m", "Last 6M"]] as const).map(([v, lab]) => (
-            <button key={v} onClick={() => setRange(v)}
+          {([["full", "Full run"], ["2025", "2025+"], ["6m", "Last 6M"],
+             ["custom", "Custom"]] as const).map(([v, lab]) => (
+            <button key={v} onClick={() => {
+              // Seed the pickers from whatever window is showing, so "Custom" starts where
+              // you already are instead of snapping back to the full run.
+              if (v === "custom" && !custom.from && !custom.to) setCustom(span);
+              setRange(v);
+            }}
               className="px-3 py-1.5 rounded-[7px] text-[12px] font-extrabold"
               style={range === v
                 ? { background: "var(--card)", color: "var(--strong)", boxShadow: "0 1px 2px rgba(0,0,0,.08)" }
                 : { color: "var(--muted)" }}>{lab}</button>
           ))}
         </div>
+        {range === "custom" && (
+          <span className="inline-flex items-center gap-1.5">
+            <input type="date" value={span.from} min={bundle.start ?? undefined}
+              max={span.to || bundle.end || undefined} aria-label="range from"
+              onChange={(e) => setCustom((c) => ({ ...c, from: e.target.value }))}
+              className="rounded-[8px] px-2 py-1 text-[12px] font-semibold"
+              style={{ background: "var(--field,var(--chip))", color: "var(--strong)",
+                       border: "1px solid var(--border)" }} />
+            <span className="text-[12px] text-[var(--faint)]">→</span>
+            <input type="date" value={span.to} min={span.from || bundle.start || undefined}
+              max={bundle.end ?? undefined} aria-label="range to"
+              onChange={(e) => setCustom((c) => ({ ...c, to: e.target.value }))}
+              className="rounded-[8px] px-2 py-1 text-[12px] font-semibold"
+              style={{ background: "var(--field,var(--chip))", color: "var(--strong)",
+                       border: "1px solid var(--border)" }} />
+          </span>
+        )}
         {range !== "full" && (
           <span className="text-[12px] text-[var(--muted)] font-semibold">
             {trades.length} of {bundle.trades.length} trades — every tile and the simulator re-slice
@@ -274,7 +323,7 @@ export default function AnalyzeWorkbench({ runId }: { runId: number }) {
         <Kpi tinted label="AVG HOLD" value={fmtHold(k.avg_hold_min)} sub="entry → square-off" tip={KPI_TIPS.avg_hold} />
       </div>
 
-      <Simulator trades={trades} disabled={bundle.coverage.simulator === "none"} />
+      <Simulator trades={trades} disabled={bundle.coverage.simulator === "none"} capital={bundle.capital} />
 
       <Explorer trades={trades} norm={norm} leg={leg} />
 

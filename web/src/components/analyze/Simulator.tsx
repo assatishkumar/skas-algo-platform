@@ -93,9 +93,10 @@ function equitySeries(sims: SimTrade[]) {
   return { pts, ddB, ddS };
 }
 
-export default function Simulator({ trades, disabled }: {
+export default function Simulator({ trades, disabled, capital }: {
   trades: AnalyticsTrade[];
   disabled: boolean;         // coverage.simulator === "none" (no paths on this basis)
+  capital: number;           // same base the header CAGR uses, so the two are comparable
 }) {
   // margin basis needs per-trade margin_rs (bundle v2+); fall back to credit when absent
   const marginable = trades.some((t) => t.margin_rs != null);
@@ -130,11 +131,26 @@ export default function Simulator({ trades, disabled }: {
     const stopOff = stop >= cfg.stopMax, targetOff = target >= cfg.tgtMax;
     const n = sims.length || 1;
     const unit = basis === "margin" ? "% of margin" : "% of credit";
+    // CAGR on the same capital base as the header KPI, over the span the trades cover.
+    // Needs a real span and a surviving equity base — else it is not a rate, and "—" is
+    // the honest answer rather than a number nobody can act on.
+    const days = trades.length
+      ? (Date.parse(trades[trades.length - 1].exit) - Date.parse(trades[0].entry)) / 864e5 : 0;
+    const yrs = days / 365.25;
+    const cagrOf = (p: number) =>
+      capital > 0 && yrs >= 0.25 && capital + p > 0
+        ? ((capital + p) / capital) ** (1 / yrs) * 100 - 100 : null;
+    const cS = cagrOf(se), cB = cagrOf(be);
     const tiles = [
       { l: "NET P&L", v: formatInr(Math.round(se)), d: `${se - be >= 0 ? "+" : "−"}${formatInr(Math.abs(Math.round(se - be))).replace("−", "")}`, good: se - be >= 0 },
       { l: "WIN RATE", v: `${((100 * sWins) / n).toFixed(1)}%`, d: `${sWins - bWins >= 0 ? "+" : "−"}${Math.abs(sWins - bWins)} trades`, good: sWins - bWins >= 0 },
       { l: "MAX DRAWDOWN", v: formatInr(Math.round(ddS)), d: `${ddS - ddB >= 0 ? "−" : "+"}${formatInr(Math.abs(Math.round(ddS - ddB))).replace("−", "")}`, good: ddS >= ddB },
       { l: "WINNERS CLIPPED", v: String(clipped), d: bWins ? `${((clipped / bWins) * 100).toFixed(0)}% of winners` : "", good: clipped === 0 },
+      { l: "CAGR", v: cS != null ? `${cS.toFixed(1)}%` : "—",
+        d: cS != null && cB != null
+          ? `${cS - cB >= 0 ? "+" : "−"}${Math.abs(cS - cB).toFixed(1)} pts`
+          : "needs 3+ months",
+        good: cS != null && cB != null ? cS - cB >= 0 : true },
     ];
     const trailTxt = trailMode !== "off" && !stopOff
       ? ` + ${trailMode === "ratchet" ? "ratchet" : "below-peak"} trail (${trailTrig}/${trailStep})`
@@ -260,8 +276,30 @@ export default function Simulator({ trades, disabled }: {
             </>
           )}
         </div>
-        <div className="h-[320px] min-w-0">
+        <div className="h-[320px] min-w-0 flex flex-col">
           {!disabled && (
+            <>
+              {/* Two series, two stroke styles, previously no key — the solid/dashed
+                  distinction is the whole point of the panel, so name it explicitly. */}
+              <div className="flex items-center gap-4 mb-1 text-[11.5px] font-bold">
+                <span className="inline-flex items-center gap-1.5" style={{ color: "var(--strong)" }}>
+                  <svg width="20" height="8" aria-hidden="true">
+                    <line x1="0" y1="4" x2="20" y2="4" stroke="var(--accent)" strokeWidth="2.2" />
+                  </svg>
+                  Simulated (with your stop / target)
+                </span>
+                <span className="inline-flex items-center gap-1.5" style={{ color: "var(--muted)" }}>
+                  <svg width="20" height="8" aria-hidden="true">
+                    <line x1="0" y1="4" x2="20" y2="4" stroke="var(--faint)" strokeWidth="1.6"
+                      strokeDasharray="5 4" />
+                  </svg>
+                  As traded (the run itself)
+                </span>
+                <span className="text-[11px] font-semibold" style={{ color: "var(--faint)" }}>
+                  cumulative P&amp;L
+                </span>
+              </div>
+            <div className="flex-1 min-h-0">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={pts} margin={{ top: 8, right: 12, bottom: 4, left: 8 }}>
                 <CartesianGrid strokeDasharray="2 4" stroke="var(--divider)" vertical={false} />
@@ -278,6 +316,8 @@ export default function Simulator({ trades, disabled }: {
                   strokeWidth={2.2} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
+            </div>
+            </>
           )}
         </div>
       </div>

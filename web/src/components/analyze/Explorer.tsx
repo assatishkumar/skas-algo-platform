@@ -18,6 +18,33 @@ function fmt(v: number, norm: Norm): string {
   return norm === "rs" ? formatInr(Math.round(v)) : `${v.toFixed(norm === "mg" ? 2 : 1)}%`;
 }
 
+// Column template — the mean bar is now a COLUMN, not a detached chart beside the table:
+// reading a bar meant matching row order across a 300px gap, and the ₹ column had nowhere
+// to live. Widths are fr-based so the table still fits without the right edge clipping.
+const COLS = "1.4fr 0.55fr 0.8fr 0.8fr 0.6fr 0.85fr 0.8fr 1.5fr 1fr 1.1fr";
+
+/** Diverging mean bar, centred on zero — magnitude at a glance beside its own numbers. */
+function MeanBar({ value, max }: { value: number | null; max: number }) {
+  if (value == null) return <span className="text-right text-[var(--faint)]">—</span>;
+  const half = 44;
+  const w = Math.min(half, (Math.abs(value) / (max || 1)) * half);
+  const color = value >= 0 ? "var(--pos)" : "var(--danger)";
+  return (
+    <span className="flex items-center justify-center gap-1.5"
+      title={`mean ${value >= 0 ? "+" : ""}${value.toFixed(1)}% of credit`}>
+      <span className="relative h-[10px] shrink-0" style={{ width: half * 2 }}>
+        <span className="absolute top-0 bottom-0 w-px opacity-70"
+          style={{ left: half, background: "var(--faint)" }} />
+        <span className="absolute top-0 h-[10px] rounded-[2px]"
+          style={{ left: value >= 0 ? half : half - w, width: w, background: color }} />
+      </span>
+      <span className="text-[10.5px] font-extrabold tabular-nums" style={{ color }}>
+        {value >= 0 ? "+" : ""}{value.toFixed(1)}%
+      </span>
+    </span>
+  );
+}
+
 export default function Explorer({ trades, norm, leg }: {
   trades: AnalyticsTrade[]; norm: Norm; leg: Leg;
 }) {
@@ -75,62 +102,37 @@ export default function Explorer({ trades, norm, leg }: {
         ))}
       </div>
 
-      <div className="grid gap-6 mt-4 items-start" style={{ gridTemplateColumns: "minmax(0,1fr) 300px" }}>
+      <div className="mt-4">
         {/* bucket table */}
         <div className="overflow-x-auto">
-          <div className="grid gap-2 px-3 py-2 rounded-lg bg-[var(--stat)] text-[10px] font-extrabold tracking-wider text-[var(--faint)]"
-            style={{ gridTemplateColumns: "1.5fr 0.6fr 1fr 1fr 0.7fr 1fr 0.9fr 1.4fr" }}>
+          <div className="grid gap-2 px-3 py-2 rounded-lg bg-[var(--stat)] text-[10px] font-extrabold tracking-wider text-[var(--muted)]"
+            style={{ gridTemplateColumns: COLS }}>
             <span>BUCKET</span><span className="text-right">TRADES</span>
             <span className="text-right">MEAN</span><span className="text-right">MEDIAN</span>
             <span className="text-right">WIN %</span><span className="text-right">WORST</span>
             <span className="text-right">ROM/CYC</span><span className="text-right">95% CI</span>
+            <span className="text-right">P&amp;L ₹</span><span className="text-center">MEAN · % CREDIT</span>
           </div>
           {rows.map((r) => (
             <div key={r.label}
-              className="grid gap-2 px-3 py-2 border-b border-[var(--divider)] text-[12.5px] font-semibold tabular-nums"
-              style={{ gridTemplateColumns: "1.5fr 0.6fr 1fr 1fr 0.7fr 1fr 0.9fr 1.4fr", opacity: r.n < 20 ? 0.45 : 1 }}>
+              className="grid gap-2 px-3 py-2 border-b border-[var(--divider)] text-[12.5px] font-semibold tabular-nums items-center"
+              style={{ gridTemplateColumns: COLS, opacity: r.n < 20 ? 0.55 : 1 }}>
               <span className="text-[var(--strong)] font-extrabold">{r.label}</span>
-              <span className="text-right">{r.n}{r.n < 20 ? " ⚠" : ""}</span>
+              <span className="text-right text-[var(--body,var(--strong))]">{r.n}{r.n < 20 ? " ⚠" : ""}</span>
               <span className="text-right font-bold" style={{ color: r.mean >= 0 ? "var(--pos)" : "var(--danger)" }}>{fmt(r.mean, norm)}</span>
-              <span className="text-right text-[var(--muted)]">{fmt(r.median, norm)}</span>
-              <span className="text-right text-[var(--muted)]">{r.winPct.toFixed(0)}%</span>
+              <span className="text-right text-[var(--strong)]">{fmt(r.median, norm)}</span>
+              <span className="text-right text-[var(--strong)]">{r.winPct.toFixed(0)}%</span>
               <span className="text-right text-[var(--danger)]">{fmt(r.worst, norm)}</span>
-              <span className="text-right text-[var(--muted)]">{r.romCycle != null ? `${r.romCycle.toFixed(2)}%` : "—"}</span>
-              <span className="text-right text-[var(--faint)]">{fmt(r.ci[0], norm)} … {fmt(r.ci[1], norm)}</span>
+              <span className="text-right text-[var(--strong)]">{r.romCycle != null ? `${r.romCycle.toFixed(2)}%` : "—"}</span>
+              <span className="text-right text-[var(--muted)] whitespace-nowrap">{fmt(r.ci[0], norm)} … {fmt(r.ci[1], norm)}</span>
+              <span className="text-right font-bold" style={{ color: r.pnlRs >= 0 ? "var(--pos)" : "var(--danger)" }}>{formatInr(Math.round(r.pnlRs))}</span>
+              <MeanBar value={r.meanPctCredit} max={maxBar} />
             </div>
           ))}
           {!rows.length && (
             <div className="px-3 py-5 text-sm text-[var(--muted)] font-semibold">No trades in range for this condition.</div>
           )}
           <div className="text-[11.5px] text-[var(--faint)] font-semibold mt-2 leading-[1.5]">{footnote}</div>
-        </div>
-
-        {/* diverging mean-%-of-credit bars */}
-        <div className="pt-7">
-          {rows.map((r) => {
-            const v = r.meanPctCredit ?? 0;
-            const w = Math.min(46, (Math.abs(v) / maxBar) * 46);
-            return (
-              <div key={r.label} className="flex items-center gap-1.5 h-[26px]"
-                style={{ opacity: r.n < 20 ? 0.45 : 1 }}>
-                <div className="relative h-[10px]" style={{ width: 120 }}>
-                  <div className="absolute top-0 bottom-0 w-px bg-[var(--faint)] opacity-85" style={{ left: 60 }} />
-                  <div className="absolute top-0 h-[10px] rounded"
-                    style={{
-                      left: v >= 0 ? 60 : 60 - w, width: w,
-                      background: v >= 0 ? "var(--pos)" : "var(--danger)",
-                    }} />
-                </div>
-                <span className="text-[10.5px] font-extrabold tabular-nums"
-                  style={{ color: v >= 0 ? "var(--pos)" : "var(--danger)" }}>
-                  {v >= 0 ? "+" : ""}{v.toFixed(1)}%
-                </span>
-              </div>
-            );
-          })}
-          {rows.length > 0 && (
-            <div className="text-[10px] text-[var(--faint)] font-bold mt-1">mean · % of credit</div>
-          )}
         </div>
       </div>
     </div>
