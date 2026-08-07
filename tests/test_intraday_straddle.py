@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+import pytest
+
 from skas_algo.engine.options import black_scholes as bs
 from skas_algo.strategies.intraday_straddle import IntradayStraddleStrategy
 
@@ -245,3 +247,67 @@ def test_leg_book_off_by_default_no_booking():
     ctx.market.prices[pe["symbol"]] = pe["entry"]
     assert tick(st, ctx, datetime(2026, 7, 13, 11, 0)) == []
     assert len(st.legs) == 2 and st.leg_realized == 0.0
+
+
+def test_stop_compares_banked_plus_open_not_the_open_leg_alone():
+    """The SL must fire on the DAY's net — banked (realized) leg bookings plus the
+    surviving leg's unrealized — not on the open leg in isolation. Pinned in both
+    directions: a loss that alone would breach the stop must NOT stop the day while
+    banked profit covers it, and must stop it once the net genuinely breaches."""
+    base = 200_000.0
+    st, ctx = setup(leg_book_pct=90.0, stop_loss_pct=2.0,
+                    trail_trigger_pct=0, trail_step_pct=0)  # trail off — isolate the fixed stop
+    tick(st, ctx, ENTRY_DT)
+    _fill(st, ctx, base)
+    ce, pe = st.legs[0], st.legs[1]
+    units = ce["units"]
+
+    # Book the CE at 5% of its entry -> banks 95% of that leg's premium.
+    ctx.market.prices[ce["symbol"]] = ce["entry"] * 0.05
+    ctx.market.prices[pe["symbol"]] = pe["entry"]
+    sigs = tick(st, ctx, datetime(2026, 7, 13, 11, 0))
+    assert len(sigs) == 1 and sigs[0].reason == "leg_book"
+    ctx.positions.pop(ce["symbol"], None)
+    banked = (ce["entry"] - ce["entry"] * 0.05) * units
+    assert abs(st.leg_realized - banked) < 1e-6
+    assert banked > base * 0.02, "test needs banked > the stop, else it proves nothing"
+
+    stop_rs = base * 0.02  # 4,000
+
+    # PE loses MORE than the whole stop on its own, but less than banked+stop -> net is
+    # still above the line, so the day must survive. If the stop looked at the open leg
+    # alone this would (wrongly) fire.
+    open_loss = banked + stop_rs - 1_000          # net = -(stop-1000) = above the stop
+    ctx.market.prices[pe["symbol"]] = pe["entry"] + open_loss / units
+    assert open_loss > stop_rs                     # the open leg alone is past the stop
+    assert tick(st, ctx, datetime(2026, 7, 13, 12, 0)) == []
+    assert abs(st.strategy_pnl({pe["symbol"]: ctx.market.prices[pe["symbol"]]})
+               - (banked - open_loss)) < 1e-6
+
+    # Push until the NET breaches -> now it must stop.
+    open_loss = banked + stop_rs + 1_000
+    ctx.market.prices[pe["symbol"]] = pe["entry"] + open_loss / units
+    sigs = tick(st, ctx, datetime(2026, 7, 13, 12, 5))
+    assert len(sigs) == 1 and sigs[0].reason == "stop" and sigs[0].symbol == pe["symbol"]
+
+
+def test_trail_high_water_also_counts_banked_profit():
+    """The ratchet's peak is measured on the same net, so banking a leg can itself lift
+    the stop — otherwise booking would silently disarm the trail for the rest of the day."""
+    base = 100_000.0
+    st, ctx = setup(leg_book_pct=90.0, stop_loss_pct=2.0,
+                    trail_trigger_pct=1.0, trail_step_pct=0.5, trail_mode="ratchet")
+    tick(st, ctx, ENTRY_DT)
+    _fill(st, ctx, base)
+    ce, pe = st.legs[0], st.legs[1]
+    assert st._stop_level() == -2.0                      # nothing banked yet
+
+    ctx.market.prices[ce["symbol"]] = ce["entry"] * 0.05
+    ctx.market.prices[pe["symbol"]] = pe["entry"]
+    tick(st, ctx, datetime(2026, 7, 13, 11, 0))          # books the CE
+    ctx.positions.pop(ce["symbol"], None)
+    tick(st, ctx, datetime(2026, 7, 13, 11, 1))          # next tick re-measures the peak
+
+    banked_pct = 100.0 * st.leg_realized / base
+    assert st.peak_pct == pytest.approx(banked_pct, abs=1e-6)
+    assert st._stop_level() > -2.0, "banked profit should have ratcheted the stop up"
