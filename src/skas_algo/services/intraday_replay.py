@@ -471,7 +471,10 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
     charges_bd = {k: 0.0 for k in ("brokerage", "stt", "exchange", "sebi", "stamp", "gst",
                                    "total")}
     margin_by_day: dict[str, float] = {}    # day → peak pushed margin
-    premium_by_day: dict[str, float] = {}   # day → net credit collected that day
+    # day → OPEN premium at that day's close: the cost to buy the book back, matching
+    # engine/runner.py's ``open_premium`` (sum of units x mark over open option lots).
+    # It is 0 on every flat night — which is the whole point for intraday strategies.
+    open_premium_by_day: dict[str, float] = {}
     episode: dict | None = None              # the open cycle being assembled
     realized = 0.0
     days_with_bars = 0
@@ -500,8 +503,6 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
             units = float(sig.quantity or 0)
             ctx.positions[sym] = {"units": units, "dir": d, "entry": px, "entered": minute}
             _charge("SHORT" if d < 0 else "BUY", units, px)
-            day_key = minute[:10]
-            premium_by_day[day_key] = premium_by_day.get(day_key, 0.0) + d * -1 * px * units
             if episode is None:
                 episode = {"entry_minute": minute, "closed": [], "premium": 0.0,
                            # minute-accurate parity spot — the cycles table's
@@ -672,11 +673,15 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
 
         # Daily close: mark any open book at the day's last (forward-filled) closes.
         unreal = 0.0
+        open_prem = 0.0
         for sym, pos in ctx.positions.items():
             try:
-                unreal += (market.close(sym) - pos["entry"]) * pos["units"] * pos["dir"]
+                mark = market.close(sym)
             except KeyError:
-                pass  # never printed today — carry at entry (flat contribution)
+                continue  # never printed today — carry at entry (flat contribution)
+            unreal += (mark - pos["entry"]) * pos["units"] * pos["dir"]
+            open_prem += mark * pos["units"]   # buy-back cost, sign-free (engine parity)
+        open_premium_by_day[day.isoformat()] = round(open_prem, 2)
         if episode is not None:
             # The open cycle's MTM at this close (owner ask: per-cycle EOD P&L) —
             # legs already closed within the episode + the open book's unreal.
@@ -686,8 +691,8 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
         equity_curve.append({"date": day.isoformat(),
                              "equity": round(capital + realized + unreal, 2)})
 
-    options = _options_report(cycles, positions, charges_bd, margin_by_day, premium_by_day,
-                              realized)
+    options = _options_report(cycles, positions, charges_bd, margin_by_day,
+                              open_premium_by_day, realized)
     # Spot/VIX context for the cycles table + payoff markers. enrich_with_market fills
     # DATE-based spots (cache daily closes) + India VIX for cycles AND positions — then
     # the cycles' spots are overwritten with the replay's own MINUTE-accurate parity
@@ -718,12 +723,18 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
 
 
 def _options_report(cycles: list[dict], positions: list[dict], charges_bd: dict,
-                    margin_by_day: dict, premium_by_day: dict, realized: float) -> dict:
+                    margin_by_day: dict, open_premium_by_day: dict,
+                    realized: float) -> dict:
     """The FULL options sub-report ReportView/OptionsReport render (types.OptionsReportData).
     Its mere presence flips ReportView into the options layout, so every non-optional
     summary field must exist (CLAUDE.md footgun: absent-or-complete, never partial)."""
     collected = sum(c["premium_collected"] for c in cycles)
+    # The replay's per-leg pnl is already NET of charges (unlike the EOD engine, whose
+    # positions carry gross realized_pnl). Re-gross it so the two bases mean the same
+    # thing: "captured" is pre-charge, "net_after_charges" is post — otherwise the report
+    # showed the same figure twice with a charges line between them (2026-08-07).
     net = round(realized, 2)
+    captured = round(net + charges_bd["total"], 2)
     wins = sum(1 for c in cycles if c["realized_pnl"] > 0)
     margins = sorted(margin_by_day.values())
     max_margin = margins[-1] if margins else 0.0
@@ -743,15 +754,14 @@ def _options_report(cycles: list[dict], positions: list[dict], charges_bd: dict,
         e["realized_pnl"] = round(e["realized_pnl"] + c["realized_pnl"], 2)
     per_expiry = [{**e, "win": e["realized_pnl"] > 0}
                   for e in sorted(by_expiry.values(), key=lambda x: x["expiry"])]
-    cum, premium_curve = 0.0, []
-    for d in sorted(premium_by_day):
-        cum += premium_by_day[d]
-        premium_curve.append({"date": d, "premium": round(cum, 2)})
+    premium_curve = [{"date": d, "premium": open_premium_by_day[d]}
+                     for d in sorted(open_premium_by_day)]
     return {
         "summary": {
             "total_premium_collected": round(collected, 2),
-            "total_premium_captured": net,
-            "premium_capture_pct": round(100.0 * net / collected, 1) if collected else 0.0,
+            "total_premium_captured": captured,
+            "premium_capture_pct": (round(100.0 * captured / collected, 1)
+                                    if collected else 0.0),
             "avg_holding_days": round(sum(c["holding_days"] for c in cycles) / len(cycles), 2)
             if cycles else 0.0,
             "num_positions": len(positions),
@@ -760,11 +770,16 @@ def _options_report(cycles: list[dict], positions: list[dict], charges_bd: dict,
             "win_rate_pct": round(100.0 * wins / len(cycles), 1) if cycles else 0.0,
             "max_margin_used": round(max_margin, 2),
             "avg_margin_used": round(sum(margins) / len(margins), 2) if margins else 0.0,
-            "capital_efficiency": round(100.0 * net / max_margin, 2) if max_margin else 0.0,
+            # RATIO (premium collected per rupee of peak margin), as the EOD engine
+            # defines it and as the UI's "x" suffix + footnote promise.
+            "capital_efficiency": round(collected / max_margin, 2) if max_margin else 0.0,
             "avg_premium_per_cycle": round(collected / len(cycles), 2) if cycles else 0.0,
             "total_charges": round(charges_bd["total"], 2),
             "net_after_charges": net,
         },
+        # Marker for the read-time backfill: reports without it predate the 2026-08-07
+        # gross/net + open-premium fix and carry known-wrong summary/curve values.
+        "premium_basis": "open_premium",
         "charges": {k: round(v, 2) for k, v in charges_bd.items()},
         "exit_reasons": exit_reasons,
         "per_expiry_cycle": per_expiry,

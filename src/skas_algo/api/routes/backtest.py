@@ -431,6 +431,52 @@ def _instrument_class(algo: Algo | None, trades: list[dict] | None = None) -> st
     return "STOCK"
 
 
+def _repair_options_summary(report: dict | None) -> dict | None:
+    """Repair the options sub-report of runs saved before the 2026-08-07 fix, at READ time
+    (never mutating the stored row — same contract as _backfill_period_tables).
+
+    Three defects, all in the intraday-replay path:
+      * ``total_premium_captured`` was emitted as the ALREADY-NET figure, so the report
+        showed it equal to ``net_after_charges`` with a charges line between them.
+        Recoverable exactly: captured = net + charges.
+      * ``capital_efficiency`` was 100 x net / margin (a percent) where the EOD engine and
+        the UI's "x" suffix both mean collected / margin. Recomputable from stored fields,
+        and the recomputation is a no-op for correct EOD rows.
+      * ``premium_curve`` was a cumulative sum of entry credits instead of the daily OPEN
+        premium. NOT recoverable — per-day open premium was never stored — so the curve is
+        dropped rather than left to contradict its own caption.
+    """
+    if not isinstance(report, dict):
+        return report
+    o = report.get("options")
+    if not isinstance(o, dict) or o.get("premium_basis") == "open_premium":
+        return report          # EOD-engine rows and post-fix replays are already right
+    sm = o.get("summary")
+    if not isinstance(sm, dict):
+        return report
+    out = {**report, "options": {**o, "summary": {**sm}}}
+    so, oo = out["options"]["summary"], out["options"]
+    charges = float(so.get("total_charges") or 0.0)
+    net = so.get("net_after_charges")
+    if net is not None and charges > 0 and so.get("total_premium_captured") == net:
+        so["total_premium_captured"] = round(float(net) + charges, 2)
+        collected = float(so.get("total_premium_collected") or 0.0)
+        so["premium_capture_pct"] = (round(100.0 * so["total_premium_captured"] / collected, 1)
+                                     if collected else 0.0)
+    mm = float(so.get("max_margin_used") or 0.0)
+    if mm > 0:
+        so["capital_efficiency"] = round(
+            float(so.get("total_premium_collected") or 0.0) / mm, 2)
+    # A cumulative-credit curve is the pre-fix signature; it cannot be turned into open
+    # premium after the fact, and showing it would keep contradicting the chart's caption.
+    curve = oo.get("premium_curve") or []
+    if len(curve) > 1:
+        vals = [float(pt.get("premium") or 0.0) for pt in curve]
+        if vals[-1] > 0 and all(b >= a for a, b in zip(vals, vals[1:])):
+            oo["premium_curve"] = []
+    return out
+
+
 def _backfill_period_tables(report: dict | None, algo: Algo | None) -> dict | None:
     """Intraday-replay runs saved before 2026-07-17 stored their report WITHOUT the
     yearly / monthly-profit / monthly-equity tables — the replay only started emitting
@@ -459,7 +505,7 @@ def _run_report(run: AlgoRun, algo: Algo | None) -> dict | None:
     stop. Backtests / stopped / options runs return the stored report unchanged (old pre-2026-07-17
     replay reports get their missing period tables derived from the stored equity curve)."""
     if _instrument_class(algo) != "STOCK":
-        return _backfill_period_tables(run.metrics, algo)
+        return _repair_options_summary(_backfill_period_tables(run.metrics, algo))
     from skas_algo.engine.jsonutil import to_native
     from skas_algo.engine.report import build_report
     from skas_algo.engine.runner import RunResult
@@ -467,7 +513,7 @@ def _run_report(run: AlgoRun, algo: Algo | None) -> dict | None:
 
     live = manager.get(run.id)
     if live is None or not live.session.history:
-        return _backfill_period_tables(run.metrics, algo)
+        return _repair_options_summary(_backfill_period_tables(run.metrics, algo))
     rr = RunResult(
         history=live.session.history,
         transactions=live.session.transactions,

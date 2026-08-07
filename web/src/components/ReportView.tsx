@@ -271,7 +271,12 @@ function MonthlyGrid({
   const totalOf = (row: Record<string, number>) => {
     const vals = MONTHS.map((_, i) => row[String(i + 1)] ?? 0);
     if (total === "max") return Math.max(...vals);
-    if (total === "eoy") return row["12"] ?? 0;
+    if (total === "eoy") {
+      // The latest month PRESENT — an in-progress year has no "12", and reading it as 0
+      // printed ₹0 under a row of real equity values (2026 on run #251).
+      const present = MONTHS.map((_, i) => String(i + 1)).filter((k) => row[k] != null);
+      return present.length ? row[present[present.length - 1]] : 0;
+    }
     return vals.reduce((a, b) => a + b, 0);
   };
 
@@ -333,7 +338,12 @@ export default function ReportView({
   cycleMeta?: { params?: unknown; strategyId?: string };
 }) {
   const m = report.metrics ?? {};   // a not-yet-finalised run can carry {} — never crash on it
-  const netMonthly = m["Avg Monthly Net P&L (Post-Tax)"] ?? 0;
+  // Absent ≠ zero: intraday-replay runs don't score this metric at all, and defaulting to
+  // 0 rendered a confident green ₹0 directly above a monthly grid full of real numbers
+  // (run #251, 2026-08-07). Undefined now renders "—".
+  const netMonthlyRaw = m["Avg Monthly Net P&L (Post-Tax)"];
+  const netMonthly = netMonthlyRaw ?? 0;
+  const netMonthlyText = netMonthlyRaw == null ? "—" : formatInr(netMonthlyRaw);
   // Deployed-capital + idle-cash overlay (present only for opt-in strategies). The idle-CAGR
   // key carries the configured rate (e.g. "CAGR (idle @ 6%) %"), so find it dynamically.
   const idleKey = Object.keys(m).find((k) => k.startsWith("CAGR (idle @"));
@@ -370,7 +380,7 @@ export default function ReportView({
           <MetricCard label="CAGR" value={pct(m["CAGR %"])} />
           <MetricCard label="Final Equity" value={formatInr(m["Final Equity"])} />
           <MetricCard label="Max Drawdown" value={pct(m["Max Drawdown %"])} tone="bad" />
-          <MetricCard label="Avg Monthly Net P&L" value={formatInr(netMonthly)} tone={netMonthly >= 0 ? "good" : "bad"} />
+          <MetricCard label="Avg Monthly Net P&L" value={netMonthlyText} tone={netMonthlyRaw == null ? undefined : netMonthly >= 0 ? "good" : "bad"} />
           <MetricCard label="F&O Charges" value={formatInr(report.options.summary.total_charges)} tone="bad" />
           <MetricCard label="Avg Holding (days)" value={report.options.summary.avg_holding_days.toFixed(1)} />
         </div>
@@ -386,7 +396,7 @@ export default function ReportView({
           <MetricCard label="Total Withdrawals" value={formatInr(m["Total Withdrawals"])} />
           <MetricCard label="Cash Balance" value={formatInr(m["Cash Balance"])} />
           <MetricCard label="Avg Monthly Bookings" value={m["Avg Monthly Profit Booking"]?.toFixed(2)} />
-          <MetricCard label="Avg Monthly Net P&L" value={formatInr(netMonthly)} tone={netMonthly >= 0 ? "good" : "bad"} />
+          <MetricCard label="Avg Monthly Net P&L" value={netMonthlyText} tone={netMonthlyRaw == null ? undefined : netMonthly >= 0 ? "good" : "bad"} />
           <MetricCard label="Avg Winners' Profit (Pre-Tax)" value={formatInr(m["Avg Monthly Profit (Pre-Tax)"])} />
           <MetricCard label="Avg Winners' Profit (Post-Tax)" value={formatInr(m["Avg Monthly Profit (Post-Tax)"])} />
           {deployedPerYr != null && (

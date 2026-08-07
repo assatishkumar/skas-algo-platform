@@ -22,22 +22,57 @@ import CoveredCallReport from "./CoveredCallReport";
 import PayoffChart from "./PayoffChart";
 import { Card, MetricCard } from "./ui";
 
-const REASON_COLOR: Record<string, string> = {
-  target: "#10b981",
-  stop: "#f43f5e",
-  expiry: "#f59e0b",
-  manual: "#64748b",
-  mixed: "#8b5cf6",
+// Exit reasons are grouped into OUTCOME FAMILIES, not one hue each: the engines emit ~20
+// distinct identifiers and 20 hues would be unreadable (and would cycle). Each family gets
+// one colour so a chart still separates "banked" from "stopped" from "ran out of time" at a
+// glance. Anything genuinely unknown falls back to slate — but the map is the source of
+// truth, so a NEW engine reason should be added here rather than left to the fallback.
+// (Before 2026-08-07 only 5 of 19 emitted reasons were mapped: the donut was a monochrome
+// pie and a trail-stop looked identical to a manual exit.)
+const REASON_FAMILY: Record<string, "banked" | "stopped" | "time" | "adjust" | "manual"> = {
+  target: "banked", portfolio_target: "banked", leg_target: "banked", leg_book: "banked",
+  stop: "stopped", portfolio_stop: "stopped", trail: "stopped",
+  ironfly_payoff_neg: "stopped",
+  eod: "time", eod_1520: "time", time: "time", expiry: "time", expiry_settle: "time",
+  btst_exit: "time",
+  roll: "adjust", reverse: "adjust", flip: "adjust", cc_rolldown_close: "adjust",
+  mixed: "adjust",
+  manual: "manual",
 };
+const FAMILY_COLOR: Record<string, string> = {
+  banked: "#10b981",   // booked a profit target
+  stopped: "#f43f5e",  // risk rule fired (fixed stop, trail, payoff guard)
+  time: "#f59e0b",     // ran to a clock/expiry exit
+  adjust: "#8b5cf6",   // rolled / reversed into a new structure
+  manual: "#64748b",
+};
+// Raw engine identifiers must never reach the user as-is.
+const REASON_LABEL: Record<string, string> = {
+  eod: "End of day", eod_1520: "End of day (15:20)", time: "Time exit",
+  expiry: "Expiry", expiry_settle: "Settled at expiry", btst_exit: "BTST exit",
+  target: "Target", portfolio_target: "Portfolio target", leg_target: "Leg target",
+  leg_book: "Leg booked", stop: "Stop loss", portfolio_stop: "Portfolio stop",
+  trail: "Trailing stop", ironfly_payoff_neg: "Iron-fly payoff negative",
+  roll: "Rolled", reverse: "Reversed", flip: "Flipped",
+  cc_rolldown_close: "Covered-call roll-down", manual: "Manual", mixed: "Mixed",
+};
+export function reasonColor(reason: string): string {
+  return FAMILY_COLOR[REASON_FAMILY[reason]] ?? "#64748b";
+}
+export function reasonLabel(reason: string): string {
+  return REASON_LABEL[reason]
+    ?? reason.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
 
 function ReasonChip({ reason }: { reason: string }) {
-  const color = REASON_COLOR[reason] ?? "#64748b";
+  const color = reasonColor(reason);
   return (
     <span
       className="inline-block rounded-full px-2 py-0.5 text-xs font-medium"
       style={{ background: `${color}22`, color }}
+      title={reason}
     >
-      {reason}
+      {reasonLabel(reason)}
     </span>
   );
 }
@@ -181,7 +216,8 @@ function ExitReasonDonut({ options }: { options: OptionsReportData }) {
   const data = useMemo(
     () =>
       Object.entries(options.exit_reasons).map(([reason, s]) => ({
-        reason,
+        reason: reasonLabel(reason),
+        raw: reason,
         count: s.count,
         pnl: s.pnl,
       })),
@@ -204,7 +240,7 @@ function ExitReasonDonut({ options }: { options: OptionsReportData }) {
             paddingAngle={2}
           >
             {data.map((d) => (
-              <Cell key={d.reason} fill={REASON_COLOR[d.reason] ?? "#64748b"} />
+              <Cell key={d.raw} fill={reasonColor(d.raw)} />
             ))}
           </Pie>
           <Tooltip

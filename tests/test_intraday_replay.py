@@ -86,6 +86,23 @@ def test_contract_and_single_instance_across_days():
     assert 0 < c["holding_days"] <= 1.0                       # intraday fraction of a session
     assert len(o["per_expiry_cycle"]) == 1 and o["per_expiry_cycle"][0]["entries"] == 2
     assert len(o["margin_series"]) == 2 and len(o["premium_curve"]) == 2
+    # "Captured" is PRE-charge and "net_after_charges" POST — the report renders both with a
+    # charges line between them, so emitting the same figure twice was arithmetic that could
+    # not be true (2026-08-07). Mirrors the EOD engine: captured − charges = net.
+    sm = o["summary"]
+    assert sm["total_premium_captured"] == pytest.approx(
+        sm["net_after_charges"] + sm["total_charges"], abs=0.02)
+    assert sm["net_after_charges"] == pytest.approx(m["Net Realized P&L"], abs=0.02)
+    assert sm["total_premium_captured"] > sm["net_after_charges"]   # charges are non-zero
+    # capital_efficiency is a RATIO (premium collected per rupee of peak margin) — the UI
+    # renders it with a "x" suffix. It was 100 x net / margin, i.e. a percent wearing "x".
+    assert sm["capital_efficiency"] == pytest.approx(
+        sm["total_premium_collected"] / sm["max_margin_used"], abs=0.01)
+    # premium_curve is OPEN premium (buy-back cost) per day, matching the EOD engine's
+    # runner.open_premium — NOT a cumulative sum of entry credits. This strategy is flat
+    # every night, so every point is 0; the old curve climbed monotonically under a caption
+    # promising it "decays toward zero".
+    assert [p["premium"] for p in o["premium_curve"]] == [0.0, 0.0]
     # Periodic breakdowns (owner ask 2026-07-17): same keys the EOD engine emits, so the
     # existing Yearly table + Monthly grids render for intraday runs too.
     yr = report["yearly"]["2026"]
@@ -517,3 +534,46 @@ def test_backfill_period_tables_derives_missing_tables():
     # No curve / empty report → passthrough, never raises.
     assert _backfill_period_tables({"metrics": {}}, None) == {"metrics": {}}
     assert _backfill_period_tables(None, None) is None
+
+
+def test_read_time_repair_of_pre_fix_option_reports():
+    """Runs saved before 2026-08-07 stored a net figure under 'captured', a percent under
+    'capital_efficiency', and a cumulative-credit 'premium_curve'. GET /runs/{id} repairs
+    what is recoverable and drops what is not — without touching the stored row."""
+    from skas_algo.api.routes.backtest import _repair_options_summary
+
+    stale = {"options": {"summary": {
+        "total_premium_collected": 7_915_541.75,
+        "total_premium_captured": 228_983.36,      # bug: already net
+        "net_after_charges": 228_983.36,
+        "total_charges": 61_518.60,
+        "capital_efficiency": 92.86,                # bug: 100 x net / margin
+        "max_margin_used": 246_599.18,
+        "premium_capture_pct": 2.9,
+    }, "premium_curve": [{"date": "2024-08-05", "premium": 1000.0},
+                         {"date": "2024-08-06", "premium": 7_900_000.0}]}}
+    out = _repair_options_summary(stale)
+    s = out["options"]["summary"]
+    assert s["total_premium_captured"] == pytest.approx(290_501.96, abs=0.01)
+    assert s["net_after_charges"] == 228_983.36                    # net is untouched
+    assert s["total_premium_captured"] - s["total_charges"] == pytest.approx(
+        s["net_after_charges"], abs=0.01)                          # the arithmetic now holds
+    assert s["capital_efficiency"] == pytest.approx(32.1, abs=0.01)  # collected / margin
+    assert out["options"]["premium_curve"] == []                   # unrecoverable -> dropped
+    assert stale["options"]["summary"]["capital_efficiency"] == 92.86  # stored row untouched
+
+    # A post-fix report carries the marker and passes through byte-identical.
+    fixed = {"options": {"premium_basis": "open_premium", "summary": {
+        "total_premium_captured": 290_501.96, "net_after_charges": 228_983.36,
+        "total_charges": 61_518.60, "capital_efficiency": 32.1,
+        "total_premium_collected": 7_915_541.75, "max_margin_used": 246_599.18},
+        "premium_curve": [{"date": "2024-08-05", "premium": 0.0}]}}
+    assert _repair_options_summary(fixed) is fixed
+    # EOD-engine rows (no marker, already correct) keep their captured value: captured
+    # differs from net there, so the gross re-derivation must not fire.
+    eod = {"options": {"summary": {
+        "total_premium_collected": 500_000.0, "total_premium_captured": -123_855.0,
+        "net_after_charges": -127_466.0, "total_charges": 3_611.0,
+        "capital_efficiency": 2.5, "max_margin_used": 200_000.0}, "premium_curve": []}}
+    assert _repair_options_summary(eod)["options"]["summary"][
+        "total_premium_captured"] == -123_855.0
