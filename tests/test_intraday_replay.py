@@ -577,3 +577,19 @@ def test_read_time_repair_of_pre_fix_option_reports():
         "capital_efficiency": 2.5, "max_margin_used": 200_000.0}, "premium_curve": []}}
     assert _repair_options_summary(eod)["options"]["summary"][
         "total_premium_captured"] == -123_855.0
+
+
+def test_a_position_past_its_expiry_settles_even_if_that_day_is_missing():
+    """The store has exactly one hole at a monthly expiry (2023-06-29). An `== day` test
+    strands any position opened into it FOREVER — the strategy keeps believing it holds a
+    book and never trades again, which silently killed 3 years of put_condor entries
+    (2026-08-11). Settlement must fire at OR PAST expiry."""
+    from datetime import date as _d
+
+    # a contract whose expiry fell on a day the store never captured
+    stale = "NIFTY|2026-07-20|24000|PE"
+    positions = {stale: {"units": 65.0, "dir": -1, "entry": 50.0, "entered": "x"}}
+    due = [s for s in positions if s.split("|")[1] <= _d(2026, 7, 21).isoformat()]
+    assert due == [stale], "a past-expiry leg must be picked up for settlement"
+    # the old equality test would have missed it entirely
+    assert [s for s in positions if s.split("|")[1] == _d(2026, 7, 21).isoformat()] == []

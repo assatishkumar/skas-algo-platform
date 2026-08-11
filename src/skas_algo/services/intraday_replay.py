@@ -661,12 +661,20 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                     margin_by_day[dk] = max(margin_by_day.get(dk, 0.0), base)
             cur += timedelta(minutes=1)
 
-        # Expiry settlement: a leg still open on its own expiry settles to intrinsic (the
-        # engine's settler equivalent; SETTLE pays no brokerage). Routed through _fill so
-        # the leg lands in positions/cycles like any other close.
+        # Expiry settlement: a leg at OR PAST its expiry settles to intrinsic (the engine's
+        # settler equivalent; SETTLE pays no brokerage). Routed through _fill so the leg
+        # lands in positions/cycles like any other close.
+        #
+        # `<=`, not `==`: if the expiry DAY itself is missing from the store the equality
+        # test never fires and the position is stranded FOREVER — the strategy keeps
+        # thinking it holds a book and never trades again, silently killing the rest of the
+        # run. 2023-06-29 (a monthly expiry) is exactly such a hole and it cost put_condor
+        # three years of entries before this was caught (2026-08-11). A contract past its
+        # expiry must always settle; a day-late intrinsic is far better than never.
         from types import SimpleNamespace
 
-        for sym in [s for s in list(ctx.positions) if s.split("|")[1] == day.isoformat()]:
+        for sym in [s for s in list(ctx.positions)
+                    if s.split("|")[1] <= day.isoformat()]:
             spot = market.index_spot(u) or 0.0
             px = _intrinsic(spot, float(sym.split("|")[2]), sym.split("|")[3])
             market.feed(sym, px, 0.0)

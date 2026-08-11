@@ -153,6 +153,12 @@ class PutCondorStrategy(DeltaNeutralMonthlyStrategy):
 
         live = self._live_legs(ctx)
         if live:
+            # Defence in depth against an uncloseable book: if the contract has expired but
+            # our legs never cleared, abandon them rather than hold a dead position for the
+            # rest of the run. This must precede _manage's print guard — an expired contract
+            # has no marks, so _manage would return [] forever and never reach an exit.
+            if self.cycle_expiry and today > date.fromisoformat(self.cycle_expiry):
+                return self._exit_all(live, "pc_expired_stale")
             self._note_session(ctx, today)
             return self._manage(ctx, live, now)
 
