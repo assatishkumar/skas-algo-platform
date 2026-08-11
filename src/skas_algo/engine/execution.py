@@ -205,7 +205,7 @@ class SliceExecutor:
     def _sell(self, ts, symbol, lot_id, units, entry, tag, lots) -> dict | None:
         if units <= 0:
             return None
-        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.SELL, units))
+        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.SELL, units, reduce_only=True))
         profit = self.portfolio.reduce_lot(symbol, lot_id, units, fill.price)
         pnl_pct = (fill.price - entry) / entry if entry else 0.0
         return trade_event(ts, symbol, "SELL", units, fill.price, profit, pnl_pct, lots, tag,
@@ -217,7 +217,8 @@ class SliceExecutor:
             return None
         total_units = sum(lot.units for lot in lots)
         n_lots = len(lots)
-        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.SELL, total_units))
+        fill = self.broker.execute(
+            BrokerOrder(symbol, OrderSide.SELL, total_units, reduce_only=True))
         closed = self.portfolio.close_position(symbol, fill.price)
         if closed is None:
             return None
@@ -263,7 +264,7 @@ class SliceExecutor:
 
     def _buy_to_close(self, ts, symbol, lot_id, lot, tag, reason="") -> dict | None:
         """Buy-to-close a short lot; profit = (entry − exit)·units·multiplier."""
-        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.BUY, lot.units))
+        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.BUY, lot.units, reduce_only=True))
         profit = self.portfolio.buy_to_close(symbol, lot_id, fill.price)
         pnl_pct = (lot.price - fill.price) / lot.price if lot.price else 0.0
         return trade_event(

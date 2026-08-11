@@ -494,3 +494,142 @@ def test_reconcile_ok_alerts_every_completed_run():
     assert len(sent) == 2 and sent[-1][0] == "INFO" and "195" in sent[-1][2]
     LiveRun._alert_reconciled_ok(s, book, d1)           # same book, same hour → alerts again
     assert len(sent) == 3
+
+
+class LadderAdapter(FakeAdapter):
+    """Fills only once the modify price reaches `fills_at` — models a market running away
+    from the order, which is what a single-rung escalation cannot catch."""
+
+    def __init__(self, fills_at: float, side=OrderSide.BUY, qty=195):
+        super().__init__(initial=PENDING)
+        self.fills_at = fills_at
+        self.side = side
+        self.qty = qty
+        self.filled = False
+
+    def modify_order(self, broker_order_id, *, order_type=None, price=None):
+        self.modified.append((broker_order_id, order_type, price))
+        if price is not None and (
+                price >= self.fills_at if self.side is OrderSide.BUY else price <= self.fills_at):
+            self.filled = True
+
+    def order_status(self, broker_order_id):
+        if self.filled:
+            return {"status": "COMPLETE", "average_price": self.fills_at,
+                    "filled_quantity": self.qty, "status_message": None}
+        if self.cancelled:
+            return {"status": "CANCELLED", "average_price": 0.0, "filled_quantity": 0,
+                    "status_message": None}
+        return dict(PENDING)
+
+
+def test_ladder_catches_a_leg_a_single_rung_would_miss():
+    """The 2026-08-11 halt: the 24500 PE ran 31.30 → 41.75 while the square-off rested, so
+    a limit 3% through a stale touch never filled — it cancelled and halted the run with a
+    live short leg. A widening ladder re-reads the touch and keeps crossing."""
+    a = LadderAdapter(fills_at=39.0)                 # needs ~+15% over a 34.00 touch
+    lb = make(a, touch_fn=lambda s, side: 34.0)
+    fill = lb.execute(BrokerOrder("NIFTY|2026-08-11|24500|PE", OrderSide.BUY, 195,
+                                 reduce_only=True))
+    assert fill.quantity == 195 and fill.price == 39.0
+    prices = [p for (_, t, p) in a.modified if t is OrderType.LIMIT]
+    assert prices == sorted(prices), "each rung must cross FURTHER than the last"
+    assert prices[0] == 35.05                        # 34 x 1.03, tick-snapped outward
+    assert prices[-1] >= 39.0                        # the ladder reached a fillable price
+    assert a.cancelled == []                         # filled, so nothing to cancel
+    # and the run is NOT halted — that is the whole point
+    assert not any(al.level.name == "ERROR" for al in lb.notifier.alerts)
+
+
+def test_ladder_re_reads_the_touch_each_rung():
+    """A running market must be chased, not crossed once off a stale quote."""
+    seen = []
+    quotes = iter([34.0, 37.0, 40.0, 43.0])
+
+    def touch(_s, _side):
+        v = next(quotes, 43.0)
+        seen.append(v)
+        return v
+
+    a = LadderAdapter(fills_at=99.0)                 # never fills — exercise every rung
+    lb = make(a, touch_fn=touch)
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("NIFTY|2026-08-11|24500|PE", OrderSide.BUY, 195,
+                               reduce_only=True))
+    assert len(seen) >= 4, "initial placement + one re-read per rung"
+    prices = [p for (_, t, p) in a.modified if t is OrderType.LIMIT]
+    assert len(prices) == 3                          # default ladder is three rungs
+    assert prices == sorted(prices)
+
+
+def test_ladder_still_raises_when_nothing_fills():
+    """Exhausting the ladder must behave exactly as before: cancel, then halt."""
+    a = LadderAdapter(fills_at=1e9)
+    lb = make(a, touch_fn=lambda s, side: 34.0)
+    with pytest.raises(OrderExecutionError, match="CANCELLED"):
+        lb.execute(BrokerOrder("NIFTY|2026-08-11|24500|PE", OrderSide.BUY, 195))
+    assert a.cancelled == ["KITE-1"]
+
+
+def test_protect_pct_zero_still_means_no_crossing():
+    """Back-compat: the single knob still steers the whole ladder, and 0 disarms it."""
+    a = FakeAdapter(initial=PENDING, after_modify=COMPLETE)
+    lb = make(a, protect_pct=0.0, touch_fn=lambda s, side: 100.0)
+    lb.execute(BrokerOrder("NIFTY|2026-07-07|24500|CE", OrderSide.BUY, 65))
+    assert a.modified[0] == ("KITE-1", OrderType.LIMIT, 100.0)   # no cross at all
+
+
+def test_explicit_ladder_is_honoured():
+    a = LadderAdapter(fills_at=1e9)
+    lb = make(a, touch_fn=lambda s, side: 100.0, protect_ladder=(5.0, 25.0))
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("NIFTY|2026-07-07|24500|CE", OrderSide.BUY, 65,
+                               reduce_only=True))
+    assert [p for (_, t, p) in a.modified if t is OrderType.LIMIT] == [105.0, 125.0]
+
+
+def test_a_market_placed_order_never_walks_the_ladder():
+    """No touch → the order is PLACED as MARKET, and escalation is LIMIT-only. The ladder
+    must not touch that path at all (it would only re-send an order type the broker may
+    reject outright on options)."""
+    a = FakeAdapter(initial=PENDING, after_modify=PENDING, after_cancel=PENDING)
+    lb = make(a, touch_fn=lambda s, side: None)
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("AAA", OrderSide.SELL, 10))
+    assert a.placed[0].order_type is OrderType.MARKET
+    assert a.modified == []          # never escalated
+    assert a.cancelled == ["KITE-1"]  # cancel-then-halt, exactly as before
+
+
+def test_entries_keep_the_single_rung_exits_walk_the_ladder():
+    """The ladder exists so an EXIT gets out. An ENTRY must keep exactly the pre-2026-08-11
+    behaviour — one 3% rung then give up — because chasing 20% through the touch to OPEN a
+    position would trade the halt risk for a bad-fill risk."""
+    entry = LadderAdapter(fills_at=1e9)
+    lb = make(entry, touch_fn=lambda s, side: 100.0)
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("NIFTY|2026-08-11|24500|PE", OrderSide.SELL, 195))
+    assert [p for (_, t, p) in entry.modified if t is OrderType.LIMIT] == [97.0]  # ONE rung
+
+    exit_ = LadderAdapter(fills_at=1e9)
+    lb2 = make(exit_, touch_fn=lambda s, side: 100.0)
+    with pytest.raises(OrderExecutionError):
+        lb2.execute(BrokerOrder("NIFTY|2026-08-11|24500|PE", OrderSide.BUY, 195,
+                                reduce_only=True))
+    assert len([p for (_, t, p) in exit_.modified if t is OrderType.LIMIT]) == 3
+
+
+def test_the_executor_marks_closing_orders_reduce_only():
+    """Wiring check: the shared executor must flag its three CLOSING paths, or the ladder
+    never engages on the orders it was built for."""
+    import inspect
+
+    from skas_algo.engine import execution
+
+    src = inspect.getsource(execution.SliceExecutor)
+    for fn in ("_sell", "_close_position", "_buy_to_close"):
+        body = src.split(f"def {fn}(")[1].split("\n    def ")[0]
+        assert "reduce_only=True" in body, f"{fn} must mark its order reduce_only"
+    for fn in ("_buy", "_sell_to_open"):
+        body = src.split(f"def {fn}(")[1].split("\n    def ")[0]
+        assert "reduce_only" not in body, f"{fn} OPENS a position — must not be reduce_only"

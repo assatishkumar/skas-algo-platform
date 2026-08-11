@@ -7,8 +7,9 @@ armed AND SKAS_LIVE_TRADING_ENABLED is true AND the adapter has order methods
 (live/manager._build_session; every other combination keeps PaperBroker).
 
 Execution style (owner decision): LIMIT at touch — a SELL is placed at the current BID,
-a BUY at the ASK — then polled ~2s up to ``live_order_timeout_s``; still pending →
-modified to MARKET and polled to a terminal state. COMPLETE → Fill at the broker's
+a BUY at the ASK — then polled ~2s up to ``live_order_timeout_s``; still pending → walked
+up an escalation LADDER of protected crossing limits (touch re-read each rung) until it
+fills or the ladder is exhausted. COMPLETE → Fill at the broker's
 average price. REJECTED / CANCELLED / stuck → best-effort cancel, then
 ``OrderExecutionError`` — the live loop catches it, sets the run's ``order_error`` halt
 (no further decisions until acknowledged), and notifies.
@@ -97,7 +98,8 @@ class LiveBroker:
         max_orders_per_day: int = 20,
         order_timeout_s: float = 10.0,
         poll_interval_s: float = 2.0,
-        protect_pct: float = 3.0,           # escalation crosses the touch by this %
+        protect_pct: float = 3.0,           # FIRST escalation rung: cross the touch by this %
+        protect_ladder: tuple[float, ...] | None = None,  # None → (protect_pct, x2.7, x6.7)
         notifier=None,
         clock=None,                          # injectable for tests (datetime-like)
     ):
@@ -110,6 +112,18 @@ class LiveBroker:
         self.order_timeout_s = float(order_timeout_s)
         self.poll_interval_s = float(poll_interval_s)
         self.protect_pct = float(protect_pct)
+        # Escalation ladder. ONE 3% rung is far too thin for a near-the-money option on
+        # expiry day: on 2026-08-11 the 24500 PE ran 31.30 → 41.75 (+33%) during the ~20s
+        # run 10's square-off was resting, so a limit 3% through a touch read seconds
+        # earlier never stood a chance — it cancelled, halted the run, and left a short
+        # leg to be closed by hand. Each rung RE-READS the touch and crosses it further.
+        # Derived from protect_pct so the single knob still steers the whole ladder, and
+        # so an explicit protect_pct=0 still means "no crossing".
+        self.protect_ladder: tuple[float, ...] = tuple(
+            float(x) for x in (protect_ladder
+                               if protect_ladder is not None
+                               else (protect_pct, protect_pct * 2.7, protect_pct * 6.7))
+        )
         self.notifier = notifier or build_notifier()
         self._clock = clock or datetime
         self._orders_day: date | None = None
@@ -179,32 +193,53 @@ class LiveBroker:
         st = self._await_terminal(broker_id, deadline_s=self.order_timeout_s)
         if st["status"] not in _TERMINAL and req.order_type is OrderType.LIMIT:
             # Escalate: unfilled at the touch → re-price to a PROTECTED crossing LIMIT
-            # (touch re-read, pushed protect_pct THROUGH the spread). NOT a MARKET modify:
-            # Zerodha rejects naked MARKET orders on options via API ("Market orders
-            # without market protection are not allowed") — on 2026-07-27 that rejection
-            # left run 10's PE square-off resting at a stale touch until it CANCELLED and
-            # halted the run. A limit through the touch is the same thing a market order
-            # with protection does, and is accepted.
-            fresh = None
-            if self.touch_fn is not None:
+            # (touch RE-READ each rung, pushed further THROUGH the spread). NOT a MARKET
+            # modify: Zerodha rejects naked MARKET orders on options via API ("Market
+            # orders without market protection are not allowed") — on 2026-07-27 that
+            # rejection left run 10's PE square-off resting at a stale touch until it
+            # CANCELLED and halted the run. A limit through the touch is the same thing a
+            # market order with protection does, and is accepted.
+            #
+            # The LADDER (2026-08-11): a single rung fails whenever the option is moving
+            # faster than the crossing is wide, which is the norm for a near-the-money leg
+            # on expiry day — the very leg you most need out of. Later rungs are shorter
+            # (the market is clearly running) so the whole ladder still fits inside roughly
+            # the old two-step budget.
+            # An EXIT walks the whole ladder — not being flat is the expensive outcome.
+            # An ENTRY gets the single original rung: there a bad fill is worse than no
+            # fill, and chasing 20% through the touch to OPEN a position would be a new
+            # risk introduced by the fix for a different one.
+            ladder = (self.protect_ladder if getattr(order, "reduce_only", False)
+                      else self.protect_ladder[:1])
+            for i, pct in enumerate(ladder):
+                fresh = None
+                if self.touch_fn is not None:
+                    try:
+                        fresh = self.touch_fn(order.symbol, order.side)
+                    except Exception:  # pragma: no cover - no book → fall back below
+                        fresh = None
+                base = float(fresh or touch or 0.0)
                 try:
-                    fresh = self.touch_fn(order.symbol, order.side)
-                except Exception:  # pragma: no cover - no book → fall back below
-                    fresh = None
-            base = float(fresh or touch or 0.0)
-            try:
-                self._governor.wait()
-                if base > 0:
-                    self.adapter.modify_order(
-                        broker_id, order_type=OrderType.LIMIT,
-                        price=self._protected_price(base, order.side))
-                else:
-                    # no price basis at all (book vanished) — MARKET is the only lever
-                    # left; equities accept it, and an option order always had a touch.
-                    self.adapter.modify_order(broker_id, order_type=OrderType.MARKET)
-            except Exception as exc:  # pragma: no cover - modify raced a fill
-                logger.warning("escalation modify failed for %s: %s", broker_id, exc)
-            st = self._await_terminal(broker_id, deadline_s=self.order_timeout_s)
+                    self._governor.wait()
+                    if base > 0:
+                        self.adapter.modify_order(
+                            broker_id, order_type=OrderType.LIMIT,
+                            price=self._protected_price(base, order.side, pct=pct))
+                    else:
+                        # no price basis at all (book vanished) — MARKET is the only lever
+                        # left; equities accept it, and an option order always had a touch.
+                        self.adapter.modify_order(broker_id, order_type=OrderType.MARKET)
+                except Exception as exc:  # pragma: no cover - modify raced a fill
+                    logger.warning("escalation modify failed for %s: %s", broker_id, exc)
+                # first rung keeps the full timeout (unchanged behaviour); the rest are
+                # halved — if it has not filled by now, waiting longer only drifts further.
+                st = self._await_terminal(
+                    broker_id,
+                    deadline_s=self.order_timeout_s if i == 0 else self.order_timeout_s / 2)
+                if st["status"] in _TERMINAL:
+                    break
+                if base <= 0:
+                    break     # MARKET modify already sent; more rungs cannot add anything
 
         if st["status"] == "COMPLETE":
             fill = Fill(order.symbol, order.side, st["filled_quantity"] or order.quantity,
@@ -235,10 +270,11 @@ class LiveBroker:
         raise OrderExecutionError(
             f"{order.side.value} {order.quantity} {order.symbol} → {detail}")
 
-    def _protected_price(self, touch: float, side) -> float:
-        """The escalation limit: cross the touch by ``protect_pct`` — BUY pays up, SELL
-        gives way — snapped OUTWARD to the ₹0.05 tick so the price stays marketable."""
-        frac = self.protect_pct / 100.0
+    def _protected_price(self, touch: float, side, pct: float | None = None) -> float:
+        """The escalation limit: cross the touch by ``pct`` (default ``protect_pct``) —
+        BUY pays up, SELL gives way — snapped OUTWARD to the ₹0.05 tick so the price
+        stays marketable."""
+        frac = (self.protect_pct if pct is None else pct) / 100.0
         mult = 1 + frac if side is OrderSide.BUY else 1 - frac
         raw = touch * mult
         ticks = raw / 0.05

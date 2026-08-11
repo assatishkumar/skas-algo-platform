@@ -39,6 +39,11 @@ class BrokerOrder:
     price: float | None = None
     client_order_id: str | None = None
     tag: str | None = None
+    # True when this order REDUCES an existing position (an exit/cover) rather than opening
+    # one. Only LiveBroker reads it, to decide how hard to chase a fill: being flat matters
+    # far more on the way out than the last rupee of price does. PaperBroker and the
+    # backtest ignore it entirely, so the shared path stays byte-identical.
+    reduce_only: bool = False
 
 
 @dataclass
