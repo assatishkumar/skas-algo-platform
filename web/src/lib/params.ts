@@ -200,6 +200,23 @@ const PCT_KEYS = new Set([
   "idle_return",
 ]);
 
+// put_condor
+const _PC_LABELS = {
+  spacing: "Strike spacing",
+  first_long_offset: "First long offset",
+  target_pct_of_max_loss: "Target (% of max loss)",
+  stop_pct_of_max_loss: "Stop (% of max loss)",
+  hold_to_expiry: "Hold to expiry",
+  payoff_neg_exit: "Exit on negative payoff",
+  down_breach_action: "On down-breach",
+  long_roll_step: "Long roll step",
+  loss_repair: "Loss repair",
+  repair_trigger_pct: "Repair trigger (% of max loss)",
+  short_roll_step: "Short roll step",
+  max_adjusts: "Max adjustments / rule",
+};
+Object.assign(LABELS, _PC_LABELS);
+
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 /** Enum-valued STRATEGY-CTOR params → their legal values, as the live strategies accept
@@ -209,6 +226,8 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
  *  the ratio-family ctor's fixed|margin. */
 export const PARAM_ENUMS: Record<string, string[]> = {
   trail_mode: ["ratchet", "below_peak"],
+  down_breach_action: ["none", "roll_long", "recenter"],
+  loss_repair: ["none", "roll_short_up"],
   sizing: ["fixed", "margin"],
   allocation_mode: ["fixed", "equity_scaled"],
   rsi_source: ["ema", "close"],

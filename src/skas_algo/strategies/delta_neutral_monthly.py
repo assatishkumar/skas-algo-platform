@@ -823,21 +823,33 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
         net_credit = sum(leg["entry"] for leg in shorts) - sum(leg["entry"] for leg in longs)
         return k - net_credit, k + net_credit
 
-    def _payoff_max(self, legs: list[dict], spot: float) -> float:
-        """Max P&L-at-expiry over the spot grid for the open ``legs`` PLUS the banked credit
-        from closed adjustment legs. The payoff is piecewise-linear, so its max sits at a leg
-        strike (or a wide endpoint) — evaluating those is exact."""
+    def _payoff_at(self, legs: list[dict], s: float) -> float:
+        """P&L-at-expiry of ``legs`` if the underlying settled at ``s``, PLUS the banked credit
+        from closed adjustment legs. One point on the payoff graph."""
+        pnl = self.adjust_realized
+        for leg in legs:
+            k = float(leg["symbol"].split("|")[2])
+            pnl += leg["dir"] * (bs.intrinsic(leg["right"], s, k) - leg["entry"]) * leg["units"]
+        return pnl
+
+    @staticmethod
+    def _payoff_grid(legs: list[dict], spot: float) -> list[float]:
+        """The spot levels an extremum can sit at: every leg strike plus wide endpoints. The
+        payoff is piecewise-linear, so its min/max is always at a kink or an end."""
         strikes = [float(leg["symbol"].split("|")[2]) for leg in legs]
-        grid = sorted(set(strikes + [0.5 * spot, spot, 1.5 * spot]))
-        best: float | None = None
-        for s in grid:
-            pnl = self.adjust_realized
-            for leg in legs:
-                k = float(leg["symbol"].split("|")[2])
-                pnl += leg["dir"] * (bs.intrinsic(leg["right"], s, k) - leg["entry"]) * leg["units"]
-            if best is None or pnl > best:
-                best = pnl
-        return best if best is not None else self.adjust_realized
+        return sorted(set(strikes + [0.5 * spot, spot, 1.5 * spot]))
+
+    def _payoff_max(self, legs: list[dict], spot: float) -> float:
+        """Max P&L-at-expiry over the spot grid — exact, see _payoff_grid."""
+        vals = [self._payoff_at(legs, s) for s in self._payoff_grid(legs, spot)]
+        return max(vals) if vals else self.adjust_realized
+
+    def _payoff_min(self, legs: list[dict], spot: float) -> float:
+        """Worst P&L-at-expiry over the same grid. ``-_payoff_min`` is the structure's MAX LOSS,
+        and unlike a debit captured at entry it stays correct after adjustments reshape the
+        book — which is what put_condor's %-of-max-loss thresholds are measured against."""
+        vals = [self._payoff_at(legs, s) for s in self._payoff_grid(legs, spot)]
+        return min(vals) if vals else self.adjust_realized
 
     def _open_untested(
         self, ctx, rows: dict[float, dict], spot: float, t: float, now: datetime

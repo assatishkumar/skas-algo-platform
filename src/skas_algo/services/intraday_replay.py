@@ -56,7 +56,8 @@ _CLOSE = time(15, 30)
 # backtest on the 1-min store (the EOD options basis left the UI; equity keeps the cache).
 REPLAYABLE = {"intraday_straddle", "straddle_btst", "weekly_intraday_straddle", "call_put_ratio_expiry",
               "delta_neutral_monthly", "iron_fly_monthly", "call_ratio_monthly",
-              "put_ratio_monthly", "batman_ratio_monthly", "hni_weekly", "21_ema_momentum"}
+              "put_ratio_monthly", "batman_ratio_monthly", "hni_weekly", "21_ema_momentum",
+              "put_condor"}
 
 
 class _Market:
@@ -304,7 +305,9 @@ _SHORT_UNITS_PER_SET = {"intraday_straddle": 2, "straddle_btst": 2,
                         "delta_neutral_monthly": 2, "iron_fly_monthly": 2,
                         "call_put_ratio_expiry": 6, "call_ratio_monthly": 2,
                         "put_ratio_monthly": 2, "batman_ratio_monthly": 4,
-                        "hni_weekly": 3, "21_ema_momentum": 1}
+                        "hni_weekly": 3, "21_ema_momentum": 1,
+                        # long condor: 2 short legs per lot-set (the 2 longs are hedges)
+                        "put_condor": 2}
 
 
 def _daily_bars_with_forming(u: str, market: "_Market"):

@@ -411,6 +411,12 @@ def build_cycle_detail(
 
 
 _EXIT_COPY = {
+    "pc_entry": "Condor opened",
+    "pc_target": "Target hit — booked a multiple of max loss",
+    "pc_stop": "Stop hit — % of max loss",
+    "pc_adjust_long": "Rolled the upper long down (banked it)",
+    "pc_adjust_short": "Rolled the lower short up for a credit",
+    "pc_payoff_neg": "Exited — the whole expiry payoff turned negative",
     "target": "Profit target hit — MTM crossed the target, all legs booked.",
     "stop": "Stop-loss hit — MTM breached the stop, all legs closed.",
     "trail": "Trailing stop hit — gave back the allowed slice of peak profit, all legs closed.",

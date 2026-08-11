@@ -10,6 +10,7 @@ from typing import Any
 
 from .broker_smoke_test import BrokerSmokeTestStrategy
 from .call_put_ratio_expiry import CallPutRatioExpiryStrategy
+from .put_condor import PutCondorStrategy
 from .call_ratio_monthly import (
     BatmanRatioMonthlyStrategy,
     CallRatioMonthlyStrategy,
@@ -48,6 +49,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     ShortPremiumStrategy.strategy_id: ShortPremiumStrategy,
     CallRatioMonthlyStrategy.strategy_id: CallRatioMonthlyStrategy,
     PutRatioMonthlyStrategy.strategy_id: PutRatioMonthlyStrategy,
+    PutCondorStrategy.strategy_id: PutCondorStrategy,
     BatmanRatioMonthlyStrategy.strategy_id: BatmanRatioMonthlyStrategy,
     HniWeeklyStrategy.strategy_id: HniWeeklyStrategy,
     StaggeredCoveredCallStrategy.strategy_id: StaggeredCoveredCallStrategy,

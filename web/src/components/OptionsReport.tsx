@@ -31,11 +31,14 @@ import { Card, MetricCard } from "./ui";
 // pie and a trail-stop looked identical to a manual exit.)
 const REASON_FAMILY: Record<string, "banked" | "stopped" | "time" | "adjust" | "manual"> = {
   target: "banked", portfolio_target: "banked", leg_target: "banked", leg_book: "banked",
+  pc_target: "banked",
   stop: "stopped", portfolio_stop: "stopped", trail: "stopped",
+  pc_stop: "stopped", pc_payoff_neg: "stopped",
   ironfly_payoff_neg: "stopped",
   eod: "time", eod_1520: "time", time: "time", expiry: "time", expiry_settle: "time",
   btst_exit: "time",
   roll: "adjust", reverse: "adjust", flip: "adjust", cc_rolldown_close: "adjust",
+  pc_adjust_long: "adjust", pc_adjust_short: "adjust",
   mixed: "adjust",
   manual: "manual",
 };
@@ -55,6 +58,9 @@ const REASON_LABEL: Record<string, string> = {
   trail: "Trailing stop", ironfly_payoff_neg: "Iron-fly payoff negative",
   roll: "Rolled", reverse: "Reversed", flip: "Flipped",
   cc_rolldown_close: "Covered-call roll-down", manual: "Manual", mixed: "Mixed",
+  pc_target: "Target (% of max loss)", pc_stop: "Stop (% of max loss)",
+  pc_adjust_long: "Upper long rolled down", pc_adjust_short: "Lower short rolled up",
+  pc_payoff_neg: "Payoff turned negative",
 };
 export function reasonColor(reason: string): string {
   return FAMILY_COLOR[REASON_FAMILY[reason]] ?? "#64748b";

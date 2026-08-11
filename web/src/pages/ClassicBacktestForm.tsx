@@ -93,17 +93,27 @@ const INTRADAY_DEFAULTS: Record<string, Record<string, number | string | boolean
     ...SIZING_FIELDS },
   momentum_theta_gainer_intra: { lots: 1, st_period: 7, st_multiplier: 3,
     max_trades_per_day: 3, vol_multiplier: 1.1 },
+  // Long put condor. Every adjustment rule is a knob on purpose — the point of this
+  // strategy is the factorial sweep, so they must all be reachable from the form (the
+  // straddle_btst omission left that one with an empty params grid).
+  put_condor: { lots: 1, spacing: 200, first_long_offset: 0, entry_time: "09:20",
+    target_pct_of_max_loss: 100, stop_pct_of_max_loss: 0, hold_to_expiry: false,
+    payoff_neg_exit: false, down_breach_action: "roll_long", long_roll_step: 100,
+    loss_repair: "roll_short_up", repair_trigger_pct: 50, short_roll_step: 100,
+    max_adjusts: 2, adjust_cooldown_min: 15, ...SIZING_FIELDS },
 };
 // Enum-valued intraday params render as dropdowns (free-text invites typos the strategy
 // would silently fall back from).
 const INTRADAY_ENUMS: Record<string, string[]> = {
   trail_mode: ["ratchet", "below_peak"],
   sizing: ["fixed", "capital"],
+  down_breach_action: ["none", "roll_long", "recenter"],
+  loss_repair: ["none", "roll_short_up"],
 };
 // These need the NIFTY chain specifically (weekly straddle is NIFTY-v1; MTG's BS service
 // replays NIFTY spot bars).
 const INTRADAY_NIFTY_ONLY = new Set(["weekly_intraday_straddle", "momentum_theta_gainer_intra"]);
-const INTRADAY_MONTHLY = new Set(["delta_neutral_monthly", "iron_fly_monthly"]);
+const INTRADAY_MONTHLY = new Set(["delta_neutral_monthly", "iron_fly_monthly", "put_condor"]);
 
 /** The CLASSIC backtest form — every strategy the v2 sectioned form doesn't cover (all
  *  equity strategies, plus donchian_strangle_bt / staggered_covered_call / short_premium /
