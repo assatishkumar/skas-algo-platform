@@ -283,7 +283,24 @@ class LiveSession:
         if self.settler is not None:
             events.extend(self.executor.settle_expiries(ts, self.settler))
         events.extend(self.executor.check_stops(ts, self.market.closes_today()))
-        events.extend(self.executor.decide_and_execute(ts, self.strategy, self.ctx))
+        try:
+            events.extend(self.executor.decide_and_execute(ts, self.strategy, self.ctx))
+        except Exception as exc:
+            # A real-order failure mid-slice halts the run, but the legs that DID fill are
+            # real: they moved the portfolio and were sent to the broker. Book them here or
+            # this session's OWN trade log and realized P&L silently lose them while the
+            # Order table keeps them — which is exactly what happened to run 10's filled CE
+            # cover on 2026-08-11 (and, half-fixed, on 2026-07-27: that fix reached
+            # record_trades but never got as far as `transactions`).
+            partial = list(getattr(exc, "partial_events", []) or [])
+            events.extend(partial)
+            if events:
+                self.transactions.extend(events)
+                self._record_history(ts)
+                # hand the FULL set up so the Order/Fill trail matches the session, not just
+                # the decision legs (settlement/stop events used to be dropped here too)
+                exc.partial_events = events
+            raise
         self.transactions.extend(events)
         self._record_history(ts)
         return events
