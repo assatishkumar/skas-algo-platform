@@ -321,3 +321,22 @@ def test_state_round_trip():
     assert st2.last_session == st.last_session
     assert st2.n_long_rolls == 1
     assert st2.adjust_realized == pytest.approx(1234.5)
+
+
+def test_recenter_closes_everything_before_reopening():
+    """Shifting the condor down one spacing puts the NEW upper long on the OLD upper short's
+    strike — the same symbol. All closes must precede all opens, and the book must end with
+    exactly four distinct legs (the interleaved version wiped two of them)."""
+    st, ctx = setup(down_breach_action="recenter", loss_repair="none", adjust_cooldown_min=0)
+    enter(st, ctx)
+    st.set_broker_margin(400_000.0)
+    ctx.market.chain_dict = chain(spot=24600.0)
+    for leg in st.legs:
+        ctx.market.prices[leg["symbol"]] = leg["entry"] * 1.5
+    sigs = tick(st, ctx, datetime(2026, 8, 5, 11, 0))
+    acts = [s.action.name for s in sigs]
+    assert acts == ["EXIT_ALL"] * 4 + ["ENTER_LONG", "ENTER_LONG", "ENTER_SHORT", "ENTER_SHORT"]
+    assert len(st.legs) == 4
+    assert len({x["symbol"] for x in st.legs}) == 4          # no collapsed symbols
+    assert sorted(K(x["symbol"]) for x in st.legs) == [24000.0, 24200.0, 24400.0, 24600.0]
+    assert st.is_defined_risk()

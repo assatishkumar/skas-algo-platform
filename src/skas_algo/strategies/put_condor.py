@@ -406,36 +406,43 @@ class PutCondorStrategy(DeltaNeutralMonthlyStrategy):
 
     def _recenter(self, rows, marks, now) -> list[Signal]:
         """Roll the WHOLE condor down one spacing, keeping the tent over the market instead of
-        merely capping the loss. The alternative down-breach policy in the sweep."""
-        out: list[Signal] = []
-        for leg in list(self._sorted_legs()):
-            new_k = self._k(leg) - self.spacing
-            row = rows.get(float(new_k))
-            prem = self._ltp((row or {}).get("pe"))
-            mark = marks.get(leg["symbol"])
-            if prem is None or mark is None or not self._oi_ok((row or {}).get("pe")):
-                return []                       # all-or-nothing: a partial recenter is junk
-        for leg in list(self._sorted_legs()):
+        merely capping the loss. The alternative down-breach policy in the sweep.
+
+        Closes are emitted for EVERY leg before any open, and self.legs is replaced wholesale.
+        Doing it leg-by-leg is wrong and was wrong here first: shifting down one spacing means
+        the new upper long lands on the strike the old upper short occupies — the SAME symbol —
+        so the interleaved version briefly held both, then removed both by symbol, and in the
+        replay the second ENTER overwrote the first position outright. The run-#203 shape.
+        """
+        originals = list(self._sorted_legs())
+        fresh_legs: list[dict] = []
+        for leg in originals:
             new_k = float(self._k(leg) - self.spacing)
-            mark = marks[leg["symbol"]]
-            prem = self._ltp(rows[new_k].get("pe"))
-            self.adjust_realized += (mark - leg["entry"]) * leg["units"] * leg["dir"]
+            prem = self._ltp((rows.get(new_k) or {}).get("pe"))
+            if (prem is None or marks.get(leg["symbol"]) is None
+                    or not self._oi_ok((rows.get(new_k) or {}).get("pe"))):
+                return []                    # all-or-nothing: a partial recenter is junk
             per_lot = int(leg["units"] // self.lots) or 1
-            fresh = self._leg(date.fromisoformat(self.cycle_expiry), new_k, leg["right"],
-                              leg["dir"], leg["units"], prem, per_lot)
-            self.legs = [x for x in self.legs if x["symbol"] != leg["symbol"]]
-            self.legs.append(fresh)
-            out.append(Signal(leg["symbol"], SignalAction.EXIT_ALL, reason="pc_adjust_long"))
-            out.append(Signal(fresh["symbol"],
-                              SignalAction.ENTER_LONG if fresh["dir"] > 0
-                              else SignalAction.ENTER_SHORT,
-                              quantity=int(fresh["units"]), reason="pc_adjust_long",
-                              meta={"multiplier": 1}))
+            fresh_legs.append(self._leg(date.fromisoformat(self.cycle_expiry), new_k,
+                                        leg["right"], leg["dir"], leg["units"], prem, per_lot))
+        if len({x["symbol"] for x in fresh_legs}) != len(fresh_legs):
+            return []                        # two legs would collapse onto one symbol
+        for leg in originals:
+            self.adjust_realized += (marks[leg["symbol"]] - leg["entry"]) * leg["units"] * leg["dir"]
+        self.legs = fresh_legs
         self.n_long_rolls += 1
         self.last_adjust_at = now.isoformat()
         self.adjust_count += 1
         self._refreeze = True
-        return out
+        # ALL closes, THEN all opens — _fill walks the list in order, so the old short is
+        # popped before the new long claims the same symbol.
+        return ([Signal(x["symbol"], SignalAction.EXIT_ALL, reason="pc_adjust_long")
+                 for x in originals]
+                + [Signal(x["symbol"],
+                          SignalAction.ENTER_LONG if x["dir"] > 0 else SignalAction.ENTER_SHORT,
+                          quantity=int(x["units"]), reason="pc_adjust_long",
+                          meta={"multiplier": 1})
+                   for x in sorted(fresh_legs, key=lambda y: -y["dir"])])
 
     # ------------------------------------------------------------------ exit
     def _exit_all(self, live, reason) -> list[Signal]:
