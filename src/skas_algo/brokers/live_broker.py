@@ -219,12 +219,14 @@ class LiveBroker:
                     except Exception:  # pragma: no cover - no book → fall back below
                         fresh = None
                 base = float(fresh or touch or 0.0)
+                want = self._protected_price(base, order.side, pct=pct) if base > 0 else None
                 try:
                     self._governor.wait()
                     if base > 0:
+                        logger.info("escalating %s %s rung %.1f%%: touch %.2f → limit %.2f",
+                                    order.symbol, order.side.value, pct, base, want)
                         self.adapter.modify_order(
-                            broker_id, order_type=OrderType.LIMIT,
-                            price=self._protected_price(base, order.side, pct=pct))
+                            broker_id, order_type=OrderType.LIMIT, price=want)
                     else:
                         # no price basis at all (book vanished) — MARKET is the only lever
                         # left; equities accept it, and an option order always had a touch.
@@ -236,6 +238,15 @@ class LiveBroker:
                 st = self._await_terminal(
                     broker_id,
                     deadline_s=self.order_timeout_s if i == 0 else self.order_timeout_s / 2)
+                # Did the re-price actually land? A modify that is silently ignored looks
+                # exactly like one that filled nothing, and on 2026-08-11 we could not tell
+                # the two apart after the fact. Say so in the log while the order is live.
+                got = float(st.get("price") or 0.0)
+                if want and got and abs(got - want) > 0.011:
+                    logger.warning(
+                        "escalation did NOT take effect on %s: asked %.2f, broker still "
+                        "shows %.2f — the re-price was ignored or rejected",
+                        broker_id, want, got)
                 if st["status"] in _TERMINAL:
                     break
                 if base <= 0:

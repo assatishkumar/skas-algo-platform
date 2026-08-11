@@ -633,3 +633,47 @@ def test_the_executor_marks_closing_orders_reduce_only():
     for fn in ("_buy", "_sell_to_open"):
         body = src.split(f"def {fn}(")[1].split("\n    def ")[0]
         assert "reduce_only" not in body, f"{fn} OPENS a position — must not be reduce_only"
+
+
+def test_escalation_warns_when_the_reprice_does_not_land():
+    """A modify that the broker silently ignores is indistinguishable from one that just
+    did not fill — which is exactly why the 2026-08-11 halt could not be diagnosed after
+    the fact (Kite showed the cancelled order still at its original 33.75 while a fill was
+    available 15 paise away). Say it in the log while the order is still live."""
+    import logging
+
+    class IgnoringAdapter(FakeAdapter):
+        """Accepts the modify but never changes the resting price — the suspect case."""
+
+        def order_status(self, broker_order_id):
+            if self.cancelled:
+                return {"status": "CANCELLED", "average_price": 0.0, "filled_quantity": 0,
+                        "status_message": None, "price": 33.75}
+            return {"status": "OPEN", "average_price": 0.0, "filled_quantity": 0,
+                    "status_message": None, "price": 33.75}   # unchanged, always
+
+    a = IgnoringAdapter(initial=PENDING)
+    lb = make(a, touch_fn=lambda s, side: 33.75)
+    logger = logging.getLogger("skas_algo.live")
+    seen: list[str] = []
+
+    class Grab(logging.Handler):
+        def emit(self, record):
+            seen.append(record.getMessage())
+
+    h = Grab()
+    logger.addHandler(h)
+    prev = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        with pytest.raises(OrderExecutionError):
+            lb.execute(BrokerOrder("NIFTY|2026-08-11|24500|PE", OrderSide.BUY, 195,
+                                   reduce_only=True))
+    finally:
+        logger.removeHandler(h)
+        logger.setLevel(prev)
+    # the warning names BOTH the price we asked for and the one the broker still shows —
+    # everything the 2026-08-11 post-mortem lacked
+    assert any("did NOT take effect" in m and "asked 34.80" in m and "shows 33.75" in m
+               for m in seen), seen
+    assert any(m.startswith("escalating") and "34.80" in m for m in seen), seen

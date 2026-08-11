@@ -178,6 +178,11 @@ class ZerodhaAdapter:
             "average_price": float(last.get("average_price") or 0.0),
             "filled_quantity": int(last.get("filled_quantity") or 0),
             "status_message": last.get("status_message"),
+            # the order's CURRENT limit price — lets the escalation verify its own modify
+            # actually landed (2026-08-11: Kite showed the cancelled order still at its
+            # original 33.75 while a fill was available 15 paise away, and nothing in the
+            # logs could say whether the re-price was sent, rejected, or ignored).
+            "price": float(last.get("price") or 0.0),
         }
 
     def cancel_order(self, broker_order_id: str) -> None:
