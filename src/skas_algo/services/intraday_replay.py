@@ -55,9 +55,16 @@ _CLOSE = time(15, 30)
 # joined 2026-07-18 via the _Chain cached-chain adapter: ALL index-options strategies now
 # backtest on the 1-min store (the EOD options basis left the UI; equity keeps the cache).
 REPLAYABLE = {"intraday_straddle", "straddle_btst", "weekly_intraday_straddle", "call_put_ratio_expiry",
+              "intraday_strangle_combo",
               "delta_neutral_monthly", "iron_fly_monthly", "call_ratio_monthly",
               "put_ratio_monthly", "batman_ratio_monthly", "hni_weekly", "21_ema_momentum",
               "put_condor"}
+
+# Strategies whose strike rule counts the exchange's LISTING grid (NIFTY 50s), so the
+# harness must NOT apply the platform's NIFTY-100 coarsening. See allow_fifty_strikes.
+_NEEDS_LISTING_GRID = {"intraday_strangle_combo"}
+# Strategies that take ``underlyings=[...]`` instead of ``universe``.
+_TAKES_UNDERLYINGS = {"call_put_ratio_expiry", "intraday_strangle_combo"}
 
 
 class _Market:
@@ -307,7 +314,8 @@ _SHORT_UNITS_PER_SET = {"intraday_straddle": 2, "straddle_btst": 2,
                         "put_ratio_monthly": 2, "batman_ratio_monthly": 4,
                         "hni_weekly": 3, "21_ema_momentum": 1,
                         # long condor: 2 short legs per lot-set (the 2 longs are hedges)
-                        "put_condor": 2}
+                        "put_condor": 2,
+                        "intraday_strangle_combo": 2}
 
 
 def _daily_bars_with_forming(u: str, market: "_Market"):
@@ -401,6 +409,12 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
     sizing = str(p.pop("sizing", "fixed") or "fixed")
     buffer_pct = float(p.pop("sizing_buffer_pct", 10) or 0)
     allow_fifty = bool(p.pop("allow_fifty_strikes", False))
+    # intraday_strangle_combo counts its OTM steps on the LISTING grid (NIFTY 50s — the
+    # owner's spec: spot 25000 → OTM3 PE 24850). FORCED on rather than left to a form
+    # checkbox: coarsened to 100s the replay would place different strikes and still look
+    # perfectly healthy, which is the worst kind of wrong.
+    if strategy_id in _NEEDS_LISTING_GRID:
+        allow_fifty = True
     lot_overrides = p.get("contract_specs")   # same override surface as the engine paths
 
     # Strategy FIRST: the margin math below reads the instance's real leg ratios.
@@ -409,8 +423,11 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
     # default sizing="fixed" — its internal auto-size can never fight the harness's
     # external lots refit (pinned by test).
     factory = get_strategy(strategy_id)
-    if strategy_id == "call_put_ratio_expiry":
-        p.setdefault("underlyings", [u])   # cpre ignores ``universe`` — takes underlyings
+    if strategy_id in _TAKES_UNDERLYINGS:
+        # These read ``underlyings``, not ``universe``. Pinning it to the ONE index this
+        # replay covers also scopes intraday_strangle_combo's weekday schedule: a NIFTY run
+        # trades only its scheduled days (Mon/Tue/Fri) and never reaches for SENSEX.
+        p.setdefault("underlyings", [u])
     strategy = factory(universe=[u], initial_capital=capital, **p)
     market = _Market(u, lot_overrides=lot_overrides, allow_fifty_strikes=allow_fifty)
     chain = _Chain(market)

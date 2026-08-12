@@ -50,7 +50,11 @@ _INTENTIONAL |= {(sid, "profit_check") for sid in (
     "put_ratio_monthly", "hni_weekly")}
 _INTENTIONAL |= {(sid, "stop_check") for sid in (
     "intraday_straddle", "weekly_intraday_straddle", "call_put_ratio_expiry",
-    "delta_neutral_monthly", "iron_fly_monthly")}
+    "delta_neutral_monthly", "iron_fly_monthly", "intraday_strangle_combo")}
+# intraday_strangle_combo's ctor default is None → the deck's PER-INDEX dict
+# {NIFTY: 1500, SENSEX: 0}. A replay covers ONE index, so the form offers a scalar (the ctor
+# spreads a bare number across the underlyings it was built with) — set it to 0 for SENSEX.
+_INTENTIONAL |= {("intraday_strangle_combo", "mtm_stop_per_lot")}
 _INTENTIONAL |= {(sid, "eod_time") for sid in (
     "batman_ratio_monthly", "call_ratio_monthly", "put_ratio_monthly", "hni_weekly")}
 _INTENTIONAL |= {(sid, "entry_time") for sid in (

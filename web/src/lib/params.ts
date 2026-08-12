@@ -217,6 +217,19 @@ const _PC_LABELS = {
 };
 Object.assign(LABELS, _PC_LABELS);
 
+// intraday_strangle_combo
+Object.assign(LABELS, {
+  otm_steps: "OTM steps (listing grid)",
+  reentry_cutoff: "Re-entry cutoff",
+  leg_stop_pct: "Leg stop (% of entry)",
+  leg_target_pct: "Leg target (% of entry)",
+  max_sl_reentries: "Max SL re-entries / leg",
+  max_target_reentries: "Max target re-entries / leg",
+  mtm_stop_per_lot: "Overall MTM stop (₹/lot)",
+  day_schedule: "Weekday index schedule",
+  underlyings: "Indices",
+});
+
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 /** Enum-valued STRATEGY-CTOR params → their legal values, as the live strategies accept

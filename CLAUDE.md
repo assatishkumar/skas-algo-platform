@@ -225,6 +225,31 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   short-straddle tails → the stop is the only guard. Deploy-only + broker source required (live
   chain for ATM/delta); NO backtest (EOD-slice can't model intraday SL/trailing). `peak_pct`
   persists in export_state for the trail; one entry/day (a stopped-out day doesn't re-enter).
+- **intraday_strangle_combo** (`strategies/intraday_strangle_combo.py`, NIFTY + SENSEX,
+  owner deck 2026-08-12): sell 1 lot OTM3 CE + PE on the current weekly at 09:16, flat 15:25.
+  Index rotates by weekday (`day_schedule`, default Mon NIFTY · Tue BOTH · Wed/Thu SENSEX ·
+  Fri NIFTY — expiry-anchored). **The two legs are managed INDEPENDENTLY** (the deck's one
+  "non-negotiable"): 40%/70% stop/target on each leg's OWN entry premium, and an exiting leg
+  re-enters at a **freshly recomputed** OTM3 — `max_sl_reentries` AND `max_target_reentries`
+  are SEPARATE budgets (2+2 → a side can trade 5×/day). Nothing may be read or written across
+  sides. **ORDER IS LOAD-BEARING** on a re-entry: the EXIT_ALL signal must precede the
+  ENTER_SHORT, because `overrides.py` resolves EXIT_ALL against the PRE-action book — with an
+  unmoved spot the re-entry lands on the same symbol and entry-first would have the close
+  swallow the reopened lot (the run-#203 merge bug in miniature). Pinned by test.
+  **OTM3 counts the exchange's LISTING grid** (`_LISTING_STEP`: NIFTY 50, SENSEX 100 → spot
+  25000 gives 24850 PE / 25150 CE), deliberately NOT `selection_step` — the ONE place the
+  platform's NIFTY-100s rule (§8) is set aside, which is why v1 is **BACKTEST-ONLY**: the live
+  chain coarsens NIFTY at `_coarsen_chain`, so a deploy would silently place 100-step strikes.
+  The harness force-enables `allow_fifty_strikes` for this id (`_NEEDS_LISTING_GRID`) — never
+  a form checkbox, since a coarsened run places different strikes and still looks healthy.
+  Risk is a **rupee** MTM stop per index (`mtm_stop_per_lot`, NIFTY ₹1,500/lot, SENSEX 0 = off),
+  day-cumulative (realized + open) and evaluated PER underlying; on breach the index's book
+  closes and stops for the day. It **outranks a leg stop in the same tick** — and with the
+  deck's numbers they collide constantly (a 40% stop on a ₹100 premium is −₹3,000, 2× the
+  ₹1,500 budget), so the overall stop usually binds first. A rupee threshold is also the one
+  case where backtest and live thresholds are identical (everything else anchors to broker
+  margin, which reads ~1.5-2× the model margin in replay). SENSEX is **unvalidated** — the
+  1-min store holds 23 SENSEX days vs 1,249 NIFTY. Coverage: `tests/test_intraday_strangle_combo.py`.
 - **weekly_intraday_straddle** (`strategies/weekly_intraday_straddle.py`, NIFTY; ref video
   https://www.youtube.com/watch?v=kYahbSjbubQ): a WEEKLY-CYCLE intraday SHORT straddle. A cycle
   spans one weekly expiry; the ATM strike (nearest 100 — the live chain coarsens it) is LOCKED

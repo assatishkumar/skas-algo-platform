@@ -131,6 +131,56 @@ const adjustTimingFields = (): FieldSpec[] => [
 
 export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
   // ------------------------------------------------------------------ intraday replays
+  intraday_strangle_combo: {
+    id: "intraday_strangle_combo",
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY", "SENSEX"], eod: NONE },
+    sizing: "intradayHarness",
+    note: "Sell 1 lot OTM3 CE + PE on the current weekly at 09:16, flat by 15:25. The two legs "
+      + "are managed INDEPENDENTLY — 40% stop / 70% target on each leg's own entry premium, and "
+      + "a leg that exits re-enters at a freshly computed OTM3 (up to 2 stop and 2 target "
+      + "re-entries, separate budgets). OTM3 counts the exchange's LISTING grid (NIFTY 50s: spot "
+      + "25000 → 24850 PE / 25150 CE), so the NIFTY-100s rule is lifted for this strategy "
+      + "automatically. Index rotates by weekday: Mon NIFTY · Tue both · Wed/Thu SENSEX · Fri "
+      + "NIFTY — a single-index replay therefore trades only its own days. SENSEX has ~1 month "
+      + "of stored data; treat any SENSEX result as unvalidated.",
+    entry: {
+      frequency: "daily",
+      frequencyHint: "one strangle per scheduled day, plus per-leg re-entries",
+      fields: [
+        TIME("entry_time", "ENTRY TIME", "09:16"),
+        f("otm_steps", "OTM STEPS", "number", 3,
+          { hint: "steps on the LISTING grid (NIFTY 50s, SENSEX 100s) — 3 = the deck's OTM3" }),
+        TIME("reentry_cutoff", "RE-ENTRY CUTOFF", "15:00",
+             "no re-entry after this; set = exit time to disable"),
+      ],
+    },
+    exit: {
+      basisNote: "per leg: % of that leg's OWN entry premium (not margin)",
+      fields: [
+        f("leg_stop_pct", "LEG STOP %", "number", 40, { step: "any" }),
+        f("leg_target_pct", "LEG TARGET %", "number", 70, { step: "any" }),
+        f("max_sl_reentries", "MAX SL RE-ENTRIES", "number", 2, { hint: "per leg, per day" }),
+        f("max_target_reentries", "MAX TARGET RE-ENTRIES", "number", 2,
+          { hint: "per leg, per day — a separate budget from the SL one" }),
+        // A replay covers ONE index, so a scalar is exactly right here — the ctor spreads a
+        // bare number across the underlyings it was built with. Per the deck: NIFTY ₹1,500,
+        // SENSEX none, so set this to 0 for a SENSEX run.
+        f("mtm_stop_per_lot", "OVERALL MTM STOP ₹/LOT", "number", 1500,
+          { step: "any", hint: "day P&L (realized + open) below this closes the book and stops "
+            + "the day; 0 = off, as the deck specifies for SENSEX" }),
+        TIME("exit_time", "EOD / FORCE EXIT", "15:25", "hard — never carried"),
+        f("stop_check", "MTM STOP CHECK", "select", "1min",
+          { options: CADENCE_OPTS, hint: "cadence for the OVERALL MTM stop only; the per-leg "
+            + "40/70 exits are checked every tick" }),
+        TIME("eod_time", "EOD CHECK TIME", "15:20", "what \"eod\" cadence means"),
+      ],
+    },
+    extras: [
+      f("min_leg_oi", "MIN LEG OI", "number", 1),
+    ],
+  },
+
   intraday_straddle: {
     id: "intraday_straddle",
     bases: ["intraday"],

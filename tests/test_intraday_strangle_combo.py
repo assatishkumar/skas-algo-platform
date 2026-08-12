@@ -1,0 +1,402 @@
+"""intraday_strangle_combo: OTM3 strike math on the LISTING grid, per-leg 40/70 exits,
+LEG INDEPENDENCE (the deck's one non-negotiable), independent re-entry caps, the rupee
+MTM stop, the weekday index schedule and the hard 15:25 exit — fake market, no network.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+
+from skas_algo.strategies.intraday_strangle_combo import IntradayStrangleComboStrategy
+
+# 2026-08-14 is a FRIDAY → NIFTY-only under the default schedule.
+FRI = datetime(2026, 8, 14, 9, 20)
+
+
+def at(h: int, m: int = 0) -> datetime:
+    """A wall-clock time on FRI. Use this, never ``FRI.replace(hour=…)`` — that keeps
+    minute=20, so 11:00 would land AFTER 11:01 and the cadence window (which stamps the
+    last check time) silently refuses every later check."""
+    return datetime(2026, 8, 14, h, m)
+NIFTY_WEEKLY = date(2026, 8, 18)
+SENSEX_WEEKLY = date(2026, 8, 20)
+
+
+def chain(spot=25000.0, step=50, lot=75, prem=100.0, oi=5000, span=30):
+    """A flat-premium chain on the given LISTING grid — premiums are uniform so a test can
+    set an exact SL/target price without solving BS."""
+    rows = []
+    atm = round(spot / step) * step
+    for i in range(-span, span + 1):
+        k = float(atm + i * step)
+        rows.append({"strike": k,
+                     "ce": {"ltp": prem, "oi": oi},
+                     "pe": {"ltp": prem, "oi": oi}})
+    return {"spot": spot, "atm_strike": float(atm), "lot_size": lot, "rows": rows}
+
+
+class FakeCacheChain:
+    def __init__(self, expiries):
+        self._e = expiries
+
+    def expiries(self, _u, today):
+        return [e for e in self._e if e >= today]
+
+
+class FakeMarket:
+    def __init__(self, chains: dict):
+        self.chains = chains            # underlying -> chain dict
+        self.prices: dict[str, float] = {}
+        self.current_date = None
+
+    def live_chain(self, u, _e):
+        return self.chains.get(u)
+
+    def index_spot(self, u):
+        return (self.chains.get(u) or {}).get("spot")
+
+    def has_print(self, s):
+        return s in self.prices
+
+
+class FakeCtx:
+    def __init__(self, market, cache_chain=None):
+        self.market = market
+        self.cache_chain = cache_chain
+        self._now = None
+        self.positions: dict[str, float] = {}
+
+    def now(self):
+        return self._now
+
+    def today(self):
+        return self._now.date()
+
+    def option_chain(self):
+        return self.cache_chain
+
+    def lots(self, s):
+        return self.positions.get(s, 0)
+
+    def close(self, s):
+        if s in self.market.prices:
+            return self.market.prices[s]
+        raise KeyError(s)
+
+
+# Per-leg mechanics have to be tested with the overall MTM stop OFF, because on NIFTY it
+# usually fires first: a 40% stop on a Rs100 premium is -40 x 75 = -Rs3,000, twice the
+# Rs1,500/lot budget. That interaction is real and gets its own test below.
+NO_MTM = {"NIFTY": 0.0, "SENSEX": 0.0}
+
+
+def setup(chains=None, expiries=None, **kw):
+    st = IntradayStrangleComboStrategy(**kw)
+    ctx = FakeCtx(FakeMarket(chains or {"NIFTY": chain()}),
+                  FakeCacheChain(expiries or [NIFTY_WEEKLY, SENSEX_WEEKLY]))
+    return st, ctx
+
+
+def tick(st, ctx, dt):
+    ctx._now = dt
+    sigs = st.on_slice(ctx)
+    # Mirror the engine: entries open a position, EXIT_ALL closes it.
+    for s in sigs:
+        if s.action.name == "ENTER_SHORT":
+            ctx.positions[s.symbol] = s.quantity
+        elif s.action.name == "EXIT_ALL":
+            ctx.positions.pop(s.symbol, None)
+    return sigs
+
+
+def mark(ctx, symbol, price):
+    ctx.market.prices[symbol] = price
+
+
+def leg_of(st, u, right):
+    return st.sides[u][right]["leg"]
+
+
+def open_all(st, ctx, dt=FRI, prem=100.0):
+    """Enter the day's strangle and give both legs a fresh print at entry premium."""
+    sigs = tick(st, ctx, dt)
+    for r in ("CE", "PE"):
+        mark(ctx, leg_of(st, "NIFTY", r)["symbol"], prem)
+    return sigs
+
+
+# --------------------------------------------------------------- strike math
+def test_otm3_uses_the_listing_grid_the_owners_worked_example():
+    """Spot 25000 → PE 24850, CE 25150. Three FIFTY-point steps, not the platform's
+    NIFTY-100 selection grid — the whole reason this strategy is backtest-only."""
+    st, ctx = setup()
+    sigs = tick(st, ctx, FRI)
+    strikes = {s.symbol.split("|")[3]: s.symbol.split("|")[2] for s in sigs}
+    assert strikes == {"PE": "24850", "CE": "25150"}
+    assert all(s.action.name == "ENTER_SHORT" and s.quantity == 75 for s in sigs)
+
+
+def test_sensex_counts_hundred_point_steps():
+    """SENSEX lists 100s only → OTM3 is ±300. Wednesday is a SENSEX day."""
+    st, ctx = setup(chains={"SENSEX": chain(spot=82000.0, step=100, lot=20)},
+                    underlyings=["SENSEX"])
+    sigs = tick(st, ctx, datetime(2026, 8, 19, 9, 20))   # Wednesday
+    strikes = {s.symbol.split("|")[3]: s.symbol.split("|")[2] for s in sigs}
+    assert strikes == {"PE": "81700", "CE": "82300"}
+
+
+def test_a_missing_strike_skips_rather_than_substituting():
+    """An absent OTM3 row must SKIP the entry (retried next tick), never silently sell a
+    nearby strike the owner didn't ask for."""
+    c = chain()
+    c["rows"] = [r for r in c["rows"] if r["strike"] != 24850.0]   # drop the PE leg's strike
+    st, ctx = setup(chains={"NIFTY": c})
+    sigs = tick(st, ctx, FRI)
+    assert [s.symbol.split("|")[3] for s in sigs] == ["CE"]        # CE only
+    assert leg_of(st, "NIFTY", "PE") is None
+
+
+# ------------------------------------------------------------ per-leg exits
+def test_forty_percent_stop_and_seventy_percent_target_off_each_legs_own_entry():
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM)
+    open_all(st, ctx)
+    ce, pe = leg_of(st, "NIFTY", "CE"), leg_of(st, "NIFTY", "PE")
+    assert ce["entry"] == 100.0
+
+    mark(ctx, ce["symbol"], 139.9)          # +39.9% — not yet
+    mark(ctx, pe["symbol"], 30.1)           # −69.9% — not yet
+    assert tick(st, ctx, at(10)) == []
+
+    mark(ctx, ce["symbol"], 140.0)          # +40% exactly → stop
+    out = tick(st, ctx, at(10, 1))
+    assert out[0].action.name == "EXIT_ALL" and out[0].reason == "isc_leg_sl"
+
+    mark(ctx, pe["symbol"], 30.0)           # −70% exactly → target
+    out = tick(st, ctx, at(10, 2))
+    assert any(s.reason == "isc_leg_target" for s in out)
+
+
+def test_one_leg_exiting_never_touches_the_other():
+    """The deck's non-negotiable, asserted directly: the PE leg's record, symbol and entry
+    are untouched by the CE leg stopping out and re-entering."""
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM)
+    open_all(st, ctx)
+    pe_before = dict(leg_of(st, "NIFTY", "PE"))
+    pe_side_before = dict(st.sides["NIFTY"]["PE"], leg=None)
+
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 140.0)
+    out = tick(st, ctx, at(10))
+
+    assert pe_before["symbol"] not in [s.symbol for s in out]       # PE never signalled
+    assert leg_of(st, "NIFTY", "PE") == pe_before                   # record identical
+    assert dict(st.sides["NIFTY"]["PE"], leg=None) == pe_side_before  # counters untouched
+    assert ctx.positions.get(pe_before["symbol"]) == pe_before["units"]  # still held
+
+
+def test_reentry_recomputes_otm3_from_the_current_spot():
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM)
+    open_all(st, ctx)
+    ce = leg_of(st, "NIFTY", "CE")
+    assert ce["strike"] == 25150.0
+
+    ctx.market.chains["NIFTY"] = chain(spot=25200.0)   # spot ran 200 points up
+    mark(ctx, ce["symbol"], 140.0)                     # ...which is what stopped the CE
+    out = tick(st, ctx, at(10))
+
+    assert [s.action.name for s in out] == ["EXIT_ALL", "ENTER_SHORT"]
+    # ORDER IS LOAD-BEARING (overrides.py resolves EXIT_ALL against the pre-action book):
+    # entry-first would let the close swallow the freshly re-opened lot.
+    assert out[0].symbol.split("|")[2] == "25150"      # the leg that stopped
+    assert out[1].symbol.split("|")[2] == "25350"      # OTM3 off the NEW spot, not the old strike
+    assert leg_of(st, "NIFTY", "CE")["strike"] == 25350.0
+
+
+def test_same_strike_reentry_still_exits_before_it_re_enters():
+    """Spot unmoved → the re-entry lands on the strike just closed. The exit signal must
+    still come first or the close swallows the re-opened lot (the run-#203 merge bug)."""
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM)
+    open_all(st, ctx)
+    ce = leg_of(st, "NIFTY", "CE")
+    mark(ctx, ce["symbol"], 140.0)
+    out = tick(st, ctx, at(10))
+    assert [s.symbol for s in out] == [ce["symbol"], ce["symbol"]]
+    assert [s.action.name for s in out] == ["EXIT_ALL", "ENTER_SHORT"]
+
+
+# --------------------------------------------------------------- re-entry caps
+def test_sl_and_target_reentry_caps_are_independent_counters():
+    """2 SL re-entries AND 2 target re-entries per leg — so a side can trade up to 5 times.
+    The counters must not share a budget."""
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM)
+    open_all(st, ctx)
+
+    for i in range(2):                       # two SL re-entries
+        leg = leg_of(st, "NIFTY", "CE")
+        mark(ctx, leg["symbol"], leg["entry"] * 1.4)
+        tick(st, ctx, at(10, i))
+        mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 100.0)
+    assert st.sides["NIFTY"]["CE"]["sl_reentries"] == 2
+    assert leg_of(st, "NIFTY", "CE") is not None        # still trading
+
+    for i in range(2):                       # two TARGET re-entries, a separate budget
+        leg = leg_of(st, "NIFTY", "CE")
+        mark(ctx, leg["symbol"], leg["entry"] * 0.3)
+        tick(st, ctx, at(10, 10 + i))
+        mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 100.0)
+    assert st.sides["NIFTY"]["CE"]["tgt_reentries"] == 2
+    assert leg_of(st, "NIFTY", "CE") is not None        # 5th entry of the day, still open
+
+    # A third stop exhausts the SL budget → that side is done, the PE side is not.
+    leg = leg_of(st, "NIFTY", "CE")
+    mark(ctx, leg["symbol"], leg["entry"] * 1.4)
+    out = tick(st, ctx, at(10, 30))
+    assert [s.action.name for s in out] == ["EXIT_ALL"]   # exit, NO re-entry
+    assert st.sides["NIFTY"]["CE"]["closed_for_day"] is True
+    assert st.sides["NIFTY"]["PE"]["closed_for_day"] is False
+    assert leg_of(st, "NIFTY", "PE") is not None
+
+
+# ------------------------------------------------------------------- risk
+def test_nifty_rupee_mtm_stop_closes_both_sides_and_stops_the_day():
+    """₹1,500 per lot, day-cumulative. On breach: close everything, no more re-entries."""
+    st, ctx = setup(lots=2)                              # → ₹3,000 budget
+    open_all(st, ctx)
+    ce, pe = leg_of(st, "NIFTY", "CE"), leg_of(st, "NIFTY", "PE")
+    assert ce["units"] == 150                            # 2 lots × 75
+
+    mark(ctx, ce["symbol"], 105.0)                       # −5 × 150 = −750
+    mark(ctx, pe["symbol"], 109.0)                       # −9 × 150 = −1350 → −2,100 total
+    assert tick(st, ctx, at(11)) == []     # inside the ₹3,000 budget
+
+    mark(ctx, pe["symbol"], 116.0)                       # −16 × 150 = −2,400 → −3,150
+    out = tick(st, ctx, at(11, 1))
+    assert len(out) == 2 and all(s.reason == "isc_mtm_stop" for s in out)
+    assert st.stopped_day["NIFTY"] == FRI.date().isoformat()
+    assert tick(st, ctx, at(12)) == []     # stopped for the day
+
+
+def test_the_mtm_stop_counts_realized_pnl_banked_earlier_in_the_day():
+    """"Overall MTM" is realized + unrealized. A leg already booked at a loss must keep
+    counting, or the day's real drawdown runs well past the budget."""
+    st, ctx = setup(mtm_stop_per_lot={"NIFTY": 4000.0})   # above a single leg's 40% stop
+    open_all(st, ctx)
+    ce = leg_of(st, "NIFTY", "CE")
+    mark(ctx, ce["symbol"], 140.0)                        # leg stop: −40 × 75 = −3,000
+    out = tick(st, ctx, at(10))
+    assert [s.reason for s in out] == ["isc_leg_sl", "isc_entry"]
+    assert st.realized["NIFTY"] == -3000.0                # banked, and the day continues
+
+    # Both legs now sit at entry, so UNREALIZED is zero — only the banked −3,000 is in play.
+    for r in ("CE", "PE"):
+        mark(ctx, leg_of(st, "NIFTY", r)["symbol"], 100.0)
+    assert tick(st, ctx, at(10, 1)) == []                 # −3,000 is inside the −4,000 budget
+
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 115.0)  # −15 × 75 = −1,125 → −4,125
+    out = tick(st, ctx, at(10, 2))
+    assert out and all(s.reason == "isc_mtm_stop" for s in out)
+    assert st.stopped_day["NIFTY"] == FRI.date().isoformat()
+
+
+def test_the_overall_mtm_stop_outranks_a_leg_stop_in_the_same_tick():
+    """With the deck's numbers these collide constantly: a 40% stop on a ₹100 NIFTY premium
+    is −₹3,000, twice the ₹1,500/lot budget. When both fire on one price the OVERALL stop
+    must win — it closes the book and ends the day, which is the stricter guard."""
+    st, ctx = setup()                                     # default ₹1,500/lot
+    open_all(st, ctx)
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 140.0)  # would also be a leg stop
+    out = tick(st, ctx, at(10))
+    assert len(out) == 2 and all(s.reason == "isc_mtm_stop" for s in out)
+    assert st.stopped_day["NIFTY"] == FRI.date().isoformat()
+    assert st.sides["NIFTY"]["CE"]["sl_reentries"] == 0    # no re-entry was counted
+
+
+def test_sensex_has_no_mtm_stop_only_the_per_leg_forties():
+    st, ctx = setup(chains={"SENSEX": chain(spot=82000.0, step=100, lot=20)},
+                    underlyings=["SENSEX"])
+    wed = datetime(2026, 8, 19, 9, 20)
+    tick(st, ctx, wed)
+    for r in ("CE", "PE"):
+        mark(ctx, leg_of(st, "SENSEX", r)["symbol"], 100.0)
+    for r in ("CE", "PE"):                               # −₹40,000 combined, no stop fires
+        mark(ctx, leg_of(st, "SENSEX", r)["symbol"], 130.0)
+    assert tick(st, ctx, wed.replace(hour=11, minute=0)) == []
+    assert st.stopped_day["SENSEX"] is None
+
+
+# ------------------------------------------------------------- session/schedule
+def test_weekday_schedule_picks_the_index():
+    chains = {"NIFTY": chain(), "SENSEX": chain(spot=82000.0, step=100, lot=20)}
+    for day, expect in [(datetime(2026, 8, 17, 9, 20), {"NIFTY"}),        # Mon
+                        (datetime(2026, 8, 18, 9, 20), {"NIFTY", "SENSEX"}),  # Tue: both
+                        (datetime(2026, 8, 19, 9, 20), {"SENSEX"}),       # Wed
+                        (datetime(2026, 8, 20, 9, 20), {"SENSEX"}),       # Thu
+                        (datetime(2026, 8, 21, 9, 20), {"NIFTY"})]:       # Fri
+        st, ctx = setup(chains=chains)
+        sigs = tick(st, ctx, day)
+        assert {s.symbol.split("|")[0] for s in sigs} == expect, day.strftime("%a")
+        assert len(sigs) == 2 * len(expect)
+
+
+def test_no_entry_before_0916_and_hard_exit_at_1525():
+    st, ctx = setup()
+    assert tick(st, ctx, at(9, 15)) == []   # pre-entry
+    open_all(st, ctx, dt=at(9, 16))
+    out = tick(st, ctx, at(15, 25))
+    assert len(out) == 2 and all(s.reason == "isc_eod" for s in out)
+    assert tick(st, ctx, at(15, 26)) == []  # and stays flat
+
+
+def test_the_time_exit_does_not_wait_for_a_fresh_print():
+    """15:25 is unconditional — a stale mark defers the SL/MTM checks, never the square-off."""
+    st, ctx = setup()
+    tick(st, ctx, FRI)                              # entered, but NO marks fed
+    out = tick(st, ctx, at(15, 25))
+    assert len(out) == 2 and all(s.reason == "isc_eod" for s in out)
+
+
+def test_a_stale_mark_defers_the_stop_rather_than_judging_on_it():
+    st, ctx = setup()
+    tick(st, ctx, FRI)                              # entered; no prints yet
+    assert tick(st, ctx, at(11)) == []
+    assert leg_of(st, "NIFTY", "CE") is not None
+
+
+def test_reentry_cutoff_stops_late_re_entries_but_not_the_open_leg():
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM)
+    open_all(st, ctx)
+    ce = leg_of(st, "NIFTY", "CE")
+    mark(ctx, ce["symbol"], 140.0)
+    out = tick(st, ctx, at(15, 1))   # past the 15:00 cutoff
+    assert [s.action.name for s in out] == ["EXIT_ALL"]   # booked, not re-entered
+    assert leg_of(st, "NIFTY", "PE") is not None          # the other leg runs to 15:25
+
+
+def test_new_day_resets_counters_and_realized():
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM)
+    open_all(st, ctx)
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 140.0)
+    tick(st, ctx, at(10))
+    tick(st, ctx, at(15, 25))
+    assert st.sides["NIFTY"]["CE"]["sl_reentries"] == 1 and st.realized["NIFTY"] != 0
+
+    mon = datetime(2026, 8, 17, 9, 20)                    # next NIFTY day
+    ctx.market.prices.clear()
+    sigs = tick(st, ctx, mon)
+    assert len(sigs) == 2                                 # fresh strangle
+    assert st.sides["NIFTY"]["CE"]["sl_reentries"] == 0
+    assert st.realized["NIFTY"] == 0.0
+
+
+def test_state_round_trip():
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM)
+    open_all(st, ctx)
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 140.0)
+    tick(st, ctx, at(10))
+    exported = st.export_state()
+
+    fresh = IntradayStrangleComboStrategy()
+    fresh.load_state(exported)
+    assert fresh.export_state() == exported
+    assert fresh.sides["NIFTY"]["CE"]["sl_reentries"] == 1
+    assert fresh.realized["NIFTY"] == st.realized["NIFTY"]
+    assert fresh.sides["NIFTY"]["PE"]["leg"] == leg_of(st, "NIFTY", "PE")

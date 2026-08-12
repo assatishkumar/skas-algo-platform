@@ -27,6 +27,7 @@ from .ema21_momentum import Ema21MomentumStrategy
 from .gap_reversal import GapReversalStrategy
 from .hni_weekly import HniWeeklyStrategy
 from .intraday_straddle import IntradayStraddleStrategy
+from .intraday_strangle_combo import IntradayStrangleComboStrategy
 from .straddle_btst import StraddleBtstStrategy
 from .momentum_theta_intra import MomentumThetaGainerIntra
 from .nifty_shop import NiftyShopStrategy
@@ -62,6 +63,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     GapReversalStrategy.strategy_id: GapReversalStrategy,
     MomentumThetaGainerIntra.strategy_id: MomentumThetaGainerIntra,
     IntradayStraddleStrategy.strategy_id: IntradayStraddleStrategy,
+    IntradayStrangleComboStrategy.strategy_id: IntradayStrangleComboStrategy,
     StraddleBtstStrategy.strategy_id: StraddleBtstStrategy,
     WeeklyIntradayStraddle.strategy_id: WeeklyIntradayStraddle,
     CustomOptionsStrategy.strategy_id: CustomOptionsStrategy,
