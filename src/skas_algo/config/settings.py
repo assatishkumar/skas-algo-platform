@@ -98,6 +98,17 @@ class Settings(BaseSettings):
     # decision (reconcile_pending). Off unless the owner deliberately turns it on.
     live_resume_orders_on_recovery: bool = False  # SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY
 
+    # --- Trading session close, per SEGMENT (live/quotes.py::is_market_open) ---
+    # SEBI's Closing Auction Session (2026-08-03) extended index F&O past 15:30 while the
+    # equity cash session stayed put, so this can no longer be one number. The DERIV value
+    # is measured, not quoted: in our own 1-min option store the last minute-bar starts at
+    # 15:29 through 2026-07-31 and at 15:39 every day from 2026-08-03 → the session runs to
+    # 15:40. Env-overridable (like NSE_HOLIDAYS_ADD) so the next exchange change is a config
+    # edit, not a VPS deploy — these gate REAL orders, so a bad value must never widen the
+    # window: quotes.session_close() falls back to the literal default on any parse failure.
+    session_close_equity: str = "15:30"  # SKAS_SESSION_CLOSE_EQUITY
+    session_close_deriv: str = "15:40"  # SKAS_SESSION_CLOSE_DERIV
+
     # --- Live pricing feed (WebSocket) ---
     # When True (default), zerodha runs pull marks from a shared per-account KiteTicker
     # WebSocket feed (push) with a REST fallback on any staleness; False forces the legacy

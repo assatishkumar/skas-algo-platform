@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sqlite3
 import time as _time
-from datetime import datetime
+from datetime import datetime, time
 from types import SimpleNamespace
 
 from skas_algo.live import holidays
@@ -56,6 +56,35 @@ def test_is_market_open_excludes_holidays():
     assert not is_market_open(holiday)
     assert not is_market_open(weekend)
     assert not is_market_open(before)
+
+
+def test_market_close_is_per_segment_since_cas():
+    """SEBI's Closing Auction Session (2026-08-03) pushed index F&O to 15:40 while equity
+    cash stayed at 15:30 — so this can't be one number. Measured off our own 1-min option
+    store: the last minute-bar starts 15:29 through 2026-07-31 and 15:39 from 08-03 on.
+
+    The EQUITY default is deliberate: any caller that doesn't opt in keeps the pre-CAS
+    behaviour rather than silently gaining ten minutes of order window."""
+    from skas_algo.live.quotes import session_close
+
+    _clear_holiday_cache()
+    assert session_close("EQUITY") == time(15, 30)
+    assert session_close("DERIV") == time(15, 40)
+    assert session_close() == session_close("EQUITY")  # default = the narrow window
+
+    mon = datetime(2026, 1, 5, 15, 35, tzinfo=IST)  # inside F&O, past equity cash
+    assert is_market_open(mon, segment="DERIV")
+    assert not is_market_open(mon, segment="EQUITY")
+    assert not is_market_open(mon)  # unqualified callers keep the 15:30 close
+
+    # 15:30 is the last equity minute; 15:40 the last F&O one; a second later, closed.
+    assert is_market_open(mon.replace(hour=15, minute=30), segment="EQUITY")
+    assert is_market_open(mon.replace(hour=15, minute=40), segment="DERIV")
+    assert not is_market_open(mon.replace(hour=15, minute=40, second=1), segment="DERIV")
+
+    # Segment never overrides the calendar.
+    holiday = datetime(2026, 1, 26, 15, 35, tzinfo=IST)
+    assert not is_market_open(holiday, segment="DERIV")
 
 
 def test_backup_writes_and_prunes(tmp_path):

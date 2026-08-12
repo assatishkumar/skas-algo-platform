@@ -761,3 +761,61 @@ def test_snapshot_offers_params_added_after_deploy():
         assert "profit_target" not in live.snapshot()["param_defaulted"]
     finally:
         manager.stop(live.run_id)
+
+
+def test_tick_driven_runs_actually_roll_the_day_forward(monkeypatch):
+    """end_day() used to be unreachable for tick-driven runs.
+
+    It fired on `now >= 15:30` from INSIDE the `if is_market_open()` block, and
+    is_market_open() required `<= 15:30` — the two conditions intersect at exactly
+    15:30:00.000000, so in practice the market view never rolled forward for any DERIV /
+    intraday run. It now keys off the run's own session close and sits outside the
+    market-hours gate (the loop keeps ticking after the close to re-price marks).
+    """
+    from datetime import time as dtime
+    from types import SimpleNamespace
+
+    from skas_algo.live import manager as mgr
+
+    calls = {"decisions": 0, "end_days": 0}
+
+    def make_live(segment="DERIV"):
+        return SimpleNamespace(
+            config=SimpleNamespace(segment=segment),
+            refresh=lambda: None,
+            run_decision=lambda now: calls.__setitem__("decisions", calls["decisions"] + 1),
+            end_day=lambda: calls.__setitem__("end_days", calls["end_days"] + 1),
+            quote_error=None, order_error=None, reconcile_pending=False,
+            last_decision_day=None,
+        )
+
+    def tick_at(hh, mm, live, segment="DERIV"):
+        monkeypatch.setattr(
+            mgr, "datetime",
+            SimpleNamespace(now=lambda tz=None: datetime(2026, 8, 11, hh, mm, tzinfo=mgr.IST)),
+        )
+        mgr.LiveRunManager._tick(None, live, True, dtime(15, 20))
+
+    # Mid-session: decides, does NOT roll the day.
+    live = make_live()
+    tick_at(11, 0, live)
+    assert calls == {"decisions": 1, "end_days": 0}
+
+    # 15:35 — past the equity close but inside the F&O session: still deciding.
+    tick_at(15, 35, live)
+    assert calls == {"decisions": 2, "end_days": 0}
+
+    # 15:41 — past the F&O close: no decision (market shut), but the day DOES roll.
+    tick_at(15, 41, live)
+    assert calls == {"decisions": 2, "end_days": 1}
+    assert live.last_decision_day == date(2026, 8, 11)
+
+    # Latched — a second post-close tick must not roll twice.
+    tick_at(15, 50, live)
+    assert calls["end_days"] == 1
+
+    # An EQUITY run rolls at its own (earlier) close.
+    calls.update(decisions=0, end_days=0)
+    eq = make_live(segment="EQUITY")
+    tick_at(15, 35, eq)
+    assert calls == {"decisions": 0, "end_days": 1}  # shut at 15:30, so no decision

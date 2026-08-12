@@ -32,7 +32,14 @@ from .persistence import (
     start_live_run,
     sync_positions,
 )
-from .quotes import IST, QuoteSource, is_broker_source, is_market_open, warmup_history
+from .quotes import (
+    IST,
+    QuoteSource,
+    is_broker_source,
+    is_market_open,
+    session_close,
+    warmup_history,
+)
 
 logger = logging.getLogger("skas_algo.live")
 
@@ -116,6 +123,15 @@ class LiveConfig:
     auto: bool = False  # whether the background refresh/decision loop runs
     # Options PAPER only: replay from this past date as a backtest, then continue live.
     warm_from_date: "date | None" = None
+
+    @property
+    def segment(self) -> str:
+        """Trading-session segment for market-hours checks ("DERIV" | "EQUITY").
+
+        The two segments close at different times since CAS (2026-08-03): index F&O 15:40,
+        equity cash 15:30 — see live/quotes.py::session_close.
+        """
+        return "DERIV" if self.instrument_class.upper() == "DERIV" else "EQUITY"
 
 
 def _serialize_event(ev: dict) -> dict:
@@ -600,7 +616,7 @@ class LiveRun:
         # then only produced false "BOOK MISMATCH" halts (the ~4:50 AM alarm). Decisions are
         # market-hours-only anyway, and a reconcile_pending run reconciles at the first market-hours
         # tick before its first decision, so overnight manual trades are still caught.
-        if not is_market_open():
+        if not is_market_open(segment=self.config.segment):
             return
         now = datetime.now(IST)
         last = getattr(self, "_last_reconcile_at", None)
@@ -683,7 +699,7 @@ class LiveRun:
         # it at 09:15 (the 2026-07-08 batman exit at ~1/9 of the intended target). Off-hours
         # we hold the last in-session margin; the session's first tick refreshes it (the
         # throttle has long expired because we didn't touch it overnight).
-        if not is_market_open():
+        if not is_market_open(segment=self.config.segment):
             return
         symbols = self.session.portfolio.lot_symbols()
         if not symbols:
@@ -2028,7 +2044,8 @@ class LiveRunManager:
         """One synchronous pricing/decision tick — always called via asyncio.to_thread."""
         live.refresh()
         now = datetime.now(IST)
-        mkt = is_market_open()
+        close = session_close(live.config.segment)
+        mkt = is_market_open(now, segment=live.config.segment)
         # refresh() ran the reconcile; a still-pending run has NOT verified its book yet
         # (no session / transient failure) → do not decide/trade until it clears.
         if mkt and not live.quote_error and not live.order_error and not live.reconcile_pending:
@@ -2037,13 +2054,19 @@ class LiveRunManager:
                 # Decide EVERY tick — the strategy's own gates decide what fires
                 # (options exit cadences; an equity trade's trigger/stop/trailing).
                 live.run_decision(now)
-                if now.time() >= time(15, 30) and live.last_decision_day != now.date():
-                    live.end_day()
-                    live.last_decision_day = now.date()
             elif now.time() >= decide_at and live.last_decision_day != now.date():
                 live.run_decision(now)
                 live.end_day()
                 live.last_decision_day = now.date()
+        # End-of-day roll for TICK-DRIVEN runs, deliberately OUTSIDE the market-hours gate.
+        # It used to sit inside it keyed on `now >= 15:30` while is_market_open() required
+        # `<= 15:30` — the two intersect at exactly one microsecond, so end_day() effectively
+        # never fired for these runs. The loop keeps ticking after the close (it re-prices
+        # marks), so this is where it actually gets reached; run_decision stays market-hours
+        # -only above, and end_day() is just market.roll_forward() + persist (no orders).
+        if tick_driven and now.time() >= close and live.last_decision_day != now.date():
+            live.end_day()
+            live.last_decision_day = now.date()
 
     def _maybe_self_stop(self, live: LiveRun) -> bool:
         """A strategy whose lifecycle is COMPLETE (broker_smoke_test after its one
@@ -2072,7 +2095,7 @@ class LiveRunManager:
             decide_at = time.fromisoformat(live.config.decision_time)
             while True:
                 now = datetime.now(IST)
-                mkt = is_market_open()
+                mkt = is_market_open(now, segment=live.config.segment)
                 is_zerodha = is_broker_source(live.config.quote_source)  # any real-broker feed
 
                 # Self-heal a stuck zerodha run as soon as a VALID session exists — even off-hours,

@@ -144,11 +144,18 @@ class LiveBroker:
 
     # ------------------------------------------------------------------ rails
     def _check_rails(self, order: BrokerOrder, ref_price: float | None) -> None:
-        from skas_algo.live.holidays import is_nse_holiday
+        # ONE definition of the session window, shared with the live loop. This used to be a
+        # second inline copy of the weekday/holiday/09:15-15:30 triplet — and that is exactly
+        # how it went stale: SEBI's Closing Auction Session (2026-08-03) pushed index F&O to
+        # 15:40 while this rail still refused every real order after 15:30, so any exit or
+        # manual flatten in that window raised → the run halted holding an open position.
+        # Segment is per-ORDER (an option leg and an equity leg can be on the same account).
+        from skas_algo.engine.options.instrument import is_option_symbol
+        from skas_algo.live.quotes import is_market_open
 
         now = self._clock.now()
-        if (now.weekday() >= 5 or is_nse_holiday(now.date())
-                or not ("09:15" <= now.strftime("%H:%M") <= "15:30")):
+        segment = "DERIV" if is_option_symbol(order.symbol) else "EQUITY"
+        if not is_market_open(now, segment=segment):
             raise OrderExecutionError("market closed — refusing to place a real order")
         today = now.date()
         if self._orders_day != today:

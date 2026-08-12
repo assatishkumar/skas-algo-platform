@@ -85,8 +85,35 @@ def warmup_history(
     return out
 
 
-def is_market_open(now: datetime | None = None) -> bool:
-    """NSE regular session: Mon-Fri, 09:15-15:30 IST, excluding trading holidays.
+SESSION_OPEN = time(9, 15)
+_SESSION_CLOSE_FALLBACK = {"EQUITY": time(15, 30), "DERIV": time(15, 40)}
+
+
+def session_close(segment: str = "EQUITY") -> time:
+    """Last minute of continuous trading for ``segment`` ("EQUITY" | "DERIV").
+
+    Two numbers since SEBI's Closing Auction Session (2026-08-03): index F&O runs to 15:40,
+    equity cash still stops at 15:30. Read from settings so the owner can correct a future
+    exchange change without a deploy; a malformed override falls back to the literal default
+    rather than widening the window — this gates REAL orders.
+    """
+    from skas_algo.config.settings import get_settings
+
+    key = "DERIV" if str(segment).upper() == "DERIV" else "EQUITY"
+    raw = (get_settings().session_close_deriv if key == "DERIV"
+           else get_settings().session_close_equity)
+    try:
+        hh, mm = str(raw).split(":")
+        return time(int(hh), int(mm))
+    except Exception:
+        return _SESSION_CLOSE_FALLBACK[key]
+
+
+def is_market_open(now: datetime | None = None, *, segment: str = "EQUITY") -> bool:
+    """NSE regular session: Mon-Fri, 09:15 → the segment's close, excluding holidays.
+
+    ``segment`` defaults to EQUITY (15:30) — i.e. the pre-CAS behaviour — so any caller that
+    doesn't opt in is unchanged; DERIV callers pass segment="DERIV" for the 15:40 close.
 
     Holidays make this return False so the loop treats them like a weekend — marks may
     re-price off-hours (read-only) but NO decisions/orders fire. See live/holidays.py.
@@ -96,4 +123,4 @@ def is_market_open(now: datetime | None = None) -> bool:
     now = now or datetime.now(IST)
     if now.weekday() >= 5 or is_nse_holiday(now.date()):
         return False
-    return time(9, 15) <= now.timetz().replace(tzinfo=None) <= time(15, 30)
+    return SESSION_OPEN <= now.timetz().replace(tzinfo=None) <= session_close(segment)

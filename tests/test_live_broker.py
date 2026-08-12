@@ -176,6 +176,55 @@ def test_market_closed_blocks():
     assert a.placed == []
 
 
+def _clock_at(h: int, m: int):
+    """A Tuesday (2026-07-07) at h:m IST — a normal trading day."""
+
+    class C:
+        @staticmethod
+        def now():
+            return datetime(2026, 7, 7, h, m)
+
+    return C
+
+
+OPTION = "NIFTY|2026-07-07|24500|CE"
+EQUITY = "RELIANCE"
+
+
+@pytest.mark.parametrize(
+    "hh,mm,symbol,allowed",
+    [
+        # Inside both sessions.
+        (11, 0, OPTION, True),
+        (11, 0, EQUITY, True),
+        # The CAS window (2026-08-03): index F&O trades on to 15:40, equity cash is done at
+        # 15:30. Before this was segment-aware BOTH were refused here, so a 15:35 square-off
+        # raised "market closed" → the run halted holding an open position.
+        (15, 35, OPTION, True),
+        (15, 35, EQUITY, False),
+        # 15:30 is the last equity minute and still inside the F&O session.
+        (15, 30, EQUITY, True),
+        (15, 30, OPTION, True),
+        # Past the F&O close nothing may be placed.
+        (15, 41, OPTION, False),
+        (15, 41, EQUITY, False),
+        # Pre-open.
+        (9, 0, OPTION, False),
+    ],
+)
+def test_the_order_rail_closes_per_segment_not_on_one_global_1530(hh, mm, symbol, allowed):
+    a = FakeAdapter(initial=COMPLETE)
+    lb = make(a, clock=_clock_at(hh, mm))
+    order = BrokerOrder(symbol, OrderSide.SELL, 65)
+    if allowed:
+        lb.execute(order)
+        assert len(a.placed) == 1
+    else:
+        with pytest.raises(OrderExecutionError, match="market closed"):
+            lb.execute(order)
+        assert a.placed == []  # never reached the broker
+
+
 def test_no_touch_price_goes_market():
     a = FakeAdapter(initial=COMPLETE)
     lb = make(a, touch_fn=lambda s, side: None)
@@ -392,7 +441,7 @@ def test_reconcile_gate_pending_lifecycle(monkeypatch):
     from skas_algo.live.manager import LiveRun, ReconcileUnavailable, manager
 
     # Reconciliation only runs during market hours (off-hours the token is routinely expired).
-    monkeypatch.setattr("skas_algo.live.manager.is_market_open", lambda: True)
+    monkeypatch.setattr("skas_algo.live.manager.is_market_open", lambda *a, **k: True)
 
     lb = LiveBroker.__new__(LiveBroker)  # a LiveBroker instance without wiring
 
@@ -400,7 +449,7 @@ def test_reconcile_gate_pending_lifecycle(monkeypatch):
         return SimpleNamespace(
             session=SimpleNamespace(broker=broker),
             quote_source=SimpleNamespace(adapter=adapter),
-            config=SimpleNamespace(broker_account_id=1, name="t"),
+            config=SimpleNamespace(broker_account_id=1, name="t", segment="DERIV"),
             run_id=1, order_error=None, reconcile_pending=pending,
             _last_reconcile_at=None,
             # the alert helpers are exercised by their own test; stub them here (this test is
@@ -440,14 +489,14 @@ def test_reconcile_gate_pending_lifecycle(monkeypatch):
     assert s.order_error is None and s.reconcile_pending is True and s._last_reconcile_at is None
 
     # Market CLOSED → reconciliation doesn't run at all (no off-hours token-expiry false alarms).
-    monkeypatch.setattr("skas_algo.live.manager.is_market_open", lambda: False)
+    monkeypatch.setattr("skas_algo.live.manager.is_market_open", lambda *a, **k: False)
     calls = {"n": 0}
     monkeypatch.setattr(manager, "reconcile_account_book",
                         lambda acc, adapter, details=None: calls.__setitem__("n", calls["n"] + 1))
     s = make(adapter=object())
     LiveRun._maybe_reconcile(s)
     assert calls["n"] == 0 and s.order_error is None and s.reconcile_pending is True
-    monkeypatch.setattr("skas_algo.live.manager.is_market_open", lambda: True)  # restore
+    monkeypatch.setattr("skas_algo.live.manager.is_market_open", lambda *a, **k: True)  # restore
 
     # Paper broker → the whole method is a no-op (no real book to reconcile).
     called = {"n": 0}

@@ -826,7 +826,9 @@ def test_maybe_refresh_margin_skips_off_hours(monkeypatch):
             lots=lambda s: [SimpleNamespace(direction=-1, units=1300)],
         )
         return SimpleNamespace(
-            config=SimpleNamespace(instrument_class="DERIV", quote_source="zerodha"),
+            config=SimpleNamespace(
+                instrument_class="DERIV", quote_source="zerodha", segment="DERIV"
+            ),
             session=SimpleNamespace(
                 portfolio=pf, strategy=SimpleNamespace(), set_margin_override=lambda m: None
             ),
@@ -837,11 +839,11 @@ def test_maybe_refresh_margin_skips_off_hours(monkeypatch):
             run_id=1,
         )
 
-    monkeypatch.setattr(mgr, "is_market_open", lambda: False)
+    monkeypatch.setattr(mgr, "is_market_open", lambda *a, **k: False)
     LiveRun._maybe_refresh_margin(make_self())
     assert calls["basket_margin"] == 0  # off-hours → no broker call
 
-    monkeypatch.setattr(mgr, "is_market_open", lambda: True)
+    monkeypatch.setattr(mgr, "is_market_open", lambda *a, **k: True)
     LiveRun._maybe_refresh_margin(make_self())
     assert calls["basket_margin"] == 1  # in-market → recomputes
 

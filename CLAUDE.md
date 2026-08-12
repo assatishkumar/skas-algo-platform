@@ -496,13 +496,36 @@ WS event + surfaces `manager.last_cache_refresh` on `GET /live/summary` → the 
 PROVISIONAL, env-correctable via `NSE_HOLIDAYS_ADD`/`NSE_HOLIDAYS_REMOVE`;
 `previous_trading_day(d)` is the adjacency helper the pivot stale-guard uses).
 
+**The session close is PER-SEGMENT since CAS (2026-08-12).** SEBI's Closing Auction Session
+(effective 2026-08-03) extended index F&O past 15:30 while equity cash stayed put, so there is
+no single close: `live/quotes.py::session_close(segment)` gives **15:40 for DERIV, 15:30 for
+EQUITY**, both env-overridable (`SKAS_SESSION_CLOSE_DERIV` / `_EQUITY`, malformed → the literal
+default, never a wider window). `is_market_open(now, *, segment="EQUITY")` defaults to the
+NARROW window, so any caller that doesn't opt in keeps pre-CAS behaviour; DERIV callers pass
+`live.config.segment`. **There is exactly ONE definition** — `LiveBroker._check_rails` used to
+keep its own inline copy and that is precisely how it went stale: it refused every real order
+after 15:30, so an exit or manual flatten between 15:30 and 15:40 raised `OrderExecutionError`
+→ the run halted holding an open position. The rail picks its segment per ORDER
+(`is_option_symbol`), because an option leg and an equity leg can share an account. If you add
+another market-hours check, call `is_market_open` — do not re-derive the window.
+The 15:40 is **measured, not quoted** (vendor pages disagree): our own 1-min store's last
+minute-bar is 15:29 pre-CAS and 15:39 after. Consequence for equity, flagged not fixed: for
+F&O-LISTED stocks the cash continuous session now ends **15:15** with an auction to ~15:35, so
+an equity strategy deciding at 15:20 lands in the auction — no equity strategy is deployed
+live today.
+
 **Option intraday-bar store (the self-built GFD replacement, 2026-07):**
 `data/option_intraday_store.py` → one **Parquet** file per trading day under
 `~/.skas_data/option_intraday/1min/` (written/read via **duckdb** — the venv has NO pyarrow;
 in-memory connections, no locking) with `symbol,start,open,high,low,close,volume,oi` (internal
-option symbols, minute-START, sparse = traded minutes only). **Session window is 09:15–15:45** (`_SESSION_CLOSE`; F&O closes 15:45 since the CAS
-extension 2026-08-03 — the old 15:30 cap silently truncated four days at 15:29 before the
-owner caught it 2026-08-06; tails were re-fetched and merged, expired-weekly tails lost).
+option symbols, minute-START, sparse = traded minutes only). **Store filter window is
+09:15–15:45** (`_SESSION_CLOSE`) — deliberately WIDER than the real session, which the store
+itself measures at **15:40** for index F&O since the CAS extension 2026-08-03 (last minute-bar
+`start` = 15:29 through 2026-07-31, 15:39 every day from 08-03; the old 15:30 cap silently
+truncated four days at 15:29 before the owner caught it 2026-08-06 — tails re-fetched and
+merged, expired-weekly tails lost). Keep the cap generous: nothing trades after 15:39, and an
+over-tight bound is exactly what caused that truncation. The **live** session close is a
+different, per-segment number — see below.
 Filled two ways: (1)
 `manager._maybe_daily_option_capture` — once/trading-day ≥16:00 IST (`SKAS_OPTION_BARS_*`,
 **default OFF; enabled on ONE box only** — the Mac data box), one Kite `historical_data(...,
