@@ -210,7 +210,13 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 - **intraday_straddle** (`strategies/intraday_straddle.py`, NIFTY / BANKNIFTY): a DAILY
   intraday short straddle on the nearest weekly. Sell ATM CE+PE (or ~0.6Δ ITM via
   `strike_delta`, which relaxes the OTM filter) at `entry_time` (default 09:18, once/day
-  `entered_day` latch), exit `exit_time` (15:25, checked FIRST — never waits on margin).
+  `entered_day` latch), exit `exit_time` (checked FIRST — never waits on margin). **The
+  intraday family's FORM/deploy exits are 15:20** (2026-08-12): Zerodha auto-squares intraday
+  F&O at **15:26**, so a 15:25 exit leaves no room to retry — the 2026-08-11 failure was at
+  15:25:34. Applies to `intraday_straddle.exit_time` and `weekly_intraday_straddle.eod_exit`
+  (+ its `entry_cutoff` → 15:15). CONSTRUCTOR defaults stay 15:25 (§1 — a param-less recovery
+  is byte-identical); RUNNING deploys keep their stored value until you move it with the tile's
+  "Edit params". Allowlisted in `tests/test_backtest_v2_registry.py::_INTENTIONAL`.
   Two configurable stops off the FROZEN broker `margin_base` (pending → waits for the manager's
   `set_broker_margin` push, never the model): a fixed `-stop_loss_pct` (2%) AND a trailing stop
   that only ratchets UP (`_stop_level`) — `trail_mode="ratchet"` (each `trail_trigger_pct` of
@@ -397,6 +403,21 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   redeploy; unknown ctor kwargs are rejected too (strategy_kwargs would silently drop them —
   a typo'd knob must not report "applied"). Coverage: `test_update_params_*` in tests/test_live.py.
   The old edit-`params_snapshot`-in-DB-and-restart route still works for stopped backends.
+- **Adopt-broker-close** (`POST /live/{id}/adopt-broker-close`, the Live tile's "Mark closed at
+  broker", 2026-08-12) books legs the BROKER has ALREADY closed — you squared off in Kite, or an
+  intraday auto-square-off fired — at the price the caller states, **placing no order**.
+  `flatten` is the wrong tool there: it PLACES orders and there is nothing left to trade, so the
+  platform keeps a phantom leg and every reconciliation halts the run. Before this the only
+  repair was to stop the backend and hand-edit `algo_run.state` (run 10, 2026-08-11).
+  Implementation deliberately reuses the ORDINARY exit path — `LiveSession.adopt_broker_close`
+  builds the same CloseShort/ClosePosition actions as `flatten` and swaps
+  `executor.broker` for a `_SettledPriceBroker` (restored in a `finally`) — so portfolio
+  bookkeeping, F&O charges, trade events (`exit_reason="broker_closed"`, tag MANUAL) and
+  strategy book-adoption are identical to a real exit. Prices default to the last mark in the UI
+  but MUST stay editable: the settled price is usually not the mark (2026-08-11: mark 28.25,
+  actual fill 33.90). Not routed through `_manual_guarded` — no order can fail here. It does
+  NOT clear an `order_error` halt; that stays a separate, explicit ack.
+  Coverage: `test_adopt_broker_close_*` in tests/test_live_options.py.
 
 ## 8b. Mobile app (`web-mobile/` + its `ios/` Capacitor shell)
 A dedicated 7-screen iPhone companion (see `docs/MOBILE.md`) that monitors + acts on the

@@ -150,7 +150,8 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       basisNote: "% of the broker basket margin, frozen at entry",
       fields: [
         f("stop_loss_pct", "STOP LOSS %", "number", 2, { step: "any" }),
-        TIME("exit_time", "EOD / FORCE EXIT", "15:25", "hard — never waits on margin"),
+        TIME("exit_time", "EOD / FORCE EXIT", "15:20",
+             "hard — never waits on margin; clear of Zerodha's 15:26 intraday auto-close"),
         ...cadenceFields("1min", "1min", "15:20"),
       ],
       trail: { trigger: "trail_trigger_pct", step: "trail_step_pct", mode: "trail_mode" },
@@ -181,7 +182,8 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       basisNote: "% of the broker basket margin (the VWAP cross-up is the primary exit)",
       fields: [
         f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any", hint: "0 = off" }),
-        TIME("eod_exit", "EOD / FORCE EXIT", "15:25", "hard square-off — never carried"),
+        TIME("eod_exit", "EOD / FORCE EXIT", "15:20",
+             "hard square-off — never carried; clear of the 15:26 intraday auto-close"),
         // stop cadence only: this strategy has no profit-booking decision (VWAP exits).
         f("stop_check", "STOP CHECK", "select", "1min",
           { options: CADENCE_OPTS, hint: "how often the SL samples" }),

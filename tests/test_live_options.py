@@ -249,3 +249,72 @@ def test_prefetch_batches_quotes_and_caches_chain():
     mv.live_chain("AAA", "2026-01-13")
     mv.live_chain("AAA", "2026-01-13")
     assert calls["chains"] == 1                                                # chain cached, not refetched
+
+
+def test_adopt_broker_close_books_a_leg_the_broker_already_closed():
+    """The case flatten CANNOT handle: the position is already gone at the broker, so
+    there is nothing left to trade — the platform just has to stop believing it holds it.
+
+    Run 10, 2026-08-11: the owner squared off in Kite after our exit failed, and the
+    platform carried a phantom short until its state blob was hand-edited with the backend
+    stopped. This is that repair as an ordinary action — booked at the price it actually
+    settled at, through the normal exit path, with no order placed.
+    """
+    cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
+    sd = FakeLiveSD(cal)
+    sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))
+    sess.update_quotes({leg["symbol"]: leg["entry"] for leg in strat.legs})
+
+    victim = next(s for s in sess.portfolio.lot_symbols()
+                  if all(lot.direction == -1 for lot in sess.portfolio.lots(s)))
+    lot = sess.portfolio.lots(victim)[0]
+    entry, units = lot.price, lot.units
+    settled = round(entry * 0.4, 2)  # deliberately far from the live mark
+    cash_before = sess.portfolio.cash
+
+    class _Explode:
+        """Any real order attempt is a bug — the position no longer exists to trade."""
+
+        def execute(self, order):  # pragma: no cover - must never be reached
+            raise AssertionError("adopt_broker_close must not place an order")
+
+    explode = _Explode()
+    sess.executor.broker = explode
+    events = sess.adopt_broker_close(datetime(2026, 1, 5, 10, 0), {victim: settled})
+
+    # The real broker is put back — a swap that leaked would silently disarm the run.
+    assert sess.executor.broker is explode
+
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["action"] == "COVER" and ev["ticker"] == victim
+    assert ev["price"] == settled                       # booked at the STATED price
+    assert ev["exit_reason"] == "broker_closed" and ev["tag"] == "MANUAL"
+    assert ev["profit"] == pytest.approx((entry - settled) * units)
+    assert ev.get("charge", 0) > 0                      # F&O charges still apply
+
+    assert victim not in sess.portfolio.lot_symbols()   # gone from the book
+    assert victim not in {leg["symbol"] for leg in strat.legs}  # and the strategy adopted it
+    assert sess.portfolio.cash == pytest.approx(
+        cash_before - settled * units - ev["charge"]
+    )
+    assert events[0] in sess.transactions               # reaches the run's own trade log
+
+
+def test_adopt_broker_close_refuses_nonsense():
+    cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
+    sd = FakeLiveSD(cal)
+    sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))
+    held = next(iter(sess.portfolio.lot_symbols()))
+    ts = datetime(2026, 1, 5, 10, 0)
+
+    with pytest.raises(ValueError, match="no legs"):
+        sess.adopt_broker_close(ts, {})
+    with pytest.raises(ValueError, match="not open"):
+        sess.adopt_broker_close(ts, {"NIFTY|2026-01-13|99999|CE": 10.0})
+    with pytest.raises(ValueError, match="greater than zero"):
+        sess.adopt_broker_close(ts, {held: 0.0})
+    # Nothing was booked by any of the three refusals.
+    assert held in sess.portfolio.lot_symbols()

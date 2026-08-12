@@ -962,6 +962,16 @@ class LiveRun:
             lambda: self.session.manual_order(datetime.now(IST), closes=closes, opens=opens)
         )
 
+    def adopt_broker_close(self, prices: dict[str, float]) -> list[dict]:
+        """Book legs the BROKER already closed, at the stated settled prices — no orders.
+
+        NOT routed through ``_manual_guarded``: that exists to catch an OrderExecutionError
+        from a real order, and this path deliberately cannot place one.
+        """
+        events = self.session.adopt_broker_close(datetime.now(IST), prices)
+        self._after_manual(events)
+        return events
+
     def _manual_guarded(self, fn) -> list[dict]:
         """Run a manual action; if a REAL order fails mid-way, persist the legs that DID
         fill, halt the run (order_error), and re-raise — the same book-vs-log guarantee

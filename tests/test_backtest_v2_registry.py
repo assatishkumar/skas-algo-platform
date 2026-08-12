@@ -55,6 +55,13 @@ _INTENTIONAL |= {(sid, "eod_time") for sid in (
     "batman_ratio_monthly", "call_ratio_monthly", "put_ratio_monthly", "hni_weekly")}
 _INTENTIONAL |= {(sid, "entry_time") for sid in (
     "batman_ratio_monthly", "call_ratio_monthly", "put_ratio_monthly")}
+# Intraday square-offs moved 15:25 → 15:20 in the FORM/deploy layer (2026-08-12): Zerodha
+# auto-squares intraday F&O at 15:26, so exiting at 15:25 leaves no room to retry — the
+# 2026-08-11 failure was at 15:25:34. Constructor defaults deliberately stay at 15:25 so a
+# param-less recovery is byte-identical (§1); only new deploys get the buffer.
+_INTENTIONAL |= {("intraday_straddle", "exit_time"),
+                 ("weekly_intraday_straddle", "eod_exit"),
+                 ("weekly_intraday_straddle", "entry_cutoff")}
 
 
 def _ctor_defaults(strategy_id: str) -> dict:

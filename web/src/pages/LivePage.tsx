@@ -1021,6 +1021,7 @@ function DeploymentTile({
   const [keepPaper, setKeepPaper] = useState(true);
   const [goLiveAcct, setGoLiveAcct] = useState<number | null>(null);
   const [showParams, setShowParams] = useState(false);
+  const [showAdopt, setShowAdopt] = useState(false);
 
   // Pulse a "live" dot each time a fresh WS snapshot bumps the version for this run.
   const [flash, setFlash] = useState(false);
@@ -1125,6 +1126,7 @@ function DeploymentTile({
       ? [
           ...(dep.mode === "PAPER" ? [{ label: "⚡ Go LIVE", onClick: () => setShowGoLive(true) }] : []),
           { label: "Exit positions", tone: "warn", onClick: () => { if (positions > 0 && confirm("Exit ALL open positions for this strategy now, at live prices?")) act(() => api.liveFlatten(dep.run_id)); } },
+          { label: "Mark closed at broker", onClick: () => setShowAdopt(true) },
           { label: "Stop deployment", tone: "danger", onClick: () => act(() => api.liveStop(dep.run_id)) },
           { label: "Edit params", onClick: () => setShowParams(true) },
           { label: "Edit name / notes", onClick: () => setEditing(true) },
@@ -1409,6 +1411,18 @@ function DeploymentTile({
           }} />
       )}
 
+      {/* Mark closed at broker — for legs that are ALREADY gone at the broker (you squared
+          off in Kite, or an intraday auto-square-off fired). "Exit positions" can't help
+          there: it places real orders and there is nothing left to trade. */}
+      {showAdopt && dep.status === "active" && (
+        <AdoptBrokerClosePanel dep={dep} busy={busy}
+          onClose={() => setShowAdopt(false)}
+          onSave={async (legs) => {
+            await act(() => api.liveAdoptBrokerClose(dep.run_id, legs));
+            setShowAdopt(false);
+          }} />
+      )}
+
       {/* Inline live detail for an expanded active deployment.
           Minimize is the chevron icon at the card's top-right. */}
       {expanded && dep.status === "active" && snapshot && (
@@ -1427,6 +1441,101 @@ const PARAM_EDIT_HIDDEN = new Set([
   "refresh_seconds", "decision_time", "ignore_market_hours", "excluded_symbols",
   "entry_legs", "warm_from_date", "tax_rate", "withdrawal_rate",
 ]);
+
+/** Book legs the BROKER has already closed, at the price they actually settled at.
+ *
+ *  The gap this fills: "Exit positions" PLACES orders, so it is useless once the position
+ *  is gone at the broker — and a platform that still believes it holds the leg fails every
+ *  reconciliation and halts. Before this the only repair was to stop the backend and
+ *  hand-edit the run's state (run 10, 2026-08-11). No order is sent from here. */
+function AdoptBrokerClosePanel({ dep, busy, onClose, onSave }: {
+  dep: Deployment;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (legs: { symbol: string; price: number }[]) => Promise<void>;
+}) {
+  const { data: snap, isLoading } = useQuery({
+    queryKey: ["liveadopt", dep.run_id],
+    queryFn: () => api.liveGet(dep.run_id),
+    staleTime: 0,
+  });
+  const open = (snap?.positions ?? []).filter((p) => p.units !== 0);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [prices, setPrices] = useState<Record<string, string>>({});
+
+  // Prefill each price with the last mark — the right starting point, but the WHOLE point
+  // of this panel is that the settled price is usually NOT the mark (yesterday: mark 28.25,
+  // actual fill 33.90), so it stays editable and the P&L follows what you type.
+  const priceOf = (sym: string, ltp: number | null | undefined) =>
+    sym in prices ? prices[sym] : ltp != null ? String(ltp) : "";
+
+  const legs = open
+    .filter((p) => picked[p.symbol])
+    .map((p) => ({ symbol: p.symbol, price: Number(priceOf(p.symbol, p.ltp)) }));
+  const valid = legs.length > 0 && legs.every((l) => Number.isFinite(l.price) && l.price > 0);
+
+  return (
+    <div className="mt-3 rounded-md border border-[var(--border)] bg-[var(--field)] p-3 text-xs space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="font-medium text-[var(--strong)]">
+          Mark closed at broker{dep.mode === "LIVE" ? " (REAL-MONEY run)" : ""}
+        </div>
+        <button onClick={onClose} className="rounded px-1.5 hover:opacity-60" aria-label="close">✕</button>
+      </div>
+      <div className="text-[var(--muted)]">
+        For legs already closed at the broker — you squared off in Kite, or an intraday
+        auto-square-off fired. This places <span className="font-medium">no orders</span>; it books the
+        exit in the platform at the price you enter, so the P&amp;L and the book match reality.
+        To actually close a position that is still open, use <span className="font-medium">Exit positions</span>.
+      </div>
+      {isLoading ? (
+        <div className="text-[var(--muted)]">Loading open legs…</div>
+      ) : open.length === 0 ? (
+        <div className="text-[var(--muted)]">This run holds no open legs — nothing to mark.</div>
+      ) : (
+        <div className="space-y-1.5">
+          {open.map((p) => (
+            <label key={p.symbol} className="flex items-center gap-2">
+              <input type="checkbox" checked={!!picked[p.symbol]}
+                onChange={(e) => setPicked((s) => ({ ...s, [p.symbol]: e.target.checked }))} />
+              <span className="flex-1 truncate" title={p.symbol}>
+                {formatOptionSymbol(p.symbol)}
+                <span className="ml-1.5 text-[var(--muted)] tabular-nums">
+                  {p.units > 0 ? "+" : ""}{p.units} @ {p.avg_price}
+                </span>
+              </span>
+              <span className="text-[var(--muted)]">settled at ₹</span>
+              <input
+                className="w-24 rounded bg-[var(--card)] border border-[var(--field-border)] px-1.5 py-0.5 text-right tabular-nums"
+                inputMode="decimal"
+                disabled={!picked[p.symbol]}
+                value={priceOf(p.symbol, p.ltp)}
+                onChange={(e) => setPrices((s) => ({ ...s, [p.symbol]: e.target.value }))}
+              />
+            </label>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={() => {
+            const summary = legs.map((l) => `${formatOptionSymbol(l.symbol)} @ ₹${l.price}`).join("\n");
+            if (confirm(`Book ${legs.length} leg${legs.length === 1 ? "" : "s"} as CLOSED at the broker?\n\n${summary}\n\nNo order is placed. Check these against your broker's trade book first — a wrong price books a wrong P&L.`)) void onSave(legs);
+          }}
+          disabled={busy || !valid}
+          className="rounded bg-[var(--accent-deep)] text-white px-3 py-1.5 disabled:opacity-50">
+          Mark {legs.length || ""} closed
+        </button>
+        <button onClick={onClose} className="rounded border border-[var(--field-border)] px-3 py-1.5">
+          Cancel
+        </button>
+        {legs.length > 0 && !valid && (
+          <span className="text-[var(--danger)]">Every selected leg needs a settled price above zero.</span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function EditParamsPanel({ dep, busy, onClose, onSave }: {
   dep: Deployment;

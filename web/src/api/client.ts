@@ -370,6 +370,15 @@ export const api = {
       `/live/${id}/flatten`,
       { method: "POST" },
     ),
+  // Book legs the BROKER already closed (manual square-off in Kite, MIS auto-square-off) at
+  // the prices they settled at. Places NO orders — flatten is the wrong tool when there is
+  // nothing left to trade, and without this the run carries a phantom leg that halts every
+  // reconciliation (run 10, 2026-08-11).
+  liveAdoptBrokerClose: (id: number, legs: { symbol: string; price: number }[]) =>
+    request<{ run_id: number; closed: number; snapshot: LiveRunSnapshot }>(
+      `/live/${id}/adopt-broker-close`,
+      { method: "POST", body: JSON.stringify({ legs }) },
+    ),
   liveManualOrder: (id: number, body: ManualOrderInput) =>
     request<{ run_id: number; executed: number; snapshot: LiveRunSnapshot }>(
       `/live/${id}/manual-order`,

@@ -80,11 +80,11 @@ type ClonePrefill = {
 // sizing="capital" refits lots per flat day: floor(equity ÷ (era margin × (1+buffer%))).
 const SIZING_FIELDS = { margin_per_lot: 0, sizing: "fixed", sizing_buffer_pct: 10 };
 const INTRADAY_DEFAULTS: Record<string, Record<string, number | string | boolean>> = {
-  intraday_straddle: { lots: 1, strike_delta: 0, entry_time: "09:18", exit_time: "15:25",
+  intraday_straddle: { lots: 1, strike_delta: 0, entry_time: "09:18", exit_time: "15:20",
     stop_loss_pct: 2, trail_trigger_pct: 1, trail_step_pct: 0.5, trail_mode: "ratchet",
     ...SIZING_FIELDS },
-  weekly_intraday_straddle: { lots: 1, entry_start: "09:20", entry_cutoff: "15:20",
-    eod_exit: "15:25", max_entries_per_day: 3, stop_loss_pct: 0, ...SIZING_FIELDS },
+  weekly_intraday_straddle: { lots: 1, entry_start: "09:20", entry_cutoff: "15:15",
+    eod_exit: "15:20", max_entries_per_day: 3, stop_loss_pct: 0, ...SIZING_FIELDS },
   call_put_ratio_expiry: { sets: 1, profit_target_pct: 1.1, stop_loss_pct: 1,
     ratio_tolerance_pct: 30, sell_lots_per_set: 3, ...SIZING_FIELDS },
   delta_neutral_monthly: { lots: 1, target_delta: 0.18, profit_target_pct: 2.5,

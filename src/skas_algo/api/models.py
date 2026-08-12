@@ -480,7 +480,12 @@ class IntradayStraddleDeploy(BaseModel):
     strike_delta: float = 0.0  # 0 = ATM straddle; e.g. 0.6 = slight-ITM (by BS delta)
     entry_time: str = "09:18"
     entry_window_end: str = "15:00"
-    exit_time: str = "15:25"
+    # 15:20, not 15:25: Zerodha auto-squares intraday F&O at 15:26, and an exit that runs
+    # right up against that leaves no room to retry — on 2026-08-11 our 15:25:34 square-off
+    # failed and the leg had to be closed by hand. Six minutes of buffer is the point.
+    # The CONSTRUCTOR default stays 15:25 (§1: a param-less recovery is unchanged); only new
+    # deploys get this. Move a RUNNING deploy with the tile's "Edit params".
+    exit_time: str = "15:20"
     stop_loss_pct: float = 2.0  # fixed SL, % of broker margin
     trail_trigger_pct: float = 1.0  # every this much peak profit moves the stop
     trail_step_pct: float = 0.5  # ...by this much (0 on either disables trailing)
@@ -514,8 +519,8 @@ class WeeklyIntradayStraddleDeploy(BaseModel):
     underlying: str = "NIFTY"  # NIFTY only for v1
     lots: int = 1
     entry_start: str = "09:20"  # cycle lock time + daily entry-window open
-    entry_cutoff: str = "15:20"  # no fresh entries after this
-    eod_exit: str = "15:25"  # hard intraday square-off
+    entry_cutoff: str = "15:15"  # no fresh entries after this
+    eod_exit: str = "15:20"  # hard square-off, clear of Zerodha's 15:26 intraday auto-close
     candle_minutes: int = 5
     max_entries_per_day: int = 3
     stop_loss_pct: float = 0.0  # optional MTM stop, % of broker margin; 0 = OFF
@@ -640,6 +645,20 @@ class ManualOrderInput(BaseModel):
 
     closes: list[ManualLegClose] = Field(default_factory=list)
     opens: list[ManualLegOpen] = Field(default_factory=list)
+
+
+class AdoptedLeg(BaseModel):
+    """One leg the broker has already closed, and the price it settled at."""
+
+    symbol: str
+    price: float = Field(gt=0, description="the price this leg actually closed at, ₹")
+
+
+class AdoptBrokerCloseInput(BaseModel):
+    """Book legs the BROKER already closed (manual square-off, MIS auto-square-off) at the
+    prices they settled at. Places NO orders — it only makes the platform's book match."""
+
+    legs: list[AdoptedLeg] = Field(min_length=1)
 
 
 class RefreshCacheInput(BaseModel):

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 
+from skas_algo.brokers.base import Fill
 from skas_algo.brokers.sim_broker import PaperBroker
 from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.execution import SliceExecutor
@@ -35,6 +36,25 @@ from skas_algo.engine.overrides import (
 from skas_algo.engine.portfolio import Portfolio
 from skas_algo.engine.sim_fill import FillModel
 from skas_algo.engine.stops import StopBook
+
+
+class _SettledPriceBroker:
+    """Fills at prices the caller states — used ONLY by ``adopt_broker_close``.
+
+    Not a broker in any real sense: the trade already happened at the broker, this just
+    lets the ordinary exit path book it at the price it actually settled at. It touches
+    no network and cannot place an order, which is exactly why adopting is safe to expose
+    as a one-click action.
+    """
+
+    def __init__(self, prices: dict[str, float]):
+        self.prices = prices
+
+    def execute(self, order) -> Fill:
+        price = self.prices.get(order.symbol)
+        if price is None:  # a caller bug — never silently invent a fill price
+            raise ValueError(f"no settled price supplied for {order.symbol}")
+        return Fill(order.symbol, order.side, order.quantity, float(price))
 
 
 class LiveSession:
@@ -153,6 +173,45 @@ class LiveSession:
             else:
                 actions.append(ClosePosition(symbol, tag=tag, reason=reason))
         events = self.executor.execute_actions(ts, actions)
+        self.transactions.extend(events)
+        self.sync_strategy_book(ts)
+        self._record_history(ts)
+        return events
+
+    def adopt_broker_close(self, ts: date | datetime, prices: dict[str, float], *,
+                           tag: str = "MANUAL", reason: str = "broker_closed") -> list[dict]:
+        """Book legs the BROKER has ALREADY closed, at the price they actually settled at —
+        WITHOUT sending a single order.
+
+        ``flatten`` is the wrong tool when the position is already gone: it *places* real
+        orders, and there is nothing left to trade. Without this the platform keeps a
+        phantom leg, every reconciliation trips BOOK MISMATCH, and the only repair was to
+        stop the backend and hand-edit the state blob (run 10, 2026-08-11).
+
+        Deliberately runs the ORDINARY exit path — same portfolio bookkeeping, same F&O
+        charges, same trade events, same strategy book adoption — with the broker swapped
+        for one that fills at the caller's prices. Reusing it is the point: a parallel
+        "just delete the lot" path would drift from how a real exit is booked.
+        """
+        if not prices:
+            raise ValueError("no legs to adopt")
+        actions: list = []
+        for symbol, px in prices.items():
+            lots = self.portfolio.lots(symbol)
+            if not lots:
+                raise ValueError(f"{symbol} is not open in the platform's book")
+            if not (float(px) > 0):
+                raise ValueError(f"settled price for {symbol} must be greater than zero")
+            if all(lot.direction == -1 for lot in lots):
+                actions.extend(CloseShort(symbol, lot.id, tag=tag, reason=reason) for lot in lots)
+            else:
+                actions.append(ClosePosition(symbol, tag=tag, reason=reason))
+        real_broker = self.executor.broker
+        self.executor.broker = _SettledPriceBroker({s: float(p) for s, p in prices.items()})
+        try:
+            events = self.executor.execute_actions(ts, actions)
+        finally:
+            self.executor.broker = real_broker  # a raise must never strand the real broker
         self.transactions.extend(events)
         self.sync_strategy_book(ts)
         self._record_history(ts)

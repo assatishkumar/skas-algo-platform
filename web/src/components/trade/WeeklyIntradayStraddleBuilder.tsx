@@ -19,8 +19,8 @@ export default function WeeklyIntradayStraddleBuilder() {
   const underlying = "NIFTY"; // v1: NIFTY only
   const [lots, setLots] = useState(1);
   const [entryStart, setEntryStart] = useState("09:20");
-  const [entryCutoff, setEntryCutoff] = useState("15:20");
-  const [eodExit, setEodExit] = useState("15:25");
+  const [entryCutoff, setEntryCutoff] = useState("15:15");
+  const [eodExit, setEodExit] = useState("15:20");
   const [maxEntries, setMaxEntries] = useState(3);
   const [stopPct, setStopPct] = useState(0);
   const [capital, setCapital] = useState(1_000_000);

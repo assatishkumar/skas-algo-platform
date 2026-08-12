@@ -18,7 +18,7 @@ export default function IntradayStraddleBuilder() {
   const [lots, setLots] = useState(1);
   const [strikeDelta, setStrikeDelta] = useState(0);
   const [entryTime, setEntryTime] = useState("09:18");
-  const [exitTime, setExitTime] = useState("15:25");
+  const [exitTime, setExitTime] = useState("15:20");
   const [stopPct, setStopPct] = useState(2);
   const [legBookPct, setLegBookPct] = useState(0); // 0 = off
   const [trailTrigger, setTrailTrigger] = useState(1);

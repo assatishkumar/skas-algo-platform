@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
+    AdoptBrokerCloseInput,
     DeploymentUpdate,
     GoLiveRequest,
     LiveControlsInput,
@@ -540,6 +541,28 @@ async def flatten(run_id: int) -> dict:
     from skas_algo.services.vault_export import journal_safe
     journal_safe("intervene", f"Flattened {live.config.name}", strategy=live.config.strategy_id,
                  run_id=run_id, detail=f"closed {len(events)} legs at live prices")
+    return {"run_id": run_id, "closed": len(events), "snapshot": live.snapshot()}
+
+
+@router.post("/{run_id}/adopt-broker-close")
+async def adopt_broker_close(run_id: int, body: AdoptBrokerCloseInput) -> dict:
+    """Book legs the BROKER already closed, at the prices they settled at. NO orders.
+
+    For the case flatten can't handle: the position is already gone at the broker (you
+    squared off in Kite, or an MIS auto-square-off fired), so there is nothing left to
+    trade — the platform just needs to stop believing it holds it. Without this the run
+    carries a phantom leg and every reconciliation halts it.
+    """
+    live = _get(run_id)
+    try:
+        events = live.adopt_broker_close({leg.symbol: leg.price for leg in body.legs})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from skas_algo.services.vault_export import journal_safe
+    detail = ", ".join(f"{leg.symbol} @ {leg.price}" for leg in body.legs)
+    journal_safe("intervene", f"Adopted broker close on {live.config.name}",
+                 strategy=live.config.strategy_id, run_id=run_id,
+                 detail=f"booked {len(events)} leg(s) with no order: {detail}")
     return {"run_id": run_id, "closed": len(events), "snapshot": live.snapshot()}
 
 
