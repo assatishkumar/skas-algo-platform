@@ -73,7 +73,7 @@ export function reconstructCycles(trades: Trade[]): ReconCycle[] {
   const open = new Map<string, ReconCycle>(); // keyed by expiry
   const done: ReconCycle[] = [];
 
-  for (const t of trades ?? []) {
+  for (const [idx, t] of (trades ?? []).entries()) {
     const m = parseSymbol(t.ticker);
     if (!m) continue;
     const isEntry = ENTRY.has(t.action);
@@ -88,7 +88,12 @@ export function reconstructCycles(trades: Trade[]): ReconCycle[] {
       open.set(m.expiry, cyc);
     }
 
-    let leg = cyc.legs.find((l) => l.symbol === t.ticker);
+    // ONE record per OPEN→CLOSE episode, not per symbol: a strategy that re-sells the same
+    // strike after booking it (intraday_strangle_combo's per-leg re-entry) would otherwise
+    // collapse three separate 3-lot shorts into one "9 lot" leg at their average price — a
+    // position that never existed — and hide the intermediate exits. Mirrors the backend's
+    // services/cycle_detail.reconstruct_cycles; keep the two in step.
+    let leg = cyc.legs.find((l) => l.symbol === t.ticker && l.open_units > 1e-9);
     if (isEntry) {
       if (!leg) {
         leg = {
@@ -112,6 +117,11 @@ export function reconstructCycles(trades: Trade[]): ReconCycle[] {
       if (t.underlying_spot != null) cyc.exit_spot = t.underlying_spot; // last exit's spot
     }
 
+    // Flat test AFTER the whole timestamp group: a leg that exits and re-enters in the SAME
+    // decision is never actually flat, and testing between the two rows split one trading
+    // day into three bogus "cycles" (run 254, 2026-08-13).
+    const nxt = (trades ?? [])[idx + 1];
+    if (nxt && nxt.date === t.date) continue;
     if (cyc.legs.length && cyc.legs.every((l) => l.open_units <= 1e-9)) {
       finalize(cyc);
       open.delete(m.expiry);

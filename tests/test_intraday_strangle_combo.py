@@ -423,3 +423,56 @@ def test_a_sensex_only_run_ignores_nifty_days_entirely():
     assert tick(st, ctx, FRI) == []                          # Friday is NIFTY-only
     sigs = tick(st, ctx, datetime(2026, 8, 20, 9, 20))       # Thursday is SENSEX
     assert {s.symbol.split("|")[0] for s in sigs} == {"SENSEX"}
+
+
+# --------------------------------------------------- reporting (cycle reconstruction)
+def _tape():
+    """Run 254's real 2026-08-13 tape: per-leg exits, same-instant re-entries, one side
+    exhausting its budget while the other keeps trading."""
+    rows = [
+        ("09:16:19", "78200|CE", "SHORT", 72.90, None, None),
+        ("09:16:19", "77600|PE", "SHORT", 74.45, None, None),
+        ("10:24:02", "78200|CE", "COVER", 21.65, 3075.0, "isc_leg_target"),
+        ("10:24:02", "78000|CE", "SHORT", 52.55, None, None),
+        ("11:52:36", "78000|CE", "COVER", 75.00, -1347.0, "isc_leg_sl"),
+        ("11:52:36", "78200|CE", "SHORT", 30.25, None, None),
+        ("11:58:08", "77600|PE", "COVER", 22.35, 3126.0, "isc_leg_target"),
+        ("11:58:08", "77600|PE", "SHORT", 22.30, None, None),
+        ("11:59:38", "78200|CE", "COVER", 44.75, -870.0, "isc_leg_sl"),
+        ("11:59:38", "78200|CE", "SHORT", 44.65, None, None),
+        ("12:03:10", "78200|CE", "COVER", 64.55, -1194.0, "isc_leg_sl"),
+        ("13:52:27", "77600|PE", "COVER", 6.55, 945.0, "isc_leg_target"),
+        ("13:52:27", "77600|PE", "SHORT", 6.50, None, None),
+        ("14:07:00", "77600|PE", "COVER", 10.00, -210.0, "isc_leg_sl"),
+        ("14:07:00", "77600|PE", "SHORT", 9.80, None, None),
+    ]
+    return [{"date": f"2026-08-13T{t}+05:30", "ticker": f"SENSEX|2026-08-13|{leg}",
+             "action": a, "units": 60, "price": p, "profit": pr, "exit_reason": r}
+            for t, leg, a, p, pr, r in rows]
+
+
+def test_a_days_per_leg_re_entries_are_ONE_cycle_not_several():
+    """A leg that exits and re-enters in the SAME decision is never flat. Testing the book
+    between those two rows reported run 254's single 2026-08-13 session as THREE cycles."""
+    from skas_algo.services.cycle_detail import reconstruct_cycles
+
+    cycles = reconstruct_cycles(_tape())
+    assert len(cycles) == 1
+    assert cycles[0]["entry_date"].startswith("2026-08-13T09:16")
+    assert cycles[0]["exit_date"] is None                       # still open at 14:07
+    assert round(cycles[0]["realized_pnl"]) == 3525             # matches the tape exactly
+
+
+def test_each_re_entry_is_its_own_leg_not_a_fattened_one():
+    """CE 78200 was sold three separate times at 3 lots. Collapsing them by symbol invented
+    a 9-lot position at their average price and hid the intermediate exits — which is what
+    made the narrator call a paired close+open a 'post-iron-fly ADD'."""
+    from skas_algo.services.cycle_detail import reconstruct_cycles
+
+    legs = reconstruct_cycles(_tape())[0]["legs_detail"]
+    assert len(legs) == 8                                       # 8 episodes, not 3 symbols
+    assert {lg["units"] for lg in legs} == {60}                 # every one is 3 lots
+    ce78200 = sorted(lg["entry_premium"] for lg in legs
+                     if lg["strike"] == 78200.0 and lg["right"] == "CE")
+    assert ce78200 == [30.25, 44.65, 72.90]                     # true entries, not 49.27
+    assert sum(1 for lg in legs if lg["exit_price"] is None) == 1   # only the last PE is open

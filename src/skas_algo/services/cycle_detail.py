@@ -46,7 +46,8 @@ def reconstruct_cycles(trades: list[dict]) -> list[dict]:
     Sorted NEWEST-FIRST to match the live page's display order (index parity)."""
     open_c: dict[str, dict] = {}
     done: list[dict] = []
-    for t in trades or []:
+    trades = list(trades or [])
+    for i, t in enumerate(trades):
         mm = _parse_option_ticker(t.get("ticker"))
         if not mm:
             continue
@@ -63,6 +64,7 @@ def reconstruct_cycles(trades: list[dict]) -> list[dict]:
                 "expiry": mm["expiry"],
                 "entry_date": t["date"],
                 "legs": {},
+                "closed_legs": [],   # finished episodes, kept in order
                 "entry_spot": t.get("underlying_spot"),
                 "exit_spot": None,
                 "exit_reason": None,
@@ -70,7 +72,17 @@ def reconstruct_cycles(trades: list[dict]) -> list[dict]:
             open_c[mm["expiry"]] = cyc
         legs, sym = cyc["legs"], t["ticker"]
         units, price = float(t.get("units") or 0), float(t.get("price") or 0)
+        # ONE record per OPEN→CLOSE episode, not per symbol. A strategy that re-sells the
+        # same strike after booking it (intraday_strangle_combo's per-leg re-entry) would
+        # otherwise collapse three separate 3-lot shorts into a single "9 lot" leg at their
+        # average price — a position that never existed — and hide the intermediate exits,
+        # which in turn made the event narrator see an open with no matching close and call
+        # it a post-iron-fly ADD (observed on run 254, 2026-08-13).
         leg = legs.get(sym)
+        if leg is not None and is_entry and leg["open_units"] <= 1e-9:
+            cyc["closed_legs"].append(leg)   # that episode is done; start a fresh one
+            leg = None
+            del legs[sym]
         if is_entry:
             if leg is None:
                 leg = {
@@ -112,7 +124,15 @@ def reconstruct_cycles(trades: list[dict]) -> list[dict]:
                 cyc["exit_reason"] = t["exit_reason"]
             if t.get("underlying_spot") is not None:
                 cyc["exit_spot"] = t["underlying_spot"]
-        if legs and all(lg["open_units"] <= 1e-9 for lg in legs.values()):
+        # Flat test AFTER the whole timestamp group. A leg that exits and re-enters in the
+        # SAME decision (the engine emits EXIT_ALL then ENTER_SHORT in one slice) is never
+        # actually flat; testing between the two rows split one trading day into three
+        # bogus "cycles" on run 254, 2026-08-13.
+        if _same_ts_ahead(trades, i):
+            continue
+        if (legs or cyc["closed_legs"]) and all(
+            lg["open_units"] <= 1e-9 for lg in legs.values()
+        ):
             done.append(_finalize_recon(cyc))
             del open_c[mm["expiry"]]
     for cyc in open_c.values():
@@ -121,10 +141,17 @@ def reconstruct_cycles(trades: list[dict]) -> list[dict]:
     return done
 
 
+def _same_ts_ahead(trades: list[dict], i: int) -> bool:
+    """True when the next trade row shares this one's timestamp — i.e. the decision that
+    produced it is still being applied, so the book must not be judged flat yet."""
+    nxt = trades[i + 1] if i + 1 < len(trades) else None
+    return bool(nxt and nxt.get("date") == trades[i].get("date"))
+
+
 def _finalize_recon(cyc: dict) -> dict:
     """Turn a reconstruction into the legs_detail-shaped cycle build_cycle_detail expects."""
     legs_detail, realized, exit_date, any_open = [], 0.0, None, False
-    for lg in cyc["legs"].values():
+    for lg in list(cyc.get("closed_legs") or []) + list(cyc["legs"].values()):
         sign = 1 if lg["side"] == "long" else -1
         closed = lg["exit_price"] is not None and lg["exit_units"] > 0
         pnl = sign * (lg["exit_price"] - lg["entry_premium"]) * lg["exit_units"] if closed else 0.0
@@ -460,6 +487,15 @@ def _reason(kind: str, tags: set, cycle: dict, opened: list, closed: list) -> st
                 "Sold a NEW short on the untested side after a breakeven breach "
                 "(post-iron-fly adjustment) — nothing was closed; the original legs stay on."
             )
+        if "isc_leg_sl" in tags or "isc_leg_target" in tags:
+            what = "stopped out at +40% of its entry premium" if "isc_leg_sl" in tags \
+                else "booked at −70% of its entry premium"
+            if opened:
+                return (f"That leg {what} and was immediately re-sold at a freshly computed "
+                        "OTM3 — the two sides are managed independently, so the other leg "
+                        "was deliberately left alone.")
+            return (f"That leg {what}. No re-entry: its per-day budget for this exit type "
+                    "is used up, so that side is done for the day.")
         if closed and not opened:
             return "Closed leg(s) — nothing new was opened at this step."
         return (
