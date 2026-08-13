@@ -103,3 +103,34 @@ def test_live_options_market_live_chain_coarsens_nifty():
     assert out is not None
     assert all(r["strike"] % 100 == 0 for r in out["rows"])
     assert out["atm_strike"] == 24200.0
+
+
+def test_allow_listing_grid_is_the_ONE_documented_exemption():
+    """intraday_strangle_combo counts its OTM steps on the exchange's LISTING grid (NIFTY
+    50s: spot 25000 → OTM3 PE 24850), so the live view must not coarsen for it. Coarsened,
+    it asks for 24850, never finds it, and SILENTLY never enters — exactly what the
+    2026-08-13 paper forward test hit.
+
+    The exemption is opt-in per strategy CLASS and default-off, so every other deployment
+    keeps the owner's round-strikes rule."""
+    cache = OptionChainView(lambda u, on: None, lambda u, on: None)
+    mv = LiveOptionsMarketView(cache)
+    mv.set_chain_fn(lambda u, e: _live_chain_dict(range(24000, 24401, 50), 24175.0, 24150.0))
+    assert mv.allow_listing_grid is False          # default: the rule holds
+
+    mv.allow_listing_grid = True
+    mv._chain_cache.clear()                        # the pre-opt-out read is cached
+    out = mv.live_chain("NIFTY", EXP.isoformat())
+    strikes = [r["strike"] for r in out["rows"]]
+    assert 24150.0 in strikes and 24250.0 in strikes   # the 50s survive
+    assert len(strikes) == len(range(24000, 24401, 50))
+
+
+def test_only_a_strategy_declaring_needs_listing_grid_gets_the_exemption():
+    """The manager must set the flag from the strategy CLASS, never globally."""
+    from skas_algo.strategies.registry import get_strategy
+
+    assert get_strategy("intraday_strangle_combo").needs_listing_grid is True
+    for other in ("intraday_straddle", "call_put_ratio_expiry", "iron_fly_monthly",
+                  "delta_neutral_monthly", "weekly_intraday_straddle"):
+        assert getattr(get_strategy(other), "needs_listing_grid", False) is False, other

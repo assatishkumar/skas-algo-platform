@@ -242,6 +242,17 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   chain coarsens NIFTY at `_coarsen_chain`, so a deploy would silently place 100-step strikes.
   The harness force-enables `allow_fifty_strikes` for this id (`_NEEDS_LISTING_GRID`) — never
   a form checkbox, since a coarsened run places different strikes and still looks healthy.
+  **LIVE carve-out (2026-08-13, owner-approved after the paper forward test):** the strategy
+  class declares `needs_listing_grid = True`; `_build_session` then sets
+  `LiveOptionsMarketView.allow_listing_grid`, which skips `_coarsen_chain`. Default False, so
+  §8's round-strikes rule still holds for every other deployment — this is the ONE documented
+  exemption, pinned in `tests/test_nifty_strike_rule.py`. Without it the run asked for 24850,
+  never found it in the coarsened chain, and SILENTLY never entered.
+  **A DERIV deploy passes its index as `universe=[config.underlying]`, NOT `underlyings`** —
+  the ctor reads universe when underlyings is absent. Before that fix, deploying a NIFTY run
+  and a SENSEX run gave BOTH the whole weekday schedule, so on a shared day each would have
+  doubled the other's book. The replay harness pins `underlyings`, which is why no test caught
+  it; there is one now.
   Risk is a **rupee** MTM stop per index (`mtm_stop_per_lot`, NIFTY ₹1,500/lot, SENSEX 0 = off),
   day-cumulative (realized + open) and evaluated PER underlying; on breach the index's book
   closes and stops for the day. It **outranks a leg stop in the same tick** — and with the
