@@ -134,3 +134,39 @@ def test_only_a_strategy_declaring_needs_listing_grid_gets_the_exemption():
     for other in ("intraday_straddle", "call_put_ratio_expiry", "iron_fly_monthly",
                   "delta_neutral_monthly", "weekly_intraday_straddle"):
         assert getattr(get_strategy(other), "needs_listing_grid", False) is False, other
+
+
+def test_build_session_wires_the_exemption_for_recovered_runs_too():
+    """The flag lives on the market view, which is built by manager._build_session — the
+    SAME function live/recovery.py:161 calls. If it were wired anywhere else, a RECOVERED
+    deployment (what you get after every restart) would silently lose the exemption and
+    stop entering."""
+    from types import SimpleNamespace
+
+    import skas_algo.data.options_provider as op
+    import skas_algo.live.manager as mgr
+
+    built = {}
+
+    def fake_build(_sd, u, **kw):
+        mv = SimpleNamespace(allow_listing_grid=False)
+        built["mv"] = mv
+        return mv, None, None, None
+
+    orig_bl, orig_cache = op.build_live_options_run, None
+    op.build_live_options_run = fake_build
+    try:
+        import skas_algo.data.provider as prov
+        orig_cache = prov.get_data_cache
+        prov.get_data_cache = lambda: None
+        cfg = mgr.LiveConfig(name="t", strategy_id="intraday_strangle_combo", symbols=[],
+                             instrument_class="DERIV", underlying="NIFTY")
+        for needs, expect in ((True, True), (False, False)):
+            strategy = SimpleNamespace(needs_listing_grid=needs) if needs else SimpleNamespace()
+            mgr._build_session(cfg, strategy, lambda *a, **k: None, True, "NIFTY")
+            assert built["mv"].allow_listing_grid is expect
+    finally:
+        op.build_live_options_run = orig_bl
+        if orig_cache is not None:
+            import skas_algo.data.provider as prov
+            prov.get_data_cache = orig_cache
