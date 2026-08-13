@@ -476,3 +476,26 @@ def test_each_re_entry_is_its_own_leg_not_a_fattened_one():
                      if lg["strike"] == 78200.0 and lg["right"] == "CE")
     assert ce78200 == [30.25, 44.65, 72.90]                     # true entries, not 49.27
     assert sum(1 for lg in legs if lg["exit_price"] is None) == 1   # only the last PE is open
+
+
+def test_an_intraday_cycle_gets_a_real_spot_line():
+    """A 0DTE cycle's window is one day, so daily closes give ONE point — and a one-point
+    polyline draws nothing, which is why the SENSEX 2026-08-13 ladder showed a spot legend
+    and no spot line. Intraday cycles use the trade rows' own minute-accurate spot."""
+    from datetime import date as _d
+
+    from skas_algo.services.cycle_detail import _spot_path
+
+    rows = [dict(t, underlying_spot=s) for t, s in zip(
+        _tape(), [77859, 77859, 77726, 77726, 77856, 77856, 77886,
+                  77886, 77925, 77925, 78002, 77910, 77910, 77892, 77892], strict=True)]
+    day = _d(2026, 8, 13)
+    pts = _spot_path(lambda d: None, day, day, 77859, 77892, day, rows)
+    assert len(pts) >= 2                              # an actual line, not a dot
+    assert all("T" in p["date"] for p in pts)         # minute-accurate, not a bare date
+    assert [p["spot"] for p in pts][:3] == [77859, 77726, 77856]
+    assert len({p["date"] for p in pts}) == len(pts)  # one point per instant, deduped
+
+    # A multi-day cycle is untouched — still daily closes at the session date.
+    multi = _spot_path(lambda d: 78000, day, _d(2026, 8, 20), 77859, None, None, rows)
+    assert len(multi) == 8 and all("T" not in p["date"] for p in multi)

@@ -433,6 +433,7 @@ def build_cycle_detail(
             entry_spot,
             exit_spot,
             exit_ts.date() if exit_ts else None,
+            trade_rows,
         ),
     }
 
@@ -631,10 +632,27 @@ def _max_margin(margin_series, d1: date, d2: date) -> float | None:
     return max(vals) if vals else None
 
 
-def _spot_path(spot_fn, d1: date, expiry, entry_spot, exit_spot, exit_date):
-    """Daily underlying closes across the cycle window (entry → expiry) for the ladder's spot
-    line. Endpoints pinned to the cycle's minute-accurate entry/exit spot."""
+def _spot_path(spot_fn, d1: date, expiry, entry_spot, exit_spot, exit_date, trade_rows=None):
+    """Underlying path across the cycle window, for the ladder's spot line.
+
+    DAILY closes for a multi-day cycle. For an INTRADAY one (0DTE, or any cycle that opens
+    and expires the same day) daily closes give a single point, and a one-point polyline
+    draws nothing — which is why the SENSEX 2026-08-13 ladder had a spot legend and no spot
+    line. There we use the trade rows' own minute-accurate ``underlying_spot`` instead: the
+    same stamps the event flags sit on, so the line and the flags agree by construction.
+    """
     exp = expiry if isinstance(expiry, date) else _parse_ts(expiry).date()
+    if exp <= d1:
+        pts = []
+        for t in trade_rows or []:
+            s = t.get("underlying_spot")
+            ts = t.get("date")
+            if s and ts and (not pts or pts[-1]["date"] != ts):
+                pts.append({"date": str(ts).replace(" ", "T"), "spot": round(float(s))})
+        if len(pts) >= 2:
+            return pts
+        # too few prints to draw a line — fall through to the daily path (still honest,
+        # just sparse) rather than inventing points.
     pts, cur = [], d1
     from datetime import timedelta as _td
 

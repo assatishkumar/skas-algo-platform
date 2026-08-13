@@ -202,7 +202,10 @@ function Ladder({ m, geo, active, toggle, legState }: {
   const yOff: Record<number, number> = {};
   const seen: Record<number, number> = {};
   m.legs.forEach((l) => { yOff[l.ref] = (seen[l.strike] = (seen[l.strike] ?? -1) + 1) * 12 - 0; });
-  const spotPts = m.spot_path.map((p) => `${x(p.date + "T15:30").toFixed(0)},${y(p.spot).toFixed(0)}`).join(" ");
+  // A daily point is a bare date (place it at that session's close); an INTRADAY cycle's
+  // points already carry their own minute, so don't stamp 15:30 over it.
+  const spotAt = (d: string) => x(d.includes("T") ? d : d + "T15:30");
+  const spotPts = m.spot_path.map((p) => `${spotAt(p.date).toFixed(0)},${y(p.spot).toFixed(0)}`).join(" ");
 
   return (
     <svg viewBox="0 0 1120 400" className="w-full block">
