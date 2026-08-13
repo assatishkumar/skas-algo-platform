@@ -170,6 +170,12 @@ def _build_session(
             lot_overrides=config.params.get("contract_specs"),
             now=datetime.now(IST),
         )
+        # A strategy whose strike rule counts the exchange's LISTING grid (NIFTY 50s) opts out
+        # of the NIFTY-100s coarsening — otherwise it asks for e.g. 24850, the coarsened chain
+        # doesn't have it, and the run silently never enters. Declared per strategy CLASS, so
+        # the owner's round-strikes rule (§8) still holds for every other deployment.
+        if getattr(strategy, "needs_listing_grid", False):
+            mv.allow_listing_grid = True
         return LiveSession(
             strategy,
             market_view=mv,

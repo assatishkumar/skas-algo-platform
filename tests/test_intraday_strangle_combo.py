@@ -400,3 +400,26 @@ def test_state_round_trip():
     assert fresh.sides["NIFTY"]["CE"]["sl_reentries"] == 1
     assert fresh.realized["NIFTY"] == st.realized["NIFTY"]
     assert fresh.sides["NIFTY"]["PE"]["leg"] == leg_of(st, "NIFTY", "PE")
+
+
+def test_a_single_index_deploy_trades_only_that_index():
+    """A DERIV deploy passes its index as ``universe=[…]`` (manager builds the strategy with
+    universe=[config.underlying]) — NOT as ``underlyings``. Without honouring that, deploying
+    "…_nifty" and "…_sensex" as two runs gave BOTH of them both indices, so on every shared
+    day each would have doubled the other's book. Caught on the 2026-08-13 forward test,
+    minutes before entry."""
+    assert IntradayStrangleComboStrategy(universe=["SENSEX"]).underlyings == ["SENSEX"]
+    assert IntradayStrangleComboStrategy(universe=["NIFTY"]).underlyings == ["NIFTY"]
+    # Explicit underlyings still wins (the replay harness pins it that way)…
+    assert IntradayStrangleComboStrategy(
+        universe=["NIFTY"], underlyings=["SENSEX"]).underlyings == ["SENSEX"]
+    # …and with neither, the whole schedule is the universe (a backtest of the full system).
+    assert IntradayStrangleComboStrategy().underlyings == ["NIFTY", "SENSEX"]
+
+
+def test_a_sensex_only_run_ignores_nifty_days_entirely():
+    st, ctx = setup(chains={"NIFTY": chain(), "SENSEX": chain(spot=82000.0, step=100, lot=20)},
+                    universe=["SENSEX"])
+    assert tick(st, ctx, FRI) == []                          # Friday is NIFTY-only
+    sigs = tick(st, ctx, datetime(2026, 8, 20, 9, 20))       # Thursday is SENSEX
+    assert {s.symbol.split("|")[0] for s in sigs} == {"SENSEX"}

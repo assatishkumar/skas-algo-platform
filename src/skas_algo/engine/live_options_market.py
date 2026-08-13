@@ -57,6 +57,13 @@ class LiveOptionsMarketView:
         # Live underlying spot per index (fed from the index LTP) — used for strike
         # selection so live entries don't pick strikes off a stale cached close.
         self._index_spots: dict[str, float] = index_spots if index_spots is not None else {}
+        # OPT-OUT from the NIFTY-100s coarsening, for the rare strategy whose strike rule is
+        # defined on the exchange's LISTING grid. Default False, so the owner's round-strikes
+        # rule (§8) still holds everywhere by default; the manager turns it on ONLY for a
+        # strategy that declares ``needs_listing_grid``. intraday_strangle_combo is the first:
+        # its OTM3 is three FIFTY-point steps, and coarsened away it never finds its strike
+        # and silently stops entering (caught on the 2026-08-13 forward test).
+        self.allow_listing_grid: bool = False
         # Optional live-quote callback (the deployment's quote source). Lets close() fetch
         # a freshly-selected contract's LIVE price at fill time, so an entry doesn't fill at
         # a days-stale cached close (which would book fake instant P&L).
@@ -92,7 +99,7 @@ class LiveOptionsMarketView:
             chain = self._chain_fn(underlying, expiry)
         except Exception:  # pragma: no cover - network hiccup → caller falls back
             return None
-        if chain is not None:
+        if chain is not None and not self.allow_listing_grid:
             chain = _coarsen_chain(underlying, chain)  # NIFTY → 100-strikes only (owner rule)
             self._chain_cache[key] = (chain, time.monotonic())
         return chain

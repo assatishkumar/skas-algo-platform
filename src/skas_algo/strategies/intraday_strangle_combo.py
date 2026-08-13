@@ -86,6 +86,10 @@ def _parse_schedule(raw) -> dict[int, list[str]]:
 class IntradayStrangleComboStrategy(ExitCadenceMixin):
     strategy_id = "intraday_strangle_combo"
     intraday = True  # ticks every refresh; the session window + per-leg exits self-gate
+    # OTM3 is counted on the exchange's LISTING grid (NIFTY 50s), so the live view must NOT
+    # coarsen the chain to 100s for this strategy — see _LISTING_STEP. The manager reads this
+    # flag when it builds the options market view; every other strategy keeps the 100s rule.
+    needs_listing_grid = True
 
     def __init__(
         self,
@@ -114,9 +118,15 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
     ):
         self.schedule = _parse_schedule(day_schedule)
         scheduled = [u for names in self.schedule.values() for u in names]
-        # Explicit `underlyings` wins (the replay harness pins it to the single index it is
-        # replaying); otherwise take everything the schedule mentions, order-stable.
-        self.underlyings = [u.upper() for u in (underlyings or list(dict.fromkeys(scheduled)))]
+        # Precedence: explicit `underlyings` (the replay harness pins it to the one index it
+        # is replaying) → then `universe`, which is how a DERIV DEPLOY passes its underlying
+        # (manager builds the strategy with universe=[config.underlying]) → only then the
+        # whole schedule. Without the universe step, deploying "…_sensex" and "…_nifty" as
+        # two runs gave BOTH of them both indices, so each would have doubled the other's
+        # book on every shared day (caught on the 2026-08-13 forward test, before entry).
+        self.underlyings = [
+            u.upper() for u in (underlyings or universe or list(dict.fromkeys(scheduled)))
+        ]
 
         self.lots = max(1, int(lots))
         self.otm_steps = max(1, int(otm_steps))

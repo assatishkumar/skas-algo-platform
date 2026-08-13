@@ -43,6 +43,7 @@ const CATEGORY_OF: Record<string, LiveCategoryId> = {
   momentum_theta_gainer_intra: "intraday",
   call_put_ratio_expiry: "intraday",
   intraday_straddle: "intraday",
+  intraday_strangle_combo: "intraday",
   weekly_intraday_straddle: "intraday",
   donchian_strangle_monthly: "positional",
   custom_options: "positional",
