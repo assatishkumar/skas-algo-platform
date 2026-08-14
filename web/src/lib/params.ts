@@ -226,7 +226,7 @@ Object.assign(LABELS, {
   max_sl_reentries: "Max SL re-entries / leg",
   max_target_reentries: "Max target re-entries / leg",
   mtm_stop_per_lot: "Overall MTM stop (₹/lot)",
-  same_strike_action: "If OTM3 is unchanged",
+  same_strike_action: "If the strike is unchanged",
   day_schedule: "Weekday index schedule",
   underlyings: "Indices",
 });

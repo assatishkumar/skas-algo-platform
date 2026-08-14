@@ -140,8 +140,8 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       + "the structure (3 = the deck's OTM3 strangle, 0 = an ATM straddle; both need "
       + "practically the same margin, ~Rs2.25L per NIFTY lot). The two legs are "
       + "managed INDEPENDENTLY — 40% stop / 70% target on each leg's own entry premium, and "
-      + "a leg that exits re-enters at a freshly computed OTM3 (up to 2 stop and 2 target "
-      + "re-entries, separate budgets). OTM3 counts the exchange's LISTING grid (NIFTY 50s: spot "
+      + "a leg that exits re-enters at a freshly computed strike (up to 2 stop and 2 target "
+      + "re-entries, separate budgets). The offset counts the exchange's LISTING grid (NIFTY 50s: spot "
       + "25000 → 24850 PE / 25150 CE), so the NIFTY-100s rule is lifted for this strategy "
       + "automatically. Index rotates by weekday: Mon NIFTY · Tue both · Wed/Thu SENSEX · Fri "
       + "NIFTY — a single-index replay therefore trades only its own days. SENSEX has ~1 month "
@@ -166,14 +166,14 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         f("max_sl_reentries", "MAX SL RE-ENTRIES", "number", 2, { hint: "per leg, per day" }),
         f("max_target_reentries", "MAX TARGET RE-ENTRIES", "number", 2,
           { hint: "per leg, per day — a separate budget from the SL one" }),
-        f("same_strike_action", "IF OTM3 IS UNCHANGED", "select", "reenter",
+        f("same_strike_action", "IF THE STRIKE IS UNCHANGED", "select", "reenter",
           { options: [
               { value: "reenter", label: "Re-enter same strike (deck)" },
               { value: "skip", label: "Book it, wait for the strike to move" },
               { value: "hold", label: "Hold the leg until it can roll away" },
             ],
-            hint: "spot must move half a grid step (25 pts NIFTY / 50 SENSEX) before OTM3 "
-              + "shifts; until then a re-entry repositions nothing. \"hold\" DEFERS the leg "
+            hint: "spot must move half a grid step (25 pts NIFTY / 50 SENSEX) before the "
+              + "strike shifts; until then a re-entry repositions nothing. \"hold\" DEFERS the leg "
               + "stop — only the overall MTM stop backstops it" }),
         // A replay covers ONE index, so a scalar is exactly right here — the ctor spreads a
         // bare number across the underlyings it was built with. Per the deck: NIFTY ₹1,500,

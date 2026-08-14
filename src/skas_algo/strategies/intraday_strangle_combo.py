@@ -330,7 +330,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
 
     def _enter_side(self, ctx, u: str, right: str, today: date,
                     blocked: float | None = None) -> list[Signal]:
-        """Sell one OTM3 leg. All-or-nothing: an absent or unpriceable strike SKIPS (and is
+        """Sell one leg at the configured offset. All-or-nothing: an absent or unpriceable strike SKIPS (and is
         retried next tick) — never substitutes a nearby strike behind the owner's back."""
         expiry = self._nearest_expiry(ctx, u, today)
         if expiry is None:
@@ -456,11 +456,17 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         return today + timedelta(days=(wd - today.weekday()) % 7)
 
     # ------------------------------------------------------- snapshot hooks
+    def _structure_phrase(self) -> str:
+        """How to name this configuration in UI copy. ``otm_steps`` is a knob, so nothing
+        user-facing may hardcode "OTM3" — at 0 the structure is a straddle and there is no
+        "OTM0"."""
+        return "the ATM strike" if self.otm_steps == 0 else f"a fresh OTM{self.otm_steps} strike"
+
     def exit_rules(self) -> list[str]:
         rules = [
             f"Per leg: stop at +{self.leg_stop_pct:g}% of its entry premium, "
             f"target at −{self.leg_target_pct:g}% (checked every tick)",
-            f"Re-enter that leg at fresh OTM{self.otm_steps}: "
+            f"Re-enter that leg at {self._structure_phrase()}: "
             f"max {self.max_sl_reentries} after a stop, {self.max_target_reentries} after a target",
             f"Hard exit {self.exit_time.strftime('%H:%M')} — never carried",
         ]

@@ -445,7 +445,7 @@ _EXIT_COPY = {
     "pc_adjust_long": "Rolled the upper long down (banked it)",
     "pc_adjust_short": "Rolled the lower short up for a credit",
     "pc_payoff_neg": "Exited — the whole expiry payoff turned negative",
-    "isc_entry": "OTM3 leg sold",
+    "isc_entry": "Leg sold",
     "isc_leg_sl": "Leg stopped at 40% of its own entry premium — re-entered if under cap",
     "isc_leg_target": "Leg booked at 70% of its own entry premium — re-entered if under cap",
     "isc_mtm_stop": "Overall MTM stop — the day P&L breached the per-lot budget",
@@ -493,7 +493,7 @@ def _reason(kind: str, tags: set, cycle: dict, opened: list, closed: list) -> st
                 else "booked at −70% of its entry premium"
             if opened:
                 return (f"That leg {what} and was immediately re-sold at a freshly computed "
-                        "OTM3 — the two sides are managed independently, so the other leg "
+                        "strike — the two sides are managed independently, so the other leg "
                         "was deliberately left alone.")
             return (f"That leg {what}. No re-entry: its per-day budget for this exit type "
                     "is used up, so that side is done for the day.")

@@ -608,3 +608,11 @@ def test_otm_steps_zero_is_a_straddle():
     assert {s.symbol.split("|")[2] for s in sigs} == {"25000"}        # both at ATM
     assert {s.symbol.split("|")[3] for s in sigs} == {"CE", "PE"}     # still two distinct legs
     assert leg_of(st, "NIFTY", "CE")["strike"] == leg_of(st, "NIFTY", "PE")["strike"]
+
+
+def test_ui_copy_never_hardcodes_the_otm_offset():
+    """`otm_steps` is a knob, so no user-facing string may name a particular value — at 0
+    the structure is a STRADDLE and "OTM0" is nonsense."""
+    assert "the ATM strike" in IntradayStrangleComboStrategy(otm_steps=0).exit_rules()[1]
+    assert "OTM0" not in " ".join(IntradayStrangleComboStrategy(otm_steps=0).exit_rules())
+    assert "OTM2" in " ".join(IntradayStrangleComboStrategy(otm_steps=2).exit_rules())
