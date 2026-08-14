@@ -253,6 +253,16 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   and a SENSEX run gave BOTH the whole weekday schedule, so on a shared day each would have
   doubled the other's book. The replay harness pins `underlyings`, which is why no test caught
   it; there is one now.
+  **`same_strike_action`** (2026-08-14) decides what happens when a leg's exit fires but the
+  recomputed OTM3 is the strike it is ALREADY on — spot must move half a grid step (25 pts
+  NIFTY / 50 SENSEX) before the strike shifts, so until then the deck's re-entry repositions
+  nothing and merely re-bases the stop wider: `reenter` (deck, ctor default per §1) ·
+  `skip` (book it, stay flat and armed) · `hold` (don't exit; carry the leg until it can roll
+  away — this DEFERS the leg stop, so only the MTM stop backstops it, and the deck turns that
+  off on SENSEX). Same-strike is ~10% of NIFTY re-entries (50-pt grid) but was 4 of 6 on
+  SENSEX 2026-08-13. The side lifecycle runs on a persisted `pending` re-entry so the budget
+  is charged when one LANDS, not when it is owed (a restart that dropped it would leave the
+  counters spent but the side looking untraded → free re-entries).
   Risk is a **rupee** MTM stop per index (`mtm_stop_per_lot`, NIFTY ₹1,500/lot, SENSEX 0 = off),
   day-cumulative (realized + open) and evaluated PER underlying; on breach the index's book
   closes and stops for the day. It **outranks a leg stop in the same tick** — and with the
