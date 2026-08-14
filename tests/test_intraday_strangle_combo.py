@@ -598,3 +598,13 @@ def test_hold_does_not_outrank_the_overall_mtm_stop():
     mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 140.0)   # -Rs3,000 → past the budget
     out = tick(st, ctx, at(10))
     assert out and all(s.reason == "isc_mtm_stop" for s in out)
+
+
+def test_otm_steps_zero_is_a_straddle():
+    """0 steps = both legs on the ATM strike. Everything else — the per-leg 40/70 exits, the
+    independent budgets, the re-entry modes — is structure-agnostic and applies unchanged."""
+    st, ctx = setup(otm_steps=0)
+    sigs = tick(st, ctx, FRI)
+    assert {s.symbol.split("|")[2] for s in sigs} == {"25000"}        # both at ATM
+    assert {s.symbol.split("|")[3] for s in sigs} == {"CE", "PE"}     # still two distinct legs
+    assert leg_of(st, "NIFTY", "CE")["strike"] == leg_of(st, "NIFTY", "PE")["strike"]

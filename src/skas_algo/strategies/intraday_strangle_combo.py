@@ -98,7 +98,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         underlyings: list[str] | None = None,
         day_schedule: dict | None = None,   # weekday(0=Mon) -> [index, …]
         lots: int = 1,
-        otm_steps: int = 3,                 # "OTM3" — steps on the LISTING grid
+        otm_steps: int = 3,                 # "OTM3" — steps on the LISTING grid; 0 = straddle
         entry_time: str = "09:16",
         exit_time: str = "15:25",           # hard square-off, never carried
         # Not in the deck (my addition): a re-entry this late has no room to work, and the
@@ -144,7 +144,9 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         ]
 
         self.lots = max(1, int(lots))
-        self.otm_steps = max(1, int(otm_steps))
+        # 0 is legal and means a STRADDLE — both legs on the ATM strike. The rest of the
+        # machinery is structure-agnostic, so the whole re-entry model applies unchanged.
+        self.otm_steps = max(0, int(otm_steps))
         self.entry_time = _hhmm(entry_time, time(9, 16))
         self.exit_time = _hhmm(exit_time, time(15, 25))
         self.reentry_cutoff = _hhmm(reentry_cutoff, time(15, 0))
