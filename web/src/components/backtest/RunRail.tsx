@@ -128,12 +128,16 @@ export default function RunRail({
 
 /** Compact sweep block (EOD, single underlying — same constraint the old form had). */
 export function SweepBlock({ enabled, onToggle, field, onField, values, onValues, options,
-  disabledReason }: {
+  disabledReason, slow }: {
   enabled: boolean; onToggle: (v: boolean) => void;
   field: string; onField: (v: string) => void;
   values: string; onValues: (v: string) => void;
   options: { value: string; label: string }[];
   disabledReason?: string | null;
+  /** Intraday: the replay is single-flight, so values run one after another — minutes each,
+   *  and only the CURRENT one re-attaches if the page is closed. Say so rather than let the
+   *  user discover it twenty minutes in. */
+  slow?: boolean;
 }) {
   return (
     <div className="mt-3.5 border-t border-[var(--divider)] pt-3.5">
@@ -155,6 +159,11 @@ export function SweepBlock({ enabled, onToggle, field, onField, values, onValues
             onChange={(e) => onValues(e.target.value)} />
           <div className="text-[11px] text-[var(--faint)]">
             2–5 values · each runs and saves, then opens Compare.
+            {slow && (
+              <> Minute-replays run <span className="font-medium">one at a time</span> — a
+              5-value sweep takes a while, and closing this page stops the queue after the
+              value that's running.</>
+            )}
           </div>
         </div>
       )}

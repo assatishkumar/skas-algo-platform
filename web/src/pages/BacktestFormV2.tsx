@@ -171,6 +171,17 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
     }
   }
 
+  /** Execute ONE prepared body on the current basis. Intraday goes through the
+   *  single-flight job + poll; EOD is a straight blocking call. SHARED by run() and
+   *  runSweep() — before this, sweep only knew the EOD call, which is the whole reason it
+   *  was disabled on the intraday basis. */
+  async function execute(body: BacktestRequest) {
+    if (basis !== "intraday") return api.backtest(body);
+    const { job_id } = await api.backtestIntraday(body);
+    return pollJob(job_id, (done, jobTotal, day) =>
+      setBatch((b) => (b ? { ...b, done, jobTotal, day } : b)));
+  }
+
   async function run() {
     if (!win) { setError("Pick a period first."); return; }
     setError(null);
@@ -191,17 +202,9 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
           ...(multi ? { batch_id: batchId, name: `${name.trim() || strategyId} — ${u}` } : {}),
         };
         setLastBody(body);
-        if (basis === "intraday") {
-          const { job_id } = await api.backtestIntraday(body);
-          const res = await pollJob(job_id, (done, jobTotal, day) =>
-            setBatch((b) => (b ? { ...b, done, jobTotal, day } : b)));
-          if (multi && res.run_id != null) runIds.push(res.run_id);
-          if (!multi) setResult(res);
-        } else {
-          const res = await api.backtest(body);
-          if (multi && res.run_id != null) runIds.push(res.run_id);
-          if (!multi) setResult(res);
-        }
+        const res = await execute(body);
+        if (multi && res.run_id != null) runIds.push(res.run_id);
+        if (!multi) setResult(res);
       }
       if (multi && runIds.length) navigate(`/compare?ids=${runIds.join(",")}`);
     } catch (e) {
@@ -234,7 +237,8 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
           persist: true, batch_id: batchId,
           name: `${name.trim() || strategyId} (${fld?.label ?? sweepField} ${v})`,
         };
-        const res = await api.backtest(body);
+        setLastBody(body);
+        const res = await execute(body);
         if (res.run_id != null) runIds.push(res.run_id);
       }
       if (runIds.length) navigate(`/compare?ids=${runIds.join(",")}`);
@@ -255,8 +259,11 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
       setSweepField(sweepOptions[0]?.value ?? "");
     }
   }, [sweepOptions, sweepField]);
-  const sweepDisabled = basis !== "eod" ? "EOD basis only (an intraday replay runs one job at a time)"
-    : underlyings.length > 1 ? "single underlying only" : null;
+  // Intraday sweeps ARE supported: the replay is single-flight, so the loop runs them one
+  // at a time and polls each to completion — the same thing a multi-underlying intraday run
+  // already did. Only the multi-underlying × sweep combination stays out (it would be a
+  // two-dimensional batch, and the sweep's Compare view is one-dimensional).
+  const sweepDisabled = underlyings.length > 1 ? "single underlying only" : null;
 
   return (
     <div>
@@ -287,7 +294,8 @@ export default function BacktestFormV2({ strategyId, strategies, onStrategyChang
         sweep={
           <SweepBlock enabled={sweepOn} onToggle={setSweepOn} field={sweepField}
             onField={setSweepField} values={sweepValues} onValues={setSweepValues}
-            options={sweepOptions} disabledReason={sweepDisabled} />
+            options={sweepOptions} disabledReason={sweepDisabled}
+            slow={basis === "intraday"} />
         } />
       </div>
 
