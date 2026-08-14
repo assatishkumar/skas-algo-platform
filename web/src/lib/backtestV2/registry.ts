@@ -163,6 +163,15 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         f("max_sl_reentries", "MAX SL RE-ENTRIES", "number", 2, { hint: "per leg, per day" }),
         f("max_target_reentries", "MAX TARGET RE-ENTRIES", "number", 2,
           { hint: "per leg, per day — a separate budget from the SL one" }),
+        f("same_strike_action", "IF OTM3 IS UNCHANGED", "select", "reenter",
+          { options: [
+              { value: "reenter", label: "Re-enter same strike (deck)" },
+              { value: "skip", label: "Book it, wait for the strike to move" },
+              { value: "hold", label: "Hold the leg until it can roll away" },
+            ],
+            hint: "spot must move half a grid step (25 pts NIFTY / 50 SENSEX) before OTM3 "
+              + "shifts; until then a re-entry repositions nothing. \"hold\" DEFERS the leg "
+              + "stop — only the overall MTM stop backstops it" }),
         // A replay covers ONE index, so a scalar is exactly right here — the ctor spreads a
         // bare number across the underlyings it was built with. Per the deck: NIFTY ₹1,500,
         // SENSEX none, so set this to 0 for a SENSEX run.

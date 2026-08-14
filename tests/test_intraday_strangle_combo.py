@@ -499,3 +499,102 @@ def test_an_intraday_cycle_gets_a_real_spot_line():
     # A multi-day cycle is untouched — still daily closes at the session date.
     multi = _spot_path(lambda d: 78000, day, _d(2026, 8, 20), 77859, None, None, rows)
     assert len(multi) == 8 and all("T" not in p["date"] for p in multi)
+
+
+# ------------------------------------------------- skip_same_strike_reentry
+def test_skip_same_strike_reentry_waits_for_the_strike_to_actually_move():
+    """When the recomputed OTM3 is the strike that just stopped, a "re-entry" repositions
+    nothing — it books the loss, pays the round trip, and only re-bases the stop wider.
+    With the flag on, the side stays flat and ARMED, and enters the moment spot moves
+    enough to change the strike. The budget is charged when the re-entry lands, not when
+    it is owed."""
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM, same_strike_action="skip")
+    open_all(st, ctx)
+    ce = leg_of(st, "NIFTY", "CE")
+    assert ce["strike"] == 25150.0
+
+    mark(ctx, ce["symbol"], 140.0)                    # stop, spot unmoved
+    out = tick(st, ctx, at(10))
+    assert [s.action.name for s in out] == ["EXIT_ALL"]        # booked, NOT re-sold
+    side = st.sides["NIFTY"]["CE"]
+    assert side["pending"] == "sl" and side["blocked_strike"] == 25150.0
+    assert side["sl_reentries"] == 0                  # nothing landed → nothing charged
+    assert side["closed_for_day"] is False            # still armed
+
+    assert tick(st, ctx, at(10, 1)) == []             # strike still 25150 → keep waiting
+
+    ctx.market.chains["NIFTY"] = chain(spot=25200.0)  # spot moves → OTM3 becomes 25350
+    out = tick(st, ctx, at(10, 2))
+    assert [s.action.name for s in out] == ["ENTER_SHORT"]
+    assert out[0].symbol.split("|")[2] == "25350"
+    assert side["sl_reentries"] == 1                  # charged only now
+    assert side["pending"] is None and side["blocked_strike"] is None
+
+
+def test_the_flag_is_off_by_default_so_a_recovered_deploy_is_unchanged():
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM)
+    assert st.same_strike_action == "reenter"
+    open_all(st, ctx)
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 140.0)
+    out = tick(st, ctx, at(10))
+    assert [s.action.name for s in out] == ["EXIT_ALL", "ENTER_SHORT"]   # same-strike re-sell
+    assert st.sides["NIFTY"]["CE"]["sl_reentries"] == 1
+
+
+def test_an_owed_reentry_survives_a_restart():
+    """Losing `pending` would leave the counters spent but the side looking untraded, so
+    the flat path would enter again without charging a re-entry — free budget."""
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM, same_strike_action="skip")
+    open_all(st, ctx)
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 140.0)
+    tick(st, ctx, at(10))
+
+    fresh = IntradayStrangleComboStrategy(mtm_stop_per_lot=NO_MTM, same_strike_action="skip")
+    fresh.load_state(st.export_state())
+    assert fresh.sides["NIFTY"]["CE"]["pending"] == "sl"
+    assert fresh.sides["NIFTY"]["CE"]["blocked_strike"] == 25150.0
+    assert fresh.export_state() == st.export_state()
+
+
+def test_hold_mode_defers_the_exit_until_the_strike_can_move_away():
+    """"hold": when the recomputed OTM3 is the strike we're already on there is nothing to
+    roll TO, so carry the leg. The exit is DEFERRED, not cancelled — the moment the strike
+    moves, the leg is booked and re-sold there."""
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM, same_strike_action="hold")
+    open_all(st, ctx)
+    ce = leg_of(st, "NIFTY", "CE")
+
+    mark(ctx, ce["symbol"], 140.0)                     # stop breached, spot unmoved
+    assert tick(st, ctx, at(10)) == []                 # held, not booked
+    assert leg_of(st, "NIFTY", "CE") is ce             # the SAME leg, still on
+    assert st.realized["NIFTY"] == 0.0
+
+    mark(ctx, ce["symbol"], 200.0)                     # deeper underwater, strike still pinned
+    assert tick(st, ctx, at(10, 1)) == []              # still held — the deferral has no cap
+    assert st.sides["NIFTY"]["CE"]["sl_reentries"] == 0
+
+    ctx.market.chains["NIFTY"] = chain(spot=25200.0)   # strike can move now → roll away
+    out = tick(st, ctx, at(10, 2))
+    assert [s.action.name for s in out] == ["EXIT_ALL", "ENTER_SHORT"]
+    assert out[1].symbol.split("|")[2] == "25350"
+    assert st.realized["NIFTY"] == (100.0 - 200.0) * ce["units"]  # at the DEFERRED price
+    assert st.sides["NIFTY"]["CE"]["sl_reentries"] == 1
+
+
+def test_hold_still_squares_off_at_the_hard_time_exit():
+    """The deferral must never outrank 15:25 — that is the one gate nothing bypasses."""
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM, same_strike_action="hold")
+    open_all(st, ctx)
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 300.0)
+    assert tick(st, ctx, at(14)) == []                 # deferred all afternoon
+    out = tick(st, ctx, at(15, 25))
+    assert len(out) == 2 and all(s.reason == "isc_eod" for s in out)
+
+
+def test_hold_does_not_outrank_the_overall_mtm_stop():
+    """The MTM stop is the only backstop while a deferred leg runs — it must still fire."""
+    st, ctx = setup(same_strike_action="hold")         # default NIFTY Rs1,500/lot
+    open_all(st, ctx)
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 140.0)   # -Rs3,000 → past the budget
+    out = tick(st, ctx, at(10))
+    assert out and all(s.reason == "isc_mtm_stop" for s in out)

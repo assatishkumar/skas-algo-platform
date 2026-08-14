@@ -108,6 +108,21 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         leg_target_pct: float = 70.0,       # premium ≤ entry × 0.30 → book that leg
         max_sl_reentries: int = 2,
         max_target_reentries: int = 2,
+        # What to do when a leg's exit fires but the freshly recomputed OTM3 is the SAME
+        # strike it is already on — i.e. there is nothing to reposition TO. Spot has to move
+        # half a grid step (25 pts NIFTY, 50 SENSEX) before the strike shifts at all.
+        #   "reenter" — the deck as written: book it and re-sell the same strike. Repositions
+        #               nothing; the only lasting effect is re-basing the stop to the current
+        #               (worse) price, which on a trend re-arms the same losing trade wider.
+        #               SENSEX 2026-08-13: three CE attempts in 11 min cost -Rs2,064 where
+        #               one stop would have cost -Rs870.
+        #   "skip"    — book it, then stay FLAT and armed; enter when the strike moves.
+        #   "hold"    — do not exit at all; carry the leg until the strike moves, then roll
+        #               there. NOTE this DEFERS the 40% stop: while the strike is pinned the
+        #               leg's loss is uncapped, and only the overall MTM stop backstops it
+        #               (which is off on SENSEX by the deck) — read the sweep before using it.
+        # Default "reenter" (§1 — a recovered deploy is unchanged).
+        same_strike_action: str = "reenter",
         # Overall MTM stop in RUPEES PER LOT, per index. NIFTY 1500; SENSEX 0 = off (deck).
         mtm_stop_per_lot: dict | float | None = None,
         stop_check: str = "tick",           # cadence for the MTM stop only (§1 default)
@@ -137,6 +152,8 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         self.leg_target_pct = float(leg_target_pct)
         self.max_sl_reentries = max(0, int(max_sl_reentries))
         self.max_target_reentries = max(0, int(max_target_reentries))
+        act = str(same_strike_action or "reenter").lower()
+        self.same_strike_action = act if act in ("reenter", "skip", "hold") else "reenter"
         if isinstance(mtm_stop_per_lot, dict):
             self.mtm_stop_per_lot = {str(k).upper(): float(v) for k, v in mtm_stop_per_lot.items()}
         elif mtm_stop_per_lot is None:
@@ -161,7 +178,10 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
 
     @staticmethod
     def _fresh_side() -> dict:
-        return {"leg": None, "sl_reentries": 0, "tgt_reentries": 0, "closed_for_day": False}
+        return {"leg": None, "sl_reentries": 0, "tgt_reentries": 0, "closed_for_day": False,
+                # a re-entry owed but not yet placed ("sl"/"tgt"), and the strike it must
+                # NOT be placed on — both only ever set when skip_same_strike_reentry bites
+                "pending": None, "blocked_strike": None}
 
     # ------------------------------------------------------------ live hooks
     def spot_symbols(self) -> list[str]:
@@ -243,6 +263,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         side = self.sides[u][right]
         if side["closed_for_day"]:
             return []
+        out: list[Signal] = []
 
         leg = side["leg"]
         if leg is not None:
@@ -256,44 +277,57 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
                 hit = "tgt"
             if hit is None:
                 return []
+            if self.same_strike_action in ("hold", "skip"):
+                want = self._current_otm_strike(ctx, u, right, today)
+                if self.same_strike_action == "hold" and want is not None \
+                        and want == leg["strike"]:
+                    # Nothing to roll TO yet — carry the leg and re-check next tick. The
+                    # exit is DEFERRED, not cancelled: the moment the strike moves, the
+                    # normal path below books this leg and opens the new one.
+                    return []
             # Book it. The two thresholds sit on opposite sides of entry, so one price can
             # never satisfy both — no intra-bar ordering question to resolve.
             self.realized[u] += (leg["entry"] - cur) * leg["units"]
             side["leg"] = None
-            reason = "isc_leg_sl" if hit == "sl" else "isc_leg_target"
-            out = [Signal(leg["symbol"], SignalAction.EXIT_ALL, reason=reason)]
+            out.append(Signal(leg["symbol"], SignalAction.EXIT_ALL,
+                              reason=("isc_leg_sl" if hit == "sl" else "isc_leg_target")))
             key = "sl_reentries" if hit == "sl" else "tgt_reentries"
             cap = self.max_sl_reentries if hit == "sl" else self.max_target_reentries
-            if side[key] >= cap:
+            if side[key] >= cap or now.time() >= self.reentry_cutoff:
+                # Budget spent, or too late for a re-entry to have room before the square-off.
                 side["closed_for_day"] = True
+                return out
+            side["pending"] = hit
+            side["blocked_strike"] = (leg["strike"]
+                                      if self.same_strike_action == "skip" else None)
+            # fall through: the re-entry is attempted in THIS slice, so "re-enter
+            # immediately" still holds. ORDER IS LOAD-BEARING — the exit Signal is already
+            # in `out` and must precede the entry, because EXIT_ALL resolves against the
+            # PRE-action book (overrides.py:143): entry-first would have the close swallow
+            # the re-opened lot when the strike is unchanged (the run-#203 merge bug).
+
+        # ---- flat: the day's first entry, or a re-entry owed from an earlier exit ----
+        pending = side["pending"]
+        if pending is None:
+            if not self._scheduled(u, today) or now.time() < self.entry_time:
                 return out
             if now.time() >= self.reentry_cutoff:
-                # Same cutoff the flat-side path applies — an immediate re-entry is still a
-                # re-entry, and one opened at 15:20 has no room to work before 15:25.
-                side["closed_for_day"] = True
-                return out
-            side[key] += 1
-            # Re-enter in the SAME slice, at a freshly computed OTM3 off the current spot.
-            # ORDER IS LOAD-BEARING: the exit must precede the entry. EXIT_ALL resolves
-            # against the PRE-action book (overrides.py:143), so if spot hasn't moved and
-            # the new strike is the old one, entry-first would have the close swallow the
-            # re-opened lot too — the run-#203 merge bug in miniature.
-            return out + self._enter_side(ctx, u, right, today)
+                return out    # deployed mid-session — too late to start the day
+        elif now.time() >= self.reentry_cutoff:
+            side["closed_for_day"] = True   # the owed re-entry ran out of day
+            return out
 
-        # Flat side: open the day's first leg (or a re-entry that a stale mark deferred).
-        if not self._scheduled(u, today):
-            return []
-        first = side["sl_reentries"] == 0 and side["tgt_reentries"] == 0
-        if now.time() < self.entry_time:
-            return []
-        if not first and now.time() >= self.reentry_cutoff:
-            side["closed_for_day"] = True
-            return []
-        if first and now.time() >= self.reentry_cutoff:
-            return []  # deployed mid-session — no first entry this late either
-        return self._enter_side(ctx, u, right, today)
+        got = self._enter_side(ctx, u, right, today, blocked=side["blocked_strike"])
+        if got and pending is not None:
+            # The budget is spent when the re-entry actually LANDS, not when it is owed —
+            # a skipped or unpriceable attempt must not silently burn one.
+            side["sl_reentries" if pending == "sl" else "tgt_reentries"] += 1
+            side["pending"] = None
+            side["blocked_strike"] = None
+        return out + got
 
-    def _enter_side(self, ctx, u: str, right: str, today: date) -> list[Signal]:
+    def _enter_side(self, ctx, u: str, right: str, today: date,
+                    blocked: float | None = None) -> list[Signal]:
         """Sell one OTM3 leg. All-or-nothing: an absent or unpriceable strike SKIPS (and is
         retried next tick) — never substitutes a nearby strike behind the owner's back."""
         expiry = self._nearest_expiry(ctx, u, today)
@@ -305,6 +339,9 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
             return []
         rows = {float(r["strike"]): r for r in chain["rows"]}
         strike = self._otm_strike(u, float(chain["spot"]), right)
+        if blocked is not None and strike == blocked:
+            return []   # skip_same_strike_reentry: nothing to reposition to yet — stay flat
+                        # and armed; the owed re-entry lands as soon as the strike moves.
         row = rows.get(strike)
         if row is None:
             return []
@@ -329,6 +366,18 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         }
         return [Signal(symbol, SignalAction.ENTER_SHORT, quantity=int(units),
                        reason="isc_entry", meta={"multiplier": 1})]
+
+    def _current_otm_strike(self, ctx, u: str, right: str, today: date) -> float | None:
+        """The OTM``otm_steps`` strike right now, or None when no chain is available. Used
+        only by the same-strike modes, and only on a tick where an exit actually fired."""
+        expiry = self._nearest_expiry(ctx, u, today)
+        if expiry is None:
+            return None
+        chain_fn = getattr(ctx.market, "live_chain", None)
+        chain = chain_fn(u, expiry.isoformat()) if chain_fn else None
+        if not chain or chain.get("spot") is None:
+            return None
+        return self._otm_strike(u, float(chain["spot"]), right)
 
     def _otm_strike(self, u: str, spot: float, right: str) -> float:
         """OTM``otm_steps`` on the LISTING grid. Deck's example: NIFTY spot 25000 (step 50,
@@ -464,6 +513,12 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
                     "sl_reentries": int(s.get("sl_reentries", 0)),
                     "tgt_reentries": int(s.get("tgt_reentries", 0)),
                     "closed_for_day": bool(s.get("closed_for_day", False)),
+                    # An OWED re-entry must survive a restart. Dropping it would leave the
+                    # counters spent but the side looking like it had never traded, so the
+                    # flat path would enter again WITHOUT charging a re-entry — free budget.
+                    "pending": s.get("pending"),
+                    "blocked_strike": (float(s["blocked_strike"])
+                                       if s.get("blocked_strike") is not None else None),
                 }
             self.day[u] = state.get("day", {}).get(u)
             self.realized[u] = float(state.get("realized", {}).get(u, 0.0))

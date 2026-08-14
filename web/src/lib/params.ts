@@ -226,6 +226,7 @@ Object.assign(LABELS, {
   max_sl_reentries: "Max SL re-entries / leg",
   max_target_reentries: "Max target re-entries / leg",
   mtm_stop_per_lot: "Overall MTM stop (₹/lot)",
+  same_strike_action: "If OTM3 is unchanged",
   day_schedule: "Weekday index schedule",
   underlyings: "Indices",
 });
@@ -239,6 +240,7 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
  *  the ratio-family ctor's fixed|margin. */
 export const PARAM_ENUMS: Record<string, string[]> = {
   trail_mode: ["ratchet", "below_peak"],
+  same_strike_action: ["reenter", "skip", "hold"],
   down_breach_action: ["none", "roll_long", "recenter"],
   loss_repair: ["none", "roll_short_up"],
   sizing: ["fixed", "margin"],
