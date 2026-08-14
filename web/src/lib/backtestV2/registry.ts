@@ -136,8 +136,10 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
     bases: ["intraday"],
     underlyings: { intraday: ["NIFTY", "SENSEX"], eod: NONE },
     sizing: "intradayHarness",
-    note: "Sell 1 lot OTM3 CE + PE on the current weekly at 09:16, flat by 15:25. The two legs "
-      + "are managed INDEPENDENTLY — 40% stop / 70% target on each leg's own entry premium, and "
+    note: "Sell 1 lot CE + PE on the current weekly at 09:16, flat by 15:25 — OTM STEPS sets "
+      + "the structure (3 = the deck's OTM3 strangle, 0 = an ATM straddle; both need "
+      + "practically the same margin, ~Rs2.25L per NIFTY lot). The two legs are "
+      + "managed INDEPENDENTLY — 40% stop / 70% target on each leg's own entry premium, and "
       + "a leg that exits re-enters at a freshly computed OTM3 (up to 2 stop and 2 target "
       + "re-entries, separate budgets). OTM3 counts the exchange's LISTING grid (NIFTY 50s: spot "
       + "25000 → 24850 PE / 25150 CE), so the NIFTY-100s rule is lifted for this strategy "
@@ -149,8 +151,9 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       frequencyHint: "one strangle per scheduled day, plus per-leg re-entries",
       fields: [
         TIME("entry_time", "ENTRY TIME", "09:16"),
-        f("otm_steps", "OTM STEPS", "number", 3,
-          { hint: "steps on the LISTING grid (NIFTY 50s, SENSEX 100s) — 3 = the deck's OTM3" }),
+        f("otm_steps", "STRUCTURE — OTM STEPS", "number", 3,
+          { hint: "how far out both legs sit, in LISTING-grid steps (NIFTY 50s, SENSEX 100s). "
+              + "3 = the deck's OTM3 strangle · 0 = an ATM STRADDLE · 1-2 = a tighter strangle" }),
         TIME("reentry_cutoff", "RE-ENTRY CUTOFF", "15:00",
              "no re-entry after this; set = exit time to disable"),
       ],
