@@ -123,6 +123,13 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         #               (which is off on SENSEX by the deck) — read the sweep before using it.
         # Default "reenter" (§1 — a recovered deploy is unchanged).
         same_strike_action: str = "reenter",
+        # Buy a protective WING ``wing_steps`` listing-grid steps beyond each short (same
+        # expiry, same units) — the intraday IRON FLY / iron condor. 0 = off (SS1: recovered
+        # deploys unchanged). Caps the worst possible day BY CONSTRUCTION instead of by a
+        # stop working through a gap, and defined risk blocks far less broker margin. The
+        # wing is protection, not a managed leg: no 40/70 exits of its own; it ROLLS with
+        # its side's re-entry and is sold the moment its side is done for the day.
+        wing_steps: int = 0,
         # Overall MTM stop in RUPEES PER LOT, per index. NIFTY 1500; SENSEX 0 = off (deck).
         mtm_stop_per_lot: dict | float | None = None,
         stop_check: str = "tick",           # cadence for the MTM stop only (§1 default)
@@ -156,6 +163,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         self.max_target_reentries = max(0, int(max_target_reentries))
         act = str(same_strike_action or "reenter").lower()
         self.same_strike_action = act if act in ("reenter", "skip", "hold") else "reenter"
+        self.wing_steps = max(0, int(wing_steps))
         if isinstance(mtm_stop_per_lot, dict):
             self.mtm_stop_per_lot = {str(k).upper(): float(v) for k, v in mtm_stop_per_lot.items()}
         elif mtm_stop_per_lot is None:
@@ -183,7 +191,9 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         return {"leg": None, "sl_reentries": 0, "tgt_reentries": 0, "closed_for_day": False,
                 # a re-entry owed but not yet placed ("sl"/"tgt"), and the strike it must
                 # NOT be placed on — both only ever set when skip_same_strike_reentry bites
-                "pending": None, "blocked_strike": None}
+                "pending": None, "blocked_strike": None,
+                # the protective long bought with this side's short (wing_steps > 0)
+                "wing": None}
 
     # ------------------------------------------------------------ live hooks
     def spot_symbols(self) -> list[str]:
@@ -195,14 +205,14 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         seen = False
         for u in self.underlyings:
             for r in _RIGHTS:
-                leg = self.sides[u][r]["leg"]
-                if leg is None:
-                    continue
-                cur = closes.get(leg["symbol"])
-                if cur is None or bad_close(cur):
-                    continue
-                total += (leg["entry"] - float(cur)) * leg["units"]  # short leg
-                seen = True
+                for rec in (self.sides[u][r]["leg"], self.sides[u][r].get("wing")):
+                    if rec is None:
+                        continue
+                    cur = closes.get(rec["symbol"])
+                    if cur is None or bad_close(cur):
+                        continue
+                    total += (float(cur) - rec["entry"]) * rec["units"] * rec["dir"]
+                    seen = True
         return total if (seen or total) else None
 
     # ----------------------------------------------------------------- slice
@@ -235,6 +245,9 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         for r in _RIGHTS:
             if sides[r]["leg"] is not None and r not in open_sides:
                 sides[r]["leg"] = None
+            wing = sides[r].get("wing")
+            if wing is not None and not ctx.lots(wing["symbol"]):
+                sides[r]["wing"] = None
 
         # 1. Hard time exit — FIRST, and gated on nothing (the intraday_straddle rule).
         if now.time() >= self.exit_time:
@@ -264,7 +277,9 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         """The whole per-leg lifecycle for ONE side. Touches only ``self.sides[u][right]``."""
         side = self.sides[u][right]
         if side["closed_for_day"]:
-            return []
+            # normally impossible — every path that sets the flag also closes the wing —
+            # but an engine oddity must not leave a stray naked long lying around
+            return self._close_wing(ctx, u, right, "isc_wing_close")
         out: list[Signal] = []
 
         leg = side["leg"]
@@ -303,7 +318,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
             if side[key] >= cap or now.time() >= self.reentry_cutoff:
                 # Budget spent, or too late for a re-entry to have room before the square-off.
                 side["closed_for_day"] = True
-                return out
+                return out + self._close_wing(ctx, u, right, "isc_wing_close")
             side["pending"] = hit
             side["blocked_strike"] = (leg["strike"]
                                       if self.same_strike_action == "skip" else None)
@@ -322,7 +337,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
                 return out    # deployed mid-session — too late to start the day
         elif now.time() >= self.reentry_cutoff:
             side["closed_for_day"] = True   # the owed re-entry ran out of day
-            return out
+            return out + self._close_wing(ctx, u, right, "isc_wing_close")
 
         got = self._enter_side(ctx, u, right, today, blocked=side["blocked_strike"])
         if got and pending is not None:
@@ -335,8 +350,9 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
 
     def _enter_side(self, ctx, u: str, right: str, today: date,
                     blocked: float | None = None) -> list[Signal]:
-        """Sell one leg at the configured offset. All-or-nothing: an absent or unpriceable strike SKIPS (and is
-        retried next tick) — never substitutes a nearby strike behind the owner's back."""
+        """Sell one leg at the configured offset (+ its wing when wing_steps > 0).
+        All-or-nothing: an absent or unpriceable strike OR WING skips the side this tick —
+        never a substitute strike, never a naked short that was promised a wing."""
         expiry = self._nearest_expiry(ctx, u, today)
         if expiry is None:
             return []
@@ -365,14 +381,53 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
             except KeyError:
                 return []
         units = float(self.lots * per_lot)
+
+        # --- protective wing (wing_steps > 0): resolve BEFORE committing anything, so the
+        # entry stays all-or-nothing — a day with no priceable wing places no short either,
+        # and the defined-risk promise is never silently broken.
+        wing_new = None
+        if self.wing_steps > 0:
+            step = _LISTING_STEP.get(u.upper(), 100)
+            off = self.wing_steps * step
+            wk = float(strike + off if right == "CE" else strike - off)
+            wrow = rows.get(wk)
+            wq = (wrow or {}).get(right.lower()) or {}
+            wprem = wq.get("ltp")
+            if wprem is None or bad_close(wprem) or float(wprem) <= 0:
+                return []
+            if int(wq.get("oi") or 0) < self.min_leg_oi:
+                return []
+            wing_new = {"symbol": make(u, expiry, wk, right, lot_size=per_lot,
+                                       lot_overrides=self.lot_overrides).symbol,
+                        "strike": wk, "right": right,
+                        "entry": float(wprem), "units": units, "dir": 1}
+
         symbol = make(u, expiry, strike, right, lot_size=per_lot,
                       lot_overrides=self.lot_overrides).symbol
+        out: list[Signal] = []
+        held_wing = self.sides[u][right].get("wing")
+        if wing_new is not None and held_wing is not None:
+            if held_wing["symbol"] == wing_new["symbol"]:
+                wing_new = held_wing    # same strike — keep it, no churn
+            else:
+                # ROLL: the close must precede every open in the signal list, because all
+                # EXIT_ALLs resolve against the PRE-slice book (overrides.py) — and the new
+                # short can even land ON the old wing's strike.
+                out += self._close_wing(ctx, u, right, "isc_wing_roll")
+        elif held_wing is not None and wing_new is None:
+            out += self._close_wing(ctx, u, right, "isc_wing_close")
+
         self.sides[u][right]["leg"] = {
             "symbol": symbol, "strike": strike, "right": right,
             "entry": float(prem), "units": units, "dir": -1,
         }
-        return [Signal(symbol, SignalAction.ENTER_SHORT, quantity=int(units),
-                       reason="isc_entry", meta={"multiplier": 1})]
+        out.append(Signal(symbol, SignalAction.ENTER_SHORT, quantity=int(units),
+                          reason="isc_entry", meta={"multiplier": 1}))
+        if wing_new is not None and wing_new is not held_wing:
+            self.sides[u][right]["wing"] = wing_new
+            out.append(Signal(wing_new["symbol"], SignalAction.ENTER_LONG,
+                              quantity=int(units), reason="isc_wing", meta={"multiplier": 1}))
+        return out
 
     def _current_otm_strike(self, ctx, u: str, right: str, today: date) -> float | None:
         """The OTM``otm_steps`` strike right now, or None when no chain is available. Used
@@ -406,8 +461,15 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
             leg = self.sides[u][r]["leg"]
             cur = self._mark(ctx, leg["symbol"])
             if cur is None:
-                return False  # a stale leg makes the whole MTM untrustworthy
+                return False  # a stale SHORT makes the whole MTM untrustworthy
             pnl += (leg["entry"] - cur) * leg["units"]
+            wing = self.sides[u][r].get("wing")
+            if wing is not None:
+                # A far wing can go minutes without a print. Never let that BLOCK the stop:
+                # value an unmarked wing at 0 — the conservative direction (overstates the
+                # loss → the stop fires sooner, never later).
+                wcur = self._mark(ctx, wing["symbol"])
+                pnl += ((wcur if wcur is not None else 0.0) - wing["entry"]) * wing["units"]
         # Cadence sampled AFTER every readiness guard (mixin rule #1: _due CONSUMES its
         # window) and keyed per underlying, so a SENSEX slice can't eat NIFTY's slot.
         if not self._due(f"stop:{u}", now):
@@ -415,20 +477,31 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         return pnl <= -(per_lot * self.lots)
 
     def _exit_sides(self, ctx, u: str, rights: list[str], reason: str) -> list[Signal]:
-        """Close the named sides and BANK what they made. Booking here (not just in the
-        per-leg path) keeps ``strategy_pnl`` — the number the UI shows and the MTM stop
-        compares — honest after an EOD or MTM exit."""
+        """Close the named sides — SHORTS AND WINGS — and BANK what they made. Booking here
+        (not just in the per-leg path) keeps ``strategy_pnl`` — the number the UI shows and
+        the MTM stop compares — honest after an EOD or MTM exit."""
         out: list[Signal] = []
         for r in rights:
             leg = self.sides[u][r]["leg"]
-            if leg is None:
-                continue
-            cur = self._mark(ctx, leg["symbol"])
-            if cur is not None:
-                self.realized[u] += (leg["entry"] - cur) * leg["units"]
-            out.append(Signal(leg["symbol"], SignalAction.EXIT_ALL, reason=reason))
-            self.sides[u][r]["leg"] = None
+            if leg is not None:
+                cur = self._mark(ctx, leg["symbol"])
+                if cur is not None:
+                    self.realized[u] += (leg["entry"] - cur) * leg["units"]
+                out.append(Signal(leg["symbol"], SignalAction.EXIT_ALL, reason=reason))
+                self.sides[u][r]["leg"] = None
+            out += self._close_wing(ctx, u, r, reason)
         return out
+
+    def _close_wing(self, ctx, u: str, right: str, reason: str) -> list[Signal]:
+        """Sell a side's protective wing (if any) and bank its P&L (long: cur − entry)."""
+        wing = self.sides[u][right].get("wing")
+        if wing is None:
+            return []
+        cur = self._mark(ctx, wing["symbol"])
+        if cur is not None:
+            self.realized[u] += (cur - wing["entry"]) * wing["units"]
+        self.sides[u][right]["wing"] = None
+        return [Signal(wing["symbol"], SignalAction.EXIT_ALL, reason=reason)]
 
     # -------------------------------------------------------------- helpers
     def _mark(self, ctx, symbol: str) -> float | None:
@@ -468,7 +541,12 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         return "the ATM strike" if self.otm_steps == 0 else f"a fresh OTM{self.otm_steps} strike"
 
     def exit_rules(self) -> list[str]:
-        rules = [
+        rules = []
+        if self.wing_steps > 0:
+            rules.append(
+                f"Protective wing bought {self.wing_steps} steps beyond each short (iron "
+                f"fly/condor) — worst case capped by construction; wings roll with re-entries")
+        rules += [
             f"Per leg: stop at +{self.leg_stop_pct:g}% of its entry premium, "
             f"target at −{self.leg_target_pct:g}% (checked every tick)",
             f"Re-enter that leg at {self._structure_phrase()}: "
@@ -495,6 +573,8 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
                 "sides": {
                     r: {
                         "leg": dict(self.sides[u][r]["leg"]) if self.sides[u][r]["leg"] else None,
+                        "wing": (dict(self.sides[u][r]["wing"])
+                                 if self.sides[u][r].get("wing") else None),
                         "sl_reentries": self.sides[u][r]["sl_reentries"],
                         "tgt_reentries": self.sides[u][r]["tgt_reentries"],
                         "closed_for_day": self.sides[u][r]["closed_for_day"],
@@ -507,7 +587,8 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
     # ------------------------------------------------------- (de)serialize
     def export_state(self) -> dict:
         return {
-            "sides": {u: {r: dict(s, leg=(dict(s["leg"]) if s["leg"] else None))
+            "sides": {u: {r: dict(s, leg=(dict(s["leg"]) if s["leg"] else None),
+                                  wing=(dict(s["wing"]) if s.get("wing") else None))
                           for r, s in rights.items()}
                       for u, rights in self.sides.items()},
             "day": dict(self.day),
@@ -532,6 +613,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
                     "pending": s.get("pending"),
                     "blocked_strike": (float(s["blocked_strike"])
                                        if s.get("blocked_strike") is not None else None),
+                    "wing": dict(s["wing"]) if s.get("wing") else None,
                 }
             self.day[u] = state.get("day", {}).get(u)
             self.realized[u] = float(state.get("realized", {}).get(u, 0.0))

@@ -298,6 +298,10 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
               + "3 = the deck's OTM3 strangle · 0 = an ATM STRADDLE · 1-2 = a tighter strangle" }),
         TIME("reentry_cutoff", "RE-ENTRY CUTOFF", "15:00",
              "no re-entry after this; set = exit time to disable"),
+        f("wing_steps", "PROTECTIVE WINGS (steps)", "number", 0,
+          { hint: "buy a long wing this many grid steps beyond each short — an intraday "
+              + "iron fly/condor: worst case capped by construction, less margin blocked. "
+              + "0 = off (naked). Wings roll with re-entries and leave with their side" }),
       ],
     },
     exit: {

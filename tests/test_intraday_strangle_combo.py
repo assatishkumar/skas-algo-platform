@@ -102,7 +102,7 @@ def tick(st, ctx, dt):
     sigs = st.on_slice(ctx)
     # Mirror the engine: entries open a position, EXIT_ALL closes it.
     for s in sigs:
-        if s.action.name == "ENTER_SHORT":
+        if s.action.name in ("ENTER_SHORT", "ENTER_LONG"):
             ctx.positions[s.symbol] = s.quantity
         elif s.action.name == "EXIT_ALL":
             ctx.positions.pop(s.symbol, None)
@@ -632,3 +632,99 @@ def test_zero_leg_thresholds_mean_OFF_not_breakeven():
     mark(ctx, ce["symbol"], 1.0)            # and a hair from zero on the target side
     assert tick(st, ctx, at(10, 2)) == []
     assert leg_of(st, "NIFTY", "CE") is ce  # still holding, untouched
+
+
+# ------------------------------------------------------------------ wings (iron fly)
+def test_wings_enter_with_the_shorts_making_an_iron_fly():
+    """wing_steps=3 on the ATM straddle = an intraday iron fly: long protection 150 pts
+    beyond each short, same expiry, same units, bought in the same slice."""
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM, otm_steps=0, wing_steps=3)
+    sigs = tick(st, ctx, FRI)
+    assert [s.action.name for s in sigs] == ["ENTER_SHORT", "ENTER_LONG",
+                                             "ENTER_SHORT", "ENTER_LONG"]
+    ks = {(s.symbol.split("|")[3], s.action.name): s.symbol.split("|")[2] for s in sigs}
+    assert ks[("CE", "ENTER_SHORT")] == "25000" and ks[("CE", "ENTER_LONG")] == "25150"
+    assert ks[("PE", "ENTER_SHORT")] == "25000" and ks[("PE", "ENTER_LONG")] == "24850"
+    assert st.sides["NIFTY"]["CE"]["wing"]["units"] == 75.0
+
+
+def test_no_priceable_wing_means_no_entry_at_all():
+    """The defined-risk promise must never silently degrade to a naked short."""
+    c = chain()
+    for r in c["rows"]:
+        if r["strike"] == 25150.0:
+            r["ce"] = None                       # the CE wing strike is unpriceable
+    st, ctx = setup(chains={"NIFTY": c}, mtm_stop_per_lot=NO_MTM, otm_steps=0, wing_steps=3)
+    sigs = tick(st, ctx, FRI)
+    assert {s.symbol.split("|")[3] for s in sigs} == {"PE"}      # PE side intact
+    assert st.sides["NIFTY"]["CE"]["leg"] is None                # CE fully skipped
+
+
+def test_a_finished_side_sells_its_wing_and_banks_its_pnl():
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM, otm_steps=0, wing_steps=3,
+                    max_sl_reentries=0)
+    open_all(st, ctx)
+    ce_wing = st.sides["NIFTY"]["CE"]["wing"]
+    mark(ctx, ce_wing["symbol"], ce_wing["entry"] + 10)          # wing gained 10
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 140.0)        # short stopped, no budget
+    out = tick(st, ctx, at(10))
+    assert [s.action.name for s in out] == ["EXIT_ALL", "EXIT_ALL"]   # short AND wing
+    assert st.sides["NIFTY"]["CE"]["wing"] is None
+    assert st.realized["NIFTY"] == (100.0 - 140.0) * 75 + 10 * 75
+    assert st.sides["NIFTY"]["PE"]["wing"] is not None           # other side untouched
+
+
+def test_eod_closes_wings_with_everything_else():
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM, otm_steps=0, wing_steps=3)
+    open_all(st, ctx)
+    for r in ("CE", "PE"):
+        mark(ctx, st.sides["NIFTY"][r]["wing"]["symbol"], 5.0)
+    out = tick(st, ctx, at(15, 25))
+    assert len(out) == 4 and all(s.reason == "isc_eod" for s in out)
+    assert all(st.sides["NIFTY"][r]["wing"] is None for r in ("CE", "PE"))
+
+
+def test_wing_rolls_when_its_sides_reentry_moves_strike():
+    """A target re-entry at a new strike drags the wing along — close old, buy new — and
+    the closes precede the opens (every EXIT_ALL resolves against the pre-slice book)."""
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM, otm_steps=0, wing_steps=3)
+    open_all(st, ctx)
+    old_wing = st.sides["NIFTY"]["CE"]["wing"]
+    mark(ctx, old_wing["symbol"], old_wing["entry"])
+    ctx.market.chains["NIFTY"] = chain(spot=25200.0)             # ATM moved to 25200
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 30.0)         # −70% → target re-entry
+    out = tick(st, ctx, at(10))
+    acts = [(s.action.name, s.symbol.split("|")[2]) for s in out]
+    assert acts == [("EXIT_ALL", "25000"),        # old short
+                    ("EXIT_ALL", "25150"),        # old wing — close BEFORE any open
+                    ("ENTER_SHORT", "25200"),     # new short at the new ATM
+                    ("ENTER_LONG", "25350")]      # new wing 3 steps beyond it
+    assert st.sides["NIFTY"]["CE"]["wing"]["strike"] == 25350.0
+
+
+def test_wing_gain_offsets_the_mtm_stop():
+    """The stop reads the WHOLE book. Shorts −Rs3,000 alone would breach Rs1,500×1; a wing
+    up Rs2,000 keeps the day inside budget — that offset is the iron fly working."""
+    st, ctx = setup(otm_steps=0, wing_steps=3)                   # NIFTY Rs1,500/lot stop ON
+    open_all(st, ctx)
+    for r in ("CE", "PE"):
+        w = st.sides["NIFTY"][r]["wing"]
+        mark(ctx, w["symbol"], w["entry"])
+    mark(ctx, leg_of(st, "NIFTY", "CE")["symbol"], 120.0)        # shorts: −20×75 −Rs1,500... 
+    mark(ctx, leg_of(st, "NIFTY", "PE")["symbol"], 106.0)        # −6×75 → −Rs1,950 total
+    w = st.sides["NIFTY"]["CE"]["wing"]
+    mark(ctx, w["symbol"], w["entry"] + 27)                      # wing +Rs2,025
+    assert tick(st, ctx, at(11)) == []                           # inside budget → no stop
+    mark(ctx, w["symbol"], w["entry"])                           # wing gain gone
+    out = tick(st, ctx, at(11, 1))
+    assert out and all(s.reason == "isc_mtm_stop" for s in out)
+    assert all(st.sides["NIFTY"][r]["wing"] is None for r in ("CE", "PE"))
+
+
+def test_wing_state_round_trips():
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM, otm_steps=0, wing_steps=3)
+    open_all(st, ctx)
+    fresh = IntradayStrangleComboStrategy(mtm_stop_per_lot=NO_MTM, otm_steps=0, wing_steps=3)
+    fresh.load_state(st.export_state())
+    assert fresh.export_state() == st.export_state()
+    assert fresh.sides["NIFTY"]["PE"]["wing"]["strike"] == 24850.0

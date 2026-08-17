@@ -227,6 +227,7 @@ Object.assign(LABELS, {
   max_target_reentries: "Max target re-entries / leg",
   mtm_stop_per_lot: "Overall MTM stop (₹/lot)",
   same_strike_action: "If the strike is unchanged",
+  wing_steps: "Protective wings (steps)",
   day_schedule: "Weekday index schedule",
   underlyings: "Indices",
 });
