@@ -616,3 +616,19 @@ def test_ui_copy_never_hardcodes_the_otm_offset():
     assert "the ATM strike" in IntradayStrangleComboStrategy(otm_steps=0).exit_rules()[1]
     assert "OTM0" not in " ".join(IntradayStrangleComboStrategy(otm_steps=0).exit_rules())
     assert "OTM2" in " ".join(IntradayStrangleComboStrategy(otm_steps=2).exit_rules())
+
+
+def test_zero_leg_thresholds_mean_OFF_not_breakeven():
+    """0 must disable the leg exit. Read literally the comparison is `cur >= entry`, a
+    breakeven stop that fires on the first tick — the run #249 trap (intraday_straddle,
+    2026-08-07), where a 0% SL silently stopped out every single trade."""
+    st, ctx = setup(mtm_stop_per_lot=NO_MTM, leg_stop_pct=0, leg_target_pct=0)
+    open_all(st, ctx)
+    ce = leg_of(st, "NIFTY", "CE")
+    mark(ctx, ce["symbol"], 100.0)          # exactly at entry
+    assert tick(st, ctx, at(10)) == []
+    mark(ctx, ce["symbol"], 100.01)         # a hair above — a breakeven stop would fire
+    assert tick(st, ctx, at(10, 1)) == []
+    mark(ctx, ce["symbol"], 1.0)            # and a hair from zero on the target side
+    assert tick(st, ctx, at(10, 2)) == []
+    assert leg_of(st, "NIFTY", "CE") is ce  # still holding, untouched

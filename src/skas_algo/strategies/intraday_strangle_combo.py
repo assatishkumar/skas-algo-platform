@@ -272,10 +272,15 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
             cur = self._mark(ctx, leg["symbol"])
             if cur is None:
                 return []  # no fresh print — never judge a 40% stop on a stale mark
+            # 0 = OFF, per the platform convention. Without the guard the comparison reads
+            # `cur >= entry` / `cur <= entry` — a BREAKEVEN stop that fires on the first
+            # tick, which is exactly what silently stopped out every trade on run #249
+            # (intraday_straddle, 2026-08-07). Same shape, same trap.
             hit = None
-            if cur >= leg["entry"] * (1 + self.leg_stop_pct / 100.0):
+            if self.leg_stop_pct > 0 and cur >= leg["entry"] * (1 + self.leg_stop_pct / 100.0):
                 hit = "sl"
-            elif cur <= leg["entry"] * (1 - self.leg_target_pct / 100.0):
+            elif (self.leg_target_pct > 0
+                    and cur <= leg["entry"] * (1 - self.leg_target_pct / 100.0)):
                 hit = "tgt"
             if hit is None:
                 return []
