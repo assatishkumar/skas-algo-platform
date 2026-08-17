@@ -218,10 +218,38 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   `donchian_strangle_bt` re-enters expiry-anchored cycles from a schedule and prices stock
   options with **synthetic Black-Scholes** (σ = HV20 × `vol_multiplier`, calibrated on /research
   ~1.1; NIFTY uses the real chain), adding backtest-only VIX rules + notional-per-name sizing.
+- **`intraday_strangle_combo` — two-index OTM strangle/straddle with per-leg re-entry
+  (owner deck, 2026-08).** Sell 1 lot CE + PE on the current weekly at 09:16, flat by 15:25;
+  the index rotates by weekday (Mon NIFTY · Tue both · Wed/Thu SENSEX · Fri NIFTY). The two
+  legs are managed **independently**: 40% stop / 70% target on each leg's OWN entry premium,
+  and an exiting leg re-enters at a freshly recomputed strike (separate SL and target re-entry
+  budgets). `otm_steps` sets the structure — 3 = the deck's OTM3 on the **listing** grid
+  (NIFTY 50s: the one documented exemption from the 100s rule, `needs_listing_grid`), 0 = an
+  ATM **straddle**. `same_strike_action` (reenter/skip/hold) governs the case where the
+  recomputed strike hasn't moved. Rupee MTM stop per index (`mtm_stop_per_lot`, day-cumulative).
+  **Backtest finding (5y NIFTY): `max_sl_reentries=0` + the straddle structure was the best
+  risk-adjusted config tested (~₹181k net, ~₹16k max DD at 1 lot); SL re-entries lost money
+  in every window.** Deploy-capable (paper-tested since 2026-08-13) + 1-min-store backtest.
+- **`put_condor` — monthly LONG put condor with switchable adjustments.** First trading day of
+  each month, on the monthly expiry: buy high PE / sell two spaced PEs / buy low PE — a NET
+  DEBIT, so max loss = the debit (~₹2k/lot): **defined-risk by construction**. Exits are % of
+  MAX LOSS (not margin — the model margin is ~200× the real risk). Both adjustment rules are
+  independently switchable (`down_breach_action`: roll the top long / recenter / none;
+  `loss_repair`: roll the lower short up / none) — the 5y sweep favoured target-only exits with
+  NO adjustments (best OOS). Backtest-only for now (deploy route deliberately deferred).
+- **`straddle_btst` — BTST long ATM straddle.** BUY the ATM CE+PE at 15:20, SELL both at the
+  next session's 09:20 — a debit position betting overnight gaps outrun overnight theta.
+  **Tested and negative** (2y NIFTY: −₹66.5k); kept for study, not recommended.
+- **`asymmetric_premium_intra` — current-week call + next-week put (owner sheet, 2026-08).**
+  Short ATM CE on this week, short ATM PE on next week, 09:30→15:15; relative-premium
+  adjustment (cheap leg rolls to match the rich leg); 100-point combined day stop.
+  **Tested and shelved**: both distinguishing ideas cost money over 2y, and with them removed
+  it is statistically the ATM straddle above (t=0.83) — kept as the controlled experiment that
+  proved it (`put_expiry_offset` 0 collapses it to the straddle).
 - **`broker_smoke_test` — the end-to-end REAL-order probe (Brokers page card).** BUY 1 lot of a
   cheap OTM weekly option (premium ₹5-20, OI floor) or 1 share of a stock (default ITC), hold
   ~60s, SELL, then the run **stops itself** (only ever on a FLAT book). One cycle exercises the
-  full order path: place → poll → LIMIT-at-touch→MARKET escalation (the wide OTM spread triggers
+  full order path: place → poll → LIMIT-at-touch→protected-limit escalation (the wide OTM spread triggers
   it naturally) → fill → book-sync → reconcile (+ Telegram) → exit. Sizes hard-coded (1 lot /
   1 share, not params); the UI gates a LIVE deploy behind a typed "REAL" confirm; on a disarmed
   account it paper-fills and wears the "orders PAPER" chip — a useful negative test. Deploy-only,
@@ -268,6 +296,10 @@ BS delta/IV helpers) · engine services: `black_scholes.py` (IV/delta), `contrac
   (with total return as a sub-line).
 - **Clone & template**: a finished run can be cloned into a new backtest form with its params
   prefilled.
+- **Parameter sweep on BOTH bases**: tick "Sweep a parameter", pick any numeric knob and 2-5
+  values — each runs and saves, then Compare opens with them side by side. On the intraday
+  basis the values run sequentially through the single-flight replay job (minutes each;
+  closing the page stops the queue after the value in flight). Single underlying only.
 
 ---
 
@@ -301,8 +333,9 @@ BS delta/IV helpers) · engine services: `black_scholes.py` (IV/delta), `contrac
 
 ## 6. Real-order execution & safety
 
-Real orders are the platform's most guarded path. **No real order has been placed yet** — even
-LIVE mode fills via the simulated broker until every gate is deliberately turned on.
+Real orders are the platform's most guarded path. **The path is LIVE** (first real order
+2026-07-10); every gate below still applies to each deployment individually — a LIVE run on a
+disarmed account paper-fills.
 
 - **`LiveBroker` (`brokers/live_broker.py`) is the ONLY code that places real orders.** It
   satisfies the engine's `execute(BrokerOrder) → Fill` contract, so the entire shared decision
@@ -312,8 +345,22 @@ LIVE mode fills via the simulated broker until every gate is deliberately turned
   adapter exposes the full order surface. Any other combination keeps simulated fills. Matrix-
   tested.
 - **Execution style**: LIMIT at the touch (SELL@bid / BUY@ask) → poll ~2s → after
-  `live_order_timeout_s` (10s) escalate to MARKET → poll to terminal. Partial fills ≥1 unit are
-  booked at the actual quantity.
+  `live_order_timeout_s` (10s) escalate to a **protected LIMIT** re-priced through the fresh
+  touch — never a naked MARKET modify (Zerodha's API rejects those on options; the 2026-07-27
+  halt). **Exits walk a LADDER** of escalations (3% → ~8% → ~20% through the touch, touch
+  re-read per rung, later rungs half-timeout) — being flat matters more than the last rupee;
+  entries keep the single 3% rung (a bad fill is worse than no fill). Partial fills ≥1 unit
+  are booked at the actual quantity, and legs that DID fill before a mid-basket failure are
+  booked into the session's own trade log before the halt (the 2026-08-11 lesson).
+- **Session close is per-segment** since SEBI's CAS (2026-08-03): index F&O trades to
+  **15:40**, equity cash to 15:30 (`SKAS_SESSION_CLOSE_DERIV`/`_EQUITY`). One definition
+  (`live/quotes.is_market_open(segment=)`) gates decisions, reconciliation AND the order rail —
+  the rail picks its segment per order.
+- **"Mark closed at broker"** (`POST /live/{id}/adopt-broker-close`, Live-tile menu): books
+  legs the broker has ALREADY closed (manual square-off in Kite, a broker auto-close) at the
+  price the owner states — **placing no orders**. Flatten places real orders, so it is the
+  wrong tool once the position is gone; without this the run carries a phantom leg and every
+  reconciliation halts it.
 - **Pre-flight rails**: market-open + **holiday** check, per-order notional cap
   (`live_max_order_notional`, ₹5L), per-run daily order cap (`live_max_orders_per_day`, 20), and
   an account-level rate governor shared across runs (paces simultaneous entries).

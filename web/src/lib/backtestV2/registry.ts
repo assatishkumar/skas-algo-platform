@@ -131,6 +131,102 @@ const adjustTimingFields = (): FieldSpec[] => [
 
 export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
   // ------------------------------------------------------------------ intraday replays
+  put_condor: {
+    id: "put_condor",
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY"], eod: NONE },
+    sizing: "intradayHarness",
+    monthlyCycle: true,
+    note: "LONG put condor on the monthly, opened on the first trading day of each month: "
+      + "buy high PE, sell two spaced PEs below, buy a low PE — a NET DEBIT, so max loss is "
+      + "the debit (~Rs2k/lot) and the structure is defined-risk by construction. Exits are "
+      + "% of MAX LOSS, not margin: the replay's model margin is ~Rs4L while the real max "
+      + "loss is ~Rs2k, so a %-of-margin exit could never fire. Adjustments are separately "
+      + "switchable for sweeping: the down-breach action (roll the top long down / recenter "
+      + "the condor) and the loss repair (roll the lower short up).",
+    entry: {
+      frequency: "monthly",
+      frequencyHint: "first trading day of each calendar month, on that month's monthly expiry",
+      fields: [
+        TIME("entry_time", "ENTRY TIME", "09:20"),
+        TIME("entry_window_end", "ENTRY CUTOFF", "15:00", "latest the entry may still fill"),
+        f("spacing", "STRIKE SPACING (pts)", "number", 200,
+          { hint: "points between adjacent strikes — 100-multiples only on NIFTY, so 200 or 300" }),
+        f("first_long_offset", "FIRST LONG OFFSET", "number", 0,
+          { hint: "0 = one spacing below ATM (the spec's example)" }),
+        f("force_entry", "FORCE ENTRY", "toggle", false,
+          { hint: "enter on the first replayed day instead of waiting for a month boundary" }),
+      ],
+    },
+    exit: {
+      basisNote: "% of MAX LOSS (the net debit) — the structure's own unit, identical in "
+        + "backtest and live",
+      fields: [
+        f("target_pct_of_max_loss", "TARGET (% OF MAX LOSS)", "number", 100, { step: "any",
+          hint: "100 = book at +1x the debit" }),
+        f("stop_pct_of_max_loss", "STOP (% OF MAX LOSS)", "number", 0, { step: "any",
+          hint: "0 = off — the debit already caps the loss" }),
+        f("hold_to_expiry", "HOLD TO EXPIRY", "toggle", false),
+        f("payoff_neg_exit", "EXIT ON NEGATIVE PAYOFF", "toggle", false,
+          { hint: "exit when the whole expiry payoff drops below zero" }),
+        ...cadenceFields("1min", "1min", "15:20"),
+      ],
+    },
+    extras: [
+      f("down_breach_action", "ON DOWN-BREACH", "select", "roll_long",
+        { options: [
+            { value: "roll_long", label: "Roll the top long down" },
+            { value: "recenter", label: "Recenter the condor" },
+            { value: "none", label: "Do nothing" },
+          ],
+          hint: "spot at/below the upper short strike — the tested best was NONE" }),
+      f("long_roll_step", "LONG ROLL STEP (pts)", "number", 100),
+      f("loss_repair", "LOSS REPAIR", "select", "roll_short_up",
+        { options: [
+            { value: "roll_short_up", label: "Roll the lower short up" },
+            { value: "none", label: "Do nothing" },
+          ] }),
+      f("repair_trigger_pct", "REPAIR TRIGGER (% OF MAX LOSS)", "number", 50, { step: "any" }),
+      f("short_roll_step", "SHORT ROLL STEP (pts)", "number", 100),
+      f("max_adjusts", "MAX ADJUSTMENTS / RULE", "number", 2),
+      f("adjust_cooldown_min", "ADJUST COOLDOWN (min)", "number", 15),
+      f("min_leg_oi", "MIN LEG OI", "number", 1),
+    ],
+  },
+
+  straddle_btst: {
+    id: "straddle_btst",
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY", "BANKNIFTY"], eod: NONE },
+    sizing: "intradayHarness",
+    note: "BTST LONG straddle: BUY the ATM CE+PE near the close (15:20), sell them at the "
+      + "next session's open (09:20). A DEBIT position — the premium paid caps the loss — "
+      + "betting overnight gaps outrun overnight theta. The 2y NIFTY backtest was NET "
+      + "NEGATIVE (-Rs66,544); kept for study, not recommended for deployment.",
+    entry: {
+      frequency: "daily",
+      frequencyHint: "one straddle bought per session close",
+      fields: [
+        TIME("entry_time", "BUY TIME", "15:20"),
+        TIME("entry_window_end", "ENTRY CUTOFF", "15:35", "latest a re-deploy still buys"),
+      ],
+    },
+    exit: {
+      basisNote: "% of the PREMIUM PAID (the debit) — 0 = off on both",
+      fields: [
+        TIME("exit_time", "SELL TIME (next session)", "09:20"),
+        f("profit_target_pct", "PROFIT TARGET %", "number", 0, { step: "any",
+          hint: "of the premium paid; 0 = off (just sell at the exit time)" }),
+        f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any",
+          hint: "of the premium paid; 0 = off — the debit already caps the loss" }),
+        ...cadenceFields("1min", "1min", "15:20"),
+      ],
+    },
+    extras: [
+      f("min_leg_oi", "MIN LEG OI", "number", 1),
+    ],
+  },
+
   asymmetric_premium_intra: {
     id: "asymmetric_premium_intra",
     bases: ["intraday"],
