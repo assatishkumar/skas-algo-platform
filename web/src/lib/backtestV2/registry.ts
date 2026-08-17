@@ -131,6 +131,52 @@ const adjustTimingFields = (): FieldSpec[] => [
 
 export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
   // ------------------------------------------------------------------ intraday replays
+  asymmetric_premium_intra: {
+    id: "asymmetric_premium_intra",
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY", "SENSEX"], eod: NONE },
+    sizing: "intradayHarness",
+    note: "Two shorts on DIFFERENT expiries: a near-ATM CALL on the current week and a "
+      + "near-ATM PUT on the next week, sold 09:30 and flat by 15:15. The adjustment is "
+      + "driven by RELATIVE premium — when one leg decays to the trigger ratio of the other, "
+      + "the CHEAP leg rolls to the strike on ITS OWN expiry whose premium matches the rich "
+      + "one. Note that re-arms the decayed side by moving it back toward the money, so it "
+      + "adds risk rather than hedging it. The stop is a COMBINED points loss for the day, "
+      + "which exits everything.",
+    entry: {
+      frequency: "daily",
+      frequencyHint: "one two-expiry pair per day",
+      fields: [
+        TIME("entry_time", "ENTRY TIME", "09:30"),
+        f("strike_offset_steps", "STRIKE OFFSET (steps)", "number", 0,
+          { hint: "0 = ATM (near-ATM in the sheet); 1 moves each leg one step OTM" }),
+      ],
+    },
+    exit: {
+      basisNote: "stop is COMBINED POINTS of loss for the day (realized + open)",
+      fields: [
+        f("stop_loss_points", "STOP — COMBINED POINTS", "number", 100, { step: "any",
+          hint: "times the lot size in rupees, so it stays right as the lot changes; 0 = off" }),
+        f("adjust_trigger_ratio", "ADJUST TRIGGER RATIO", "number", 0.5, { step: "any",
+          hint: "roll the cheap leg once it decays to this fraction of the rich leg" }),
+        f("max_adjusts", "MAX ADJUSTMENTS / DAY", "number", 3,
+          { hint: "the sheet sets no cap; 0 disables the adjustment entirely" }),
+        f("max_reentries", "RE-ENTRIES AFTER A STOP", "number", 0,
+          { hint: "the sheet leaves this undefined, so it is off by default" }),
+        TIME("exit_time", "EOD / FORCE EXIT", "15:15", "hard — never carried"),
+        f("stop_check", "STOP CHECK", "select", "1min",
+          { options: CADENCE_OPTS, hint: "how often the combined stop samples" }),
+        TIME("eod_time", "EOD CHECK TIME", "15:10", "what the eod cadence means"),
+      ],
+    },
+    extras: [
+      f("adjust_tolerance_pct", "ADJUST TOLERANCE %", "number", 40, { step: "any",
+        hint: "no strike within this of the target premium then skip the roll" }),
+      TIME("reentry_cutoff", "RE-ENTRY CUTOFF", "14:30"),
+      f("min_leg_oi", "MIN LEG OI", "number", 1),
+    ],
+  },
+
   intraday_strangle_combo: {
     id: "intraday_strangle_combo",
     bases: ["intraday"],

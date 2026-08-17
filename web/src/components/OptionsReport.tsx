@@ -35,11 +35,12 @@ const REASON_FAMILY: Record<string, "banked" | "stopped" | "time" | "adjust" | "
   stop: "stopped", portfolio_stop: "stopped", trail: "stopped",
   pc_stop: "stopped", pc_payoff_neg: "stopped",
   ironfly_payoff_neg: "stopped",
-  isc_leg_sl: "stopped", isc_mtm_stop: "stopped",
+  isc_leg_sl: "stopped", isc_mtm_stop: "stopped", apx_stop: "stopped",
   eod: "time", eod_1520: "time", time: "time", expiry: "time", expiry_settle: "time",
-  btst_exit: "time", isc_eod: "time",
+  btst_exit: "time", isc_eod: "time", apx_eod: "time",
   roll: "adjust", reverse: "adjust", flip: "adjust", cc_rolldown_close: "adjust",
   pc_adjust_long: "adjust", pc_adjust_short: "adjust",
+  apx_adjust: "adjust", apx_adjust_open: "adjust",
   mixed: "adjust",
   manual: "manual",
 };
@@ -64,6 +65,7 @@ const REASON_LABEL: Record<string, string> = {
   pc_payoff_neg: "Payoff turned negative",
   isc_leg_sl: "Leg stop (40% of entry)", isc_leg_target: "Leg target (70% of entry)",
   isc_mtm_stop: "Overall MTM stop (Rs/lot)", isc_eod: "End of day (15:25)",
+  apx_stop: "Combined points stop", apx_adjust: "Cheap leg rolled", apx_eod: "End of day",
 };
 export function reasonColor(reason: string): string {
   return FAMILY_COLOR[REASON_FAMILY[reason]] ?? "#64748b";

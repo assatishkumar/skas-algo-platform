@@ -26,6 +26,7 @@ from .donchian_strangle_monthly import DonchianStrangleMonthlyStrategy
 from .ema21_momentum import Ema21MomentumStrategy
 from .gap_reversal import GapReversalStrategy
 from .hni_weekly import HniWeeklyStrategy
+from .asymmetric_premium_intra import AsymmetricPremiumIntraStrategy
 from .intraday_straddle import IntradayStraddleStrategy
 from .intraday_strangle_combo import IntradayStrangleComboStrategy
 from .straddle_btst import StraddleBtstStrategy
@@ -62,6 +63,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     Ema21MomentumStrategy.strategy_id: Ema21MomentumStrategy,
     GapReversalStrategy.strategy_id: GapReversalStrategy,
     MomentumThetaGainerIntra.strategy_id: MomentumThetaGainerIntra,
+    AsymmetricPremiumIntraStrategy.strategy_id: AsymmetricPremiumIntraStrategy,
     IntradayStraddleStrategy.strategy_id: IntradayStraddleStrategy,
     IntradayStrangleComboStrategy.strategy_id: IntradayStrangleComboStrategy,
     StraddleBtstStrategy.strategy_id: StraddleBtstStrategy,

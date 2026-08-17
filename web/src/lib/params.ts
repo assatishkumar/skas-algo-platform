@@ -231,6 +231,16 @@ Object.assign(LABELS, {
   underlyings: "Indices",
 });
 
+// asymmetric_premium_intra
+Object.assign(LABELS, {
+  strike_offset_steps: "Strike offset (steps)",
+  adjust_trigger_ratio: "Adjust trigger ratio",
+  adjust_tolerance_pct: "Adjust tolerance %",
+  max_adjusts: "Max adjustments / day",
+  max_reentries: "Re-entries after a stop",
+  stop_loss_points: "Stop \u2014 combined points",
+});
+
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 /** Enum-valued STRATEGY-CTOR params → their legal values, as the live strategies accept
