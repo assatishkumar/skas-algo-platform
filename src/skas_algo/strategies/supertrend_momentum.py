@@ -40,6 +40,8 @@ class SuperTrendMomentumStrategy:
         entry_mode: str = "flip",            # "flip" = buy on green flip; "pullback" = wait for a dip + breakout
         pullback_pct: float = 0.0,           # min dip below the post-flip peak to count as a pullback
         idle_return: float = 0.06,           # reporting-only: assumed annual yield on idle cash
+        # Point-in-time index membership (pit_universe mode): entries only, never exits.
+        membership: dict[str, list[str]] | None = None,
         **_ignored,
     ):
         self.universe = universe
@@ -54,6 +56,8 @@ class SuperTrendMomentumStrategy:
         self.entry_mode = str(entry_mode).lower()
         self.pullback_pct = float(pullback_pct)
         self.idle_return = float(idle_return)
+        from ._membership import MembershipGate
+        self.gate = MembershipGate(membership)
         # Per-symbol state: last seen SuperTrend direction + whether we've booked the partial.
         self.prev_dir: dict[str, float] = {}
         self.partial_booked: dict[str, bool] = {}
@@ -151,9 +155,12 @@ class SuperTrendMomentumStrategy:
             self.partial_booked[sym] = False
             return True
 
+        today_iso = ctx.today().isoformat() if hasattr(ctx, "today") else "9999-12-31"
         for sym in present:
             if sym in held:
                 continue
+            if not self.gate.allows(sym, today_iso):
+                continue   # not an index member on this date (point-in-time universe)
             dir_now = ctx.supertrend_dir(sym)
             prev = self.prev_dir.get(sym)
             if dir_now is None or prev is None:

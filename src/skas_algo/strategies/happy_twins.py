@@ -25,6 +25,8 @@ from typing import Any
 from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.types import Signal, SignalAction
 
+from ._membership import MembershipGate
+
 
 class HappyTwinsStrategy:
     strategy_id = "happy_twins"
@@ -52,6 +54,9 @@ class HappyTwinsStrategy:
         # ranked by close vs the 20-day mean (the momentum proxy the view already
         # computes). 0 = the original equal-split-across-the-whole-universe behavior.
         capital_parts: int = 0,
+        # Point-in-time index membership ({effective_iso: [symbols]}, injected by the
+        # backtest route's pit_universe mode). Gates ENTRIES only; exits never.
+        membership: dict[str, list[str]] | None = None,
         **_ignored,
     ):
         self.universe = universe
@@ -63,6 +68,7 @@ class HappyTwinsStrategy:
         self.timeframe = str(timeframe)
         self.park_symbol = park_symbol or None
         self.capital_parts = max(0, int(capital_parts))
+        self.gate = MembershipGate(membership)
         # the twins trade everything EXCEPT the parking vehicle
         self.trading = [s for s in universe if s != self.park_symbol]
         # prior slice's fast direction per symbol — what makes the entry a TRANSITION.
@@ -100,6 +106,7 @@ class HappyTwinsStrategy:
         # (signal order below), so entries may spend unparked/exit proceeds.
         running_cash = ctx.cash
 
+        today_iso = ctx.today().isoformat() if hasattr(ctx, "today") else "9999-12-31"
         # Pass 1 — exits and flip detection (prev_fast updates for EVERY symbol).
         flips: list[tuple[float, str]] = []
         for sym in self.trading:
@@ -117,7 +124,8 @@ class HappyTwinsStrategy:
                     held.discard(sym)
             elif fast is not None:
                 prev = self.prev_fast.get(sym)
-                if prev is not None and prev < 0 and fast > 0:
+                if prev is not None and prev < 0 and fast > 0 \
+                        and self.gate.allows(sym, today_iso):
                     # Rank fresh flips by 20-day relative strength (close vs DMA) so a
                     # crowded day spends its free parts on the strongest breakouts.
                     dma = ctx.rolling_mean(sym)
