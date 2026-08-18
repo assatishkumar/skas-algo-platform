@@ -216,6 +216,27 @@ NIFTY_500: list[str] = [
 ]
 
 
+# Nifty500 Momentum 50 — NSE's official CURRENT constituents (fetched from
+# niftyindices.com, 2026-08-18): the 50 highest volatility-adjusted-momentum names of the
+# Nifty 500, reconstituted semi-annually by NSE. STATIC SNAPSHOT — the survivorship caveat
+# at the top of this file applies DOUBLE here: these are stocks that already won their way
+# in, so a long backtest over today's list flatters any strategy. Fine for live/paper
+# screening going forward; treat multi-year backtests on it with suspicion until the
+# point-in-time membership work lands. ~8 names are 2025-26 listings/renames with no cache
+# history yet; resolve() drops them until a cache refresh pulls them.
+NIFTY500_MOMENTUM_50: list[str] = [
+    "ABB", "ACUTAAS", "ADANIENSOL", "ADANIPOWER", "ABCAPITAL",
+    "ABSLAMC", "ANANDRATHI", "APARINDS", "ATHERENERG", "BSE",
+    "MAHABANK", "BELRISE", "BHARATFORG", "BHEL", "CGPOWER",
+    "CRAFTSMAN", "CUMMINSIND", "FEDERALBNK", "FINCABLES", "GVT&D",
+    "GLENMARK", "GRANULES", "GESHIP", "GMDCLTD", "HFCL",
+    "HINDALCO", "HINDCOPPER", "POWERINDIA", "HONASA", "KEI",
+    "KARURVYSYA", "KIRLOSENG", "LAURUSLABS", "MCX", "NLCINDIA",
+    "NATIONALUM", "NAVINFLUOR", "NETWEB", "POLYCAB", "RRKABEL",
+    "RBLBANK", "SAILIFE", "SCHNEIDER", "SHRIRAMFIN", "SAIL",
+    "SYRMA", "THERMAX", "TORNTPHARM", "IDEA", "WELCORP",
+]
+
 # name -> (display label, symbol list)
 UNIVERSES: dict[str, tuple[str, list[str]]] = {
     "nifty25": ("Nifty 25 (top by weight)", NIFTY_25),
@@ -223,6 +244,7 @@ UNIVERSES: dict[str, tuple[str, list[str]]] = {
     "nifty100": ("Nifty 100", NIFTY_100),
     "nifty200": ("Nifty 200", NIFTY_200),
     "nifty500": ("Nifty 500", NIFTY_500),
+    "nifty500mom50": ("Nifty500 Momentum 50 (snapshot)", NIFTY500_MOMENTUM_50),
 }
 
 
