@@ -39,6 +39,13 @@ class HappyTwinsStrategy:
         slow_period: int = 3,        # ATR bars of the EXIT SuperTrend
         slow_multiplier: float = 1.0,
         timeframe: str = "weekly",   # daily | weekly | monthly (bars both STs run on)
+        # Park idle capital in this symbol (e.g. GOLDBEES) whenever EVERY trading symbol
+        # is flat; unparked in full the moment an entry fires (its sale funds the buy in
+        # the same slice). None = cash idles, the original behavior. The park symbol must
+        # be in the run's symbol list (it needs price data) and is excluded from the
+        # twins logic itself. Multi-symbol caveat: parking engages only when ALL trading
+        # names are flat, and leftover cash after a partial entry stays cash.
+        park_symbol: str | None = None,
         **_ignored,
     ):
         self.universe = universe
@@ -48,6 +55,9 @@ class HappyTwinsStrategy:
         self.slow_period = int(slow_period)
         self.slow_multiplier = float(slow_multiplier)
         self.timeframe = str(timeframe)
+        self.park_symbol = park_symbol or None
+        # the twins trade everything EXCEPT the parking vehicle
+        self.trading = [s for s in universe if s != self.park_symbol]
         # prior slice's fast direction per symbol — what makes the entry a TRANSITION.
         self.prev_fast: dict[str, float] = {}
 
@@ -71,13 +81,19 @@ class HappyTwinsStrategy:
 
     # ------------------------------------------------------------------ decide
     def on_slice(self, ctx: AlgoContext) -> list[Signal]:
-        signals: list[Signal] = []
+        exits: list[Signal] = []
+        entries: list[Signal] = []
         present = ctx.present_symbols()
         if not present:
-            return signals
+            return []
         held = set(ctx.lot_symbols())
+        park = self.park_symbol
+        park_held = bool(park and park in held)
+        # Cash as it will stand after this slice's sells — sells execute before buys
+        # (signal order below), so entries may spend unparked/exit proceeds.
+        running_cash = ctx.cash
 
-        for sym in self.universe:
+        for sym in self.trading:
             if sym not in present:
                 continue
             fast = ctx.indicator(sym, "st_fast")
@@ -87,18 +103,37 @@ class HappyTwinsStrategy:
                 # EXIT: slow ST red — state-based, so a restart can never strand a
                 # position that flipped while we were down.
                 if slow is not None and slow < 0:
-                    signals.append(Signal(symbol=sym, action=SignalAction.EXIT_ALL))
+                    exits.append(Signal(symbol=sym, action=SignalAction.EXIT_ALL))
+                    running_cash += sum(lot.units for lot in ctx.lots(sym)) * ctx.close(sym)
+                    held.discard(sym)
             elif fast is not None:
                 prev = self.prev_fast.get(sym)
                 if prev is not None and prev < 0 and fast > 0:
+                    if park_held and park in present:
+                        # UNPARK first — its sale funds the entry in this same slice.
+                        exits.insert(0, Signal(symbol=park, action=SignalAction.EXIT_ALL))
+                        running_cash += (sum(lot.units for lot in ctx.lots(park))
+                                         * ctx.close(park))
+                        park_held = False
                     # ENTER on the green FLIP only. Equal slot of current equity;
                     # skip (never shrink) when cash is short.
-                    slot = ctx.equity() / max(len(self.universe), 1)
+                    slot = ctx.equity() / max(len(self.trading), 1)
                     close = ctx.close(sym)
                     units = int(slot // close) if close > 0 else 0
-                    if units > 0 and ctx.cash >= units * close:
-                        signals.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG,
+                    if units > 0 and running_cash >= units * close:
+                        running_cash -= units * close
+                        entries.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG,
                                               quantity=units))
+                        held.add(sym)
             if fast is not None:
                 self.prev_fast[sym] = float(fast)
-        return signals
+
+        # PARK: every trading name flat and money sitting idle → hold gold instead.
+        if park and park in present and not park_held and running_cash > 0 \
+                and not (held & set(self.trading)):
+            close = ctx.close(park)
+            units = int(running_cash // close) if close > 0 else 0
+            if units > 0:
+                entries.append(Signal(symbol=park, action=SignalAction.ENTER_LONG,
+                                      quantity=units))
+        return exits + entries

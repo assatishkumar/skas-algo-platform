@@ -39,6 +39,7 @@ class _Ctx:
         self.price = 100.0
         self.cash = 1_000_000.0
         self.positions: set[str] = set()
+        self.units: dict[str, int] = {}
         self._u = universe
 
     def present_symbols(self):
@@ -46,6 +47,11 @@ class _Ctx:
 
     def lot_symbols(self):
         return sorted(self.positions)
+
+    def lots(self, sym):
+        from types import SimpleNamespace
+        n = self.units.get(sym, 0)
+        return [SimpleNamespace(units=n)] if n else []
 
     def indicator(self, sym, name):
         return (self.fast if name == "st_fast" else self.slow).get(sym)
@@ -62,8 +68,10 @@ def _tick(st, ctx):
     for s in sigs:
         if s.action.name == "ENTER_LONG":
             ctx.positions.add(s.symbol)
+            ctx.units[s.symbol] = s.quantity or 0
         else:
             ctx.positions.discard(s.symbol)
+            ctx.units.pop(s.symbol, None)
     return sigs
 
 
@@ -84,7 +92,7 @@ def test_exits_while_slow_is_red_even_without_seeing_the_flip():
     """State-based exit: a restart that missed the red flip still closes next slice."""
     st = HappyTwinsStrategy(universe=["AAA"])
     ctx = _Ctx(["AAA"])
-    ctx.positions.add("AAA")                 # recovered holding, no prev state at all
+    ctx.positions.add("AAA"); ctx.units["AAA"] = 100   # recovered, no prev state
     ctx.fast["AAA"], ctx.slow["AAA"] = -1.0, -1.0
     sigs = _tick(st, ctx)
     assert [s.action.name for s in sigs] == ["EXIT_ALL"]
@@ -93,7 +101,7 @@ def test_exits_while_slow_is_red_even_without_seeing_the_flip():
 def test_reentry_after_exit_needs_a_fresh_flip_and_gets_one():
     st = HappyTwinsStrategy(universe=["AAA"])
     ctx = _Ctx(["AAA"])
-    ctx.positions.add("AAA")
+    ctx.positions.add("AAA"); ctx.units["AAA"] = 100
     ctx.fast["AAA"], ctx.slow["AAA"] = -1.0, -1.0
     _tick(st, ctx)                            # exited; prev_fast = -1 recorded
     ctx.fast["AAA"], ctx.slow["AAA"] = 1.0, 1.0
@@ -111,3 +119,44 @@ def test_state_round_trip_preserves_the_transition_memory():
     ctx.fast["AAA"] = 1.0
     sigs = fresh.on_slice(ctx)                # flip visible ACROSS the restart
     assert [s.action.name for s in sigs] == ["ENTER_LONG"]
+
+
+# ------------------------------------------------------------------ parking
+def test_parks_idle_cash_in_gold_and_unparks_to_fund_the_entry():
+    st = HappyTwinsStrategy(universe=["AAA", "GOLDBEES"], park_symbol="GOLDBEES")
+    assert st.trading == ["AAA"]              # the park vehicle is never twins-traded
+    ctx = _Ctx(["AAA", "GOLDBEES"])
+
+    # Flat everywhere → park the whole balance.
+    ctx.fast["AAA"], ctx.slow["AAA"] = 1.0, 1.0
+    sigs = _tick(st, ctx)
+    assert [(s.action.name, s.symbol) for s in sigs] == [("ENTER_LONG", "GOLDBEES")]
+    assert sigs[0].quantity == 10_000
+    ctx.cash = 0.0                            # everything is in gold now
+
+    # Fast flips green → unpark FIRST, entry funded by the sale in the same slice.
+    ctx.fast["AAA"] = -1.0; _tick(st, ctx)
+    ctx.fast["AAA"] = 1.0
+    sigs = _tick(st, ctx)
+    assert [(s.action.name, s.symbol) for s in sigs] == [
+        ("EXIT_ALL", "GOLDBEES"), ("ENTER_LONG", "AAA")]
+    assert sigs[1].quantity == 10_000         # sized off the unparked proceeds
+
+
+def test_exit_slice_reparks_the_proceeds():
+    st = HappyTwinsStrategy(universe=["AAA", "GOLDBEES"], park_symbol="GOLDBEES")
+    ctx = _Ctx(["AAA", "GOLDBEES"])
+    ctx.positions.add("AAA"); ctx.units["AAA"] = 10_000
+    ctx.cash = 0.0
+    ctx.fast["AAA"], ctx.slow["AAA"] = -1.0, -1.0
+    sigs = _tick(st, ctx)
+    assert [(s.action.name, s.symbol) for s in sigs] == [
+        ("EXIT_ALL", "AAA"), ("ENTER_LONG", "GOLDBEES")]
+    assert sigs[1].quantity == 10_000         # exit proceeds straight into gold
+
+
+def test_no_park_symbol_means_the_old_behavior():
+    st = HappyTwinsStrategy(universe=["AAA"])
+    ctx = _Ctx(["AAA"])
+    ctx.fast["AAA"], ctx.slow["AAA"] = 1.0, 1.0
+    assert _tick(st, ctx) == []               # idle cash just sits, as before
