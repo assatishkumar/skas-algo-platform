@@ -198,3 +198,37 @@ def test_parts_zero_keeps_the_legacy_equal_split():
     ctx.fast["AAA"] = 1.0
     sigs = _tick(st, ctx)
     assert [s.symbol for s in sigs] == ["AAA"] and sigs[0].quantity == 5_000  # equity/2 syms
+
+
+# --------------------------------------------------------------- regime brake
+def test_regime_red_blocks_new_entries_but_never_exits():
+    st = HappyTwinsStrategy(universe=["AAA", "IDX"], regime_symbol="IDX", capital_parts=2)
+    assert st.trading == ["AAA"]                        # the index itself is never traded
+    ctx = _Ctx(["AAA", "IDX"])
+    ctx.fast["AAA"], ctx.slow["AAA"] = -1.0, 1.0
+    ctx.slow["IDX"] = -1.0                              # regime RED
+    _tick(st, ctx)
+    ctx.fast["AAA"] = 1.0
+    assert _tick(st, ctx) == []                         # a real flip, braked
+
+    ctx.positions.add("AAA"); ctx.units["AAA"] = 100    # now suppose we hold through it
+    ctx.slow["AAA"] = -1.0
+    sigs = _tick(st, ctx)
+    assert [s.action.name for s in sigs] == ["EXIT_ALL"]  # exits are NEVER braked
+
+
+def test_regime_green_or_missing_lets_entries_through():
+    st = HappyTwinsStrategy(universe=["AAA", "IDX"], regime_symbol="IDX", capital_parts=2)
+    ctx = _Ctx(["AAA", "IDX"])
+    ctx.fast["AAA"], ctx.slow["AAA"] = -1.0, 1.0
+    ctx.slow["IDX"] = 1.0                               # regime GREEN
+    _tick(st, ctx)
+    ctx.fast["AAA"] = 1.0
+    assert len(_tick(st, ctx)) == 1                     # entry flows
+
+    st2 = HappyTwinsStrategy(universe=["BBB", "IDX"], regime_symbol="IDX", capital_parts=2)
+    ctx2 = _Ctx(["BBB", "IDX"])                         # IDX never gets a slow value
+    ctx2.fast["BBB"], ctx2.slow["BBB"] = -1.0, 1.0
+    _tick(st2, ctx2)
+    ctx2.fast["BBB"] = 1.0
+    assert len(_tick(st2, ctx2)) == 1                   # missing data fails OPEN

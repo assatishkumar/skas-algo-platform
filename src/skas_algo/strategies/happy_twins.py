@@ -57,6 +57,12 @@ class HappyTwinsStrategy:
         # Point-in-time index membership ({effective_iso: [symbols]}, injected by the
         # backtest route's pit_universe mode). Gates ENTRIES only; exits never.
         membership: dict[str, list[str]] | None = None,
+        # THE EXPOSURE BRAKE: while this symbol's SLOW SuperTrend is red, no NEW part is
+        # deployed — existing positions still exit by their own rules, so the book bleeds
+        # out naturally in a bad regime instead of being liquidated. Use the universe's
+        # own index (e.g. "NIFTY 500"); it must be in the run's symbol list for data and
+        # is excluded from trading. None = no brake, the original behavior.
+        regime_symbol: str | None = None,
         **_ignored,
     ):
         self.universe = universe
@@ -67,10 +73,12 @@ class HappyTwinsStrategy:
         self.slow_multiplier = float(slow_multiplier)
         self.timeframe = str(timeframe)
         self.park_symbol = park_symbol or None
+        self.regime_symbol = regime_symbol or None
         self.capital_parts = max(0, int(capital_parts))
         self.gate = MembershipGate(membership)
-        # the twins trade everything EXCEPT the parking vehicle
-        self.trading = [s for s in universe if s != self.park_symbol]
+        # the twins trade everything EXCEPT the parking vehicle and the regime index
+        self.trading = [s for s in universe
+                        if s != self.park_symbol and s != (regime_symbol or None)]
         # prior slice's fast direction per symbol — what makes the entry a TRANSITION.
         self.prev_fast: dict[str, float] = {}
 
@@ -107,6 +115,12 @@ class HappyTwinsStrategy:
         running_cash = ctx.cash
 
         today_iso = ctx.today().isoformat() if hasattr(ctx, "today") else "9999-12-31"
+        # Regime read: green (or no brake / no data — fail OPEN, a data gap must not
+        # silently halt a momentum engine) → entries allowed.
+        regime_ok = True
+        if self.regime_symbol and self.regime_symbol in present:
+            rd = ctx.indicator(self.regime_symbol, "st_slow")
+            regime_ok = rd is None or rd > 0
         # Pass 1 — exits and flip detection (prev_fast updates for EVERY symbol).
         flips: list[tuple[float, str]] = []
         for sym in self.trading:
@@ -124,7 +138,7 @@ class HappyTwinsStrategy:
                     held.discard(sym)
             elif fast is not None:
                 prev = self.prev_fast.get(sym)
-                if prev is not None and prev < 0 and fast > 0 \
+                if prev is not None and prev < 0 and fast > 0 and regime_ok \
                         and self.gate.allows(sym, today_iso):
                     # Rank fresh flips by 20-day relative strength (close vs DMA) so a
                     # crowded day spends its free parts on the strongest breakouts.

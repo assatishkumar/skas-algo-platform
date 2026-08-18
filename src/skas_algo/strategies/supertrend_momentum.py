@@ -42,6 +42,9 @@ class SuperTrendMomentumStrategy:
         idle_return: float = 0.06,           # reporting-only: assumed annual yield on idle cash
         # Point-in-time index membership (pit_universe mode): entries only, never exits.
         membership: dict[str, list[str]] | None = None,
+        # EXPOSURE BRAKE: no NEW entries while this symbol's SuperTrend (same config as
+        # the run's) is red; exits unaffected. None = no brake (unchanged).
+        regime_symbol: str | None = None,
         **_ignored,
     ):
         self.universe = universe
@@ -58,6 +61,7 @@ class SuperTrendMomentumStrategy:
         self.idle_return = float(idle_return)
         from ._membership import MembershipGate
         self.gate = MembershipGate(membership)
+        self.regime_symbol = regime_symbol or None
         # Per-symbol state: last seen SuperTrend direction + whether we've booked the partial.
         self.prev_dir: dict[str, float] = {}
         self.partial_booked: dict[str, bool] = {}
@@ -156,9 +160,15 @@ class SuperTrendMomentumStrategy:
             return True
 
         today_iso = ctx.today().isoformat() if hasattr(ctx, "today") else "9999-12-31"
+        regime_ok = True
+        if self.regime_symbol and self.regime_symbol in present:
+            rd = ctx.supertrend_dir(self.regime_symbol)
+            regime_ok = rd is None or rd > 0     # fail OPEN on missing data
         for sym in present:
             if sym in held:
                 continue
+            if sym == self.regime_symbol or not regime_ok:
+                continue   # the index itself is never traded; red regime = no new parts
             if not self.gate.allows(sym, today_iso):
                 continue   # not an index member on this date (point-in-time universe)
             dir_now = ctx.supertrend_dir(sym)
