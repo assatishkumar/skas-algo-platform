@@ -148,7 +148,11 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   const [startDate, setStartDate] = useState("2015-01-01");
   const [endDate, setEndDate] = useState("2026-06-01");
   // Once the user hand-edits a date, stop auto-prefilling from cached coverage.
-  const [datesTouched, setDatesTouched] = useState(false);
+  // A REF, deliberately not state: the clone effect and the coverage effect can run in the
+  // SAME effects pass (react-query serves coverage from cache on mount), and a state guard
+  // read from the coverage effect's closure is still false mid-pass — so it overwrote the
+  // clone's dates every time (2026-08-18). A ref mutates synchronously across the pass.
+  const datesTouched = useRef(false);
   const [capital, setCapital] = useState(2500000);
   // INTRADAY basis: generic per-strategy params + the option store's coverage for date hints.
   const [iparams, setIparams] = useState<Record<string, number | string | boolean>>(
@@ -175,7 +179,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   useEffect(() => {
     if (prevBasis.current === basis) return;
     prevBasis.current = basis;
-    setDatesTouched(false);
+    datesTouched.current = false;
     if (!isIntraday) {
       setStartDate("2015-01-01");
       setEndDate("2026-06-01");
@@ -183,11 +187,11 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   }, [basis, isIntraday]);
   useEffect(() => {
     // Intraday: default the window to the store's coverage (until hand-edited).
-    if (isIntraday && barStore?.first_day && barStore?.last_day && !datesTouched) {
+    if (isIntraday && barStore?.first_day && barStore?.last_day && !datesTouched.current) {
       setStartDate(barStore.first_day);
       setEndDate(barStore.last_day);
     }
-  }, [isIntraday, barStore, datesTouched]);
+  }, [isIntraday, barStore]);
   const [parts, setParts] = useState(50);
   const [target, setTarget] = useState(6);
   // SST-FIFO tiered targets (tighten as lots accumulate): 1 / 2 / 3+ lots.
@@ -448,7 +452,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
     }
     if (typeof p.start_date === "string") setStartDate(p.start_date);
     if (typeof p.end_date === "string") setEndDate(p.end_date);
-    setDatesTouched(true);
+    datesTouched.current = true;
     if (clonePrefill.name) setName(`${clonePrefill.name} (copy)`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clonePrefill]);
@@ -591,10 +595,10 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
       api.dataCoverage(isOptions ? "DERIV" : "STOCK", isOptions ? underlying : undefined),
   });
   useEffect(() => {
-    if (datesTouched) return;
+    if (datesTouched.current) return;
     if (coverage?.start_date) setStartDate(coverage.start_date);
     if (coverage?.end_date) setEndDate(coverage.end_date);
-  }, [coverage, datesTouched]);
+  }, [coverage]);
 
   // Donchian basket: resolve the preset's cached members so the exclude/include inputs
   // can show a live effective count (and flag excludes that aren't in the basket).
@@ -1088,10 +1092,10 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
               </>
             )}
             <Field label="Start date">
-              <input type="date" className={inputClass} value={startDate} onChange={(e) => { setDatesTouched(true); setStartDate(e.target.value); }} />
+              <input type="date" className={inputClass} value={startDate} onChange={(e) => { datesTouched.current = true; setStartDate(e.target.value); }} />
             </Field>
             <Field label="End date">
-              <input type="date" className={inputClass} value={endDate} onChange={(e) => { setDatesTouched(true); setEndDate(e.target.value); }} />
+              <input type="date" className={inputClass} value={endDate} onChange={(e) => { datesTouched.current = true; setEndDate(e.target.value); }} />
             </Field>
           </div>
 
