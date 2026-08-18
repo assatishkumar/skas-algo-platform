@@ -59,6 +59,9 @@ class _Ctx:
     def equity(self):
         return 1_000_000.0
 
+    def rolling_mean(self, sym):
+        return self.price  # flat DMA → strength 0; ranking ties resolve by symbol
+
     def close(self, sym):
         return self.price
 
@@ -160,3 +163,38 @@ def test_no_park_symbol_means_the_old_behavior():
     ctx = _Ctx(["AAA"])
     ctx.fast["AAA"], ctx.slow["AAA"] = 1.0, 1.0
     assert _tick(st, ctx) == []               # idle cash just sits, as before
+
+
+# --------------------------------------------------------------- parts mode
+def test_parts_mode_caps_concurrent_names_and_takes_the_strongest_flips():
+    st = HappyTwinsStrategy(universe=["AAA", "BBB", "CCC"], capital_parts=2)
+    ctx = _Ctx(["AAA", "BBB", "CCC"])
+
+    class _RankCtx(type(ctx)):
+        pass
+    # give each symbol a different 20d strength: CCC strongest, AAA weakest
+    strengths = {"AAA": 105.0, "BBB": 102.0, "CCC": 98.0}   # rolling mean per symbol
+    ctx.rolling_mean = lambda sym: strengths[sym]           # close 100 vs mean → CCC best
+
+    for s_ in ("AAA", "BBB", "CCC"):
+        ctx.fast[s_], ctx.slow[s_] = -1.0, 1.0
+    _tick(st, ctx)                                          # arm all three transitions
+    for s_ in ("AAA", "BBB", "CCC"):
+        ctx.fast[s_] = 1.0
+    sigs = _tick(st, ctx)                                   # 3 flips, 2 free parts
+    assert [s.symbol for s in sigs] == ["CCC", "BBB"]       # strongest two win
+    assert all(s.quantity == 5_000 for s in sigs)           # equity/2 parts // price
+    ctx.fast["AAA"] = -1.0; _tick(st, ctx)
+    ctx.fast["AAA"] = 1.0
+    assert _tick(st, ctx) == []                             # book full: 2/2 parts
+
+
+def test_parts_zero_keeps_the_legacy_equal_split():
+    st = HappyTwinsStrategy(universe=["AAA", "BBB"])
+    ctx = _Ctx(["AAA", "BBB"])
+    ctx.fast["AAA"], ctx.slow["AAA"] = -1.0, 1.0
+    ctx.fast["BBB"], ctx.slow["BBB"] = 1.0, 1.0
+    _tick(st, ctx)
+    ctx.fast["AAA"] = 1.0
+    sigs = _tick(st, ctx)
+    assert [s.symbol for s in sigs] == ["AAA"] and sigs[0].quantity == 5_000  # equity/2 syms

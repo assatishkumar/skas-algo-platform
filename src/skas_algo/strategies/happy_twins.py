@@ -46,6 +46,12 @@ class HappyTwinsStrategy:
         # twins logic itself. Multi-symbol caveat: parking engages only when ALL trading
         # names are flat, and leftover cash after a partial entry stays cash.
         park_symbol: str | None = None,
+        # Portfolio mode (the supertrend_momentum mechanism): split equity into this many
+        # parts, deploy ONE part per green flip, hold at most this many names at once.
+        # When more stocks flip than there are free parts, the STRONGEST flips win —
+        # ranked by close vs the 20-day mean (the momentum proxy the view already
+        # computes). 0 = the original equal-split-across-the-whole-universe behavior.
+        capital_parts: int = 0,
         **_ignored,
     ):
         self.universe = universe
@@ -56,6 +62,7 @@ class HappyTwinsStrategy:
         self.slow_multiplier = float(slow_multiplier)
         self.timeframe = str(timeframe)
         self.park_symbol = park_symbol or None
+        self.capital_parts = max(0, int(capital_parts))
         # the twins trade everything EXCEPT the parking vehicle
         self.trading = [s for s in universe if s != self.park_symbol]
         # prior slice's fast direction per symbol — what makes the entry a TRANSITION.
@@ -93,6 +100,8 @@ class HappyTwinsStrategy:
         # (signal order below), so entries may spend unparked/exit proceeds.
         running_cash = ctx.cash
 
+        # Pass 1 — exits and flip detection (prev_fast updates for EVERY symbol).
+        flips: list[tuple[float, str]] = []
         for sym in self.trading:
             if sym not in present:
                 continue
@@ -109,24 +118,35 @@ class HappyTwinsStrategy:
             elif fast is not None:
                 prev = self.prev_fast.get(sym)
                 if prev is not None and prev < 0 and fast > 0:
-                    if park_held and park in present:
-                        # UNPARK first — its sale funds the entry in this same slice.
-                        exits.insert(0, Signal(symbol=park, action=SignalAction.EXIT_ALL))
-                        running_cash += (sum(lot.units for lot in ctx.lots(park))
-                                         * ctx.close(park))
-                        park_held = False
-                    # ENTER on the green FLIP only. Equal slot of current equity;
-                    # skip (never shrink) when cash is short.
-                    slot = ctx.equity() / max(len(self.trading), 1)
-                    close = ctx.close(sym)
-                    units = int(slot // close) if close > 0 else 0
-                    if units > 0 and running_cash >= units * close:
-                        running_cash -= units * close
-                        entries.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG,
-                                              quantity=units))
-                        held.add(sym)
+                    # Rank fresh flips by 20-day relative strength (close vs DMA) so a
+                    # crowded day spends its free parts on the strongest breakouts.
+                    dma = ctx.rolling_mean(sym)
+                    strength = (ctx.close(sym) / dma - 1.0) if dma else 0.0
+                    flips.append((strength, sym))
             if fast is not None:
                 self.prev_fast[sym] = float(fast)
+
+        # Pass 2 — entries, strongest first, capped by free parts (portfolio mode).
+        parts = self.capital_parts
+        capacity = (parts - len(held & set(self.trading))) if parts else len(flips)
+        slot_div = parts if parts else max(len(self.trading), 1)
+        for _strength, sym in sorted(flips, reverse=True):
+            if capacity <= 0:
+                break
+            if park_held and park in present:
+                # UNPARK first — its sale funds the entry in this same slice.
+                exits.insert(0, Signal(symbol=park, action=SignalAction.EXIT_ALL))
+                running_cash += sum(lot.units for lot in ctx.lots(park)) * ctx.close(park)
+                park_held = False
+            slot = ctx.equity() / slot_div
+            close = ctx.close(sym)
+            units = int(slot // close) if close > 0 else 0
+            if units > 0 and running_cash >= units * close:
+                running_cash -= units * close
+                entries.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG,
+                                      quantity=units))
+                held.add(sym)
+                capacity -= 1
 
         # PARK: every trading name flat and money sitting idle → hold gold instead.
         if park and park in present and not park_held and running_cash > 0 \
