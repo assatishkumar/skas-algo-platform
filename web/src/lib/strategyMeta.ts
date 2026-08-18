@@ -58,6 +58,7 @@ const CATEGORY_OF: Record<string, LiveCategoryId> = {
   iron_fly_monthly: "positional",
   supertrend_momentum: "equity",
   gap_reversal: "equity",
+  happy_twins: "equity",
   nifty_shop: "equity",
   custom_equity: "equity",
   sst_lifo: "equity",
@@ -84,6 +85,7 @@ export const STRATEGY_NAMES: Record<string, string> = {
   supertrend_momentum: "SuperTrend Momentum",
   nifty_shop: "Nifty Shop (dip buyer)",
   gap_reversal: "Gap Reversal",
+  happy_twins: "Happy Twins (dual SuperTrend, weekly)",
   custom_equity: "Custom Equity Trade",
   // options — positional / overnight
   short_premium: "Short Premium (strangle)",

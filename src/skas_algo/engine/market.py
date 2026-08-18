@@ -112,6 +112,20 @@ class MarketView:
             series["rsi"] = rsi(src, int(cfg.get("period", 10)))
         if "gap_pct" in self._ind_cfg and "open" in df.columns:
             series["gap_pct"] = df["open"] / close.shift(1) - 1.0
+        # Named SuperTrend series ({"kind": "supertrend", period, multiplier, timeframe}) —
+        # any number of them, so a strategy can run TWINS (fast entry / slow exit) or more.
+        # Reuses the same resample+ffill engine as the single-ST precompute: a weekly flip
+        # becomes visible on the first trading day after the bar closes, no lookahead.
+        for name, cfg in self._ind_cfg.items():
+            if isinstance(cfg, dict) and cfg.get("kind") == "supertrend":
+                from skas_algo.engine.indicators.supertrend import supertrend_direction
+
+                series[name] = supertrend_direction(
+                    df.reset_index(),
+                    period=int(cfg.get("period", 10)),
+                    multiplier=float(cfg.get("multiplier", 3.0)),
+                    timeframe=str(cfg.get("timeframe", "daily")),
+                )
         out: dict[pd.Timestamp, dict[str, float]] = {}
         for name, s in series.items():
             for ts, v in s.items():
