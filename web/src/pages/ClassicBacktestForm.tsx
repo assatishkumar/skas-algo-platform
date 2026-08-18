@@ -1,3 +1,4 @@
+import StrategySelect from "../components/StrategySelect";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -988,11 +989,8 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
           )}
           <div className="grid md:grid-cols-2 gap-4">
             <Field label="Strategy">
-              <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>
-                {strategies.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
+              <StrategySelect value={strategyId} onChange={setStrategyId}
+                ids={strategies} className={inputClass} />
             </Field>
             <Field label="Data">
               {/* Which candles drive the run. A strategy enables only the bases it supports —

@@ -64,7 +64,80 @@ const CATEGORY_OF: Record<string, LiveCategoryId> = {
   sst_fifo: "equity",
   sst_weekly: "equity",
   sst_weekly_fifo: "equity",
+  // additions since the handoff (deploy pages + pickers group off this same map)
+  asymmetric_premium_intra: "intraday",
+  broker_smoke_test: "intraday",          // a 60-second self-stopping probe
+  straddle_btst: "positional",            // holds OVERNIGHT — "intraday" would lie on the blurb
+  double_diagonal_calendar: "positional",
+  put_condor: "positional",
+  donchian_strangle_bt: "positional",
 };
+
+/** Human names for the pickers. The raw ids stay the API/URL currency everywhere else —
+ *  this is display only, so an unmapped id degrades to its id, never breaks. */
+export const STRATEGY_NAMES: Record<string, string> = {
+  // equity
+  sst_lifo: "SST — LIFO",
+  sst_fifo: "SST — FIFO",
+  sst_weekly: "SST Weekly",
+  sst_weekly_fifo: "SST Weekly — FIFO",
+  supertrend_momentum: "SuperTrend Momentum",
+  nifty_shop: "Nifty Shop (dip buyer)",
+  gap_reversal: "Gap Reversal",
+  custom_equity: "Custom Equity Trade",
+  // options — positional / overnight
+  short_premium: "Short Premium (strangle)",
+  call_ratio_monthly: "Call Ratio — Monthly",
+  put_ratio_monthly: "Put Ratio — Monthly",
+  batman_ratio_monthly: "Batman Ratio — Monthly",
+  hni_weekly: "HNI Weekly (1-3-2)",
+  staggered_covered_call: "Staggered Covered Call",
+  custom_options: "Custom Options (builder)",
+  "21_ema_momentum": "21-EMA Momentum Spreads",
+  delta_neutral_monthly: "Delta-Neutral — Monthly",
+  iron_fly_monthly: "Iron Fly — Monthly",
+  double_diagonal_calendar: "Double Diagonal Calendar",
+  put_condor: "Put Condor — Monthly (defined risk)",
+  donchian_strangle_monthly: "Donchian Basket Strangle",
+  donchian_strangle_bt: "Donchian Strangle — Backtest",
+  straddle_btst: "Straddle BTST (overnight long)",
+  // options — intraday
+  intraday_straddle: "Intraday Straddle",
+  weekly_intraday_straddle: "Weekly VWAP Straddle",
+  call_put_ratio_expiry: "Call/Put Ratio — Expiry Day",
+  momentum_theta_gainer_intra: "Momentum Theta (15-min ST)",
+  intraday_strangle_combo: "Strangle/Straddle Combo (per-leg re-entry)",
+  asymmetric_premium_intra: "Asymmetric Premium (two expiries)",
+  broker_smoke_test: "Broker Smoke Test",
+};
+
+export function strategyName(id: string): string {
+  return STRATEGY_NAMES[id] ?? id;
+}
+
+const GROUP_LABEL: Record<LiveCategoryId, string> = {
+  intraday: "Options — intraday",
+  positional: "Options — positional",
+  equity: "Equity",
+};
+
+/** Group a raw id list into <optgroup> data: intraday options first (the daily drivers),
+ *  then positional, then equity — alphabetical by display name inside each group. */
+export function groupedStrategyOptions(ids: string[]):
+    { label: string; options: { value: string; label: string }[] }[] {
+  const buckets: Record<LiveCategoryId, { value: string; label: string }[]> = {
+    intraday: [], positional: [], equity: [],
+  };
+  for (const id of ids) {
+    buckets[liveCategoryOf(id, "DERIV")].push({ value: id, label: strategyName(id) });
+  }
+  return (["intraday", "positional", "equity"] as LiveCategoryId[])
+    .filter((c) => buckets[c].length)
+    .map((c) => ({
+      label: GROUP_LABEL[c],
+      options: buckets[c].sort((a, b) => a.label.localeCompare(b.label)),
+    }));
+}
 
 export function liveCategoryOf(strategyId: string, instrumentClass?: string | null): LiveCategoryId {
   return CATEGORY_OF[strategyId] ?? (instrumentClass === "DERIV" ? "positional" : "equity");

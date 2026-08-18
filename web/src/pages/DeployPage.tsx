@@ -1,3 +1,4 @@
+import StrategySelect from "../components/StrategySelect";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -150,11 +151,8 @@ export default function DeployPage() {
           <div className="grid md:grid-cols-3 gap-3 mb-3">
             <label className="block">
               <span className={lbl}>Strategy</span>
-              <select className={inputClass} value={strategyId} onChange={(e) => setStrategyId(e.target.value)}>
-                {(strategyData?.strategies ?? ["sst_lifo"]).map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
+              <StrategySelect value={strategyId} onChange={setStrategyId}
+                ids={strategyData?.strategies ?? ["sst_lifo"]} className={inputClass} />
             </label>
             {!isOptions && (
               <>

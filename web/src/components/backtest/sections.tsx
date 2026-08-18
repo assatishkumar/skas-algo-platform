@@ -1,3 +1,4 @@
+import StrategySelect from "../StrategySelect";
 import { formatInr } from "../../lib/format";
 import type { Basis, FieldSpec, StrategyFormSpec } from "../../lib/backtestV2/registry";
 import { TRAIL_UI, visibleFields } from "../../lib/backtestV2/registry";
@@ -74,8 +75,8 @@ export function BasicsSection({ name, notes, onName, onNotes, strategyId, strate
           <V2Text value={notes} onChange={onNotes} placeholder="what you're testing / why" />
         </V2Field>
         <V2Field label="STRATEGY">
-          <V2Select value={strategyId} onChange={onStrategy}
-            options={strategies.map((s) => ({ value: s, label: s }))} />
+          <StrategySelect value={strategyId} onChange={onStrategy} ids={strategies}
+            className={v2InputClass} />
         </V2Field>
         <V2Field label="DATA"
           hint={spec.bases.length === 1
