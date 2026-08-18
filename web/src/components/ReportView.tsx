@@ -30,17 +30,24 @@ function EquityChart({ report, runId, defaultBenchmark }: { report: Report; runI
   const hasGross = (report.equity_curve ?? []).some((p) => p.gross_equity != null);
 
   const { data: benchNames } = useQuery({ queryKey: ["benchmarks"], queryFn: api.benchmarks });
+  // Downsample FIRST: the preview endpoint takes the drawn x-axis dates, so the overlay
+  // aligns with the points actually rendered and the payload stays ≤400 dates.
+  const sampled = useMemo(() => downsample(report.equity_curve ?? []), [report.equity_curve]);
+  const capital0 = sampled[0]?.equity ?? 0;
   const { data: bench } = useQuery({
-    queryKey: ["benchmark", runId, index],
-    queryFn: () => api.runBenchmark(runId!, index),
-    enabled: runId != null && index !== "none",
+    // A preview has no run id — key on the curve's shape instead so a re-run refetches.
+    queryKey: ["benchmark", runId ?? `preview-${sampled[0]?.date}-${sampled.length}`, index],
+    queryFn: () =>
+      runId != null
+        ? api.runBenchmark(runId, index)
+        : api.benchmarkSeries(index, sampled.map((p) => p.date), capital0),
+    enabled: index !== "none" && sampled.length > 0,
   });
 
   const data = useMemo(() => {
-    const curve = downsample(report.equity_curve ?? []);
     const byDate = new Map((bench?.points ?? []).map((p) => [p.date, p.value]));
-    return curve.map((p) => ({ ...p, benchmark: byDate.get(p.date) ?? null }));
-  }, [report.equity_curve, bench]);
+    return sampled.map((p) => ({ ...p, benchmark: byDate.get(p.date) ?? null }));
+  }, [sampled, bench]);
 
   if (data.length === 0) return null;
   const options = ["none", ...(benchNames?.benchmarks ?? ["NIFTY 50", "NIFTY 100", "NIFTY 200"])];
@@ -49,7 +56,7 @@ function EquityChart({ report, runId, defaultBenchmark }: { report: Report; runI
     <Card>
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm font-medium text-slate-300">Equity curve</div>
-        {runId != null && (
+        {(
           <label className="text-xs text-slate-400 flex items-center gap-1.5">
             benchmark
             <select
@@ -90,7 +97,7 @@ function EquityChart({ report, runId, defaultBenchmark }: { report: Report; runI
               strokeWidth={1.5}
             />
           )}
-          {runId != null && index !== "none" && (
+          {index !== "none" && (
             <Line
               type="monotone"
               dataKey="benchmark"

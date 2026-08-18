@@ -26,6 +26,8 @@ from skas_algo.db.enums import InstrumentClass, TradingMode
 from skas_algo.db.models import Algo, AlgoRun, Order, StrategyTemplate
 from skas_algo.engine.market import PriceLoader
 from skas_algo.services.backtest import persist_backtest, run_backtest
+from pydantic import BaseModel
+
 from skas_algo.services.benchmark import BENCHMARK_INDICES, benchmark_series
 from skas_algo.services.runs import delete_algo_cascade
 from skas_algo.strategies.registry import available
@@ -745,6 +747,31 @@ def get_run_trades_csv(run_id: int, db: Session = Depends(get_db)) -> Response:
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="run_{run_id}_trades.csv"'},
     )
+
+
+class BenchmarkSeriesInput(BaseModel):
+    """A benchmark overlay for an UNSAVED backtest preview: the helper only ever needed the
+    equity DATES and a starting capital, not a run row — the run route below is just the
+    saved-run convenience wrapper. ``dates`` is the (already downsampled) chart x-axis, so
+    the payload stays small and the overlay aligns with the points actually drawn."""
+
+    index: str
+    dates: list[str]
+    capital: float
+
+
+@router.post("/benchmark-series")
+def post_benchmark_series(
+    body: BenchmarkSeriesInput,
+    loader: PriceLoader = Depends(get_price_loader),
+) -> dict:
+    if body.index not in BENCHMARK_INDICES:
+        raise HTTPException(status_code=400, detail=f"unknown index {body.index!r}")
+    try:
+        points = benchmark_series(loader, body.index, body.dates, body.capital)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"index": body.index, "points": points}
 
 
 @router.get("/runs/{run_id}/benchmark")

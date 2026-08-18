@@ -203,6 +203,11 @@ export const api = {
   dataSymbols: () => request<DataSymbol[]>("/data/symbols"),
   dataSymbol: (sym: string) =>
     request<DataSymbolDetail>(`/data/symbols/${encodeURIComponent(sym)}`),
+  // Benchmark overlay for an UNSAVED preview — dates are the chart's own x-axis.
+  benchmarkSeries: (index: string, dates: string[], capital: number) =>
+    request<{ index: string; points: BenchmarkPoint[] }>(`/benchmark-series`, {
+      method: "POST", body: JSON.stringify({ index, dates, capital }),
+    }),
   runBenchmark: (id: number, index: string) =>
     request<{ index: string; points: BenchmarkPoint[] }>(
       `/runs/${id}/benchmark?index=${encodeURIComponent(index)}`,
