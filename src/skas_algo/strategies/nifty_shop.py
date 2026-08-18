@@ -45,6 +45,12 @@ class NiftyShopStrategy:
         avg_down_pct: float = 0.03,       # Case 2: average a name down >3% from last entry
         max_avg_per_day: int = 1,         # Case 2: averaging trades allowed per day
         lookback: int | None = None,      # DMA window; defaults to the run's lookback (20)
+        # Point-in-time universe: {effective_iso: [symbols]} (semi-annual index rebalances).
+        # When set, the daily SCAN only considers names that were index members AS OF that
+        # day — entries and averaging follow the index of the time; EXITS are never gated
+        # (a name that left the index still gets sold at its target). None = scan the whole
+        # run universe, exactly the old behavior.
+        membership: dict[str, list[str]] | None = None,
         **_ignored,                       # tolerate SST-style params from shared forms
     ):
         self.universe = universe
@@ -56,6 +62,9 @@ class NiftyShopStrategy:
         self.avg_down_pct = float(avg_down_pct)
         self.max_avg_per_day = int(max_avg_per_day)
         self.lookback = lookback  # informational; the market view's window is authoritative
+        self.membership = ({k: frozenset(v) for k, v in sorted(membership.items())}
+                           if membership else None)
+        self._member_keys = sorted(self.membership) if self.membership else []
 
     # Stateless — every decision is derived from the portfolio + market each slice.
     def initial_state(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -92,8 +101,11 @@ class NiftyShopStrategy:
                 running_cash += units * close
 
         # --- 2) Selection: the N names furthest BELOW their DMA ---
+        members = self._members_asof(ctx.today().isoformat()) if self.membership else None
         scored: list[tuple[float, str, float]] = []
         for sym in present:
+            if members is not None and sym not in members:
+                continue  # not an index member on this date (point-in-time universe)
             dma = ctx.rolling_mean(sym)
             if not dma or dma <= 0:
                 continue
@@ -142,6 +154,18 @@ class NiftyShopStrategy:
                 _buy(sym, close)
 
         return signals
+
+    def _members_asof(self, today_iso: str) -> frozenset[str]:
+        """Members per the latest rebalance effective ON OR BEFORE today; dates before the
+        first table entry use the first list (better than an empty scan, and said so in
+        the membership JSON's caveats)."""
+        chosen = self._member_keys[0]
+        for k in self._member_keys:
+            if k <= today_iso:
+                chosen = k
+            else:
+                break
+        return self.membership[chosen]
 
     @staticmethod
     def _last_entry_price(ctx: AlgoContext, sym: str) -> float | None:

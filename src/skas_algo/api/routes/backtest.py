@@ -124,6 +124,16 @@ def _resolve_universe(req: BacktestRequest, avail: set[str]) -> None:
             req.symbols = universes.resolve(req.universe, avail)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # Point-in-time mode (params.pit_universe, momentum-50 only): trade the UNION of
+        # every name that was ever a member, and hand the strategy the rebalance table so
+        # its daily scan follows the index of the time — the survivorship-bias fix.
+        if req.universe == "nifty500mom50" and req.params.get("pit_universe"):
+            from skas_algo.data import mom50_membership
+
+            req.symbols = [s for s in mom50_membership.union_members()
+                           if avail is None or s in avail]
+            req.params = {**req.params, "membership": mom50_membership.membership_table()}
+            req.params.pop("pit_universe", None)
     if not req.symbols:
         raise HTTPException(status_code=422, detail="symbols or a valid universe required")
 

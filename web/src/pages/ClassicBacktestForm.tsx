@@ -141,6 +141,9 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
   const [universe, setUniverse] = useState("nifty50"); // "" = Custom
+  // Momentum-50 only: trade the union of every name EVER in the index, with the strategy's
+  // daily scan following the rebalance table — the survivorship-bias fix for backtests.
+  const [pitUniverse, setPitUniverse] = useState(true);
   const [symbols, setSymbols] = useState("RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK");
   const [startDate, setStartDate] = useState("2015-01-01");
   const [endDate, setEndDate] = useState("2026-06-01");
@@ -810,6 +813,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
             num_candidates: nsCandidates,
             new_buys_per_day: nsNewBuys,
             avg_down_pct: nsAvgDown / 100,
+            ...(universe === "nifty500mom50" && pitUniverse ? { pit_universe: true } : {}),
           }
         : isGapReversal
         ? {
@@ -1060,6 +1064,15 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                     <option value="">Custom</option>
                   </select>
                 </Field>
+                {universe === "nifty500mom50" && (
+                  <label className="flex items-center gap-2 text-xs text-slate-400 -mt-1">
+                    <input type="checkbox" checked={pitUniverse}
+                      onChange={(e) => setPitUniverse(e.target.checked)} />
+                    Point-in-time constituents (2016→today; official lists where NSE
+                    published them, methodology replication elsewhere — avoids
+                    survivorship bias)
+                  </label>
+                )}
                 {universe === "" ? (
                   <Field label="Symbols (comma-separated)">
                     <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
