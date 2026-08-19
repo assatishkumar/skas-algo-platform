@@ -407,30 +407,18 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
         if nxt is None:
             return []
 
-        # ---- validate EVERYTHING before mutating (all-or-nothing roll) ----
-        # 1. The buy legs move out FIRST when the sells would land on their expiry.
-        buy_moves: list[tuple[dict, date, float, int]] = []  # (old leg, new expiry, ltp, lot)
+        # The buy leg is NEVER rolled (owner rule 2026-08-19): when the sells would land
+        # on its expiry the CYCLE is over — close everything and clear the month latch so
+        # a FRESH cycle (new FV read, new premium hunt) opens the next session. This also
+        # structurally bounds a losing cycle at ~one buy-expiry month, where the old
+        # buy-roll let one drag on for 46+ weekly rolls (run #269's 198-day cycle).
         if self.buy_expiry and nxt.isoformat() == self.buy_expiry:
-            be = date.fromisoformat(self.buy_expiry)
-            ny, nm = (be.year + 1, 1) if be.month == 12 else (be.year, be.month + 1)
-            new_buy = self._monthly_of(expiries, ny, nm)
-            if new_buy is None:
-                return []  # next monthly not listed yet → defer, retry next tick
-            rows_nb = self._chain_rows(ctx, new_buy.isoformat())
-            if rows_nb is None:
-                return []
-            try:
-                nb_lot = lot_size_for(self.underlying, new_buy, overrides=self.lot_overrides)
-            except KeyError:
-                return []
-            for leg in [x for x in self.legs if x["dir"] > 0]:
-                k = float(leg["symbol"].split("|")[2])
-                prem = self._ltp((rows_nb.get(k) or {}).get(leg["right"].lower()))
-                if prem is None or not self._has_mark(ctx, leg["symbol"]):
-                    return []  # same strike must price on the new monthly, old must mark
-                buy_moves.append((leg, new_buy, prem, nb_lot))
+            sigs = self._exit_all(live, "fvc_cycle_end")
+            self.entered_month = None
+            return sigs
 
-        # 2. The sold specs re-sell at the SAME strikes on the next weekly.
+        # ---- validate EVERYTHING before mutating (all-or-nothing roll) ----
+        # The sold specs re-sell at the SAME strikes on the next weekly.
         rows_new = self._chain_rows(ctx, nxt.isoformat())
         if rows_new is None:
             return []
@@ -457,21 +445,6 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
         # ---- mutate + emit (exits first; the new legs land in the same decision) ----
         exits: list[Signal] = []
         enters: list[Signal] = []
-        for leg, new_buy, prem, nb_lot in buy_moves:
-            mark = ctx.close(leg["symbol"])
-            self.realized_rolls += (mark - leg["entry"]) * leg["units"] * leg["dir"]
-            new_leg = self._leg(
-                new_buy, float(leg["symbol"].split("|")[2]), leg["right"], 1,
-                leg["units"], prem, nb_lot,
-            )
-            exits.append(Signal(leg["symbol"], SignalAction.EXIT_ALL, reason="fvc_buy_roll"))
-            enters.append(
-                Signal(new_leg["symbol"], SignalAction.ENTER_LONG,
-                       quantity=int(new_leg["units"]), reason="fvc_buy_roll",
-                       meta={"multiplier": 1})
-            )
-            self.legs = [x for x in self.legs if x["symbol"] != leg["symbol"]]
-            self.legs.append(new_leg)
         for old, spec, prem in sold_moves:
             if old is not None:
                 mark = ctx.close(old["symbol"])
@@ -488,9 +461,6 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
             self.legs.append(new_leg)
 
         self.sold_expiry = nxt.isoformat()
-        if buy_moves:
-            self.buy_expiry = buy_moves[0][1].isoformat()
-            self.cycle_expiry = self.buy_expiry
         self.roll_count += 1
         self.pending_resell = False
         spot = self._index_spot(ctx)
@@ -524,7 +494,10 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
             f"No target by the sold weekly's expiry → roll both sells to the next weekly "
             f"at the same strikes ({self.roll_time.strftime('%H:%M')} on expiry day)"
         )
-        rules.append("Sells would land on the buy expiry → buy legs move to the next month first")
+        rules.append(
+            "Sells about to land on the buy expiry → close the WHOLE cycle; a fresh one "
+            "opens the next session (the buy leg is never rolled)"
+        )
         if self.max_rolls > 0:
             rules.append(f"Exit all after {self.max_rolls} rolls")
         rules.append("After any exit: flat until the next calendar month's entry")

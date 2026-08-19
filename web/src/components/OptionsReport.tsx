@@ -41,7 +41,7 @@ const REASON_FAMILY: Record<string, "banked" | "stopped" | "time" | "adjust" | "
   roll: "adjust", reverse: "adjust", flip: "adjust", cc_rolldown_close: "adjust",
   pc_adjust_long: "adjust", pc_adjust_short: "adjust",
   apx_adjust: "adjust", apx_adjust_open: "adjust",
-  fvc_roll: "adjust", fvc_buy_roll: "adjust", fvc_max_rolls: "time",
+  fvc_roll: "adjust", fvc_buy_roll: "adjust", fvc_max_rolls: "time", fvc_cycle_end: "time",
   mixed: "adjust",
   manual: "manual",
 };
@@ -68,7 +68,8 @@ const REASON_LABEL: Record<string, string> = {
   isc_mtm_stop: "Overall MTM stop (Rs/lot)", isc_eod: "End of day (15:25)",
   apx_stop: "Combined points stop", apx_adjust: "Cheap leg rolled", apx_eod: "End of day",
   fvc_roll: "Sells rolled to next weekly", fvc_buy_roll: "Buy legs moved a month out",
-  fvc_max_rolls: "Roll cap reached",
+  fvc_max_rolls: "Roll cap reached", fvc_cycle_end: "Cycle end (buy expiry reached)",
+  open: "Open — still holding",
 };
 export function reasonColor(reason: string): string {
   return FAMILY_COLOR[REASON_FAMILY[reason]] ?? "#64748b";

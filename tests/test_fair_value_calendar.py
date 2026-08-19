@@ -277,25 +277,24 @@ def test_roll_day_resells_same_strikes_on_next_weekly():
                for leg in st.legs)
 
 
-def test_roll_collision_moves_the_buy_leg_first():
-    """Sold 8/18 rolling into 8/25 — the buy expiry: the 3 longs move to the Sep monthly
-    (same strike) in the SAME decision, exits before enters."""
+def test_collision_closes_the_cycle_and_a_fresh_one_opens():
+    """Sold 8/18 rolling into 8/25 — the buy expiry: the buy leg is NEVER rolled (owner
+    rule) — everything closes, the month latch clears, and the NEXT session hunts a
+    fresh cycle (sells on the Aug monthly, buys on the Sep monthly)."""
     st, ctx = setup()
     enter(st, ctx, at(date(2026, 8, 13), 10))            # sold W3, buy AUG_MON
     assert st.sold_expiry == W3.isoformat() and st.buy_expiry == AUG_MON.isoformat()
     out = tick(st, ctx, at(W3, 15, 0))
-    by_reason: dict[str, list] = {}
-    for s in out:
-        by_reason.setdefault(s.reason, []).append(s)
-    assert len(by_reason["fvc_buy_roll"]) == 2           # exit + re-enter the long
-    assert len(by_reason["fvc_roll"]) == 4
-    new_long = next(s for s in by_reason["fvc_buy_roll"] if s.action.name == "ENTER_LONG")
-    assert expiry(new_long.symbol) == SEP_MON.isoformat()
-    assert strike(new_long.symbol) == 24500.0            # same strike, a month out
-    assert st.buy_expiry == SEP_MON.isoformat()
-    assert st.sold_expiry == AUG_MON.isoformat()
-    names = [s.action.name for s in out]
-    assert names.index("ENTER_LONG") > names.index("EXIT_ALL")
+    assert [s.action.name for s in out] == ["EXIT_ALL"] * 3
+    assert all(s.reason == "fvc_cycle_end" for s in out)
+    assert st.legs == [] and st.entered_month is None    # month latch cleared
+    fresh = tick(st, ctx, at(date(2026, 8, 19), 9, 45))
+    assert len(fresh) == 3                               # a NEW cycle, immediately
+    shorts = {expiry(s.symbol) for s in fresh if s.action.name == "ENTER_SHORT"}
+    long = next(s for s in fresh if s.action.name == "ENTER_LONG")
+    assert shorts == {AUG_MON.isoformat()}               # ≥4 DTE from 8/19 → the monthly
+    assert expiry(long.symbol) == SEP_MON.isoformat()    # buy beyond the sold, next month
+    assert st.roll_count == 0                            # fresh cycle, fresh counters
 
 
 def test_max_rolls_closes_the_cycle():

@@ -736,6 +736,58 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
         equity_curve.append({"date": day.isoformat(),
                              "equity": round(capital + realized + unreal, 2)})
 
+    if episode is not None and ctx.positions:
+        # The window ended mid-cycle — emit the open episode as a live=True row so the
+        # cycles table and the P&L tiles reconcile (run #269: the tiles counted its
+        # banked roll losses while the closed-cycles table couldn't show it, reading as
+        # a phantom ₹-88k). Aggregates below stay CLOSED-only; this row is display truth.
+        open_legs, unreal = [], 0.0
+        for sym, pos in ctx.positions.items():
+            try:
+                mark = market.close(sym)
+            except KeyError:
+                mark = pos["entry"]
+            unreal += (mark - pos["entry"]) * pos["units"] * pos["dir"]
+            _u2, e_iso, strike_s, right = sym.split("|")
+            try:
+                per_lot = lot_size_for(_u2, date.fromisoformat(e_iso),
+                                       overrides=lot_overrides)
+            except KeyError:
+                per_lot = 0
+            open_legs.append({"symbol": sym, "underlying": _u2, "strike": float(strike_s),
+                              "right": right,
+                              "side": "short" if pos["dir"] < 0 else "long",
+                              "expiry": e_iso, "entry_date": pos["entered"],
+                              "entry_premium": pos["entry"], "exit_date": None,
+                              "exit_price": None, "exit_action": None, "exit_reason": "",
+                              "units": pos["units"],
+                              "lots": int(pos["units"] // per_lot) if per_lot else 0,
+                              "multiplier": 1, "holding_days": None, "pnl": 0.0})
+        legs_all = episode["closed"] + open_legs
+        closed_pnl = sum(x["pnl"] for x in episode["closed"])
+        last_iso = equity_curve[-1]["date"] if equity_curve else episode["entry_minute"][:10]
+        e_spot = episode.get("entry_spot")
+        x_spot = market.index_spot(u)
+        cycles.append({
+            "underlying": u, "entry_date": episode["entry_minute"],
+            "expiry": max(x["expiry"] for x in legs_all),
+            "legs": [x["symbol"] for x in legs_all],
+            "legs_detail": legs_all,
+            "premium_collected": round(episode["premium"], 2),
+            "realized_pnl": round(closed_pnl, 2),
+            "net_pnl": round(closed_pnl + unreal, 2),
+            "holding_days": _holding_days(episode["entry_minute"], f"{last_iso} 15:30"),
+            "exit_date": None,
+            "daily_pnl": episode.get("daily", []),
+            "underlying_entry": e_spot,
+            "underlying_exit": x_spot,
+            "underlying_pct": (100.0 * (x_spot - e_spot) / e_spot
+                               if e_spot and x_spot else None),
+            "exit_reason": "open",
+            "live": True,
+            "ce": None, "pe": None,
+        })
+
     options = _options_report(cycles, positions, charges_bd, margin_by_day,
                               open_premium_by_day, realized)
     # Spot/VIX context for the cycles table + payoff markers. enrich_with_market fills
@@ -773,25 +825,28 @@ def _options_report(cycles: list[dict], positions: list[dict], charges_bd: dict,
     """The FULL options sub-report ReportView/OptionsReport render (types.OptionsReportData).
     Its mere presence flips ReportView into the options layout, so every non-optional
     summary field must exist (CLAUDE.md footgun: absent-or-complete, never partial)."""
-    collected = sum(c["premium_collected"] for c in cycles)
+    # Aggregates run over CLOSED cycles only — an open (live=True) window-end row sits
+    # in the table but must not tilt win-rate / capture / per-expiry stats mid-flight.
+    done = [c for c in cycles if not c.get("live")]
+    collected = sum(c["premium_collected"] for c in done)
     # The replay's per-leg pnl is already NET of charges (unlike the EOD engine, whose
     # positions carry gross realized_pnl). Re-gross it so the two bases mean the same
     # thing: "captured" is pre-charge, "net_after_charges" is post — otherwise the report
     # showed the same figure twice with a charges line between them (2026-08-07).
     net = round(realized, 2)
     captured = round(net + charges_bd["total"], 2)
-    wins = sum(1 for c in cycles if c["realized_pnl"] > 0)
+    wins = sum(1 for c in done if c["realized_pnl"] > 0)
     margins = sorted(margin_by_day.values())
     max_margin = margins[-1] if margins else 0.0
     exit_reasons: dict[str, dict] = {}
-    for c in cycles:
+    for c in done:
         s = exit_reasons.setdefault(c["exit_reason"] or "other",
                                     {"count": 0, "pnl": 0.0, "wins": 0, "losses": 0})
         s["count"] += 1
         s["pnl"] = round(s["pnl"] + c["realized_pnl"], 2)
         s["wins" if c["realized_pnl"] > 0 else "losses"] += 1
     by_expiry: dict[str, dict] = {}
-    for c in cycles:
+    for c in done:
         e = by_expiry.setdefault(c["expiry"], {"expiry": c["expiry"], "entries": 0,
                                                "premium_collected": 0.0, "realized_pnl": 0.0})
         e["entries"] += 1
@@ -807,18 +862,18 @@ def _options_report(cycles: list[dict], positions: list[dict], charges_bd: dict,
             "total_premium_captured": captured,
             "premium_capture_pct": (round(100.0 * captured / collected, 1)
                                     if collected else 0.0),
-            "avg_holding_days": round(sum(c["holding_days"] for c in cycles) / len(cycles), 2)
-            if cycles else 0.0,
+            "avg_holding_days": round(sum(c["holding_days"] for c in done) / len(done), 2)
+            if done else 0.0,
             "num_positions": len(positions),
-            "num_cycles": len(cycles),
+            "num_cycles": len(done),
             "winning_cycles": wins,
-            "win_rate_pct": round(100.0 * wins / len(cycles), 1) if cycles else 0.0,
+            "win_rate_pct": round(100.0 * wins / len(done), 1) if done else 0.0,
             "max_margin_used": round(max_margin, 2),
             "avg_margin_used": round(sum(margins) / len(margins), 2) if margins else 0.0,
             # RATIO (premium collected per rupee of peak margin), as the EOD engine
             # defines it and as the UI's "x" suffix + footnote promise.
             "capital_efficiency": round(collected / max_margin, 2) if max_margin else 0.0,
-            "avg_premium_per_cycle": round(collected / len(cycles), 2) if cycles else 0.0,
+            "avg_premium_per_cycle": round(collected / len(done), 2) if done else 0.0,
             "total_charges": round(charges_bd["total"], 2),
             "net_after_charges": net,
         },

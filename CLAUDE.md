@@ -430,8 +430,14 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   calendar month). Target 5% of FROZEN broker margin (₹1.43L/set measured 2026-08-19) on the
   WHOLE cycle (`pnl_basis="total"` — the rolls ARE the income); not hit by the sold expiry →
   roll both sells to the next weekly at the SAME strikes (roll_time 15:00, before the replay's
-  15:30 settle), banking into `realized_rolls`; next weekly == buy expiry → the 3 longs move to
-  the next monthly FIRST, same decision. Rolls are ALL-OR-NOTHING (every new leg must price or
+  15:30 settle), banking into `realized_rolls`; **next weekly == buy expiry → the CYCLE ends**
+  (`fvc_cycle_end`, owner rule 2026-08-19: the buy leg is NEVER rolled) — exit all, clear the
+  month latch, and a FRESH cycle (new FV read + hunt) opens next session, so a losing cycle is
+  structurally bounded at ~one buy-expiry month. A window that ends mid-cycle emits the open
+  episode as a `live: true` cycles row (closed-only aggregates) — before that, run #269's tiles
+  counted the open cycle's banked rolls while the table couldn't show it (a phantom ₹-88k gap).
+  CAPTURE-ERA CAVEAT: the store lists only ≤40d expiries, so late-month entries can pick a far
+  WEEKLY as the "monthly" buy (max-of-month on a truncated ladder) — live chains are immune. Rolls are ALL-OR-NOTHING (every new leg must price or
   the whole roll defers a tick) and a settled-short backstop re-sells from the persisted
   `sold_specs` (strikes are frozen at entry). Premiums are ABSOLUTE ₹ from
   `premium_scale_before` (2024-08-01) and scale by spot/`premium_ref_spot` before (owner: ₹150

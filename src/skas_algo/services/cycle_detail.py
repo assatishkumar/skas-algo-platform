@@ -486,6 +486,8 @@ _EXIT_COPY = {
     # (roll-branch) copy, and listing them would let a roll tag win the exit-blurb pick
     # over a genuine "target"/"stop" on the same close set.
     "fvc_max_rolls": "Roll cap reached — cycle closed without the target",
+    "fvc_cycle_end": "The sells were about to land on the buy expiry — cycle closed "
+                     "(the buy leg is never rolled); a fresh cycle opens next session",
     "apx_adjust": "Cheap leg decayed past the trigger — rolled to match the richer leg",
     "apx_stop": "Combined loss hit the points budget for the day — everything closed",
     "apx_eod": "Hard square-off — never carried overnight",
