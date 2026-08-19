@@ -421,6 +421,25 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   runs (real minute fills, per-fill charges, frozen pushed margin, de-carried parity
   spot). Coverage: `tests/test_exit_cadence.py`, replay round-trips in
   `tests/test_intraday_replay.py`, registry pins in `tests/test_backtest_v2_registry.py`.
+- **fair_value_calendar** (`strategies/fair_value_calendar.py`, NIFTY, 2026-08-19): monthly
+  premium-matched ratio calendar — sell a ~₹150 and a ~₹450 near-weekly (≥`min_sold_dte`=4 DTE)
+  + buy 3× a ~₹200 monthly, SAME side; the side comes from the **fair-value line** (Jan-2020
+  high 12,430 × 1.117^yrs): above by >`fv_band_pct` → PE, below/inside → CE (`side_mode` also
+  offers both/pe/ce). **900-pt gap rule**: |buy K − furthest sell K| > `max_gap_points` → skip
+  the DAY, retry tomorrow (entry retries daily all month — `entered_month` latch, one cycle per
+  calendar month). Target 5% of FROZEN broker margin (₹1.43L/set measured 2026-08-19) on the
+  WHOLE cycle (`pnl_basis="total"` — the rolls ARE the income); not hit by the sold expiry →
+  roll both sells to the next weekly at the SAME strikes (roll_time 15:00, before the replay's
+  15:30 settle), banking into `realized_rolls`; next weekly == buy expiry → the 3 longs move to
+  the next monthly FIRST, same decision. Rolls are ALL-OR-NOTHING (every new leg must price or
+  the whole roll defers a tick) and a settled-short backstop re-sells from the persisted
+  `sold_specs` (strikes are frozen at entry). Premiums are ABSOLUTE ₹ from
+  `premium_scale_before` (2024-08-01) and scale by spot/`premium_ref_spot` before (owner: ₹150
+  at 25k wasn't ₹150 at 16k); the gap cap scales identically. Subclasses DeltaNeutralMonthly
+  (ddc precedent) with phase="calendar" so the base delta-adjust machinery never engages.
+  Deploy-only + broker source (no deploy route yet — backtest-first); REPLAYABLE on the 1-min
+  store (the first two-expiry strategy WITH a backtest). Coverage:
+  `tests/test_fair_value_calendar.py`.
 - **broker_smoke_test** (Brokers-page card, 2026-07-18): the end-to-end REAL-order probe —
   BUY 1 lot of a cheap OTM weekly (premium band ₹5–20, nearest ₹10, OI floor) or 1 share of
   a stock (default ITC), hold ~60s, SELL, then the run **stops itself** (`stop_requested` →

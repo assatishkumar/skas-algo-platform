@@ -55,7 +55,7 @@ _CLOSE = time(15, 30)
 # joined 2026-07-18 via the _Chain cached-chain adapter: ALL index-options strategies now
 # backtest on the 1-min store (the EOD options basis left the UI; equity keeps the cache).
 REPLAYABLE = {"intraday_straddle", "straddle_btst", "weekly_intraday_straddle", "call_put_ratio_expiry",
-              "intraday_strangle_combo", "asymmetric_premium_intra",
+              "intraday_strangle_combo", "asymmetric_premium_intra", "fair_value_calendar",
               "delta_neutral_monthly", "iron_fly_monthly", "call_ratio_monthly",
               "put_ratio_monthly", "batman_ratio_monthly", "hni_weekly", "21_ema_momentum",
               "put_condor"}
@@ -316,7 +316,10 @@ _SHORT_UNITS_PER_SET = {"intraday_straddle": 2, "straddle_btst": 2,
                         # long condor: 2 short legs per lot-set (the 2 longs are hedges)
                         "put_condor": 2,
                         "intraday_strangle_combo": 2,
-                        "asymmetric_premium_intra": 2}
+                        "asymmetric_premium_intra": 2,
+                        # ratio calendar: 2 sold weeklies per side (the instance's
+                        # sell_lots doubles this in side_mode="both")
+                        "fair_value_calendar": 2}
 
 
 def _daily_bars_with_forming(u: str, market: "_Market"):
@@ -653,6 +656,11 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                         sizing_skipped_days += 1
                     elif strategy_id == "call_put_ratio_expiry":
                         strategy.sets = {k: n for k in strategy.sets}
+                    elif strategy_id == "fair_value_calendar":
+                        # sizes by ``sets`` (its entry ignores ``lots``); keep both in
+                        # step so base per-lot math stays consistent
+                        strategy.sets = n
+                        strategy.lots = n
                     elif hasattr(strategy, "lots"):
                         strategy.lots = n
             if day_blocked and not ctx.positions:

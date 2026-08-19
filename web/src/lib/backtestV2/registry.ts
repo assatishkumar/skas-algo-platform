@@ -492,6 +492,74 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
     ],
   },
 
+  fair_value_calendar: {
+    id: "fair_value_calendar",
+    // Two-expiry premium hunt off the live chain -> intraday store only (like the
+    // delta_neutral family, an EOD run would silently make 0 trades).
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY"], eod: NONE },
+    monthlyCycle: true,
+    note: "Premium-matched ratio calendar: sell a ~150 and a ~450 weekly, buy 3x a ~200 "
+      + "monthly (same side). Side picked by the fair-value line (Jan-2020 high compounded "
+      + "at 11.7%/yr): above -> puts, below/near -> calls. No target by the weekly's expiry "
+      + "-> roll the sells to the next weekly at the same strikes; the buy leg moves to the "
+      + "next month when the sells would land on it. Skip entry when the buy-to-furthest-sell "
+      + "gap exceeds 900 pts (2x the expected rollover income).",
+    sizing: "intradayHarness",
+    entry: {
+      frequency: "monthly",
+      frequencyHint: "from the 1st of each month, retried daily until a valid setup lands",
+      fields: [
+        TIME("entry_time", "ENTRY TIME", "09:30"),
+        TIME("entry_window_end", "ENTRY CUTOFF", "15:00"),
+        f("min_sold_dte", "SOLD LEG MIN DTE", "number", 4),
+        f("sell_premium_1", "SELL PREMIUM 1 (RS)", "number", 150, { step: "any" }),
+        f("sell_premium_2", "SELL PREMIUM 2 (RS)", "number", 450, { step: "any" }),
+        f("buy_premium", "BUY PREMIUM (RS)", "number", 200, { step: "any" }),
+        f("buy_lots_per_set", "BUY LOTS PER SET", "number", 3),
+        f("premium_tolerance_pct", "PREMIUM TOLERANCE %", "number", 30, { step: "any",
+          hint: "hunt miss beyond this -> no entry that day, retry tomorrow" }),
+        f("max_gap_points", "MAX GAP (PTS)", "number", 900, { step: "any",
+          hint: "buy strike to furthest sell strike; the 900-point rule" }),
+        f("side_mode", "SIDE", "select", "fair_value", {
+          options: [
+            { value: "fair_value", label: "Auto by fair value" },
+            { value: "both", label: "Both sides every month" },
+            { value: "pe", label: "Put calendar only" },
+            { value: "ce", label: "Call calendar only" },
+          ],
+        }),
+        f("fv_growth_pct", "FV GROWTH %/YR", "number", 11.7,
+          { step: "any", showIf: (p) => p.side_mode === "fair_value" }),
+        f("fv_anchor_value", "FV ANCHOR LEVEL", "number", 12430,
+          { showIf: (p) => p.side_mode === "fair_value" }),
+        f("fv_anchor_date", "FV ANCHOR DATE", "text", "2020-01-20",
+          { showIf: (p) => p.side_mode === "fair_value" }),
+        f("fv_band_pct", "FV BAND %", "number", 4,
+          { step: "any", showIf: (p) => p.side_mode === "fair_value",
+            hint: "inside the band -> calls (rollover preference)" }),
+      ],
+    },
+    exit: {
+      basisNote: "% of the entry margin, on the whole cycle (banked rolls + open MTM)",
+      fields: [
+        f("profit_target_pct", "PROFIT TARGET %", "number", 5, { step: "any" }),
+        f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any", hint: "0 = off (spec)" }),
+        TIME("roll_time", "ROLL TIME", "15:00", "on the sold weekly's expiry day"),
+        f("max_rolls", "MAX ROLLS", "number", 0, { hint: "0 = roll until the target hits" }),
+        EXIT_MARGIN_BASIS,
+        ...cadenceFields("1min", "1min", "15:20"),
+      ],
+    },
+    extras: [
+      f("sets", "LOT-SETS", "number", 1, { hint: "1 set = 2 sold lots + 3 bought lots per side" }),
+      f("premium_scale_before", "SCALE PREMIUMS BEFORE", "text", "2024-08-01",
+        { hint: "entries before this date scale the Rs targets (and gap cap) by spot/ref" }),
+      f("premium_ref_spot", "PREMIUM REF SPOT", "number", 24500),
+      f("min_leg_oi", "MIN LEG OI", "number", 1),
+    ],
+  },
+
   iron_fly_monthly: {
     id: "iron_fly_monthly",
     bases: ["intraday"],

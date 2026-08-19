@@ -242,6 +242,27 @@ Object.assign(LABELS, {
   stop_loss_points: "Stop \u2014 combined points",
 });
 
+// fair_value_calendar
+Object.assign(LABELS, {
+  sets: "Lot-sets",
+  sell_premium_1: "Sell premium 1 (\u20b9)",
+  sell_premium_2: "Sell premium 2 (\u20b9)",
+  buy_premium: "Buy premium (\u20b9)",
+  buy_lots_per_set: "Buy lots per set",
+  premium_tolerance_pct: "Premium tolerance %",
+  max_gap_points: "Max gap (pts)",
+  premium_scale_before: "Scale premiums before",
+  premium_ref_spot: "Premium ref spot",
+  min_sold_dte: "Sold leg min DTE",
+  side_mode: "Side selection",
+  fv_anchor_date: "Fair-value anchor date",
+  fv_anchor_value: "Fair-value anchor level",
+  fv_growth_pct: "Fair-value growth %/yr",
+  fv_band_pct: "Fair-value band %",
+  roll_time: "Roll time",
+  max_rolls: "Max rolls",
+});
+
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 /** Enum-valued STRATEGY-CTOR params → their legal values, as the live strategies accept
@@ -260,6 +281,7 @@ export const PARAM_ENUMS: Record<string, string[]> = {
   exit_margin_basis: ["current", "entry"],
   portfolio_basis: ["notional", "margin"],
   breach_basis: ["close", "touch"],
+  side_mode: ["fair_value", "both", "pe", "ce"],
   profit_check: ["tick", "1min", "5min", "15min", "30min", "60min", "eod"],
   stop_check: ["tick", "1min", "5min", "15min", "30min", "60min", "eod"],
 };

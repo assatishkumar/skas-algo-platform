@@ -451,6 +451,12 @@ _EXIT_COPY = {
     "isc_mtm_stop": "Overall MTM stop — the day P&L breached the per-lot budget",
     "isc_eod": "Hard 15:25 square-off — never carried overnight",
     "apx_entry": "Sold the current-week call and the next-week put",
+    "fvc_entry": "Premium-matched calendar on: two weekly sells + the monthly buys",
+    "fvc_roll": "No target by the weekly's expiry — sells rolled to the next weekly, "
+                "same strikes",
+    "fvc_buy_roll": "The sells would have landed on the buy expiry — buy legs moved to "
+                    "the next month first",
+    "fvc_max_rolls": "Roll cap reached — cycle closed without the target",
     "apx_adjust": "Cheap leg decayed past the trigger — rolled to match the richer leg",
     "apx_stop": "Combined loss hit the points budget for the day — everything closed",
     "apx_eod": "Hard square-off — never carried overnight",
