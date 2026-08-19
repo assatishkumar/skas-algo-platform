@@ -50,6 +50,7 @@ import type {
   Trade,
   Universe,
   CpRatioExpiryDeploy,
+  FairValueCalendarDeploy,
   IntradayStraddleDeploy,
   DeltaNeutralDeploy,
   DoubleDiagonalDeploy,
@@ -288,6 +289,8 @@ export const api = {
     request<LiveRunSnapshot>("/trade/smoke-test/deploy", { method: "POST", body: JSON.stringify(body) }),
   ironflyAdjust: (runId: number, on: boolean) =>
     request<{ ironfly_adjust: boolean; note: string }>(`/live/${runId}/ironfly-adjust`, { method: "POST", body: JSON.stringify({ on }) }),
+  fairValueCalendarDeploy: (body: FairValueCalendarDeploy) =>
+    request<LiveRunSnapshot>("/trade/options/fair-value-calendar/deploy", { method: "POST", body: JSON.stringify(body) }),
   cpRatioExpiryDeploy: (body: CpRatioExpiryDeploy) =>
     request<LiveRunSnapshot>("/trade/options/cp-ratio-expiry/deploy", { method: "POST", body: JSON.stringify(body) }),
   intradayStraddleDeploy: (body: IntradayStraddleDeploy) =>

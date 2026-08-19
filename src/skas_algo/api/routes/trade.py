@@ -24,6 +24,7 @@ from skas_algo.api.models import (
     DoubleDiagonalDeploy,
     EquityTradeDeploy,
     IntradayStraddleDeploy,
+    FairValueCalendarDeploy,
     IronFlyDeploy,
     LiveStartRequest,
     MomentumThetaDeploy,
@@ -636,6 +637,67 @@ async def iron_fly_deploy(
     }
     req = LiveStartRequest(
         strategy_id="iron_fly_monthly",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=body.underlying.upper(),
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/options/fair-value-calendar/deploy")
+async def fair_value_calendar_deploy(
+    body: FairValueCalendarDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the monthly premium-matched ratio calendar (fair_value_calendar)."""
+    if body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="the ~150/~450/~200 premium hunt reads the LIVE chain — deploy with a "
+            "broker quote source (zerodha)",
+        )
+    params = {
+        "underlying": body.underlying.upper(),
+        "sets": body.sets,
+        "side_mode": body.side_mode,
+        "sell_premium_1": body.sell_premium_1,
+        "sell_premium_2": body.sell_premium_2,
+        "buy_premium": body.buy_premium,
+        "buy_lots_per_set": body.buy_lots_per_set,
+        "premium_tolerance_pct": body.premium_tolerance_pct,
+        "max_gap_points": body.max_gap_points,
+        "min_sold_dte": body.min_sold_dte,
+        "fv_growth_pct": body.fv_growth_pct,
+        "fv_anchor_value": body.fv_anchor_value,
+        "fv_anchor_date": body.fv_anchor_date,
+        "fv_band_pct": body.fv_band_pct,
+        "entry_time": body.entry_time,
+        "entry_window_end": body.entry_window_end,
+        "roll_time": body.roll_time,
+        "max_rolls": body.max_rolls,
+        "profit_target_pct": body.profit_target_pct,
+        "stop_loss_pct": body.stop_loss_pct,
+        "force_entry": body.force_entry,
+        "profit_check": body.profit_check,
+        "stop_check": body.stop_check,
+        "eod_time": body.eod_time,
+        "pnl_basis": body.pnl_basis,
+        "exit_margin_basis": body.exit_margin_basis,
+        "min_leg_oi": body.min_leg_oi,
+    }
+    req = LiveStartRequest(
+        strategy_id="fair_value_calendar",
         name=body.name,
         notes=body.notes,
         instrument_class="DERIV",

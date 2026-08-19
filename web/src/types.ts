@@ -1019,6 +1019,29 @@ export interface SmokeTestDeploy {
   broker_account_id: number | null;
 }
 
+export interface FairValueCalendarDeploy {
+  name: string;
+  underlying: string;
+  sets: number;
+  side_mode: string;                 // ce | fair_value | both | pe
+  sell_premium_1: number;
+  sell_premium_2: number;
+  buy_premium: number;
+  premium_tolerance_pct: number;
+  max_gap_points: number;
+  min_sold_dte: number;
+  profit_target_pct: number;
+  stop_loss_pct: number;
+  roll_time: string;
+  entry_time: string;
+  force_entry: boolean;
+  capital: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  auto: boolean;
+}
+
 export interface IronFlyDeploy {
   name: string;
   underlying: string;

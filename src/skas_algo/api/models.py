@@ -371,6 +371,54 @@ class RatioManualDeploy(BaseModel):
     auto: bool = True
 
 
+class FairValueCalendarDeploy(BaseModel):
+    """Deploy fair_value_calendar: the monthly premium-matched ratio calendar (sell ~150 +
+    ~450 near-weekly, buy 3× ~200 monthly, same side; 900-pt gap rule; weekly rolls at the
+    SAME strikes; the buy leg never rolls — sells about to land on it end the cycle and a
+    fresh one opens next session). Premium hunt reads the LIVE chain → broker source
+    required. Deploy default side_mode="ce" — the only configuration the 5-year store
+    replay rewarded (+₹147k/set, maxDD ₹52k); "fair_value" (the video's auto-pick),
+    "both" and "pe" all backtested negative and are offered for experiments only."""
+
+    name: str
+    notes: str | None = None
+    underlying: str = "NIFTY"
+    sets: int = 1
+    side_mode: str = "ce"  # ce | fair_value | both | pe
+    sell_premium_1: float = 150.0
+    sell_premium_2: float = 450.0
+    buy_premium: float = 200.0
+    buy_lots_per_set: int = 3
+    premium_tolerance_pct: float = 30.0
+    max_gap_points: float = 900.0
+    min_sold_dte: int = 4
+    fv_growth_pct: float = 11.7
+    fv_anchor_value: float = 12430.0
+    fv_anchor_date: str = "2020-01-20"
+    fv_band_pct: float = 4.0
+    entry_time: str = "09:30"
+    entry_window_end: str = "15:00"
+    roll_time: str = "15:00"
+    max_rolls: int = 0  # 0 = roll until target or the buy-expiry cycle end
+    profit_target_pct: float = 5.0  # % of frozen broker margin, whole percent
+    stop_loss_pct: float = 0.0  # 0 = off (the cycle end is the structural bound)
+    force_entry: bool = False  # enter next window tick, skipping the month gate
+    # Deploy default = the owner cadence policy (1min); ctor defaults stay "tick" (§1).
+    profit_check: str = "1min"
+    stop_check: str = "1min"
+    eod_time: str = "15:20"
+    pnl_basis: str = "total"  # the rolls ARE the income — whole-cycle basis
+    exit_margin_basis: str = "entry"
+    min_leg_oi: int = 1
+    capital: float = 500_000
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    refresh_seconds: int = 15
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class DoubleDiagonalDeploy(BaseModel):
     """Deploy double_diagonal_calendar: a NIFTY double-diagonal calendar — a near short strangle +
     farther long hedges (the first TWO-expiry position). Delta-first (shorts ~20-25Δ, hedges

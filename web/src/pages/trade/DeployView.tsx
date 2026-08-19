@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import CpRatioExpiryBuilder from "../../components/trade/CpRatioExpiryBuilder";
 import DeltaNeutralBuilder from "../../components/trade/DeltaNeutralBuilder";
 import EquityTradeBuilder from "../../components/trade/EquityTradeBuilder";
+import FairValueCalendarBuilder from "../../components/trade/FairValueCalendarBuilder";
 import IntradayStraddleBuilder from "../../components/trade/IntradayStraddleBuilder";
 import IronFlyBuilder from "../../components/trade/IronFlyBuilder";
 import MomentumThetaBuilder from "../../components/trade/MomentumThetaBuilder";
@@ -63,6 +64,13 @@ const STRATS: Managed[] = [
     cadence: "EXPIRY DAY",
     blurb: "Buy 1 ATM set, sell 3 at the ⅓-premium strikes",
     builder: <CpRatioExpiryBuilder />,
+  },
+  {
+    id: "fv_calendar",
+    name: "FV calendar",
+    cadence: "MONTHLY",
+    blurb: "Premium-matched ratio calendar, weekly rolls, cycle ends at buy expiry",
+    builder: <FairValueCalendarBuilder />,
   },
   {
     id: "equity",
