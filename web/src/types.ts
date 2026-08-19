@@ -933,6 +933,9 @@ export interface CycleDetailEvent {
   net_delta: number | null; reason: string; realized_so_far: number;
   unrealized_eod?: number | null; // open-book MTM at the event day's EOD mark (0 on a flat exit)
   open_refs?: number[];           // legs still OPEN right after this event (held-through book)
+  // legs held THROUGH the event: price = 1-min-store mark at the event minute, realized =
+  // that leg's unrealized P&L at that mark; both null when the store has no print (never faked)
+  held?: CycleDetailEventLeg[];
   closed: CycleDetailEventLeg[]; opened: CycleDetailEventLeg[];
 }
 export interface CycleDetailLeg {

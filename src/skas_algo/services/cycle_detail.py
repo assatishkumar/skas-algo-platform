@@ -238,6 +238,32 @@ def _lot_size(underlying: str, expiry) -> int | None:
         return None
 
 
+def _marks_at(symbols: list[str], ts: datetime) -> dict[str, float]:
+    """Last traded close ≤ ``ts`` for each store symbol, from that day's 1-min parquet.
+    FAIL CLOSED: no file / no print / any error → the symbol is simply absent — the caller
+    renders "—", never a fake mark. (Analyze-page invariant: honest gaps over invented data.)"""
+    try:
+        import duckdb
+
+        from skas_algo.data.option_intraday_store import day_path
+
+        path = day_path(ts.date())
+        if not path.exists() or not symbols:
+            return {}
+        con = duckdb.connect()
+        try:
+            rows = con.execute(
+                "SELECT symbol, arg_max(close, start) FROM read_parquet(?) "
+                "WHERE symbol IN (SELECT unnest(?::VARCHAR[])) AND start <= ? GROUP BY symbol",
+                [str(path), symbols, ts.strftime("%Y-%m-%d %H:%M")],
+            ).fetchall()
+        finally:
+            con.close()
+        return {sym: float(px) for sym, px in rows if px is not None}
+    except Exception:  # pragma: no cover - a broken store read never breaks the page
+        return {}
+
+
 def build_cycle_detail(
     cycle: dict,
     trade_rows: list[dict],
@@ -370,6 +396,11 @@ def build_cycle_detail(
                 "open_refs": [lg["ref"] for lg in open_now],
                 "closed": [_event_leg(lg, "close") for lg in closed],
                 "opened": [_event_leg(lg, "open") for lg in opened],
+                # legs held THROUGH the event, marked at the event minute off the 1-min store
+                # (owner ask 2026-08-19: at a roll, the untouched hedge's swing was invisible
+                # outside the aggregate EOD unrealized). price=mark, realized=unrealized at
+                # that minute; both None when the store has no print (never faked).
+                "held": _held_rows([lg for lg in open_now if lg["open_ts"] < ts], ts),
             }
         )
 
@@ -451,11 +482,9 @@ _EXIT_COPY = {
     "isc_mtm_stop": "Overall MTM stop — the day P&L breached the per-lot budget",
     "isc_eod": "Hard 15:25 square-off — never carried overnight",
     "apx_entry": "Sold the current-week call and the next-week put",
-    "fvc_entry": "Premium-matched calendar on: two weekly sells + the monthly buys",
-    "fvc_roll": "No target by the weekly's expiry — sells rolled to the next weekly, "
-                "same strikes",
-    "fvc_buy_roll": "The sells would have landed on the buy expiry — buy legs moved to "
-                    "the next month first",
+    # NOTE: fvc_entry/fvc_roll/fvc_buy_roll are deliberately NOT here — they are event
+    # (roll-branch) copy, and listing them would let a roll tag win the exit-blurb pick
+    # over a genuine "target"/"stop" on the same close set.
     "fvc_max_rolls": "Roll cap reached — cycle closed without the target",
     "apx_adjust": "Cheap leg decayed past the trigger — rolled to match the richer leg",
     "apx_stop": "Combined loss hit the points budget for the day — everything closed",
@@ -485,6 +514,17 @@ def _reason(kind: str, tags: set, cycle: dict, opened: list, closed: list) -> st
             return (
                 "The adjustment short decayed — banked its premium and re-sold a fresh "
                 "short nearer the money (post-iron-fly adjustment roll)."
+            )
+        if "fvc_buy_roll" in tags:
+            return (
+                "The sells were due to land on the buy legs' expiry — moved the monthly "
+                "buys one month out (same strike) first, then rolled both sells to the "
+                "next weekly."
+            )
+        if "fvc_roll" in tags:
+            return (
+                "No target by the sold weekly's expiry — bought both sells back and "
+                "re-sold the SAME strikes on the next weekly, banking the week's decay."
             )
         if kind == "hedge" or "dnm_ironfly" in tags:
             return (
@@ -531,6 +571,37 @@ def _net_delta(open_legs, spot, expiry, when, r) -> float | None:
         d = bs.delta(spot, lg["strike"], _years_to(expiry, when), r, iv, lg["right"])
         total += lg["dir"] * lg["units"] * d
     return total
+
+
+def _held_rows(held: list[dict], ts: datetime) -> list[dict]:
+    """Event-card rows for legs held through an event — the _event_leg shape, with
+    ``price`` = the store mark at the event minute and ``realized`` = that leg's
+    unrealized P&L at that mark (open → now). Store-less symbols keep None."""
+    if not held:
+        return []
+    marks = _marks_at([lg["symbol"] for lg in held if "|" in str(lg["symbol"])], ts)
+    rows = []
+    for lg in held:
+        mark = marks.get(lg["symbol"])
+        pnl = (
+            round((mark - lg["open_price"]) * lg["units"] * lg["dir"])
+            if mark is not None
+            else None
+        )
+        rows.append(
+            {
+                "ref": lg["ref"],
+                "symbol": lg["symbol"],
+                "side": lg["side"],
+                "right": lg["right"],
+                "strike": lg["strike"],
+                "units": lg["units"],
+                "price": mark,
+                "cashflow": None,
+                "realized": pnl,
+            }
+        )
+    return rows
 
 
 def _event_leg(lg, which: str) -> dict:

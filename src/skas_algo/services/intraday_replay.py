@@ -517,7 +517,7 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
         intraday = (x - datetime.combine(x.date(), e.time())).total_seconds() / (6.25 * 3600)
         return round(max(0.0, whole + max(0.0, min(1.0, intraday))), 2)
 
-    def _fill(sig, minute: str) -> None:
+    def _fill(sig, minute: str, reopens: bool = False) -> None:
         nonlocal realized, episode
         sym = sig.symbol
         px = market.close(sym)
@@ -566,7 +566,13 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
             positions.append(leg)
             if episode is not None:
                 episode["closed"].append(leg)
-                if not ctx.positions:   # back to flat → the cycle is complete
+                # Back to flat → the cycle is complete — UNLESS the same decision still
+                # has ENTER signals carrying THIS exit's reason (``reopens``): a calendar
+                # roll exits every leg and re-enters in one list, and judging the book
+                # mid-batch fragmented a fair_value_calendar cycle into per-buy-expiry
+                # slices (2026-08-19). Same-reason only, so a stop-then-re-enter (isc/apx)
+                # still starts a NEW cycle exactly as before.
+                if not ctx.positions and not reopens:
                     exit_spot = market.index_spot(u)
                     e_spot = episode.get("entry_spot")
                     legs = episode["closed"]
@@ -671,9 +677,11 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
             except Exception:  # a bad minute must not void the whole range
                 logger.exception("replay on_slice failed at %s (%s)", minute_key, strategy_id)
                 signals = []
-            for sig in signals:
+            for i, sig in enumerate(signals):
+                later_opens = any(x.action.name in ("ENTER_SHORT", "ENTER_LONG")
+                                  and x.reason == sig.reason for x in signals[i + 1:])
                 try:
-                    _fill(sig, minute_key.replace("T", " "))
+                    _fill(sig, minute_key.replace("T", " "), reopens=later_opens)
                 except KeyError:
                     logger.warning("replay: no mark to fill %s at %s", sig.symbol, minute_key)
             # Simulated broker-margin push (~the manager's 1/min refresh, re-based on the book).

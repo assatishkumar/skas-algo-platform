@@ -363,6 +363,7 @@ function EventTimeline({ m, active, toggle }: {
                   <div className="flex flex-col gap-[5px] mt-2.5">
                     {e.closed.map((l, i) => <EvLine key={`c${i}`} tag="CLOSE" l={l} lotSize={m.lot_size} realized />)}
                     {e.opened.map((l, i) => <EvLine key={`o${i}`} tag={l.side === "long" ? "HEDGE" : "OPEN"} l={l} lotSize={m.lot_size} />)}
+                    {(e.held ?? []).map((l, i) => <EvLine key={`h${i}`} tag="HELD" l={l} lotSize={m.lot_size} realized />)}
                   </div>
                   <div className="flex gap-3 mt-2.5 border-t border-[var(--divider)] pt-2.5 text-[11.5px] font-bold text-[var(--faint)] tabular-nums">
                     <span>spot {e.spot?.toLocaleString("en-IN") ?? "—"}</span>
@@ -388,8 +389,19 @@ function EventTimeline({ m, active, toggle }: {
 function EvLine({ tag, l, lotSize, realized }: { tag: string; l: CycleDetail["events"][0]["opened"][0]; lotSize?: number | null; realized?: boolean }) {
   const tone = tag === "CLOSE" ? { bg: "var(--chip)", fg: "var(--chip-text)" }
     : tag === "HEDGE" ? { bg: "var(--warn-bg)", fg: "var(--warn-text)" }
+    : tag === "HELD" ? { bg: "var(--divider)", fg: "var(--muted)" }
     : { bg: "var(--tint)", fg: "var(--accent-deep)" };
   const cash = l.cashflow != null ? ` · ${l.side === "long" ? "debit" : "credit"} ${formatInr(Math.abs(l.cashflow))}` : "";
+  // HELD rows: price is the event-minute store mark, realized its unrealized P&L there —
+  // dimmed like the legs panel's held-through treatment, "—" when the store has no print.
+  if (tag === "HELD") return (
+    <div className="flex items-center gap-2.5 opacity-75">
+      <span className="flex-none w-[46px] text-center py-[2.5px] rounded-md font-extrabold text-[9.5px] tracking-wide" style={{ backgroundColor: tone.bg, color: tone.fg }}>{tag}</span>
+      <span className="font-[700] text-[13px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.side === "long" ? "BUY" : "SELL"} {l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">· {lotsLabel(l.units, lotSize)}</span></span>
+      <span className="text-[12.5px] text-[var(--muted)] font-semibold tabular-nums">{l.price != null ? `mark ${l.price.toFixed(2)}` : "mark —"}</span>
+      {l.realized != null && <span className={`ml-auto font-[700] text-[12.5px] font-['Space_Grotesk'] tabular-nums ${signCls(l.realized)}`}>{formatInr(l.realized)}</span>}
+    </div>
+  );
   return (
     <div className="flex items-center gap-2.5">
       <span className="flex-none w-[46px] text-center py-[2.5px] rounded-md font-extrabold text-[9.5px] tracking-wide" style={{ backgroundColor: tone.bg, color: tone.fg }}>{tag}</span>
@@ -488,6 +500,12 @@ function Legend({ swatch, children }: { swatch: React.ReactNode; children: React
 }
 function eventTitle(e: CycleDetailEvent) {
   if (e.kind === "entry") return "Entry — position opened";
+  // the SAME strikes closed and reopened = an EXPIRY roll (the calendar family), not a
+  // strike move — checked before the hedge title, since a buy-leg push opens longs and
+  // would otherwise wear the iron-fly copy
+  const keys = (ls: CycleDetailEvent["opened"]) => ls.map((l) => `${l.right}@${l.strike}`).sort().join(",");
+  if (e.opened.length && e.closed.length && keys(e.opened) === keys(e.closed))
+    return "Roll — legs carried to the next expiry";
   if (e.kind === "hedge") return "Straddle cap → BE hedge";
   if (e.kind === "exit") return "Exit — closed all legs";
   const op = e.opened[0], cl = e.closed[0];

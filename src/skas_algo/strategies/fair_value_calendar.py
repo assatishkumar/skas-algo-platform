@@ -235,7 +235,10 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
         ~450 leg is deliberately ITM). None on a tolerance miss → no entry today, retry
         tomorrow (a monthly window, unlike cpre's one-day one)."""
         best = None
-        for k, r in rows.items():
+        # sorted: ties in |prem − target| resolve to the LOWEST strike, deterministically —
+        # the chain dict's insertion order follows the data source's row order, which is
+        # not stable across replays (parquet scan order) and drifted a rerun by ~₹600.
+        for k, r in sorted(rows.items()):
             leg = r.get(side)
             prem = self._ltp(leg)
             if prem is None or not self._oi_ok(leg):
