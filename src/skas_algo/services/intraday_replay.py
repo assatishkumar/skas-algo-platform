@@ -432,6 +432,11 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
         # replay covers also scopes intraday_strangle_combo's weekday schedule: a NIFTY run
         # trades only its scheduled days (Mon/Tue/Fri) and never reaches for SENSEX.
         p.setdefault("underlyings", [u])
+    if strategy_id == "fair_value_calendar" and "lots" in p:
+        # Harness sizing is THE sizing: the form's LOTS is this strategy's lot-set count.
+        # Its ctor reads ``sets`` (``lots`` would fall into **_ignored), which silently
+        # traded 1 set under a 5-lot capital plan until 2026-08-19.
+        p["sets"] = int(p.pop("lots") or 1)
     strategy = factory(universe=[u], initial_capital=capital, **p)
     market = _Market(u, lot_overrides=lot_overrides, allow_fifty_strikes=allow_fifty)
     chain = _Chain(market)

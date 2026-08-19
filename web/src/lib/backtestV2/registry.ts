@@ -552,7 +552,8 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       ],
     },
     extras: [
-      f("sets", "LOT-SETS", "number", 1, { hint: "1 set = 2 sold lots + 3 bought lots per side" }),
+      // sizing comes from the harness block's LOTS (mapped to ``sets`` in the replay) —
+      // a second LOT-SETS knob here traded 1 set under a 5-lot capital plan (2026-08-19)
       f("premium_scale_before", "SCALE PREMIUMS BEFORE", "text", "2024-08-01",
         { hint: "entries before this date scale the Rs targets (and gap cap) by spot/ref" }),
       f("premium_ref_spot", "PREMIUM REF SPOT", "number", 24500),
