@@ -93,6 +93,8 @@ def start_deployment(req: LiveStartRequest, db: Session, loader: PriceLoader, av
         symbols = universes.resolve(req.universe, avail) if req.universe else list(req.symbols)
         if not symbols:
             raise HTTPException(status_code=422, detail="symbols or a valid universe required")
+        # Same union the backtest route applies: price what the strategy will trade.
+        symbols = universes.with_helper_symbols(symbols, req.params or {})
     try:
         quote_source = _quote_source(req, loader, db)
         config = LiveConfig(

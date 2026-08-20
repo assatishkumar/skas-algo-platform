@@ -135,11 +135,10 @@ def _resolve_universe(req: BacktestRequest, avail: set[str]) -> None:
                            if avail is None or s in avail]
             req.params = {**req.params, "membership": mom50_membership.membership_table()}
             req.params.pop("pit_universe", None)
-    # A regime/brake symbol (an index series) needs price data in the run — append it to
-    # the symbol list; the strategy excludes it from trading itself.
-    rs = req.params.get("regime_symbol")
-    if isinstance(rs, str) and rs and req.symbols and rs not in req.symbols:
-        req.symbols = [*req.symbols, rs]
+    # Symbols a strategy needs PRICED but doesn't pick itself (a regime/brake index; the
+    # value_investing fund source + watchlist) — the strategy excludes them from trading.
+    if req.symbols:
+        req.symbols = universes.with_helper_symbols(req.symbols, req.params)
     if not req.symbols:
         raise HTTPException(status_code=422, detail="symbols or a valid universe required")
 

@@ -226,6 +226,11 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   // Nifty_Shop params (DMA-dip accumulator; the Lookback field is the DMA window)
   const [nsAllocPct, setNsAllocPct] = useState(4); // % of equity per trade (compounds)
   const [nsTarget, setNsTarget] = useState(5); // exit a name at +this% over avg cost
+  // value_investing: the daily drip + its ETF fund source
+  const [viBudget, setViBudget] = useState(5000);
+  const [viFund, setViFund] = useState("LIQUIDBEES");
+  const [viWatchlist, setViWatchlist] = useState("");
+  const [viWarnDays, setViWarnDays] = useState(2);
   const [nsCandidates, setNsCandidates] = useState(5); // rank the N most-below-DMA
   const [nsNewBuys, setNsNewBuys] = useState(2); // Case 1: open up to this many new/day
   const [nsAvgDown, setNsAvgDown] = useState(3); // Case 2: average a name down >this%
@@ -354,6 +359,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   const isSstWeeklyFifo = strategyId === "sst_weekly_fifo";
   const isSupertrend = strategyId === "supertrend_momentum";
   const isGapReversal = strategyId === "gap_reversal";
+  const isValueInvesting = strategyId === "value_investing";
   const isWeeklyDonchian = isSstWeekly || isSstWeeklyFifo; // both expose donchian_weeks
   const isTiered = isFifo || isSstWeeklyFifo; // FIFO-style tiered profit targets
   const isCallRatio = ["call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly"].includes(strategyId);
@@ -387,7 +393,14 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
     if (isDonchianBt) {
       setUnderlying("NIFTY"); // calendar + real hedge chain; capital is auto (peak margin +10%)
     }
-  }, [isCallRatio, ratioSide, isHni, isCoveredCall, isDonchianBt]);
+    if (isValueInvesting) {
+      // Nothing rolling to warm up — with the default 20 the drip would idle 20 bars before
+      // present_symbols() lets a single name through. And the monthly tax flush would tax
+      // the ETF funding sales, which are a cash sweep, not a gain.
+      setLookback(1);
+      setTaxRate(0);
+    }
+  }, [isCallRatio, ratioSide, isHni, isCoveredCall, isDonchianBt, isValueInvesting]);
 
   // Covered call: keep the ETF proxy in sync with the underlying (still editable).
   useEffect(() => {
@@ -810,7 +823,17 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
       start_date: startDate,
       end_date: endDate,
       capital,
-      params: isNiftyShop
+      params: isValueInvesting
+        ? {
+            daily_budget: viBudget,
+            fund_source: viFund.trim().toUpperCase(),
+            watchlist: viWatchlist.trim(),
+            warn_days_left: viWarnDays,
+            // A backtest starts with cash and no ETF, so day 1 converts the capital into the
+            // fund source. The ctor default is "never" — a LIVE deploy must not place this.
+            fund_seed: "if_empty",
+          }
+        : isNiftyShop
         ? {
             allocation_pct: nsAllocPct / 100,
             profit_target: nsTarget / 100,
@@ -1619,7 +1642,31 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
             <Field label="Capital (₹)">
               <NumberInput className={inputClass} value={capital} onChange={setCapital} />
             </Field>
-            {isNiftyShop ? (
+            {isValueInvesting ? (
+              <>
+                <Field label="Daily budget (₹)">
+                  <NumberInput className={inputClass} value={viBudget} onChange={setViBudget} />
+                </Field>
+                <Field label="Fund source (ETF sold to fund each day)">
+                  <input className={inputClass} value={viFund}
+                    onChange={(e) => setViFund(e.target.value)} />
+                </Field>
+                <Field label="Warn at days of runway left">
+                  <NumberInput className={inputClass} value={viWarnDays} onChange={setViWarnDays} />
+                </Field>
+                <div className="md:col-span-3">
+                  <Field label="Watchlist (comma-separated; blank = every symbol above)">
+                    <input className={inputClass} value={viWatchlist} placeholder="ITC, HDFCBANK, TITAN"
+                      onChange={(e) => setViWatchlist(e.target.value)} />
+                  </Field>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Buys 1 share each, biggest faller first, until the budget runs out. Never sells.
+                    Read the <strong>equity curve</strong> — the trade stats count ETF funding sales,
+                    not investments.
+                  </p>
+                </div>
+              </>
+            ) : isNiftyShop ? (
               <>
                 <Field label="Allocation % per trade (of equity)">
                   <NumberInput step="0.1" className={inputClass} value={nsAllocPct} onChange={setNsAllocPct} />
@@ -1747,7 +1794,11 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
           </div>
           )}
 
-          {!isOptions && (
+          {/* Hidden for value_investing: an exit rule intercepts the strategy's own partial
+              EXIT (overrides.py honours a strategy quantity only when NO rule matches), so a
+              "book 50%" override would halve the ETF funding sale and the buys would then
+              overdraw the portfolio silently — the engine never checks cash. */}
+          {!isOptions && !isValueInvesting && (
           <div className="rounded-lg border border-[var(--divider)] p-3">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={ovEnabled} onChange={(e) => setOvEnabled(e.target.checked)} />

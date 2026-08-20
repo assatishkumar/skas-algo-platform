@@ -151,7 +151,7 @@ export default function DeploymentDetailScreen() {
         {run.underlying && (
           <span className="chip">{run.underlying}{expiry ? ` · ${day(expiry)}` : ""}</span>
         )}
-        {run.strategy_alert && <span className="chip warn">DATA ⚠</span>}
+        {run.strategy_alert && <span className="chip warn" title={run.strategy_alert}>ALERT ⚠</span>}
       </div>
 
       {/* LIVE run whose orders fill on paper (restart demotion): Square-off below would

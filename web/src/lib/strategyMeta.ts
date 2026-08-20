@@ -60,6 +60,7 @@ const CATEGORY_OF: Record<string, LiveCategoryId> = {
   gap_reversal: "equity",
   happy_twins: "equity",
   nifty_shop: "equity",
+  value_investing: "equity",
   custom_equity: "equity",
   sst_lifo: "equity",
   sst_fifo: "equity",
@@ -87,6 +88,7 @@ export const STRATEGY_NAMES: Record<string, string> = {
   nifty_shop: "Nifty Shop (dip buyer)",
   gap_reversal: "Gap Reversal",
   happy_twins: "Happy Twins (dual SuperTrend, weekly)",
+  value_investing: "Value Investing (daily drip, never sells)",
   custom_equity: "Custom Equity Trade",
   // options — positional / overnight
   short_premium: "Short Premium (strangle)",

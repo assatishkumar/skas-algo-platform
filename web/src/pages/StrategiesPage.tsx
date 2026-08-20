@@ -487,6 +487,7 @@ const STRATEGIES: Rule[] = [
     exit: [
       "Target: +5% of the FROZEN broker margin on the WHOLE cycle (banked rolls + open MTM) → exit all, done for the month.",
       "No target by the sold weekly's expiry → roll BOTH sells to the next weekly at the SAME strikes, banking the decay.",
+      "The roll fires one trading day BEFORE that expiry — a short weekly's margin spikes into settlement, so rolling on the last day costs more.",
       "The bought monthly is NEVER rolled: when the sells would land on its expiry the CYCLE ENDS — flat, then a fresh cycle (new fair-value read) opens next session.",
     ],
     risk:
@@ -605,6 +606,32 @@ const STRATEGIES: Rule[] = [
     ],
     risk:
       "Two naked shorts across two expiries — a trending day tests one leg while the adjustment walks the other back into the move. The controlled experiment that proved it: with both distinguishing ideas removed it is statistically the ATM straddle (t = 0.83).",
+  },
+  {
+    id: "value_investing",
+    name: "Value Investing (daily drip)",
+    kind: "Equity",
+    bias: "Accumulation \u00b7 buys every day, never sells",
+    summary:
+      "A fixed rupee budget goes into your watchlist every single trading day, spent on whatever has fallen the most \u2014 one share each, from the top of the list down. The money comes from selling a little of a liquid ETF you already hold. Nothing is ever sold back; the position only grows.",
+    structure: [
+      "Your watchlist, sorted each day by today's % change \u2014 the biggest faller at the top.",
+      "BUY 1 share of each name, walking top to bottom while the daily budget lasts. No second share of anything.",
+      "SELL just enough of the fund source ETF (LIQUIDCASE / GOLDBEES / LIQUIDBEES) to pay for it, in the same decision \u2014 idle cash is spent first.",
+      "The watchlist is editable on a running deployment (Edit params) \u2014 no redeploy to change what you are accumulating.",
+    ],
+    entry: [
+      "Once a day at the decision time. A name the remaining budget cannot afford is skipped and the walk continues to cheaper ones below it.",
+      "Leftover budget evaporates \u2014 each day gets exactly the amount you configured, which is what keeps the runway forecast honest.",
+      "An all-green day still buys: the least-up name tops the list. The discipline is the point.",
+    ],
+    exit: [
+      "Never. This strategy has no exit \u2014 the stocks are held indefinitely.",
+      "The only sales are of the fund source ETF, to raise each day's cash.",
+      "If the ETF cannot cover the day's list it buys NOTHING and alerts \u2014 never a half-filled day.",
+    ],
+    risk:
+      "It is a savings discipline, not a trading edge: it buys weakness without asking whether the weakness is deserved, so the watchlist is the entire risk decision. Warns on the Live page and by push when the fund source has ~2 days of runway left. Needs a BROKER quote source \u2014 on the cache source every change reads 0.00% and the ranking is meaningless (the strategy detects that and refuses the day). In the backtest, read the equity curve: the only SELLs in the trade log are ETF funding sales, so win rate and realized P&L describe a cash sweep.",
   },
   {
     id: "happy_twins",
@@ -844,6 +871,14 @@ const META: Record<string, Meta> = {
     facts: [["Bias", "Neutral · intraday"], ["Underlying", "NIFTY"], ["Structure", "Short CE this week + PE next"],
             ["Adjust", "Cheap leg rolls to the rich"], ["Stop", "100 pts combined"], ["Flat by", "15:15"]],
     deployNote: "Shelved: both distinguishing ideas cost money over 2 years — kept as the controlled experiment that proved it.",
+    deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
+  value_investing: {
+    group: "Equity income", biasKind: "income",
+    facts: [["Bias", "Accumulation"], ["Universe", "Your watchlist"],
+            ["Buys", "1 share each, top-down"], ["Funded by", "An ETF you hold"],
+            ["Exits", "Never"], ["Cadence", "Every trading day"]],
+    deployNote: "Backtestable, and live-capable from day one \u2014 but only on a broker quote source (the cache source makes every change read 0.00%).",
     deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
   },
   happy_twins: {

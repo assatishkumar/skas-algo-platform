@@ -691,8 +691,10 @@ function RunCard({
         </div>
       )}
       {run.strategy_alert && (
-        /* Strategy data-health error (e.g. weekly straddle: Kite option bars unfetchable).
-           Entries are self-gated strategy-side while this is set; exits still run. */
+        /* Whatever the strategy currently wants the owner to know — a data-health failure
+           (weekly straddle: Kite option bars unfetchable) or an operational one
+           (value_investing: the fund source is nearly dry). Producers self-gate entries
+           while a BLOCKING condition is set; exits always still run. Self-clearing. */
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 px-3 py-2 text-sm">
           <span>⚠ {run.strategy_alert}</span>
         </div>
@@ -1218,7 +1220,7 @@ function DeploymentTile({
               <Tag bg="var(--danger)" color="#fff" title={dep.order_error}>orders halted</Tag>
             )}
             {dep.strategy_alert && (
-              <Tag bg="var(--warn-bg)" color="var(--warn-text)" title={dep.strategy_alert}>data ⚠</Tag>
+              <Tag bg="var(--warn-bg)" color="var(--warn-text)" title={dep.strategy_alert}>alert ⚠</Tag>
             )}
             <span className="text-[var(--faint)]">#{dep.run_id}</span>
           </div>
@@ -1557,8 +1559,10 @@ function EditParamsPanel({ dep, busy, onClose, onSave }: {
   const entries = Object.entries(snap?.editable_params ?? snap?.params ?? {})
     .filter(([k, v]) =>
       !PARAM_EDIT_HIDDEN.has(k) &&
+      // 400, not 40: value_investing's watchlist is a comma-separated list of ~20 names and
+      // hot-editing it here is the whole reason it is a string param — the old cap hid it.
       (typeof v === "number" || typeof v === "boolean" ||
-        (typeof v === "string" && v.length <= 40)))
+        (typeof v === "string" && v.length <= 400)))
     .sort(([a], [b]) => a.localeCompare(b));
 
   // Parse an edited text value back to the original's type (number stays number,
@@ -1618,7 +1622,7 @@ function EditParamsPanel({ dep, busy, onClose, onSave }: {
                   </select>
                 ) : (
                   <input
-                    className={`w-28 rounded bg-[var(--card)] border px-1.5 py-0.5 text-right tabular-nums ${dirty ? "border-[var(--accent-deep)]" : "border-[var(--field-border)]"}`}
+                    className={`${typeof v === "string" && String(cur).length > 24 ? "w-72 text-left" : "w-28 text-right"} rounded bg-[var(--card)] border px-1.5 py-0.5 tabular-nums ${dirty ? "border-[var(--accent-deep)]" : "border-[var(--field-border)]"}`}
                     inputMode={typeof v === "number" ? "decimal" : "text"}
                     value={cur}
                     onChange={(e) => setEdits((s) => ({ ...s, [k]: e.target.value }))}

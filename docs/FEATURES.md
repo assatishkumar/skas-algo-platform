@@ -45,7 +45,7 @@ live. The invariant is guarded by golden tests (`tests/test_sst_parity.py`,
 
 ## 3. Strategy catalog
 
-Strategies register in `strategies/registry.py` (32 IDs across 29 files) and onboard there,
+Strategies register in `strategies/registry.py` (33 IDs across 30 files) and onboard there,
 never by editing the engine. `intraday=True` means "decide every tick"; otherwise the run
 decides once per day at a set time. "Backtest" notes whether a strategy runs the FULL shared
 engine, a dedicated Black-Scholes service, or is deploy-only.
@@ -86,6 +86,29 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   leg (gap-down + RSI>90) awaits a sell-CE options variant — cash equity can't hold
   overnight shorts.
 
+- **`value_investing` — a daily rupee drip into a watchlist, funded by an ETF.** The platform's
+  only pure **accumulation** system: it buys and never sells. Each trading day it sorts the
+  watchlist by **today's change %, biggest faller first**, and walks that list from the top buying
+  **one share of each** while the configured **daily budget** lasts — a name the remaining budget
+  can't afford is skipped and the walk continues to cheaper ones below, there is no wrap-around,
+  and whatever is left over evaporates so the drip stays a predictable size. The cash comes from
+  selling exactly enough of a **fund source ETF** (LIQUIDCASE / GOLDBEES / LIQUIDBEES) in the same
+  decision — idle cash is spent first, since selling an asset while cash sits idle would be
+  strictly worse. Funding is **all-or-nothing**: if the ETF can't cover the day's list, it buys
+  **nothing** and raises the alert rather than half-filling the day or quietly falling back to
+  cash. It warns (Live banner + Telegram/bell, once a day) when the fund source is down to
+  ~`warn_days_left` of runway. An all-green day still buys — the least-up name tops the list; the
+  drip is the point. The **watchlist is a hot-editable parameter** (the run's symbol list is
+  edit-blocklisted, so the list of names to *buy* lives in the strategy and can be changed on a
+  running deploy from the tile's Edit params); a name outside the run's symbol list can't be
+  priced and is named in the alert. FULL backtest, and — unusually for an equity strategy —
+  **live-capable from day one**: ranking by daily change reads the new `ctx.prev_close`, which both
+  market views answer natively, instead of the `indicators=` precompute that leaves `gap_reversal`
+  and `happy_twins` failing closed live. **Two things to know before deploying:** it needs a
+  **broker quote source** (on the cache source the "live" price *is* yesterday's close, so every
+  change reads 0.00% — the strategy detects that and refuses the day rather than ranking noise);
+  and read the backtest's **equity curve**, not its trade table, because the only SELLs in the log
+  are ETF funding sales, so "win rate" and "net realized P&L" describe a cash sweep.
 - **`happy_twins` — weekly dual-SuperTrend trend follower (long-only).** One indicator family,
   two speeds: **ENTER** when the FAST SuperTrend (ATR 2, factor 1, weekly) *turns* green — a
   transition, not a state, so a freshly deployed/recovered run never chases an old signal — and

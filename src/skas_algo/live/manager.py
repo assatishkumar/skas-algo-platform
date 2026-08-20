@@ -498,20 +498,25 @@ class LiveRun:
                 }
 
             ohlc_fn(_prior_day_ohlc)
-            notify_hook = getattr(strategy, "set_notify_fn", None)
-            if notify_hook is not None:
+        # Strategy → owner push channel (bell + Telegram). DEDENTED out of the daily-OHLC
+        # block on 2026-08-20: it used to sit inside `if ohlc_fn is not None`, so a strategy
+        # that exposes set_notify_fn WITHOUT set_daily_ohlc_fn silently never got the
+        # callback. momentum_theta has both, which is why nobody noticed. The strategy owns
+        # the dedupe (a {key: day_iso} latch) — this end just delivers.
+        notify_hook = getattr(strategy, "set_notify_fn", None)
+        if notify_hook is not None:
 
-                def _pivot_notify(u: str, message: str):
-                    try:  # pragma: no cover - alert is best-effort
-                        from skas_algo.notify import Alert, AlertLevel, build_notifier
+            def _strategy_notify(u: str, message: str):
+                try:  # pragma: no cover - alert is best-effort
+                    from skas_algo.notify import Alert, AlertLevel, build_notifier
 
-                        build_notifier().send(
-                            Alert(f"{self.config.name} · {u}", message, AlertLevel.WARNING)
-                        )
-                    except Exception:
-                        logger.exception("pivot-stale alert failed for run %s", self.run_id)
+                    build_notifier().send(
+                        Alert(f"{self.config.name} · {u}", message, AlertLevel.WARNING)
+                    )
+                except Exception:
+                    logger.exception("strategy alert failed for run %s", self.run_id)
 
-                notify_hook(_pivot_notify)
+            notify_hook(_strategy_notify)
         # Vol-premium entry filter (ratio family): realized-vol leg from BROKER-first daily
         # bars (the live invariant — never depend on a manually refreshed cache), cache
         # fallback. Called only at a monthly entry; the implied leg is the strategy's ATM-IV.

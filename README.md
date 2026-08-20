@@ -65,7 +65,7 @@ src/skas_algo/
   engine/       runner, execution, portfolio, overrides, sim_fill, stops, report, metrics
     options/    Black-Scholes, margin, charges, settlement, live chain, contract specs
     indicators/ supertrend, …
-  strategies/   32 registered strategies + registry (see below)
+  strategies/   33 registered strategies + registry (see below)
   live/         manager (running paper/live sessions), recovery, persistence, quotes, seed
   brokers/      BrokerAdapter base, sim_broker, zerodha (TOTP login)
   data/         market-data provider + options provider (wraps skas-data), universes
@@ -85,7 +85,9 @@ Registered in `src/skas_algo/strategies/registry.py` — new algos onboard by re
 touching the engine:
 
 - **Equity:** SST-LIFO, SST-FIFO, SST-Weekly (+ FIFO variant), SuperTrend Momentum, Nifty Shop,
-  Gap Reversal, **Happy Twins** (weekly dual-SuperTrend: fast in, slow out), Custom Equity.
+  Gap Reversal, **Happy Twins** (weekly dual-SuperTrend: fast in, slow out),
+  **Value Investing** (a daily rupee drip into a watchlist, funded by an ETF; never sells),
+  Custom Equity.
 - **Options — positional:** Short Premium, Call / Put / Batman Ratio Monthly, HNI Weekly,
   Staggered Covered Call, Custom Options, 21-EMA Momentum spreads, Delta-Neutral Monthly,
   Iron Fly Monthly, Double Diagonal Calendar, **Fair-Value Calendar** (premium-matched ratio

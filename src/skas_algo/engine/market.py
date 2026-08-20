@@ -35,6 +35,13 @@ class MarketLike(Protocol):
     def closes_today(self) -> dict[str, float]: ...
     def mark_prices(self) -> dict[str, float]: ...
 
+    # Optional capabilities — read through AlgoContext with getattr, so a view that does
+    # not implement them degrades to None instead of raising (the options views implement
+    # none of them, and OptionMarketView does not even have rolling_mean):
+    #   supertrend_dir(symbol) -> float | None
+    #   indicator(symbol, name) -> float | None
+    #   prev_close(symbol) -> float | None
+
 
 class MarketView:
     """Per-symbol price series with a movable 'current date' cursor."""
@@ -50,6 +57,11 @@ class MarketView:
         self._universe_order: list[str] = []
         # Most recent close seen per symbol, forward-filled as the cursor advances.
         self._last_close: dict[str, float] = {}
+        # symbol -> {date: the symbol's PREVIOUS PRINTED close}. Precomputed with shift(1)
+        # because _series is an unordered dict — a "most recent date before the cursor" scan
+        # would be O(days) per symbol per slice. Written for every run, read only by
+        # prev_close(), so every existing path stays byte-identical.
+        self._prev_close: dict[str, dict[pd.Timestamp, float]] = {}
         # Optional SuperTrend precompute: {"period","multiplier","timeframe"} → per-symbol
         # daily-mapped direction (+1/−1). Only computed when requested (equity supertrend).
         self._st_cfg = supertrend
@@ -73,6 +85,9 @@ class MarketView:
         mean = close.rolling(self.lookback).mean().shift(1)  # the N-day moving average (DMA)
         self._series[symbol] = {
             ts: (close.loc[ts], high.loc[ts], low.loc[ts], mean.loc[ts]) for ts in close.index
+        }
+        self._prev_close[symbol] = {
+            ts: float(v) for ts, v in close.shift(1).items() if pd.notna(v)
         }
         if self._st_cfg is not None:
             from skas_algo.engine.indicators.supertrend import supertrend_direction
@@ -192,6 +207,14 @@ class MarketView:
         """Named precomputed indicator value at the cursor date (ema / rsi / gap_pct), or
         None when the view wasn't built with indicators / the value isn't warmed up yet."""
         return self._indicators.get(symbol, {}).get(self._current, {}).get(name)
+
+    def prev_close(self, symbol: str) -> float | None:
+        """The symbol's PREVIOUS PRINTED close at the cursor date — the base for a day's
+        change % — or None on its first bar. Deliberately NOT behind _row()'s rolling-warmup
+        gate: that gate is about the Donchian window, while LiveMarketView.prev_close is
+        available from the second close onward. Gating one side and not the other would make
+        the two modes disagree, and present_symbols() applies the gate upstream anyway."""
+        return self._prev_close.get(symbol, {}).get(self._current)
 
     def closes_today(self) -> dict[str, float]:
         """Prices actually printed today (for stop evaluation / fills)."""

@@ -37,6 +37,7 @@ from .nifty_shop import NiftyShopStrategy
 from .short_premium import ShortPremiumStrategy
 from .sst_fifo import SSTFifoStrategy
 from .sst_lifo import SSTLifoStrategy
+from .value_investing import ValueInvestingStrategy
 from .sst_weekly import SSTWeeklyFifoStrategy, SSTWeeklyStrategy
 from .staggered_covered_call import StaggeredCoveredCallStrategy
 from .supertrend_momentum import SuperTrendMomentumStrategy
@@ -50,6 +51,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     SSTWeeklyFifoStrategy.strategy_id: SSTWeeklyFifoStrategy,
     SuperTrendMomentumStrategy.strategy_id: SuperTrendMomentumStrategy,
     NiftyShopStrategy.strategy_id: NiftyShopStrategy,
+    ValueInvestingStrategy.strategy_id: ValueInvestingStrategy,
     ShortPremiumStrategy.strategy_id: ShortPremiumStrategy,
     CallRatioMonthlyStrategy.strategy_id: CallRatioMonthlyStrategy,
     PutRatioMonthlyStrategy.strategy_id: PutRatioMonthlyStrategy,

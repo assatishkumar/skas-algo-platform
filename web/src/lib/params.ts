@@ -109,10 +109,21 @@ const LABELS: Record<string, string> = {
   num_candidates: "Candidates (below DMA)",
   new_buys_per_day: "New buys / day",
   avg_down_pct: "Average-down trigger",
+  // value_investing
+  daily_budget: "Daily budget (₹)",
+  watchlist: "Watchlist",
+  fund_source: "Fund source (ETF)",
+  warn_days_left: "Warn at days of runway",
+  funding_buffer_pct: "Funding buffer",
+  fund_seed: "Seed the fund source",
 };
 
 const ORDER = [
   "universe",
+  "watchlist",
+  "daily_budget",
+  "fund_source",
+  "warn_days_left",
   "symbols",
   "instrument_class",
   "underlying",
@@ -278,6 +289,7 @@ export const PARAM_ENUMS: Record<string, string[]> = {
   sizing: ["fixed", "margin"],
   allocation_mode: ["fixed", "equity_scaled"],
   rsi_source: ["ema", "close"],
+  fund_seed: ["never", "if_empty"],
   exit_margin_basis: ["current", "entry"],
   portfolio_basis: ["notional", "margin"],
   breach_basis: ["close", "touch"],

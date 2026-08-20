@@ -130,6 +130,14 @@ class LiveMarketView:
         hist = self._hist.get(symbol)
         return hist[-1] if hist else None
 
+    def prev_close(self, symbol: str) -> float | None:
+        """YESTERDAY's close — history ONLY, never today's quote. The backtest twin of this
+        is MarketView.prev_close. Note how different it is from last_close(), which PREFERS
+        the live quote: a change % measured against last_close() would read 0.00% for every
+        symbol, every day, and look perfectly healthy while ranking nothing."""
+        hist = self._hist.get(symbol)
+        return hist[-1] if hist else None
+
     def levels(self, symbol: str) -> tuple[float, float] | None:
         """(rolling_high, rolling_low) from history, or None if insufficient."""
         return self._rolling(symbol)

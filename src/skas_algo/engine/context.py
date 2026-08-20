@@ -100,6 +100,16 @@ class AlgoContext:
         fn = getattr(self.market, "indicator", None)
         return fn(symbol, name) if fn is not None else None
 
+    def prev_close(self, symbol: str) -> float | None:
+        """The symbol's previous close — backtest: its prior printed bar; live: the last
+        seeded/rolled historical close, NEVER today's quote. None on a symbol's first bar or
+        on a view with no history (the options views). Unlike ``indicator``, this works in
+        BOTH modes with nothing to seed, which is what lets a strategy ranking by daily
+        change deploy live. Strategies MUST still fail closed on None: a change % measured
+        off a missing base is not a small error, it is a fabricated ranking."""
+        fn = getattr(self.market, "prev_close", None)
+        return fn(symbol) if fn is not None else None
+
     # ----- options (no-ops / None for non-options runs) -----
     def today(self):
         """Current trading date (a ``datetime.date``). Used by options strategies."""

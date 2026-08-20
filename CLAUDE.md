@@ -203,6 +203,32 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   exits — shared with supertrend_momentum/nifty_shop and fed by the backtest route's
   `pit_universe` flag on the `nifty500mom50` universe (trades the UNION of ever-members;
   `data/mom50_membership.json` labels each rebalance's source — official capture vs replication).
+- **value_investing** (`strategies/value_investing.py`, equity, 2026-08-20): the platform's
+  only BUY-AND-NEVER-SELL strategy — a fixed `daily_budget` walked down the watchlist (sorted by
+  today's change %, biggest faller first) buying ONE share of each, funded by selling a
+  `fund_source` ETF in the same decision. Owner rules: an unaffordable name is SKIPPED (the walk
+  continues), NO wrap-around, leftover evaporates, funding is ALL-OR-NOTHING (dry ⇒ buy nothing +
+  alert), and an all-green day still buys. Idle cash is spent BEFORE the ETF.
+  **Three load-bearing facts.** (1) `SignalAction.EXIT` with a quantity but NO `lot_id` is a
+  SILENT no-op and the quantity is clamped to ONE lot (`overrides.py`) — there is no cross-lot
+  partial sell, so funding emits one `EXIT(lot_id, qty)` per lot, FIFO. Pinned by
+  `test_every_fund_exit_carries_a_lot_id`. (2) Ranking needs yesterday's close, and the
+  `indicators=` precompute is DEAD IN LIVE — so this reads the NEW **`ctx.prev_close`**
+  (`MarketView._prev_close`, a `close.shift(1)` precompute, write-only for every existing path;
+  `LiveMarketView._hist[-1]`, history ONLY — `last_close()` prefers the live quote and would make
+  every change read 0.00%). That is why this deploys live while gap_reversal/happy_twins fail
+  closed. (3) On `quote_source="cache"` the live price IS yesterday's close, so every change reads
+  0.00% — `_rank` detects an all-flat book (>1 name) and refuses the day. **Broker source
+  required live.** The `watchlist` is a comma-separated STRING, not a list: the Live Edit-params
+  modal only renders scalars, and hot-editing it is the point (the run's `symbols` is
+  edit-blocklisted). `universes.with_helper_symbols` unions `fund_source` + `watchlist` into the
+  run's symbols at both launch paths; a name added LATER by a params edit can't be priced and the
+  strategy names it in `strategy_alert`. `fund_seed` ctor default `"never"` (§1 — a LIVE deploy
+  must never place a surprise ETF buy); the backtest FORM sends `"if_empty"`. The exit-override
+  builder is HIDDEN for this id — an override intercepts the strategy's partial EXIT and would
+  halve the funding sale, after which the buys overdraw silently. Backtest caveat: the only SELLs
+  are ETF funding sales, so read the equity curve, not the trade table (form defaults `tax_rate`
+  0 and `lookback` 1). Coverage: `tests/test_value_investing.py`.
 - **21_ema_momentum** (`strategies/ema21_momentum.py`, NIFTY): daily EMA(21)-on-high/low
   channel; fresh close beyond the band at 15:20 → OTM 100-pt credit spread (bull put /
   bear call), width 300-500, credit ₹80-140 (ideal 90-130 preferred; miss → SKIP and

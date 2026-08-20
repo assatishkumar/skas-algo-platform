@@ -265,3 +265,28 @@ def resolve(name: str, available: set[str] | None = None) -> list[str]:
     if available is None:
         return list(symbols)
     return [s for s in symbols if s in available]
+
+
+def with_helper_symbols(symbols: list[str], params: dict) -> list[str]:
+    """Union in the symbols a strategy needs PRICED but does not pick itself: a regime/brake
+    index, and value_investing's fund source + watchlist. A name outside the run's symbol
+    list gets no series and no quote, so it is silently never traded — appending here means
+    a launch always prices what it will trade. (A watchlist name added LATER by a params
+    edit still can't be priced; the strategy alerts on that itself.)"""
+    out = list(symbols)
+    extra: list[str] = []
+    rs = params.get("regime_symbol")
+    if isinstance(rs, str) and rs:
+        extra.append(rs)
+    fs = params.get("fund_source")
+    if isinstance(fs, str) and fs:
+        extra.append(fs.upper())
+    wl = params.get("watchlist")
+    if isinstance(wl, str):
+        extra += [s.strip().upper() for s in wl.split(",") if s.strip()]
+    elif isinstance(wl, list):
+        extra += [str(s).strip().upper() for s in wl if str(s).strip()]
+    for s in extra:
+        if s and s not in out:
+            out.append(s)
+    return out

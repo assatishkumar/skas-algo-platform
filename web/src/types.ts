@@ -543,7 +543,8 @@ export interface LiveRunSnapshot {
   order_error?: string | null;
   order_broker?: "live" | "paper"; // what fills orders NOW — "paper" on a LIVE run = restart demotion
   resume_orders_pending?: boolean; // real orders re-arm automatically at the next broker login
-  strategy_alert?: string | null; // strategy data-health error (e.g. option bars unfetchable)
+  strategy_alert?: string | null; // strategy-surfaced warning: data health, or an
+  // operational one like value_investing's fund source running dry. Self-clearing.
   supports_force_entry?: boolean;
   ironfly_adjust?: boolean | null; // delta_neutral/iron_fly: null unless the strategy has it
   realized_taxes: number;
@@ -1317,7 +1318,8 @@ export interface Deployment {
   order_error?: string | null; // real-order failure/book-mismatch halt (ack to resume)
   order_broker?: "live" | "paper"; // what fills orders NOW — "paper" on a LIVE run = restart demotion
   resume_orders_pending?: boolean; // real orders re-arm automatically at the next broker login
-  strategy_alert?: string | null; // strategy data-health error (e.g. option bars unfetchable)
+  strategy_alert?: string | null; // strategy-surfaced warning: data health, or an
+  // operational one like value_investing's fund source running dry. Self-clearing.
   underlying_spot?: number | null; // live underlying spot (tile subline)
 }
 
