@@ -24,7 +24,10 @@ git fetch origin --quiet
 behind=$(git rev-list --count "HEAD..origin/${branch}")
 echo "▶ branch ${branch} — ${behind} commit(s) to pull"
 if [ "${behind}" != "0" ]; then
-  git log --oneline "HEAD..origin/${branch}" | head -10
+  # git's own -10, NOT "| head -10": under pipefail, head closing the pipe SIGPIPEs
+  # git log (141) and killed the whole script when >10 commits were pending (2026-08-20 —
+  # died right before the stop, so the backend was fine but nothing updated).
+  git log --oneline -10 "HEAD..origin/${branch}"
 fi
 
 echo "▶ stopping backend for a clean code reload…"
