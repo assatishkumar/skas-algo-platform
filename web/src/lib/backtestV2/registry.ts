@@ -545,7 +545,9 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 5, { step: "any" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any", hint: "0 = off (spec)" }),
-        TIME("roll_time", "ROLL TIME", "15:00", "on the sold weekly's expiry day"),
+        TIME("roll_time", "ROLL TIME", "15:00"),
+        f("roll_days_before", "ROLL (TRADING DAYS BEFORE EXPIRY)", "number", 1,
+          { hint: "1 = roll the day before — expiry-day margin on the short weekly spikes" }),
         f("max_rolls", "MAX ROLLS", "number", 0, { hint: "0 = roll until the target hits" }),
         EXIT_MARGIN_BASIS,
         ...cadenceFields("1min", "1min", "15:20"),

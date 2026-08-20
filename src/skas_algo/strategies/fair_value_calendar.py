@@ -48,6 +48,7 @@ from datetime import date, datetime, time
 from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
+from skas_algo.live.holidays import previous_trading_day
 
 from ._options_common import bad_close
 from .delta_neutral_monthly import DeltaNeutralMonthlyStrategy, _hhmm
@@ -89,7 +90,13 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
         # --- cycle management ---
         entry_time: str = "09:30",
         entry_window_end: str = "15:00",
-        roll_time: str = "15:00",  # sold-expiry-day roll; before the 15:30 settlement
+        roll_time: str = "15:00",  # time of day the roll fires
+        # Roll this many TRADING days BEFORE the sold expiry. Expiry-day margin on a short
+        # weekly spikes (the exchange raises the risk charge into settlement), so rolling
+        # on the last day costs materially more than rolling the day before — owner rule
+        # 2026-08-20. Ctor default 0 = the historical expiry-day roll, so a recovered deploy
+        # is byte-identical (§1); the FORM and the deploy route default to 1.
+        roll_days_before: int = 0,
         max_rolls: int = 0,  # 0 = roll until the target hits (spec behavior)
         profit_target_pct: float = 5.0,  # % of frozen broker margin (owner decision)
         stop_loss_pct: float = 0.0,  # 0 = off (spec gives no stop)
@@ -139,6 +146,7 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
         self.fv_growth_pct = float(fv_growth_pct)
         self.fv_band_pct = float(fv_band_pct)
         self.roll_time = _hhmm(roll_time, time(15, 0))
+        self.roll_days_before = max(0, int(roll_days_before))
         self.max_rolls = int(max_rolls)
         # Replay-harness sizing hint: short lots per lot-SET (one SIDE's two sold legs;
         # "both" doubles it — margin_per_lot is then the ₹ for the two-sided set). Per-set,
@@ -387,15 +395,28 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
         self.legs = [leg for leg in self.legs if ctx.lots(leg["symbol"])]
         return self.legs
 
+    def _roll_date(self, sold_expiry: date) -> date:
+        """The session the sells are rolled on: ``roll_days_before`` TRADING days before the
+        sold expiry (0 = expiry day itself). Trading days, not calendar days, so a Tuesday
+        expiry rolls on Monday and never onto a weekend or an NSE holiday."""
+        d = sold_expiry
+        for _ in range(self.roll_days_before):
+            d = previous_trading_day(d)
+        return d
+
     def _maybe_roll(self, ctx, live: list[dict], now: datetime) -> list[Signal]:
         if not self.sold_expiry:
             return []
         today = ctx.today()
         se = date.fromisoformat(self.sold_expiry)
+        rd = self._roll_date(se)
+        # ``today > rd`` (not ``== rd``) keeps the catch-up: a roll that could not fill on
+        # its day — no print, no chain — still fires on every later slice, expiry day
+        # included. With roll_days_before=0 this is exactly the old expiry-day test.
         due = (
             self.pending_resell
-            or today > se
-            or (today == se and now.time() >= self.roll_time)
+            or today > rd
+            or (today == rd and now.time() >= self.roll_time)
         )
         if not due:
             return []
@@ -492,9 +513,15 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
                 f"Stop out at −{self.stop_pct:g}% of {mlabel} "
                 f"({self._cadence_phrase('stop')})"
             )
+        when = (
+            f"{self.roll_time.strftime('%H:%M')} on expiry day"
+            if self.roll_days_before == 0
+            else f"{self.roll_time.strftime('%H:%M')}, {self.roll_days_before} trading day"
+                 f"{'s' if self.roll_days_before > 1 else ''} before the sold expiry"
+        )
         rules.append(
             f"No target by the sold weekly's expiry → roll both sells to the next weekly "
-            f"at the same strikes ({self.roll_time.strftime('%H:%M')} on expiry day)"
+            f"at the same strikes ({when})"
         )
         rules.append(
             "Sells about to land on the buy expiry → close the WHOLE cycle; a fresh one "

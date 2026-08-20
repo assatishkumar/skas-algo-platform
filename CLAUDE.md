@@ -458,7 +458,13 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   calendar month). Target 5% of FROZEN broker margin (₹1.43L/set measured 2026-08-19) on the
   WHOLE cycle (`pnl_basis="total"` — the rolls ARE the income); not hit by the sold expiry →
   roll both sells to the next weekly at the SAME strikes (roll_time 15:00, before the replay's
-  15:30 settle), banking into `realized_rolls`; **next weekly == buy expiry → the CYCLE ends**
+  15:30 settle), banking into `realized_rolls`. **`roll_days_before`** (owner 2026-08-20) moves
+  the roll OFF expiry day — a short weekly's margin spikes into settlement — firing N TRADING
+  days earlier (`_roll_date` walks `previous_trading_day`, never a weekend/NSE holiday). Ctor
+  default **0** = the historical expiry-day roll (§1: recovered deploys unchanged); FORM +
+  deploy default **1**, pinned in `test_backtest_v2_registry._INTENTIONAL`. The due test is
+  `today > roll_date`, so a roll that cannot fill on its day still catches up on expiry day.
+  Next weekly == buy expiry → **the CYCLE ends**
   (`fvc_cycle_end`, owner rule 2026-08-19: the buy leg is NEVER rolled) — exit all, clear the
   month latch, and a FRESH cycle (new FV read + hunt) opens next session, so a losing cycle is
   structurally bounded at ~one buy-expiry month. A window that ends mid-cycle emits the open

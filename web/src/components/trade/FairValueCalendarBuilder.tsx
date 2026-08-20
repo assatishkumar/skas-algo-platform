@@ -34,6 +34,8 @@ export default function FairValueCalendarBuilder() {
   const [targetPct, setTargetPct] = useState(5);
   const [stopPct, setStopPct] = useState(0);
   const [rollTime, setRollTime] = useState("15:00");
+  // 1 = roll the day BEFORE the sold expiry — expiry-day margin on a short weekly spikes.
+  const [rollDaysBefore, setRollDaysBefore] = useState(1);
   const [entryTime, setEntryTime] = useState("09:30");
   const [forceEntry, setForceEntry] = useState(false);
   const [capital, setCapital] = useState(500_000);
@@ -64,6 +66,7 @@ export default function FairValueCalendarBuilder() {
         profit_target_pct: targetPct,
         stop_loss_pct: stopPct,
         roll_time: rollTime,
+        roll_days_before: rollDaysBefore,
         entry_time: entryTime,
         force_entry: forceEntry,
         capital,
@@ -122,8 +125,11 @@ export default function FairValueCalendarBuilder() {
           <NumberInput className={inputClass} value={stopPct} onChange={setStopPct} /></label>
         <label className="block"><span className={lbl}>Entry time</span>
           <input className={inputClass} value={entryTime} onChange={(e) => setEntryTime(e.target.value)} /></label>
-        <label className="block"><span className={lbl}>Roll time (expiry day)</span>
+        <label className="block"><span className={lbl}>Roll time</span>
           <input className={inputClass} value={rollTime} onChange={(e) => setRollTime(e.target.value)} /></label>
+        <label className="block"><span className={lbl}>Roll days before expiry</span>
+          <NumberInput className={inputClass} value={rollDaysBefore} onChange={setRollDaysBefore} />
+          <span className="text-[11px] text-slate-500">1 = the day before (expiry-day margin spikes)</span></label>
         <label className="block"><span className={lbl}>Capital (₹)</span>
           <NumberInput className={inputClass} value={capital} onChange={setCapital} /></label>
       </div>

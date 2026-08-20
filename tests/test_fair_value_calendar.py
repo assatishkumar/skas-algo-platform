@@ -373,3 +373,53 @@ def test_state_round_trips():
     assert fresh.export_state() == st.export_state()
     assert fresh.sold_expiry == W3.isoformat() and fresh.roll_count == 1
     assert fresh.sold_specs == st.sold_specs
+
+
+# --------------------------------------------------------------- roll_days_before
+def test_roll_fires_the_trading_day_before_expiry_when_asked():
+    """Expiry-day margin on a short weekly spikes into settlement, so the owner's policy is
+    to roll the session BEFORE (owner rule 2026-08-20). W2 is Tue 11 Aug → roll Mon 10 Aug."""
+    st, ctx = setup(roll_days_before=1)
+    enter(st, ctx)
+    sold_syms = [leg["symbol"] for leg in st.legs if leg["dir"] < 0]
+    ctx.market.prices[next(s for s in sold_syms if strike(s) == 24700.0)] = 40.0
+    ctx.market.prices[next(s for s in sold_syms if strike(s) == 25300.0)] = 120.0
+
+    day_before = date(2026, 8, 10)                       # Monday
+    assert st._roll_date(W2) == day_before
+    assert tick(st, ctx, at(day_before, 14, 59)) == []   # before roll_time — nothing yet
+    out = tick(st, ctx, at(day_before, 15, 0))
+    assert [s.action.name for s in out] == ["EXIT_ALL", "EXIT_ALL",
+                                            "ENTER_SHORT", "ENTER_SHORT"]
+    news = [s for s in out if s.action.name == "ENTER_SHORT"]
+    assert {expiry(s.symbol) for s in news} == {W3.isoformat()}   # still the NEXT weekly
+    assert st.sold_expiry == W3.isoformat() and st.roll_count == 1
+
+
+def test_roll_days_before_defaults_to_the_old_expiry_day_roll():
+    """CLAUDE.md §1: the ctor default must leave a recovered deploy rolling where it did."""
+    st, _ = setup()
+    assert st.roll_days_before == 0 and st._roll_date(W2) == W2
+
+
+def test_roll_date_skips_weekends_and_holidays():
+    """Trading days, not calendar days — a Monday expiry rolls back to Friday."""
+    st, _ = setup(roll_days_before=1)
+    assert st._roll_date(date(2026, 8, 17)) == date(2026, 8, 14)   # Mon → Fri
+    st.roll_days_before = 2
+    assert st._roll_date(date(2026, 8, 11)) == date(2026, 8, 7)    # Tue → Fri (skips the weekend)
+
+
+def test_a_missed_early_roll_still_catches_up_on_expiry_day():
+    """No chain / no print on the roll day must not strand the sells into settlement."""
+    st, ctx = setup(roll_days_before=1)
+    enter(st, ctx)
+    sold_syms = [leg["symbol"] for leg in st.legs if leg["dir"] < 0]
+    ctx.market.prices[next(s for s in sold_syms if strike(s) == 24700.0)] = 40.0
+    ctx.market.prices[next(s for s in sold_syms if strike(s) == 25300.0)] = 120.0
+    saved = ctx.market.by_expiry.pop(W3.isoformat())      # the roll target won't price
+    assert tick(st, ctx, at(date(2026, 8, 10), 15, 0)) == []
+    ctx.market.by_expiry[W3.isoformat()] = saved
+    out = tick(st, ctx, at(W2, 9, 30))                    # expiry day, before roll_time
+    assert [s.action.name for s in out] == ["EXIT_ALL", "EXIT_ALL",
+                                            "ENTER_SHORT", "ENTER_SHORT"]

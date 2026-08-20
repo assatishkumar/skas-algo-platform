@@ -399,6 +399,9 @@ class FairValueCalendarDeploy(BaseModel):
     entry_time: str = "09:30"
     entry_window_end: str = "15:00"
     roll_time: str = "15:00"
+    # Roll the day BEFORE the sold expiry: expiry-day margin on a short weekly spikes into
+    # settlement (owner rule 2026-08-20). Ctor default is 0 (§1) — the policy lives here.
+    roll_days_before: int = 1
     max_rolls: int = 0  # 0 = roll until target or the buy-expiry cycle end
     profit_target_pct: float = 5.0  # % of frozen broker margin, whole percent
     stop_loss_pct: float = 0.0  # 0 = off (the cycle end is the structural bound)

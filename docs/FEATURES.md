@@ -255,7 +255,10 @@ are validated paper-first.
   the month. **The cycle:** enter at the start of a calendar month (retry daily until a valid setup
   lands); target **+5% of the frozen broker margin** on the WHOLE cycle (`pnl_basis="total"` — the
   rolls ARE the income); not hit by the sold weekly's expiry → roll both sold legs to the next
-  weekly at the SAME strikes, banking the decay. **The buy leg is never rolled** (owner rule): when
+  weekly at the SAME strikes, banking the decay — **one trading day before that expiry**, not on
+  it, because a short weekly's margin requirement spikes into settlement (`roll_days_before`,
+  form/deploy default 1; the constructor keeps the old expiry-day roll so a recovered deploy is
+  unchanged). **The buy leg is never rolled** (owner rule): when
   the sells would land on the buy expiry the CYCLE ENDS — close everything, and a fresh cycle (new
   FV read, new hunt) opens the next session, which structurally bounds a losing cycle at ~one
   buy-expiry month. Premiums are absolute ₹ from `premium_scale_before` (2024-08-01) and scale by

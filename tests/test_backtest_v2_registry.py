@@ -42,8 +42,12 @@ _SERVICE_ONLY = {"momentum_theta_gainer_intra": {"vol_multiplier", "slippage_bps
 #     1min (intraday family) or eod@15:20 (positional family).
 #   entry_time 14:30: the monthly family's ctor is None (enter any time) — the form pins
 #     the owner's 2:30 PM default so store replays don't enter at 09:15.
+#   roll_days_before: expiry-day margin on a short weekly spikes into settlement, so the
+#     owner's policy (2026-08-20) is to roll the day BEFORE — carried by the FORM and the
+#     deploy route; the ctor keeps 0 so a recovered deploy rolls where it always did.
 _INTENTIONAL = {("delta_neutral_monthly", "force_entry"), ("iron_fly_monthly", "force_entry"),
-                ("call_put_ratio_expiry", "sets")}
+                ("call_put_ratio_expiry", "sets"),
+                ("fair_value_calendar", "roll_days_before")}
 _INTENTIONAL |= {(sid, "profit_check") for sid in (
     "intraday_straddle", "call_put_ratio_expiry", "delta_neutral_monthly",
     "iron_fly_monthly", "batman_ratio_monthly", "call_ratio_monthly",

@@ -1036,6 +1036,7 @@ export interface FairValueCalendarDeploy {
   profit_target_pct: number;
   stop_loss_pct: number;
   roll_time: string;
+  roll_days_before: number;          // trading days before the sold expiry (1 = the day before)
   entry_time: string;
   force_entry: boolean;
   capital: number;
