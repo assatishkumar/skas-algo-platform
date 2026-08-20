@@ -1,7 +1,7 @@
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** Turn "2026-07-07" into "7 Jul '26"; pass anything unexpected through unchanged. */
-function prettyExpiry(iso: string): string {
+export function prettyExpiry(iso: string): string {
   const p = (iso ?? "").split("-"); // YYYY-MM-DD
   if (p.length !== 3) return iso;
   const mon = MONTHS[Number(p[1]) - 1];

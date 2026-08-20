@@ -269,3 +269,79 @@ def test_cycle_absolute_target_and_stop_tile():
     # unknowable → hidden, never guessed
     assert _threshold_info(None, "iron_fly_monthly", series, d1, d2) is None
     assert _threshold_info({"profit_target_pct": 2.5}, "iron_fly_monthly", [], d1, d2) is None
+
+
+def _cal(date, action, expiry, strike, units, price, **kw):
+    return {"date": date, "ticker": f"NIFTY|{expiry}|{strike}|CE", "action": action,
+            "units": units, "price": price, **kw}
+
+
+def test_two_expiry_position_is_ONE_cycle():
+    """A calendar holds a near weekly and a far monthly at once. Keyed by expiry (pre-2026-08-20)
+    the live page split one fair_value_calendar deploy into a 2-leg cycle and a 1-leg cycle —
+    two halves of the same trade, each with a nonsense P&L. Cycles key on the UNDERLYING."""
+    trades = [
+        _cal("2026-08-20 09:30", "SHORT", "2026-08-25", 23800, 195, 461.05, underlying_spot=24193),
+        _cal("2026-08-20 09:30", "SHORT", "2026-08-25", 24200, 195, 130.35, underlying_spot=24193),
+        _cal("2026-08-20 09:30", "BUY", "2026-09-29", 24600, 585, 202.45, underlying_spot=24193),
+    ]
+    cycles = reconstruct_cycles(trades)
+    assert len(cycles) == 1
+    c = cycles[0]
+    assert len(c["legs_detail"]) == 3 and c["live"] is True
+    # the cycle settles at its FURTHEST leg; each leg keeps its own expiry (the UI prints it)
+    assert c["expiry"] == "2026-09-29"
+    assert {lg["expiry"] for lg in c["legs_detail"]} == {"2026-08-25", "2026-09-29"}
+
+
+def test_two_expiry_cycle_closes_only_when_the_whole_book_is_flat():
+    """The sells expire/roll first; the cycle is not over until the far buy is closed too."""
+    trades = [
+        _cal("2026-08-20 09:30", "SHORT", "2026-08-25", 23800, 195, 461.05, underlying_spot=24193),
+        _cal("2026-08-20 09:30", "BUY", "2026-09-29", 24600, 585, 202.45, underlying_spot=24193),
+        _cal("2026-08-25 15:00", "COVER", "2026-08-25", 23800, 195, 300.0, exit_reason="fvc_roll"),
+        _cal("2026-08-25 15:00", "SHORT", "2026-09-01", 23800, 195, 420.0, exit_reason=None),
+        _cal("2026-09-01 15:00", "COVER", "2026-09-01", 23800, 195, 250.0, exit_reason="target"),
+        _cal("2026-09-01 15:00", "SELL", "2026-09-29", 24600, 585, 260.0, exit_reason="target"),
+    ]
+    cycles = reconstruct_cycles(trades)
+    assert len(cycles) == 1, [c["entry_date"] for c in cycles]
+    c = cycles[0]
+    assert c["live"] is False and c["exit_reason"] == "target"
+    assert len(c["legs_detail"]) == 3          # two sold episodes + the long
+    # the roll's re-sell on a NEW expiry is part of the same cycle, not a new one
+    assert {lg["expiry"] for lg in c["legs_detail"]} == {"2026-08-25", "2026-09-01", "2026-09-29"}
+
+
+def test_event_carries_the_overall_pnl_and_per_leg_expiry():
+    """Each event states realized + unrealized AND their sum (owner ask 2026-08-20), and every
+    leg row names its own expiry so a calendar's two legs are tellable apart."""
+    cycle = {
+        "underlying": "NIFTY", "expiry": "2026-09-29",
+        "entry_date": "2026-08-20 09:30", "exit_date": None,
+        "net_pnl": None, "underlying_entry": 24193.0,
+        "daily_pnl": [{"date": "2026-08-20", "pnl": -12000.0}],
+        "live": True,
+        "legs_detail": [
+            {"symbol": "NIFTY|2026-08-25|23800|CE", "underlying": "NIFTY", "strike": 23800,
+             "right": "CE", "expiry": "2026-08-25", "side": "short", "units": 195,
+             "entry_date": "2026-08-20 09:30", "entry_premium": 461.05, "exit_date": None,
+             "exit_price": None, "pnl": 0.0, "holding_days": None},
+            {"symbol": "NIFTY|2026-09-29|24600|CE", "underlying": "NIFTY", "strike": 24600,
+             "right": "CE", "expiry": "2026-09-29", "side": "long", "units": 585,
+             "entry_date": "2026-08-20 09:30", "entry_premium": 202.45, "exit_date": None,
+             "exit_price": None, "pnl": 0.0, "holding_days": None},
+        ],
+    }
+    m = build_cycle_detail(cycle, [], lambda d: 24193.0, [], index=0, run_id=3,
+                           strategy_id="fair_value_calendar", name="fvc")
+    ev = m["events"][0]
+    assert ev["realized_so_far"] == 0.0 and ev["unrealized_eod"] == -12000.0
+    assert ev["total_so_far"] == -12000.0
+    assert {lg["expiry"] for lg in m["legs"]} == {"2026-08-25", "2026-09-29"}
+    assert {lg["expiry"] for lg in ev["opened"]} == {"2026-08-25", "2026-09-29"}
+    # the near leg is 40 days shorter than the far one → its delta must NOT be priced off the
+    # cycle expiry (that was the bug the per-leg expiry fixes)
+    near = next(lg for lg in m["legs"] if lg["expiry"] == "2026-08-25")
+    far = next(lg for lg in m["legs"] if lg["expiry"] == "2026-09-29")
+    assert near["open_delta"] is not None and far["open_delta"] is not None

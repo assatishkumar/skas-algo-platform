@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { formatInr, pct } from "../lib/format";
+import { prettyExpiry } from "../lib/symbol";
 import type { CycleDetail, CycleDetailEvent, CycleDetailLeg } from "../types";
 
 /** Cycle Detail — the position lifecycle of one options cycle (entry → rolls/hedges → exit),
@@ -375,6 +376,14 @@ function EventTimeline({ m, active, toggle }: {
                         unrealized {formatInr(e.unrealized_eod)} <span className="opacity-60">EOD</span>
                       </span>
                     )}
+                    {/* where the cycle STOOD after this event — realized + unrealized. The two
+                        halves alone left the reader adding them up (owner ask 2026-08-20). */}
+                    {e.total_so_far != null && e.kind !== "exit" && (
+                      <span title="realized so far + unrealized at that day's EOD mark"
+                        className={`pl-3 border-l border-[var(--divider)] ${e.total_so_far > 0 ? "text-[var(--pos)]" : e.total_so_far < 0 ? "text-[var(--danger)]" : ""}`}>
+                        overall {formatInr(e.total_so_far)}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -397,7 +406,7 @@ function EvLine({ tag, l, lotSize, realized }: { tag: string; l: CycleDetail["ev
   if (tag === "HELD") return (
     <div className="flex items-center gap-2.5 opacity-75">
       <span className="flex-none w-[46px] text-center py-[2.5px] rounded-md font-extrabold text-[9.5px] tracking-wide" style={{ backgroundColor: tone.bg, color: tone.fg }}>{tag}</span>
-      <span className="font-[700] text-[13px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.side === "long" ? "BUY" : "SELL"} {l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">· {lotsLabel(l.units, lotSize)}</span></span>
+      <span className="font-[700] text-[13px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.side === "long" ? "BUY" : "SELL"} {l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">{l.expiry ? <> · <span className="text-[var(--muted)]">{prettyExpiry(l.expiry)}</span></> : null} · {lotsLabel(l.units, lotSize)}</span></span>
       <span className="text-[12.5px] text-[var(--muted)] font-semibold tabular-nums">{l.price != null ? `mark ${l.price.toFixed(2)}` : "mark —"}</span>
       {l.realized != null && <span className={`ml-auto font-[700] text-[12.5px] font-['Space_Grotesk'] tabular-nums ${signCls(l.realized)}`}>{formatInr(l.realized)}</span>}
     </div>
@@ -405,7 +414,7 @@ function EvLine({ tag, l, lotSize, realized }: { tag: string; l: CycleDetail["ev
   return (
     <div className="flex items-center gap-2.5">
       <span className="flex-none w-[46px] text-center py-[2.5px] rounded-md font-extrabold text-[9.5px] tracking-wide" style={{ backgroundColor: tone.bg, color: tone.fg }}>{tag}</span>
-      <span className="font-[700] text-[13px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.side === "long" ? "BUY" : "SELL"} {l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">· {lotsLabel(l.units, lotSize)}</span></span>
+      <span className="font-[700] text-[13px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.side === "long" ? "BUY" : "SELL"} {l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">{l.expiry ? <> · <span className="text-[var(--muted)]">{prettyExpiry(l.expiry)}</span></> : null} · {lotsLabel(l.units, lotSize)}</span></span>
       <span className="text-[12.5px] text-[var(--muted)] font-semibold tabular-nums">@{l.price?.toFixed(2)}{cash}</span>
       {realized && l.realized != null && <span className={`ml-auto font-[700] text-[12.5px] font-['Space_Grotesk'] tabular-nums ${signCls(l.realized)}`}>{formatInr(l.realized)}</span>}
     </div>
@@ -449,7 +458,7 @@ function LegsTable({ m, toggle, legState, active }: {
               backgroundColor: active && legState(l) === "on" ? "var(--stat)" : undefined,
             }}>
               <span className="text-center py-[2.5px] rounded-md font-extrabold text-[10px]" style={{ backgroundColor: l.side === "long" ? "var(--ok-bg)" : "var(--danger-bg)", color: l.side === "long" ? "var(--ok-text)" : "var(--danger)" }}>{l.side === "long" ? "BUY" : "SELL"}</span>
-              <span className="font-[700] text-[13.5px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">· {lotsLabel(l.units, m.lot_size)} · Δ{l.open_delta != null ? (l.open_delta >= 0 ? "+" : "−") + Math.abs(l.open_delta).toFixed(2) : "—"}</span></span>
+              <span className="font-[700] text-[13.5px] font-['Space_Grotesk'] text-[var(--strong)] tabular-nums">{l.right} {l.strike.toLocaleString("en-IN")} <span className="text-[var(--faint)] font-semibold">{l.expiry ? <> · <span className="text-[var(--muted)]">{prettyExpiry(l.expiry)}</span></> : null} · {lotsLabel(l.units, m.lot_size)} · Δ{l.open_delta != null ? (l.open_delta >= 0 ? "+" : "−") + Math.abs(l.open_delta).toFixed(2) : "—"}</span></span>
               <EvBadge id={l.open_event} date={l.open_ts} c={oc} />
               <EvBadge id={l.close_event} date={l.close_ts} c={cc} />
               <span className="text-[12.5px] font-semibold text-[var(--muted)] tabular-nums">{l.open_price?.toFixed(2)} → {l.close_price != null ? l.close_price.toFixed(2) : "—"}</span>

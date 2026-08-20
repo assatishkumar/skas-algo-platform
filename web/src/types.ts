@@ -926,12 +926,14 @@ export interface MtgBtResult {
 
 export interface CycleDetailEventLeg {
   ref: number; symbol: string; side: string; right: string; strike: number; units: number;
+  expiry?: string | null;   // the LEG's own expiry — a calendar cycle spans two
   price: number | null; cashflow: number | null; realized: number | null;
 }
 export interface CycleDetailEvent {
   id: string; kind: "entry" | "roll" | "hedge" | "exit"; at: string; spot: number | null;
   net_delta: number | null; reason: string; realized_so_far: number;
   unrealized_eod?: number | null; // open-book MTM at the event day's EOD mark (0 on a flat exit)
+  total_so_far?: number | null;   // realized + unrealized: where the cycle stood at this event
   open_refs?: number[];           // legs still OPEN right after this event (held-through book)
   // legs held THROUGH the event: price = 1-min-store mark at the event minute, realized =
   // that leg's unrealized P&L at that mark; both null when the store has no print (never faked)
@@ -940,6 +942,7 @@ export interface CycleDetailEvent {
 }
 export interface CycleDetailLeg {
   ref: number; symbol: string; side: string; right: string; strike: number; units: number;
+  expiry?: string | null;   // per leg, not per cycle (the calendar family holds two)
   open_event: string | null; close_event: string | null; open_ts: string; close_ts: string | null;
   open_price: number; close_price: number | null; open_delta: number | null;
   days: number | null; pnl: number;

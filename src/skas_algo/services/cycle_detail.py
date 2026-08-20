@@ -55,13 +55,22 @@ def reconstruct_cycles(trades: list[dict]) -> list[dict]:
         is_exit = t.get("action") in _EXIT_ACTIONS
         if not (is_entry or is_exit):
             continue
-        cyc = open_c.get(mm["expiry"])
+        # Keyed by UNDERLYING, not expiry (2026-08-20). A two-expiry position — the calendar
+        # family's near-weekly sells against a monthly buy, asymmetric_premium's CE/PE on
+        # different weeks — is ONE cycle; keying by expiry split a live fair_value_calendar
+        # deploy into a "+1.15L, 2 legs" cycle and a "−1.18L, 1 leg" cycle that were the two
+        # halves of the same trade. Multi-underlying runs (intraday_strangle_combo) still get
+        # a cycle per index, which is what they want. SIDE EFFECT, intended: a Donchian BASKET
+        # (42 names on one monthly expiry) used to collapse into a single 100-leg "cycle";
+        # it now lists one cycle per name, which is what a cycle actually is here.
+        key = mm["underlying"]
+        cyc = open_c.get(key)
         if cyc is None:
             if not is_entry:
                 continue
             cyc = {
                 "underlying": mm["underlying"],
-                "expiry": mm["expiry"],
+                "expiry": mm["expiry"],   # widened below to the LAST expiry the cycle holds
                 "entry_date": t["date"],
                 "legs": {},
                 "closed_legs": [],   # finished episodes, kept in order
@@ -69,7 +78,9 @@ def reconstruct_cycles(trades: list[dict]) -> list[dict]:
                 "exit_spot": None,
                 "exit_reason": None,
             }
-            open_c[mm["expiry"]] = cyc
+            open_c[key] = cyc
+        if mm["expiry"] > cyc["expiry"]:
+            cyc["expiry"] = mm["expiry"]
         legs, sym = cyc["legs"], t["ticker"]
         units, price = float(t.get("units") or 0), float(t.get("price") or 0)
         # ONE record per OPEN→CLOSE episode, not per symbol. A strategy that re-sells the
@@ -90,6 +101,7 @@ def reconstruct_cycles(trades: list[dict]) -> list[dict]:
                     "underlying": mm["underlying"],
                     "strike": mm["strike"],
                     "right": mm["right"],
+                    "expiry": mm["expiry"],
                     "side": "long" if t["action"] == "BUY" else "short",
                     "units": 0.0,
                     "entry_premium": 0.0,
@@ -134,7 +146,7 @@ def reconstruct_cycles(trades: list[dict]) -> list[dict]:
             lg["open_units"] <= 1e-9 for lg in legs.values()
         ):
             done.append(_finalize_recon(cyc))
-            del open_c[mm["expiry"]]
+            del open_c[key]
     for cyc in open_c.values():
         done.append(_finalize_recon(cyc))
     done.sort(key=lambda c: c["entry_date"], reverse=True)  # newest first (live-page order)
@@ -169,6 +181,7 @@ def _finalize_recon(cyc: dict) -> dict:
                 "underlying": lg["underlying"],
                 "strike": lg["strike"],
                 "right": lg["right"],
+                "expiry": lg.get("expiry"),
                 "side": lg["side"],
                 "units": int(lg["units"]),
                 "entry_date": lg["entry_date"],
@@ -297,6 +310,9 @@ def build_cycle_detail(
                 "ref": i,
                 "symbol": d.get("symbol"),
                 "right": d.get("right"),
+                # A calendar holds two expiries at once, so the LEG's expiry — not the
+                # cycle's — is what the UI must print and what the greeks must discount to.
+                "expiry": str(d.get("expiry") or expiry or "")[:10] or None,
                 "strike": float(d.get("strike")),
                 "units": int(d.get("units") or 0),
                 "side": side,
@@ -320,7 +336,8 @@ def build_cycle_detail(
             else (spot_fn(lg["open_ts"].date()) or entry_spot)
         )
         iv, dlt = _leg_greeks(
-            lg["open_price"], s0, lg["strike"], _years_to(expiry, lg["open_ts"]), r, lg["right"]
+            lg["open_price"], s0, lg["strike"],
+            _years_to(lg["expiry"] or expiry, lg["open_ts"]), r, lg["right"]
         )
         lg["iv"], lg["open_delta"] = iv, dlt
 
@@ -391,6 +408,12 @@ def build_cycle_detail(
                 "reason": _reason(kind, tags, cycle, opened, closed),
                 "realized_so_far": round(realized, 2),
                 "unrealized_eod": unrealized,
+                # realized + unrealized: where the cycle STOOD at this event. The two halves
+                # alone made the reader do the arithmetic (owner ask 2026-08-20); None when
+                # there is no mark to add.
+                "total_so_far": (
+                    round(realized + unrealized, 2) if unrealized is not None else None
+                ),
                 # the standing book right AFTER this event — lets the UI show which legs were
                 # simply HELD through the event vs touched by it (owner ask, 2026-07-27)
                 "open_refs": [lg["ref"] for lg in open_now],
@@ -434,6 +457,7 @@ def build_cycle_detail(
         "run_name": name,
         "live": bool(cycle.get("live")),  # an open (running) cycle — legs still held
         "underlying": underlying,
+        # the FURTHEST expiry the cycle holds (a calendar's buy leg); each leg carries its own
         "expiry": str(expiry)[:10],
         "lot_size": _lot_size(underlying, expiry),
         "entered_at": cycle["entry_date"],
@@ -517,6 +541,9 @@ def _reason(kind: str, tags: set, cycle: dict, opened: list, closed: list) -> st
                 "The adjustment short decayed — banked its premium and re-sold a fresh "
                 "short nearer the money (post-iron-fly adjustment roll)."
             )
+        # LEGACY (pre-2026-08-19): the buy leg used to roll a month out on a collision.
+        # It never rolls now — the collision ENDS the cycle (fvc_cycle_end) — but runs
+        # saved before that rule still carry this tag, so the copy stays.
         if "fvc_buy_roll" in tags:
             return (
                 "The sells were due to land on the buy legs' expiry — moved the monthly "
@@ -570,7 +597,8 @@ def _net_delta(open_legs, spot, expiry, when, r) -> float | None:
         iv = lg.get("iv")
         if iv is None:
             continue
-        d = bs.delta(spot, lg["strike"], _years_to(expiry, when), r, iv, lg["right"])
+        d = bs.delta(spot, lg["strike"], _years_to(lg.get("expiry") or expiry, when),
+                     r, iv, lg["right"])
         total += lg["dir"] * lg["units"] * d
     return total
 
@@ -597,6 +625,7 @@ def _held_rows(held: list[dict], ts: datetime) -> list[dict]:
                 "side": lg["side"],
                 "right": lg["right"],
                 "strike": lg["strike"],
+                "expiry": lg.get("expiry"),
                 "units": lg["units"],
                 "price": mark,
                 "cashflow": None,
@@ -615,6 +644,7 @@ def _event_leg(lg, which: str) -> dict:
         "side": lg["side"],
         "right": lg["right"],
         "strike": lg["strike"],
+        "expiry": lg.get("expiry"),
         "units": lg["units"],
         "price": price,
         "cashflow": round(cash) if cash else None,
@@ -629,6 +659,7 @@ def _leg_row(lg, open_ev, close_ev) -> dict:
         "side": lg["side"],
         "right": lg["right"],
         "strike": lg["strike"],
+        "expiry": lg.get("expiry"),
         "units": lg["units"],
         "open_event": open_ev,
         "close_event": close_ev,

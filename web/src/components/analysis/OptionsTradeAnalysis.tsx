@@ -315,7 +315,7 @@ export function CycleSummary({ cycles, points, runId }: {
           </thead>
           <tbody>
             {sorted.map((r) => (
-              <tr key={`${r.c.expiry}-${r.c.entry_date}`} className="border-b border-slate-800/40">
+              <tr key={`${r.c.underlying}-${r.c.expiry}-${r.c.entry_date}`} className="border-b border-slate-800/40">
                 <td className="py-1.5 pr-3">
                   {runId != null ? (
                     <Link to={`/runs/${runId}/cycle/${cycles.indexOf(r.c)}`}
@@ -404,7 +404,7 @@ export default function OptionsTradeAnalysis({ analysis }: { analysis: RunAnalys
       </div>
       <CycleSummary cycles={cycles} points={points} />
       {cycles.map((c) => (
-        <CycleCard key={`${c.expiry}-${c.entry_date}`} cycle={c} points={points}
+        <CycleCard key={`${c.underlying}-${c.expiry}-${c.entry_date}`} cycle={c} points={points}
           live={c.open ? live : null}
           // Open cycles (the ones being watched) and tiny runs auto-expand; a 500-cycle
           // intraday run starts fully collapsed — that page froze mounting 1,000+ SVGs.
