@@ -93,7 +93,11 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   same bearer scheme covers the (paused) iOS app.
 
 ## 8. Conventions
-- New strategies onboard via `strategies/registry.py`, **not** engine edits.
+- New strategies onboard via `strategies/registry.py`, **not** engine edits — and they ship
+  with docs: a `docs/FEATURES.md` §3 entry AND a `/docs` card in
+  `web/src/pages/StrategiesPage.tsx` (STRATEGIES + META). Both are pinned by
+  `tests/test_strategy_docs_coverage.py`, which also checks §3's ID/file counts — eight
+  strategies had drifted out of the docs before it existed (2026-08-20).
 - **NIFTY strikes = 100-multiples only** (owner rule, 2026-07): NIFTY lists 50s but automated
   strategies must never SELECT one. Enforced centrally via `contract_specs.selection_step` /
   `eligible_strikes` (`_SELECTION_STEP={"NIFTY":100}`, extensible) at THREE candidate choke points —
@@ -184,6 +188,21 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   byte-identical). LIVE: `LiveMarketView.set_indicators` is EMPTY until the Phase-2 manager
   seeding lands → deploys FAIL CLOSED (no entries, no blind exits). Backtest-first.
   Coverage: `tests/test_gap_reversal.py`.
+- **happy_twins** (`strategies/happy_twins.py`, equity, 2026-08-18): weekly dual-SuperTrend —
+  ENTER on the FAST ST (2,1) TURNING green (a TRANSITION, so a recovered/fresh run never chases
+  an old signal), EXIT while the SLOW ST (3,1) is red (a STATE, so a flip missed across a restart
+  still closes on the next bar). Rides the same generic indicator precompute as gap_reversal
+  (`needs_indicators`, weekly resample) → **LIVE fails closed** until the Phase-2 manager seeding
+  lands. Three overlays, all default-off: `park_symbol` (park idle capital in e.g. GOLDBEES while
+  EVERY trading name is flat; the sale funds the entry in the SAME slice — the park symbol must be
+  in the run's symbol list and is excluded from the twins logic), `capital_parts` (portfolio mode:
+  one part per flip, strongest-first by close-vs-20DMA, at most N names), `regime_symbol` (the
+  exposure BRAKE — no NEW part while that index's slow ST is red; open names still exit normally).
+  The route appends `regime_symbol` to the run's symbols for data. **Point-in-time membership**
+  (`membership={effective_iso: [syms]}`, `_membership.MembershipGate`) gates ENTRIES ONLY, never
+  exits — shared with supertrend_momentum/nifty_shop and fed by the backtest route's
+  `pit_universe` flag on the `nifty500mom50` universe (trades the UNION of ever-members;
+  `data/mom50_membership.json` labels each rebalance's source — official capture vs replication).
 - **21_ema_momentum** (`strategies/ema21_momentum.py`, NIFTY): daily EMA(21)-on-high/low
   channel; fresh close beyond the band at 15:20 → OTM 100-pt credit spread (bull put /
   bear call), width 300-500, credit ₹80-140 (ideal 90-130 preferred; miss → SKIP and
@@ -206,7 +225,8 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   basket margin if available else model Σ shorts — source recorded; model reads ~2×
   broker). Net short 2 lots/side beyond the ⅓ strikes — open-ended risk, stop is the only
   guard. Deploy-only + broker quote source REQUIRED (strike selection needs live premiums;
-  no backtest by design — flat-vol BS would misplace the smile-driven ⅓ strikes).
+  no EOD backtest by design — flat-vol BS would misplace the smile-driven ⅓ strikes; the
+  1-min store replay covers it on real premiums).
 - **intraday_straddle** (`strategies/intraday_straddle.py`, NIFTY / BANKNIFTY): a DAILY
   intraday short straddle on the nearest weekly. Sell ATM CE+PE (or ~0.6Δ ITM via
   `strike_delta`, which relaxes the OTM filter) at `entry_time` (default 09:18, once/day
@@ -223,7 +243,8 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   PEAK profit lifts the stop `trail_step_pct`) or `"below_peak"` (peak − `trail_step_pct`);
   trailing off when a trail pct is 0. No fixed profit target (the trail is the upside). Uncapped
   short-straddle tails → the stop is the only guard. Deploy-only + broker source required (live
-  chain for ATM/delta); NO backtest (EOD-slice can't model intraday SL/trailing). `peak_pct`
+  chain for ATM/delta); no EOD backtest (the daily slice can't model an intraday SL/trail) —
+  REPLAYABLE on the 1-min store instead. `peak_pct`
   persists in export_state for the trail; one entry/day (a stopped-out day doesn't re-enter).
 - **intraday_strangle_combo** (`strategies/intraday_strangle_combo.py`, NIFTY + SENSEX,
   owner deck 2026-08-12): sell 1 lot OTM3 CE + PE on the current weekly at 09:16, flat 15:25.
@@ -263,6 +284,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   SENSEX 2026-08-13. The side lifecycle runs on a persisted `pending` re-entry so the budget
   is charged when one LANDS, not when it is owed (a restart that dropped it would leave the
   counters spent but the side looking untraded → free re-entries).
+  **`wing_steps`** (>0) buys a protective long that many listing-grid steps beyond each short —
+  the intraday IRON FLY/condor: defined risk BY CONSTRUCTION (a stop can't work through a gap)
+  and far less broker margin. The wing is protection, NOT a managed leg — no 40/70 exits of its
+  own, it rolls with its side's re-entry and is sold the moment that side is done for the day.
   Risk is a **rupee** MTM stop per index (`mtm_stop_per_lot`, NIFTY ₹1,500/lot, SENSEX 0 = off),
   day-cumulative (realized + open) and evaluated PER underlying; on breach the index's book
   closes and stops for the day. It **outranks a leg stop in the same tick** — and with the
@@ -293,8 +318,8 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   first close / no prior-day bars / fetch raised), the manager snapshot + `/live/summary` tile
   carry it (amber banner + "data ⚠" chip), and ALL entries — **including the force button** —
   stay disabled while set (a forced book would have no working VWAP exit); exits still run.
-  Deploy-only + broker source required; NO backtest yet (GFF intraday option data will seed
-  one later). Coverage: `tests/test_weekly_intraday_straddle.py`.
+  Deploy-only + broker source required; no EOD backtest — REPLAYABLE on the 1-min store (the
+  GFD import + daily capture that seeded it are the data this was waiting for). Coverage: `tests/test_weekly_intraday_straddle.py`.
 - **delta_neutral_monthly** (18Δ BANKNIFTY monthly strangle): entry expiry+2 TRADING days
   ~11:00 (force_entry deploy flag skips the wait); adjustment rule is the spec's EXAMPLE,
   not its prose — when |CE−PE| > 40% of (CE+PE), the CHEAP side rolls to the strike whose
@@ -311,7 +336,8 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   makes replay exit ₹ == live exit ₹ exactly (the replay's model margin is shorts-only,
   wings-blind, linear-in-short-count — fine for reporting, wrong for thresholds). Stop param
   default OFF; recurring monthly (done_expiry gates same-month re-entry). Deploy-only + broker source
-  required (live-chain delta solve); NO backtest — BANKNIFTY chain history ≈ 2 months in cache.
+  required (live-chain delta solve); no EOD backtest — BANKNIFTY chain history ≈ 2 months in
+  cache — but REPLAYABLE on the 1-min store (a full monthly cycle needs ~2 months captured).
 - **Post-iron-fly adjustment (shared, 2026-07)** — on the BASE class, GATED by `ironfly_adjust`
   (**default False in delta_neutral_monthly** per §1 — a running deploy is unchanged on recovery;
   runtime-togglable via `set_ironfly_adjust` → `POST /live/{id}/ironfly-adjust`, persisted in
@@ -333,7 +359,8 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   (the base machinery is underlying-generic — `_STRIKE_STEP`/`lot_size_for` cover all three; SENSEX
   resolves off the broker BFO chain + BSE:SENSEX spot, no cache needed for a single-underlying
   broker-source run). Same monthly cadence + margin/target/exit machinery inherited. Deploy-only
-  (`POST /trade/options/iron-fly/deploy`, broker source required, `_DEPLOY_ONLY`); no backtest.
+  (`POST /trade/options/iron-fly/deploy`, broker source required, `_DEPLOY_ONLY`); no EOD
+  backtest — REPLAYABLE on the 1-min store (same ~2-months-per-cycle caveat).
   **SENSEX (and BANKNIFTY beyond its ~2-month cache) needs `force_entry`/the Live force button** —
   `_is_entry_day`'s 45-day expiry lookback is cache-only + `option_expiries` returns only FUTURE
   expiries, so the "2 days after expiry" auto-trigger can't fire without cached expiry history.
@@ -421,7 +448,8 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   runs (real minute fills, per-fill charges, frozen pushed margin, de-carried parity
   spot). Coverage: `tests/test_exit_cadence.py`, replay round-trips in
   `tests/test_intraday_replay.py`, registry pins in `tests/test_backtest_v2_registry.py`.
-- **fair_value_calendar** (`strategies/fair_value_calendar.py`, NIFTY, 2026-08-19): monthly
+- **fair_value_calendar** (`strategies/fair_value_calendar.py`, NIFTY, 2026-08-19; ref video
+  https://www.youtube.com/watch?v=tn-73I63yBw&t=2162s): monthly
   premium-matched ratio calendar — sell a ~₹150 and a ~₹450 near-weekly (≥`min_sold_dte`=4 DTE)
   + buy 3× a ~₹200 monthly, SAME side; the side comes from the **fair-value line** (Jan-2020
   high 12,430 × 1.117^yrs): above by >`fv_band_pct` → PE, below/inside → CE (`side_mode` also
@@ -443,8 +471,15 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   `premium_scale_before` (2024-08-01) and scale by spot/`premium_ref_spot` before (owner: ₹150
   at 25k wasn't ₹150 at 16k); the gap cap scales identically. Subclasses DeltaNeutralMonthly
   (ddc precedent) with phase="calendar" so the base delta-adjust machinery never engages.
-  Deploy-only + broker source (no deploy route yet — backtest-first); REPLAYABLE on the 1-min
-  store (the first two-expiry strategy WITH a backtest). Coverage:
+  Deploy-only + broker source (`POST /trade/options/fair-value-calendar/deploy` + the Deploy
+  page's "FV calendar" builder, 2026-08-19 — deploy default `side_mode="ce"`, the only mode the
+  backtest likes); REPLAYABLE on the 1-min store (the first two-expiry strategy WITH a backtest).
+  FOOTGUN: the ctor knob is `sets`, but the backtest form's Sizing **LOTS** is the lot-SET count —
+  the harness maps `lots`→`sets` (`intraday_replay`), because a `lots` kwarg falls into
+  `**_ignored` and silently traded 1 set under a 5-set capital plan until 2026-08-19. Never
+  re-add a separate "lot sets" field to the form. **5y store replay, 1 set, ₹1.45L margin/set:**
+  ce +₹147k (65 cycles, 77% win, DD ₹52k, t=2.4) · fair_value −₹64k · both −₹154k · pe −₹196k —
+  monthly re-centering rides the drift on calls, chases crashes down on puts. Coverage:
   `tests/test_fair_value_calendar.py`.
 - **broker_smoke_test** (Brokers-page card, 2026-07-18): the end-to-end REAL-order probe —
   BUY 1 lot of a cheap OTM weekly (premium band ₹5–20, nearest ₹10, OI floor) or 1 share of

@@ -45,7 +45,7 @@ live. The invariant is guarded by golden tests (`tests/test_sst_parity.py`,
 
 ## 3. Strategy catalog
 
-Strategies register in `strategies/registry.py` (20 IDs across 15 files) and onboard there,
+Strategies register in `strategies/registry.py` (32 IDs across 29 files) and onboard there,
 never by editing the engine. `intraday=True` means "decide every tick"; otherwise the run
 decides once per day at a set time. "Backtest" notes whether a strategy runs the FULL shared
 engine, a dedicated Black-Scholes service, or is deploy-only.
@@ -85,6 +85,22 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   price); live deploys fail closed until the live indicator seeding lands. The spec's short
   leg (gap-down + RSI>90) awaits a sell-CE options variant — cash equity can't hold
   overnight shorts.
+
+- **`happy_twins` — weekly dual-SuperTrend trend follower (long-only).** One indicator family,
+  two speeds: **ENTER** when the FAST SuperTrend (ATR 2, factor 1, weekly) *turns* green — a
+  transition, not a state, so a freshly deployed/recovered run never chases an old signal — and
+  **EXIT** while the SLOW SuperTrend (ATR 3, factor 1) is red — a state, so a flip missed across
+  a restart still closes on the next bar. Fast in, slow out: the trigger gets you in early while
+  the exit stops the whipsaw a single fast ST inflicts. Three overlays, each off by default:
+  **`park_symbol`** parks idle capital in an ETF (e.g. GOLDBEES) whenever every trading name is
+  flat and unparks in the same slice as the entry; **`capital_parts`** switches to portfolio mode
+  (equity split into parts, one part per green flip, at most N names held — when more names flip
+  than there are free parts the STRONGEST win, ranked by close vs the 20-day mean);
+  **`regime_symbol`** is the exposure brake — while that index's own slow SuperTrend is red no
+  NEW part is deployed, so a bad regime bleeds the book out through its own exits instead of
+  liquidating it. Rides the generic indicator precompute (weekly resampling, flips visible the
+  next trading day, no lookahead). FULL backtest; LIVE deploys **fail closed** until live
+  indicator seeding lands (same posture as `gap_reversal`).
 
 ### 3.2 Options strategies with a FULL backtest (real cached chain)
 
@@ -135,15 +151,34 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   stock F&O, can fill). `intraday=True`, one-shot. FULL backtest. **This is the pilot vehicle**
   for the first real order (1-lot single leg).
 
-### 3.3 Options strategies — deploy-only or dedicated backtest
+### 3.3 Options strategies — deploy-only, 1-min-store replay, or a dedicated backtest
+
+These don't ride the shared EOD engine (its slice is one trading day, which can't model an
+intraday stop or a strike picked off the live chain). Most are now backtested by replaying
+the self-captured 1-min option store through the same class the deploy runs (§4); the rest
+are validated paper-first.
 
 - **`call_put_ratio_expiry` — expiry-day 1:3 premium seller.** Only on each index's weekly
   expiry day (NIFTY Tue / SENSEX Thu), 09:20–09:27: BUY an ATM straddle, SELL 3 lots/side at
   the strikes trading nearest ⅓ of each ATM premium (live-chain lookup; >30% miss → skip the
   day). Exit ±1.1%/−1% of the **broker** basket margin, or 15:20; never carries (0DTE).
   Net short 2 lots/side beyond the ⅓ strikes → open-ended risk, the stop is the only guard.
-  **Deploy-only, no backtest** (smile-driven strike selection needs the live chain; flat-vol BS
-  would misplace the ⅓ strikes). Broker quote source required.
+  Deploy-only for trading (broker quote source required) — there is no EOD backtest, because
+  flat-vol Black-Scholes would misplace the smile-driven ⅓ strikes; the **1-min store replay**
+  backtests it on real captured premiums instead.
+- **`intraday_straddle` — daily intraday short straddle (NIFTY / BANKNIFTY).** SELL the ATM CE+PE
+  on the nearest weekly at `entry_time` (09:18; 0DTE on expiry day) and exit at `exit_time` —
+  **15:20** for new deploys/backtests, because Zerodha auto-squares intraday F&O at 15:26 and a
+  15:25 exit leaves no room to retry a rejected leg (the 2026-08-11 failure). `strike_delta`
+  (e.g. 0.6) sells slightly-ITM legs picked by per-share BS delta instead of the ATM. Risk is
+  two stops off the **frozen broker margin**: a fixed `stop_loss_pct` (2%) and a trailing stop
+  that only ever ratchets UP (`ratchet` — each +`trail_trigger_pct` of PEAK profit lifts the stop
+  a step; `below_peak` — peak − step); there is no fixed profit target, the trail is the upside.
+  `leg_book_pct` books a **melted leg on its own** once it has given up that % of its entry
+  premium (the remaining reward is pennies against its gamma); the banked profit stays in the
+  day's P&L so the stop/trail keep guarding the whole day, not just the surviving leg. One entry
+  per day (a stopped-out day does not re-enter); the time exit never waits on margin. Deploy-only
+  + broker source (the live chain picks the strike); **backtested on the 1-min store**.
 - **`weekly_intraday_straddle` — weekly-cycle intraday short straddle (NIFTY).** A cycle spans one
   weekly expiry; the ATM strike (nearest 100) is **locked once at 09:20 on the first trading day
   after the prior weekly expiry** and traded every day of the week on that fixed strike (a mid-cycle
@@ -158,8 +193,8 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   `intraday_bars` dropped volume) — for its VWAP and prior-day low. If those bars can't be fetched
   (no historical-data subscription / broker outage) the run shows an **amber data error** on the
   Live page and refuses **all** entries — even a forced one — until bars flow again (exits still
-  run). **Deploy-only, broker source required, no backtest yet** (Global Financial Feeds
-  intraday-option data will seed one later).
+  run). Deploy-only for trading, broker source required; **backtested on the 1-min store**
+  (the purchased GFD history + the platform's own daily capture is exactly what seeded it).
 - **`delta_neutral_monthly` — 18Δ BANKNIFTY strangle → iron fly.** Enter 2 trading days after
   the prior monthly expiry ~11:00: SELL the ~18-delta PE and CE (delta solved from the live
   chain). When |CE−PE| > 40% of the combined premium, roll the *cheap* side to the strike whose
@@ -170,8 +205,9 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   one; an adjustment's margin jump never moves them) while the dynamic margin keeps feeding
   margin-used/sizing/reports; `exit_margin_basis="current"` restores the historical
   re-freeze-per-change (iron fly targets 2.5% of its *reduced* margin; optional stop default off);
-  recurring monthly. **Deploy-only, no backtest** (live-chain delta solve; only ~2 months of
-  BANKNIFTY chain history cached). `force_entry` deploy flag skips the entry-day wait.
+  recurring monthly. Deploy-only for trading (the delta solve needs a live chain) with a
+  **1-min store replay** for backtesting — but the form warns that a full monthly cycle needs
+  ~2 months of captured BANKNIFTY chain. `force_entry` deploy flag skips the entry-day wait.
   **Exit/adjust controls (2026-07, from run #233):** adjustments sample on their own cadence
   `adjust_check` (form default 5min; unset → rides `profit_check`) and never fire in the first
   `adjust_after_open_min` minutes after 09:15 (form default 5 — deep-OTM wing strikes don't
@@ -187,8 +223,8 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   UNTESTED side and roll it (close at ≤10Δ or ≤¼ of its sold premium, re-sell); it exits ALL only
   when the expiry payoff can no longer be positive (max payoff < 0). The naked short adds an
   uncapped tail → an optional hard MTM stop is the backstop. Togglable live via
-  `POST /live/{id}/ironfly-adjust` (persisted; survives restart). Deploy-only, broker source
-  required, no backtest.
+  `POST /live/{id}/ironfly-adjust` (persisted; survives restart). Deploy-only for trading, broker
+  source required; **1-min store replay** for backtesting (same ~2-months-per-cycle caveat).
 - **`double_diagonal_calendar` — NIFTY double diagonal (the first two-expiry position).**
   SELL a near-weekly ~20-25Δ strangle, BUY a farther-expiry ~15-20Δ strangle as the calendar
   hedge (its residual time value rounds the payoff tent). VIX regime (High ≥20 / Med 13-19 /
@@ -200,6 +236,35 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   adjustments inside 3 DTE; at the near expiry the WHOLE structure squares — far hedges are
   never left naked. Subclasses `delta_neutral_monthly` (margin freeze / cadences / exits /
   persistence spine). Deploy-only, broker source required, no backtest.
+- **`fair_value_calendar` — premium-matched ratio calendar with a fair-value side pick (NIFTY).**
+  The owner's video spec (ref video: https://www.youtube.com/watch?v=tn-73I63yBw&t=2162s),
+  two halves:
+  - **The mean-reversion side pick.** A "fair value" line = a post-crash reference high (the
+    Jan-2020 COVID high, **12,430**) compounded at a long-run **11.7%/yr**. Spot significantly
+    ABOVE the line → a **PUT** calendar (a reversion down pays); significantly BELOW → a **CALL**
+    calendar; inside the ±`fv_band_pct` band → CALLs (better rollover carry). `side_mode` makes
+    the selector optional: `fair_value` (auto) / `both` (both sides every month) / `pe` / `ce`.
+  - **The structure**, hunted by PREMIUM rather than by strike distance (per lot-set): SELL 1 lot
+    of the near weekly (≥ `min_sold_dte`, 4 DTE) at ~₹150, SELL 1 lot of the same weekly at ~₹450
+    (deliberately ITM), BUY **3 lots** of the MONTHLY after it at ~₹200. Sold ≈ 150+450 ≈ bought
+    ≈ 3×200 — **premium-matched**, so the net debit is ~0 and the % target anchors to margin.
+  **The 900-point gap rule** is the risk cap: each sold leg earns ~70-80 pts per weekly roll →
+  ~150/week → ~450 over a month's three rolls, so only enter when the dead zone (|buy strike −
+  furthest sell strike|) is ≤ 2× that expected income. Premium hunting makes the gap *volatility's*
+  choice, so the rule doubles as a vol filter; a failed check retries the NEXT day and never burns
+  the month. **The cycle:** enter at the start of a calendar month (retry daily until a valid setup
+  lands); target **+5% of the frozen broker margin** on the WHOLE cycle (`pnl_basis="total"` — the
+  rolls ARE the income); not hit by the sold weekly's expiry → roll both sold legs to the next
+  weekly at the SAME strikes, banking the decay. **The buy leg is never rolled** (owner rule): when
+  the sells would land on the buy expiry the CYCLE ENDS — close everything, and a fresh cycle (new
+  FV read, new hunt) opens the next session, which structurally bounds a losing cycle at ~one
+  buy-expiry month. Premiums are absolute ₹ from `premium_scale_before` (2024-08-01) and scale by
+  spot before that (₹150 at 25k was not ₹150 at 16k); the gap cap scales identically.
+  **1-min-store backtest** (the first two-expiry strategy with one) + a deploy route (broker source
+  required) for the paper forward test. **5-year store replay, 1 lot-set, ₹1.45L margin/set:** CE-only
+  **+₹147k** (65 cycles, 77% win, max DD ₹52k, t=2.4) is the only positive mode — `fair_value` −₹64k,
+  `both` −₹154k, PE-only −₹196k. Monthly re-centering rides the index's upward drift on calls but
+  chases crashes down on puts.
 - **`momentum_theta_gainer_intra` — 15-min SuperTrend + pivot ATM seller.** Builds its OWN
   15-min candles from live spot ticks; on a closed candle, close > SuperTrend(7,3) AND > pivot
   R1 → SELL the ATM PUT of the nearest weekly (0DTE allowed); the mirror → SELL the ATM CALL.
@@ -225,7 +290,11 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   and an exiting leg re-enters at a freshly recomputed strike (separate SL and target re-entry
   budgets). `otm_steps` sets the structure — 3 = the deck's OTM3 on the **listing** grid
   (NIFTY 50s: the one documented exemption from the 100s rule, `needs_listing_grid`), 0 = an
-  ATM **straddle**. `same_strike_action` (reenter/skip/hold) governs the case where the
+  ATM **straddle**; `wing_steps` > 0 buys a protective long that many grid steps beyond each
+  short — the intraday **iron fly / condor**, which caps the worst possible day by construction
+  instead of by a stop working through a gap (the wing is protection, not a managed leg: no
+  40/70 exits of its own, it rolls with its side and is sold when that side is done for the day).
+  `same_strike_action` (reenter/skip/hold) governs the case where the
   recomputed strike hasn't moved. Rupee MTM stop per index (`mtm_stop_per_lot`, day-cumulative).
   **Backtest finding (5y NIFTY): `max_sl_reentries=0` + the straddle structure was the best
   risk-adjusted config tested (~₹181k net, ~₹16k max DD at 1 lot); SL re-entries lost money
@@ -275,10 +344,12 @@ BS delta/IV helpers) · engine services: `black_scholes.py` (IV/delta), `contrac
 
 - **One backtest page, two data bases.** The New-backtest form starts with a basis selector:
   **EOD (daily cache)** runs the engine below; **Intraday (1-min store)** replays the
-  self-captured option store minute-by-minute through the ACTUAL deploy-only strategy classes
-  (`services/intraday_replay.py`) — intraday straddle, weekly VWAP straddle, CP ratio expiry,
-  delta-neutral, iron fly (monthly ones warn that a full cycle needs ~2 months of capture),
-  plus momentum-theta via its BS service. Real premiums, volume-weighted signals, F&O charges
+  self-captured option store minute-by-minute through the ACTUAL strategy classes
+  (`services/intraday_replay.py`) — 15 IDs and counting: the intraday family (intraday straddle,
+  strangle combo, weekly VWAP straddle, CP ratio expiry, straddle BTST, asymmetric premium), the
+  positional family (call / put / batman ratio, HNI weekly, 21-EMA momentum, put condor), the
+  monthly cycles (delta-neutral, iron fly — these warn that a full cycle needs ~2 months of
+  capture) and the two-expiry fair-value calendar, plus momentum-theta via its BS service. Real premiums, volume-weighted signals, F&O charges
   per fill, parity-derived spot, expiry settlement. Both bases produce ordinary runs — same
   Runs list, run detail, and Compare; intraday runs carry `data_basis: intraday` in params.
   The intraday window grows automatically with every day the store captures.
@@ -294,8 +365,16 @@ BS delta/IV helpers) · engine services: `black_scholes.py` (IV/delta), `contrac
   drawdown, an **equity curve** (with a 30-day sparkline on the Home page), monthly and yearly
   breakdowns, capital-utilization, and STCG-tax + withdrawal modeling. The Runs page shows CAGR
   (with total return as a sub-line).
+- **Point-in-time universes** (the survivorship-bias fix): the **Nifty500 Momentum 50** universe
+  can run in `pit_universe` mode — the run trades the UNION of every name that was EVER a member
+  and the strategy receives the semi-annual rebalance table, so its daily scan follows the index
+  *of that date*. Membership gates ENTRIES only, never exits (a name dropped at a rebalance is
+  still managed out by its own rules). Official NSE lists where a capture exists (Wayback 2024-09
+  + 2025-02, live 2026-08), methodology replication elsewhere — validated 38-39/50 at the official
+  checkpoints, with each rebalance's source labelled in `data/mom50_membership.json`. Consumed by
+  `happy_twins`, `supertrend_momentum` and `nifty_shop`.
 - **Clone & template**: a finished run can be cloned into a new backtest form with its params
-  prefilled.
+  prefilled (including its start/end dates).
 - **Parameter sweep on BOTH bases**: tick "Sweep a parameter", pick any numeric knob and 2-5
   values — each runs and saves, then Compare opens with them side by side. On the intraday
   basis the values run sequentially through the single-flight replay job (minutes each;
@@ -547,8 +626,9 @@ theme. All data goes through `api/client.ts` (`/api/v1`) plus a live WebSocket f
   - **New backtest** — the master config form with a **param builder per strategy** (all equity
     + backtestable options strategies), an exit-override builder, and a **parameter sweep** that
     batches variations into the compare view. Renders the universal report.
-- **Trade** (`/trade`) — **Builders** (Option, Equity, Momentum-Theta, CP-Ratio-Expiry,
-  Delta-Neutral — each constructs and deploys a position) and **Screeners**:
+- **Trade** (`/trade`) — **Builders** (Option, Equity, Delta-Neutral, Iron Fly, Intraday
+  Straddle, Weekly Straddle, Intraday Theta, CP-Ratio-Expiry, FV Calendar — each constructs
+  and deploys a position) and **Screeners**:
   - **FibRet** — a Fibonacci-retracement single-stock option-selling screener (IVP CSV upload,
     live-chain strike picker + margin, deploy as `custom_options`).
   - **Donchian strangle** — the Nifty-50 basket short-strangle screener: per-row strike
@@ -566,8 +646,11 @@ theme. All data goes through `api/client.ts` (`/api/v1`) plus a live WebSocket f
   each leg's ITM/OTM/flip state, the flip timeline, and a per-name payoff.
 - **Deploy** (`/live/new`) — the generic deploy / forward-test form (equity vs options branches,
   quote source + account, auto-loop, optional warm-from-date seed).
-- **Docs** (`/docs`) — static, searchable reference cards for ~19 strategies (structure / entry /
-  exit / risk + a deploy CTA). No API calls.
+- **Docs** (`/docs`) — static, searchable reference cards for every deployable strategy
+  (structure / entry / exit / risk, a 3×2 fact grid and a deploy CTA), grouped by family and
+  searchable. No API calls. `tests/test_strategy_docs_coverage.py` fails if a registered
+  strategy has no card (the Trade builders' custom positions and the broker smoke-test probe
+  are the documented exclusions — they're tools, not strategies).
 - **Analyze** (`/analyze?run=`) — the trade analyzer for any run; options runs reconstruct
   cycles with per-leg detail, equity runs show per-stock candlesticks + round-trip markers.
 - **Run detail** (`/runs/:id`) — the full backtest report + lifecycle (Analyze, Set-template,
@@ -589,7 +672,9 @@ Grouped by router. (M = state-changing.)
 **Backtest & runs** (`backtest.py`) — `GET /strategies` (backtestable IDs), `GET /benchmarks`,
 `GET /universes` + `/{name}/symbols`; **M** `POST /backtest` (preview), **M** `POST
 /backtest/save`; `GET /runs`, `GET /runs/compare?ids=`, `GET /runs/{id}`, `GET /runs/{id}/analysis`,
-`GET /runs/{id}/trades.csv`, `GET /runs/{id}/benchmark?index=`, `GET /analysis/runs`; **M** `PATCH
+`GET /runs/{id}/trades.csv`, `GET /runs/{id}/benchmark?index=`, `GET /analysis/runs`;
+**M** `POST /backtest/intraday` (the 1-min-store replay — returns a job id, 409 while one runs)
++ `GET /backtest/intraday/progress`; **M** `PATCH
 /runs/{id}`, `POST /runs/{id}/archive|unarchive`, `DELETE /runs/{id}`; strategy templates (get /
 set-from-run / delete).
 
@@ -608,16 +693,22 @@ degraded runs); **M** `POST /{id}/refresh-cache`, `POST /{id}/refresh-gold`; **M
 /{id}/trades`; **M** control endpoints: `POST /{id}/quote-source`, `/reconnect-quotes`,
 `/refresh`, `/run-decision` (blocked while reconcile-pending), `/controls`, `/flatten`,
 `/manual-order`, `/overrides`, `/stop`, `/activate`, **`/go-live`** (armed + flag + session
-required), **`/force-entry`**, **`/ack-order-error`**, `/archive|unarchive`, `PATCH /{id}`,
+required), **`/force-entry`**, **`/ack-order-error`**, `/params` (hot-edit a running deploy's
+strategy knobs), `/adopt-broker-close` (book legs the broker already closed — places no order),
+`/ironfly-adjust`, `/archive|unarchive`, `PATCH /{id}`,
 `DELETE /{id}`; `WS /ws` (snapshot/trade broadcast).
 
 **Research** (`/research`, read-only) — **M** `POST /donchian-study`, `POST /momentum-theta-bt`,
-`POST /bs-calibration`.
+`POST /bs-calibration`, `POST /loss-study` + `GET /loss-study/progress` (single-flight job).
 
 **Trade** (`/trade`) — **M** `POST /options/margin` (basket margin preview); deploys that reuse
 the shared deployment path: **M** `POST /options/deploy` (custom_options), `/options/fibret/analyze`,
 `/options/donchian/analyze|portfolio|deploy`, `/options/delta-neutral/deploy`,
-`/options/cp-ratio-expiry/deploy`, `/options/momentum-theta/deploy`, `/equity/deploy`.
+`/options/iron-fly/deploy`, `/options/double-diagonal/deploy`,
+`/options/fair-value-calendar/deploy`, `/options/ratio/deploy`,
+`/options/intraday-straddle/deploy`, `/options/weekly-intraday-straddle/deploy`,
+`/options/cp-ratio-expiry/deploy`, `/options/momentum-theta/deploy`, `/equity/deploy`,
+`/smoke-test/deploy` (the real-order probe).
 
 ---
 

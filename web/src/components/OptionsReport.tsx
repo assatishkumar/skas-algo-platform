@@ -67,6 +67,7 @@ const REASON_LABEL: Record<string, string> = {
   isc_leg_sl: "Leg stop (40% of entry)", isc_leg_target: "Leg target (70% of entry)",
   isc_mtm_stop: "Overall MTM stop (Rs/lot)", isc_eod: "End of day (15:25)",
   apx_stop: "Combined points stop", apx_adjust: "Cheap leg rolled", apx_eod: "End of day",
+  // fvc_buy_roll is LEGACY (pre-2026-08-19 runs) — the buy leg never rolls now.
   fvc_roll: "Sells rolled to next weekly", fvc_buy_roll: "Buy legs moved a month out",
   fvc_max_rolls: "Roll cap reached", fvc_cycle_end: "Cycle end (buy expiry reached)",
   open: "Open — still holding",

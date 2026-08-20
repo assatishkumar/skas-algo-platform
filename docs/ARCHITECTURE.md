@@ -240,7 +240,10 @@ The rules that keep changes safe. Violate one and you risk breaking live silentl
    `commission` pattern in `engine/execution.py`).
 4. **Strategies never touch a broker or the engine internals.** They read marks via
    `QuoteSource` and the chain view; they onboard via `strategies/registry.py`, never by
-   editing `engine/`. New strategies ship with their own test file.
+   editing `engine/`. New strategies ship with their own test file **and their own docs** —
+   a `docs/FEATURES.md` §3 entry plus a `/docs` card in `web/src/pages/StrategiesPage.tsx`
+   (pinned by `tests/test_strategy_docs_coverage.py`; a CLAUDE.md §8 entry too if it carries
+   an invariant or footgun a future session would otherwise rediscover).
 5. **One order path.** `LiveBroker` is the only place real orders may ever be added. Never
    widen the 4-key gate. Claude never initiates a live order (§3).
 6. **Every displayed date carries the time (HH:MM) on live paths** — trades, banners,

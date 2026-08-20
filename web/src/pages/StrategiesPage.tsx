@@ -465,6 +465,171 @@ const STRATEGIES: Rule[] = [
     exit: ["Pooled exit when the average is up to the tiered target for the held lot count."],
     risk: "Equity long-only; averaged target manages the pooled position.",
   },
+  {
+    id: "fair_value_calendar",
+    name: "Fair-Value Calendar (Monthly)",
+    kind: "Options",
+    bias: "Mean-reversion · premium-matched ratio calendar",
+    summary:
+      "A monthly NIFTY ratio calendar whose SIDE is chosen by a fair-value line — the Jan-2020 COVID high (12,430) compounded at 11.7%/yr. Spot well above it → a put calendar; well below → a call calendar; inside the band → calls. Legs are hunted by PREMIUM (₹150 + ₹450 sold, 3× ₹200 bought), so the structure is premium-matched and the target anchors to margin. Unsold weeks are rolled; the bought monthly is never rolled.",
+    structure: [
+      "SELL 1 lot of the near weekly (≥4 DTE) at ~₹150 premium.",
+      "SELL 1 lot of the SAME weekly at ~₹450 premium (deliberately ITM).",
+      "BUY 3 lots of the MONTHLY after that weekly at ~₹200 premium — sold ≈ bought, a ~zero net debit.",
+      "Both sells and the buy are the same side (PE or CE); side_mode can force pe / ce / both.",
+      "Premiums are absolute ₹ from Aug-2024 and scale with spot before that (₹150 at 25k ≠ ₹150 at 16k).",
+    ],
+    entry: [
+      "Start of each calendar month, retried every day until a valid setup lands (one cycle per month).",
+      "900-POINT GAP RULE: the dead zone (buy strike → furthest sell strike) must be ≤ 900 pts — 2× the ~450 pts of rollover income three weekly rolls are expected to earn. Wider → skip today, hunt again tomorrow.",
+      "Because strikes are premium-hunted, a high-vol day spreads them out — so the gap rule doubles as a volatility filter.",
+    ],
+    exit: [
+      "Target: +5% of the FROZEN broker margin on the WHOLE cycle (banked rolls + open MTM) → exit all, done for the month.",
+      "No target by the sold weekly's expiry → roll BOTH sells to the next weekly at the SAME strikes, banking the decay.",
+      "The bought monthly is NEVER rolled: when the sells would land on its expiry the CYCLE ENDS — flat, then a fresh cycle (new fair-value read) opens next session.",
+    ],
+    risk:
+      "Net short 2 near-dated legs against 3 longer-dated longs: the calendar caps a slow move but a fast one through the sold strikes hurts before the rolls can pay. The ~₹450 ITM sell is the thin leg (sparse prints). 5y store replay at 1 lot-set: CE-only +₹147k (65 cycles, 77% win, ₹52k max DD) is the only positive mode — fair-value −₹64k, both-sides −₹154k, PE-only −₹196k. Monthly re-centering rides the index's drift on calls but chases crashes down on puts.",
+    links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=tn-73I63yBw&t=2162s" }],
+  },
+  {
+    id: "double_diagonal_calendar",
+    name: "Double Diagonal Calendar",
+    kind: "Options",
+    bias: "Neutral · sell near vol, own far vol",
+    summary:
+      "A four-leg NIFTY double diagonal: sell a near-weekly ~20-25Δ strangle and buy a farther-expiry ~15-20Δ strangle as the calendar hedge, whose residual time value rounds off the payoff tent. One manual cycle per deploy — after the exit it sits idle until you deploy again.",
+    structure: [
+      "SELL a near-expiry strangle at ~short_target_delta (the next weekly ≥ near_min_dte DTE).",
+      "BUY a farther-expiry strangle at ~hedge_target_delta (the subsequent expiry ≥ far_min_dte).",
+      "A manual BIAS knob (up / neutral / down) skews the deltas: an 'up' lean widens the calls and richens the puts.",
+      "The VIX regime (High ≥20 / Med 13-19 / Low 9-12) LABELS the expected net-premium band — display only; selection is delta-first.",
+    ],
+    entry: [
+      "On deploy (force) or the next entry weekday ~11:00, ONCE — recurring is off by design.",
+      "Broker basket margin is frozen at entry; the rupee thresholds derive from it.",
+    ],
+    exit: [
+      "±1.5% of the frozen margin (configurable).",
+      "Adjust: when the UNTESTED near short decays to ≤10Δ or ≤¼ of its sold premium, roll it back toward delta-neutral and drag its far hedge with it — never crossing the other short. No adjustments inside 3 DTE.",
+      "At the near expiry the WHOLE structure squares off — the far hedges are never left naked.",
+    ],
+    risk:
+      "Defined-ish but not defined: the far longs cushion a big move rather than cap it, and the two expiries can move on different vols (a near-vol spike costs before the far leg gains). Deploy-only, broker quotes required — the delta solve reads two live chains.",
+  },
+  {
+    id: "intraday_strangle_combo",
+    name: "Intraday Strangle Combo (2-index)",
+    kind: "Options",
+    bias: "Neutral intraday · per-leg managed",
+    summary:
+      "Sell one lot of a CE and a PE on the current weekly at 09:16 and be flat by 15:25, with the index rotating by weekday (Mon NIFTY · Tue both · Wed/Thu SENSEX · Fri NIFTY). The distinguishing rule: the two legs are managed COMPLETELY independently — each has its own stop, target and re-entry budget.",
+    structure: [
+      "SELL 1 lot CE + 1 lot PE, otm_steps grid steps out (3 = the deck's OTM3 on the exchange listing grid; 0 = an ATM straddle).",
+      "wing_steps > 0 BUYS a protective long that many steps beyond each short — an intraday iron fly/condor with risk defined by construction.",
+      "Each index keeps its own book; nothing is read or written across the two sides.",
+    ],
+    entry: [
+      "09:16 on the weekday's index; the weekly expiry in force that day.",
+      "An exited leg RE-ENTERS at a freshly recomputed strike — separate budgets for stop-outs and target-hits (2+2 → a side can trade 5× a day).",
+      "same_strike_action decides what happens when the recomputed strike is the one it just left: reenter (deck) / skip / hold.",
+    ],
+    exit: [
+      "Per leg: 40% stop and 70% target, both on THAT leg's own entry premium.",
+      "Per index: a rupee MTM stop per lot, day-cumulative (realized + open) — it outranks a leg stop in the same tick.",
+      "Hard flat at 15:25.",
+    ],
+    risk:
+      "Naked shorts intraday: a trending day can stop both legs and the re-entries can compound it, which is why the rupee MTM stop usually binds first. Backtest (5y NIFTY): the best risk-adjusted config tested was NO stop-loss re-entries + the ATM straddle structure (~₹181k net, ~₹16k max DD at 1 lot); SL re-entries lost money in every window. SENSEX is unvalidated (23 captured days).",
+  },
+  {
+    id: "put_condor",
+    name: "Put Condor (Monthly)",
+    kind: "Options",
+    bias: "Mildly bearish · defined-risk debit",
+    summary:
+      "On the first trading day of each month, buy a put condor on that month's expiry — a NET DEBIT structure, so max loss is the debit (~₹2k/lot) and it is defined-risk by construction. It needs the index to drift down into the tent by expiry. Both adjustment rules are switchable, because the backtest picks the policy.",
+    structure: [
+      "BUY the put nearest below spot (long_hi), SELL two spaced puts below it, BUY the lowest put (long_lo) — 200-pt spacing by default.",
+      "Expiry payoff: zero above long_hi, rising to +spacing across the shorts, back to zero at long_lo.",
+      "Max loss = the debit paid; max profit = spacing − debit.",
+    ],
+    entry: [
+      "First trading day of every month, on that month's monthly expiry.",
+      "One cycle per month; strikes snap to the 100-pt NIFTY selection grid.",
+    ],
+    exit: [
+      "Target / stop are a % of MAX LOSS (not of margin — a defined-risk condor's margin is tiny live and huge in the replay's model).",
+      "down_breach_action (roll the top long / recenter / none) and loss_repair (roll the lower short up / none) are independently switchable.",
+      "Otherwise held to expiry and settled to intrinsic.",
+    ],
+    risk:
+      "The worst case is known before you enter: the debit. Measured on the 1-min store (58 monthly cycles, Aug-2021 → Jul-2026, unadjusted, held to expiry, 1 lot): 24% hit rate, +₹558/cycle — a mildly positive lottery, three small losses for one large win. The 5y sweep favoured target-only exits with NO adjustments. Backtest-only for now: the deploy route is deliberately deferred.",
+  },
+  {
+    id: "straddle_btst",
+    name: "Straddle BTST (overnight long)",
+    kind: "Options",
+    bias: "Long volatility · overnight gap",
+    summary:
+      "The reverse of the intraday straddle: BUY the ATM CE+PE at ~15:20, hold overnight, sell at ~09:20 the next session. The bet is that the overnight gap plus any IV firming at the open beats the theta paid. Tested and NEGATIVE — kept for study, not recommended.",
+    structure: [
+      "BUY 1 lot ATM CE + 1 lot ATM PE on the nearest expiry STRICTLY AFTER today (so the position always survives the night).",
+      "Long-only: the loss is capped at the premium paid, so there is no margin dependence anywhere.",
+    ],
+    entry: ["~15:20 on each trading day (configurable). On expiry day the entry rolls to the next weekly automatically."],
+    exit: [
+      "~09:20 the next session that ticks — Friday's entry simply exits Monday, so weekends need no calendar math.",
+      "Optional target / stop as a % of the PREMIUM PAID (both off by default — it is a pure time-window trade).",
+    ],
+    risk:
+      "Defined: you can lose the premium, nothing more. The problem is the expectancy, not the tail — 2 years of NIFTY: −₹66.5k. Monday's entry pays the steepest theta bill (1 DTE into Tuesday's expiry).",
+  },
+  {
+    id: "asymmetric_premium_intra",
+    name: "Asymmetric Premium (Intraday)",
+    kind: "Options",
+    bias: "Neutral intraday · two expiries",
+    summary:
+      "From the owner's spec sheet: short a near-ATM CALL on the CURRENT week and a near-ATM PUT on the NEXT week, 09:30 → 15:15. The idea is that sharp declines happen fast, so the short put is kept a week out. Tested and SHELVED — both distinguishing ideas cost money over 2 years.",
+    structure: [
+      "SELL a near-ATM CE on the current week's expiry.",
+      "SELL a near-ATM PE on the NEXT week's expiry (put_expiry_offset = 1; setting it to 0 collapses this to a plain ATM straddle).",
+      "Strikes obey the platform's NIFTY 100-multiples rule — nothing here needs the 50s.",
+    ],
+    entry: ["09:30, once per day; flat by 15:15."],
+    exit: [
+      "Adjustment: when one leg decays to a fraction of the other's premium, the CHEAP leg rolls to the strike on ITS OWN expiry matching the rich leg — note this RE-ARMS the side that just decayed, so it adds risk rather than hedging it (capped by max_adjusts).",
+      "Stop: 100 POINTS of combined loss, day-cumulative (realized + open) → exit everything.",
+    ],
+    risk:
+      "Two naked shorts across two expiries — a trending day tests one leg while the adjustment walks the other back into the move. The controlled experiment that proved it: with both distinguishing ideas removed it is statistically the ATM straddle (t = 0.83).",
+  },
+  {
+    id: "happy_twins",
+    name: "Happy Twins (dual SuperTrend)",
+    kind: "Equity",
+    bias: "Trend-following · fast in, slow out",
+    summary:
+      "One indicator family, two speeds, long only: a FAST weekly SuperTrend turning green gets you in early, and a SLOW one holds you in until the trend genuinely breaks. Handing the exit to the slower twin is what kills the whipsaw a single fast SuperTrend inflicts.",
+    structure: [
+      "FAST SuperTrend (ATR 2, factor 1) on weekly bars — the entry trigger.",
+      "SLOW SuperTrend (ATR 3, factor 1) on weekly bars — the exit authority.",
+      "Optional park_symbol (e.g. GOLDBEES): idle capital sits in an ETF whenever every trading name is flat, and is sold in the same slice as the entry.",
+      "Optional capital_parts: portfolio mode — one part per green flip, strongest flip first (close vs the 20-day mean), at most N names held.",
+      "Optional regime_symbol: the exposure brake — no NEW part while that index's own slow SuperTrend is red.",
+    ],
+    entry: [
+      "ENTER when the FAST SuperTrend TURNS green — a transition, not a state, so a freshly deployed or recovered run never chases a signal that already happened.",
+      "Weekly flips become visible the next trading day (no lookahead).",
+    ],
+    exit: [
+      "EXIT while the SLOW SuperTrend is red — a state, so a flip missed across a restart still closes the position on the next bar.",
+    ],
+    risk:
+      "Cash equity, long only. Backtest-first: live deploys FAIL CLOSED (no entries, no blind exits) until the live indicator seeding lands. Point-in-time membership is available on the Nifty500 Momentum 50 universe so the backtest isn't reading today's winners into 2021.",
+  },
 ];
 
 /** Per-strategy docs metadata (design handoff design_handoff_docs1): index group,
@@ -635,6 +800,60 @@ const META: Record<string, Meta> = {
     deployNote: "Weekly SST with FIFO tiered profit booking.",
     deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
   },
+  fair_value_calendar: {
+    group: "Ratio & income", biasKind: "income",
+    facts: [["Bias", "Mean-reversion side pick"], ["Instrument", "NIFTY weekly + monthly"],
+            ["Structure", "−1 @₹150 −1 @₹450 / +3 @₹200"], ["Gap cap", "900 pts or skip"],
+            ["Target", "+5% of margin (whole cycle)"], ["Cadence", "Monthly · weekly rolls"]],
+    deployNote: "Backtested on the 1-min store; CE-only is the only positive mode. Deploy (broker quotes) for the paper forward test.",
+    deployCta: { label: "Deploy FV calendar", to: "/trade" },
+  },
+  double_diagonal_calendar: {
+    group: "Premium selling", biasKind: "neutral",
+    facts: [["Bias", "Neutral · two expiries"], ["Instrument", "NIFTY weeklies"],
+            ["Structure", "Near short strangle + far long"], ["Adjust", "untested short ≤10Δ"],
+            ["Exit", "±1.5% of margin"], ["Cycle", "One per deploy (manual)"]],
+    deployNote: "Deploy-only, broker quotes required (the delta solve reads two live chains). Paper-first.",
+    deployCta: { label: "Deploy Double diagonal", to: "/trade" },
+  },
+  intraday_strangle_combo: {
+    group: "Intraday options", biasKind: "neutral",
+    facts: [["Bias", "Neutral · intraday"], ["Underlyings", "NIFTY + SENSEX by weekday"],
+            ["Structure", "OTM3 strangle / ATM straddle / +wings"], ["Per leg", "40% stop · 70% target"],
+            ["Per index", "Rupee MTM stop per lot"], ["Flat by", "15:25 — always"]],
+    deployNote: "Deploy-capable (paper-tested since 2026-08-13) with a 1-min-store backtest — check the sweep before enabling SL re-entries.",
+    deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
+  put_condor: {
+    group: "Directional tilt", biasKind: "bear",
+    facts: [["Bias", "Mildly bearish"], ["Instrument", "NIFTY monthly"],
+            ["Structure", "Long put condor (net debit)"], ["Max loss", "The debit (~₹2k/lot)"],
+            ["Exits", "% of MAX LOSS"], ["Entry", "1st trading day of the month"]],
+    deployNote: "Backtest-only for now — the deploy route is deliberately deferred until the adjustment policy is settled.",
+    deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
+  straddle_btst: {
+    group: "Intraday options", biasKind: "neutral",
+    facts: [["Bias", "Long vol · overnight"], ["Underlying", "NIFTY"], ["Structure", "Long ATM straddle"],
+            ["Entry", "~15:20"], ["Exit", "~09:20 next session"], ["Verdict", "Negative (−₹66.5k / 2y)"]],
+    deployNote: "Tested and negative — kept for study. Replays on the 1-min store; deploy-only live.",
+    deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
+  asymmetric_premium_intra: {
+    group: "Intraday options", biasKind: "neutral",
+    facts: [["Bias", "Neutral · intraday"], ["Underlying", "NIFTY"], ["Structure", "Short CE this week + PE next"],
+            ["Adjust", "Cheap leg rolls to the rich"], ["Stop", "100 pts combined"], ["Flat by", "15:15"]],
+    deployNote: "Shelved: both distinguishing ideas cost money over 2 years — kept as the controlled experiment that proved it.",
+    deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
+  happy_twins: {
+    group: "Equity trend", biasKind: "bull",
+    facts: [["Bias", "Trend-following"], ["Universe", "Any (Nifty 500 / Momentum 50)"],
+            ["Signal", "Fast ST(2,1) in · slow ST(3,1) out"], ["Timeframe", "Weekly bars"],
+            ["Overlays", "Park · parts · regime brake"], ["Kind", "Cash equity · long-only"]],
+    deployNote: "Backtest-first: live deploys fail closed (no entries) until the live indicator seeding lands.",
+    deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
   sst_fifo: {
     group: "Equity trend", biasKind: "bull",
     facts: [["Bias", "Trend-following"], ["Universe", "Nifty 50"], ["Signal", "20d Donchian breakout"],
@@ -734,7 +953,9 @@ export default function StrategiesPage() {
           </div>
           <p className="mt-1 text-sm text-[var(--muted)]">
             Structure, entry, exit and risk for every strategy on the platform. These mirror the
-            engine's implementations — tune the parameters per deployment.
+            engine's implementations — tune the parameters per deployment. (The Trade builders'
+            custom positions and the broker smoke-test probe are tools, not strategies, so they
+            aren't listed here.)
           </p>
         </div>
         <div className="ml-auto flex items-center rounded-[12px] border border-[var(--border)] bg-[var(--card)] px-3.5 py-2 text-[12px] font-semibold text-[var(--muted)]">

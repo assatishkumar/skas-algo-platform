@@ -65,7 +65,7 @@ src/skas_algo/
   engine/       runner, execution, portfolio, overrides, sim_fill, stops, report, metrics
     options/    Black-Scholes, margin, charges, settlement, live chain, contract specs
     indicators/ supertrend, …
-  strategies/   30 registered strategies + registry (see below)
+  strategies/   32 registered strategies + registry (see below)
   live/         manager (running paper/live sessions), recovery, persistence, quotes, seed
   brokers/      BrokerAdapter base, sim_broker, zerodha (TOTP login)
   data/         market-data provider + options provider (wraps skas-data), universes
@@ -76,7 +76,7 @@ src/skas_algo/
 web/            React + Vite + TS PWA (TanStack Query, Recharts, Tailwind)
 alembic/        DB migrations
 docs/           PLAN.md + feature/roadmap plans
-tests/          ~40 test files (engine, strategies, options, live, API, parity)
+tests/          ~85 test files (engine, strategies, options, live, API, parity)
 ```
 
 ## Strategies
@@ -85,10 +85,11 @@ Registered in `src/skas_algo/strategies/registry.py` — new algos onboard by re
 touching the engine:
 
 - **Equity:** SST-LIFO, SST-FIFO, SST-Weekly (+ FIFO variant), SuperTrend Momentum, Nifty Shop,
-  Gap Reversal, Custom Equity.
+  Gap Reversal, **Happy Twins** (weekly dual-SuperTrend: fast in, slow out), Custom Equity.
 - **Options — positional:** Short Premium, Call / Put / Batman Ratio Monthly, HNI Weekly,
   Staggered Covered Call, Custom Options, 21-EMA Momentum spreads, Delta-Neutral Monthly,
-  Iron Fly Monthly, Double Diagonal Calendar, **Put Condor** (defined-risk monthly debit),
+  Iron Fly Monthly, Double Diagonal Calendar, **Fair-Value Calendar** (premium-matched ratio
+  calendar; the fair-value line picks the side), **Put Condor** (defined-risk monthly debit),
   **Donchian Strangle Monthly** (multi-underlying basket short-strangle with per-name
   breach→flip governance; + its backtest sibling `donchian_strangle_bt`).
 - **Options — intraday:** Intraday Straddle, Weekly VWAP Straddle, Call/Put Ratio Expiry-day,

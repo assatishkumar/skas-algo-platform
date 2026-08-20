@@ -1,6 +1,7 @@
 """fair_value_calendar — premium-matched ratio calendar with fair-value side selection (NIFTY).
 
-The owner's video spec (2026-08-19), two parts:
+The owner's video spec (2026-08-19; ref video
+https://www.youtube.com/watch?v=tn-73I63yBw&t=2162s), two parts:
 
 MEAN-REVERSION SIDE PICK. A "fair value" line = a post-crash reference high (the Jan-2020
 COVID high, 12,430) compounded at a long-run growth rate (11.7%/yr). Spot significantly ABOVE
@@ -23,10 +24,11 @@ the rule doubles as a vol filter; a failed check retries the NEXT DAY (never bur
 CYCLE. Enter at the start of a calendar month (retry daily until a valid setup lands).
 Target +profit_target_pct (5%) of the FROZEN broker margin on the whole cycle's P&L
 (pnl_basis="total": banked rolls + open MTM). Not hit by the sold weekly's expiry → ROLL both
-sold legs to the next weekly at the SAME strikes (screenshot #127), banking the decay. If the
-roll would land the sells ON the buy expiry, the buy legs move to the next month's monthly
-FIRST (same strike), in the same decision. Target hit / max_rolls → exit all, done for the
-month (flat until the next calendar month starts).
+sold legs to the next weekly at the SAME strikes (screenshot #127), banking the decay. THE BUY
+LEG IS NEVER ROLLED (owner rule 2026-08-19): when the roll would land the sells ON the buy
+expiry the CYCLE ENDS — exit all, clear the month latch, and a FRESH cycle (new FV read, new
+hunt) opens the next session, so a losing cycle is structurally bounded at ~one buy-expiry
+month. Target hit / max_rolls → exit all, done for the month (flat till the next month starts).
 
 ERA SCALING (owner decision): premiums are ABSOLUTE rupees for entries ≥ premium_scale_before
 (2024-08-01) and scale by spot/premium_ref_spot before that — ₹150 at 25k was not ₹150 at 16k.
