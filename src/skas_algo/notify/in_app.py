@@ -20,10 +20,34 @@ from .base import Alert
 logger = logging.getLogger(__name__)
 
 KEEP = 500  # newest rows retained
+THREAD_NAME = "in-app-alert"  # see wait_for_delivery()
+
+
+def wait_for_delivery(timeout: float = 5.0) -> None:
+    """Block until every in-flight alert write has finished. TEST HELPER — production
+    never waits, that is the whole point of the daemon thread."""
+    import threading
+    import time
+
+    deadline = time.monotonic() + timeout
+    for th in [t for t in threading.enumerate() if t.name == THREAD_NAME]:
+        th.join(max(0.0, deadline - time.monotonic()))
 
 
 class InAppNotifier:
     def send(self, alert: Alert) -> None:
+        """Fire-and-forget, on a daemon thread — the same treatment TelegramNotifier gets and
+        for the same reason. This sink opens its OWN session, so a caller that notifies while
+        holding an uncommitted write (services/broker.set_armed did) blocked here for SQLite's
+        full 15s busy_timeout waiting on its own lock, then lost the alert. Off-thread, the
+        write simply queues behind the caller's commit and lands a moment later."""
+        import threading
+
+        # Named so tests can join the writers deterministically instead of sleeping.
+        threading.Thread(target=self._deliver, args=(alert,), daemon=True,
+                         name=THREAD_NAME).start()
+
+    def _deliver(self, alert: Alert) -> None:
         try:
             from skas_algo.db.base import session_scope
             from skas_algo.db.enums import AlertChannel

@@ -121,7 +121,15 @@ def exchange_token(session: Session, account: BrokerAccount, request_token: str)
 
 def set_armed(session: Session, account: BrokerAccount, armed: bool) -> BrokerAccount:
     account.armed = armed
-    session.flush()
+    # COMMIT BEFORE NOTIFYING (2026-08-21). The in-app sink writes the alert row on its OWN
+    # session, so notifying while this one still held an uncommitted write kept SQLite's
+    # RESERVED lock and the sink then waited out the full busy_timeout (15s) on a lock this
+    # very request owned — arm/disarm hung for 15 seconds, sometimes 504'd at the proxy, and
+    # the alert was lost to "database is locked". Exactly the 2026-07-07 lock-storm shape the
+    # Telegram sink was threaded to avoid. Safe to commit early: expire_on_commit=False, so
+    # the caller's _to_out() reads need no refresh, and the flag is durable before anything
+    # announces it. (The sink is now threaded too — belt and braces, see notify/in_app.py.)
+    session.commit()
     level = AlertLevel.WARNING if armed else AlertLevel.INFO
     state = "ARMED for live orders" if armed else "disarmed"
     build_notifier().send(Alert(f"Account {account.label} {state}", level=level))
