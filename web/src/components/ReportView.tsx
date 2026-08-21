@@ -16,6 +16,7 @@ import { formatInr, pct } from "../lib/format";
 import { formatOptionSymbol } from "../lib/symbol";
 import type { Report, Trade } from "../types";
 import { Badge, Card, MetricCard } from "./ui";
+import HoldingsReport from "./HoldingsReport";
 import OptionsReport from "./OptionsReport";
 
 function downsample<T>(arr: T[], maxPoints = 400): T[] {
@@ -422,6 +423,10 @@ export default function ReportView({
       )}
       {report.options && <OptionsReport options={report.options} runId={runId} trades={trades}
         cycleMeta={cycleMeta} />}
+      {/* Accumulation runs: the holdings panel goes ABOVE the equity chart — for a strategy
+          that never sells, "what do I own and how has it grown" is the headline, and the
+          trade table below it is the least interesting thing on the page. */}
+      {report.holdings && <HoldingsReport holdings={report.holdings} />}
       <EquityChart report={report} runId={runId} defaultBenchmark={defaultBenchmark} />
       <YearlyTable report={report} />
       <MonthlyGrid

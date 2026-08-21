@@ -410,12 +410,64 @@ def delete_run(run_id: int, db: Session = Depends(get_db)) -> dict:
     return {"deleted": run_id}
 
 
+def _backfill_holdings(report, run, algo, loader) -> None:
+    """Derive the accumulation panel at READ time for runs saved before it existed. Same
+    pattern as _backfill_period_tables: computed from the stored trade log, never written
+    back to the row. Silent no-op for every other strategy."""
+    if not report or report.get("holdings") is not None or algo is None:
+        return
+    try:
+        from skas_algo.strategies.registry import get_strategy
+
+        if not getattr(get_strategy(algo.strategy_id), "report_holdings", False):
+            return
+    except (KeyError, AttributeError):
+        return
+    trades = run.trade_log or []
+    if not trades:
+        return
+    try:
+        from datetime import date as _date
+
+        from skas_algo.services.backtest import _benchmark_closes
+        from skas_algo.services.holdings import holdings_report
+
+        params = algo.params or {}
+        fund = str(params.get("fund_source") or "").upper() or None
+        end = params.get("end_date")
+        end = _date.fromisoformat(str(end)[:10]) if end else None
+        # Last traded price per symbol from the run's own tape — the stored report has no
+        # final_marks, and re-pricing from the cache would silently value a 2020 run at
+        # TODAY's prices, which is a different (and wrong) answer.
+        marks = {}
+        for tr in trades:
+            if tr.get("ticker") and tr.get("price"):
+                marks[tr["ticker"]] = float(tr["price"])
+        bench = str(params.get("benchmark") or "NIFTYBEES").upper()
+        report["holdings"] = holdings_report(
+            trades, marks, as_of=end,
+            fund_source=fund,
+            fund_yield_pct=float(params.get("fund_yield_pct") or 0.0),
+            equity_curve=report.get("equity_curve"),
+            benchmark=bench,
+            benchmark_prices=_benchmark_closes(loader, bench, params.get("start_date"), end),
+        )
+        report["holdings"]["derived"] = True   # marks from the tape, not end-of-run marks
+    except Exception:  # pragma: no cover - a backfill must never break the run view
+        import logging
+
+        logging.getLogger(__name__).exception("holdings backfill failed for run %s", run.id)
+
+
 @router.get("/runs/{run_id}")
-def get_run(run_id: int, db: Session = Depends(get_db)) -> dict:
+def get_run(run_id: int, db: Session = Depends(get_db),
+            loader: PriceLoader = Depends(get_price_loader)) -> dict:
     run = db.get(AlgoRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     algo = db.get(Algo, run.algo_id)
+    report = _run_report(run, algo)
+    _backfill_holdings(report, run, algo, loader)
     return {
         "run_id": run.id,
         "algo_id": run.algo_id,
@@ -429,7 +481,7 @@ def get_run(run_id: int, db: Session = Depends(get_db)) -> dict:
         "mode": run.mode.value,
         # Live equity (paper) runs build the report on-demand; trades resolve to the running
         # session's live transactions so the report view matches the deployment in real time.
-        "report": _run_report(run, algo),
+        "report": report,
         "trades": _resolve_run_trades(run, db),
     }
 

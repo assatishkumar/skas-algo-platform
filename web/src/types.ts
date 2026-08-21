@@ -86,6 +86,37 @@ export interface StrategyTemplate {
   params: Record<string, unknown>;
 }
 
+export interface HoldingRow {
+  symbol: string;
+  units: number;
+  invested: number;
+  avg_cost: number | null;
+  last_price: number;
+  value: number;
+  pnl: number;
+  pnl_pct: number | null;
+  xirr_pct: number | null;   // money-weighted return on this holding's own buys
+  weight_pct: number | null;
+  first_buy: string | null;
+  buys: number;
+}
+
+/** The accumulation panel (value_investing): what is HELD at the end of the run, with the
+ *  money-weighted return and the same-cashflows-into-the-index comparison. */
+export interface Holdings {
+  as_of: string;
+  rows: HoldingRow[];
+  totals: {
+    invested: number; value: number; pnl: number;
+    pnl_pct: number | null; xirr_pct: number | null; names: number;
+  };
+  fund?: { symbol: string; units: number; value: number; yield_pct: number; yield_credited: number };
+  benchmark?: {
+    index: string; value: number; xirr_pct: number | null;
+    vs_value: number; vs_xirr_pts: number | null;
+  };
+}
+
 export interface Report {
   metrics: Metrics;
   yearly?: Record<string, YearlyRow>;
@@ -106,6 +137,7 @@ export interface Report {
     sizing_buffer_pct: number;
     sizing_skipped_days?: number; // days entries were skipped — equity < one buffered lot-set
   };
+  holdings?: Holdings;   // accumulation strategies only (report_holdings)
 }
 
 export interface Trade {
