@@ -170,8 +170,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   basket API → overstates, conservative); its option-chain endpoint is throttled (~1/3s) so
   the 50-name screeners STAY on Zerodha, as does the skas-data cache refresh (Kite-coupled —
   `make_data_session` rejects dhan accounts). **Dhan live quotes/chains need the paid "Data
-  APIs" subscription** (error 806 without it; expirylist/funds/orders don't) — verified
-  2026-07-03 on the owner's account. quote_source ∈ {cache, zerodha, dhan} — the
+  APIs" subscription** (error 806 without it; expirylist/funds/orders don't) — the owner
+  SUBSCRIBED on 2026-08-21, so quotes and chains are available on the Dhan account now; the
+  ~1/3s chain throttle above is a separate, still-standing limit (it is what keeps the
+  50-name screeners on Zerodha, not the subscription). quote_source ∈ {cache, zerodha, dhan} — the
   broker sources are gated by `live/quotes.is_broker_source`, and the source must match
   `account.broker`. **Dhan PHASE B — real orders (2026-08-21):** `DhanAdapter` now has
   place/modify/status/cancel + `positions()`, behind the SAME `_ensure_armed` double gate,

@@ -497,9 +497,14 @@ disarmed account paper-fills.
   it for the daily access token (valid until ~06:00 IST next day; a restart doesn't lose a still-
   valid session). Provides quotes, chains, margins, historical bars, and (Phase B) real orders.
 - **Dhan**: no api key/secret — you paste a portal-generated JWT (its `exp` claim is the session
-  expiry); instruments resolve from the public scrip-master CSV. Read-only today (no order
-  methods); live quotes/chains need Dhan's paid "Data APIs" subscription. The 50-name screeners
-  and cache refresh stay on Zerodha.
+  expiry); instruments resolve from the public scrip-master CSV. Quotes, chains, margin and —
+  since Phase B (Aug 2026) — **real orders**, behind the same armed + platform-flag double gate
+  as Zerodha. Two operational prerequisites, both now satisfied on the owner's account: Dhan's
+  paid "Data APIs" plan for live quotes/chains (error 806 without it), and **static-IP
+  whitelisting on the DhanHQ portal for the order endpoints** — quotes work without the latter,
+  so an unwhitelisted host looks healthy right up until the first order is rejected. The 50-name
+  screeners stay on Zerodha (Dhan's chain endpoint is throttled to ~1/3s) as does the cache
+  refresh (Kite-coupled).
 - **Arming**: an account is armed/disarmed from the Brokers page. Arming is a prerequisite for
   real orders (one of the 4 keys) and is always the owner's action.
 - **Session handling** (`redesign.tsx::SessionBanner`): screeners/deploys that need a live
