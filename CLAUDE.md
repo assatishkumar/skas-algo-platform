@@ -173,14 +173,27 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   APIs" subscription** (error 806 without it; expirylist/funds/orders don't) — verified
   2026-07-03 on the owner's account. quote_source ∈ {cache, zerodha, dhan} — the
   broker sources are gated by `live/quotes.is_broker_source`, and the source must match
-  `account.broker`. **DhanAdapter has NO order surface** — no place_order/modify_order/
-  order_status/cancel_order — so `adapter_can_execute` is False and `_maybe_inject_live_broker`
-  can never inject a LiveBroker on a Dhan account, ARMED OR NOT. Consequences: the Brokers
-  page's smoke-test picker lists Zerodha sessions only (and now NAMES the excluded accounts
-  instead of hiding them), and `POST /trade/smoke-test/deploy` 422s a LIVE deploy on any
-  order-less broker — a probe that paper-fills and "passes" is worse than one that refuses.
-  The guard keys off the ORDER SURFACE, never off `armed`: a LIVE run on a DISARMED *Zerodha*
-  account is a documented, useful negative test. **No broker places real orders yet** — even LIVE mode fills via
+  `account.broker`. **Dhan PHASE B — real orders (2026-08-21):** `DhanAdapter` now has
+  place/modify/status/cancel + `positions()`, behind the SAME `_ensure_armed` double gate,
+  so `adapter_can_execute` passes and LiveBroker can be injected on a Dhan account. Raw REST
+  (`api.dhan.co/v2`), NOT the `dhanhq` SDK — the file was already raw REST for quotes/chain/
+  master and the order path is four endpoints; no new dependency. Dhan specifics that are
+  load-bearing: **order APIs only accept calls from a STATIC IP whitelisted on the DhanHQ
+  portal** (the VPS, 13.205.157.28, is — quotes work without it, so an unwhitelisted box
+  looks healthy until the first order is rejected); **statuses are normalised in the adapter**
+  (TRADED→COMPLETE, EXPIRED→CANCELLED, PART_TRADED left NON-terminal so the escalation still
+  cancels-and-books the remainder) because LiveBroker's `_TERMINAL` is Kite vocabulary;
+  **modify RESTATES the order** (Dhan's PUT rejects a partial body, so the live order is read
+  first and the changed fields overlaid); options route NSE_FNO+MARGIN, equity NSE_EQ+CNC, and
+  an unresolvable symbol RAISES rather than falling through to a wrong `securityId`.
+  `positions()` reshapes tradingSymbol/netQty into the reconciler's tradingsymbol/quantity and
+  `_option_tradingsymbol` comes from the scrip master (never reconstructed).
+  `BrokerAccountOut.can_place_orders` reports `adapter_can_execute` so the Brokers page's
+  smoke-test picker cannot promise what the engine would refuse; `POST /trade/smoke-test/deploy`
+  still 422s a LIVE deploy on an order-less broker (no broker fails it today — it stands for the
+  next one). That guard keys off the ORDER SURFACE, never off `armed`: a LIVE run on a DISARMED
+  account is a documented, useful negative test. Coverage: `tests/test_dhan_orders.py` (fake
+  http — §1: never a real order). **No broker places real orders yet** — even LIVE mode fills via
   PaperBroker; the real order path (LiveBroker, LIMIT-at-touch→protected-limit, double-gated) is the
   planned Phase B and the only place order code may ever be added.
 - **gap_reversal** (`strategies/gap_reversal.py`, Nifty 500 equity, 2026-07-28): daily LONG-only

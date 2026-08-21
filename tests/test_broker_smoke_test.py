@@ -158,12 +158,10 @@ def test_manager_self_stop_seam_guards_on_flat_book(monkeypatch):
     assert stopped == [42]
 
 
-def test_a_live_smoke_test_is_refused_on_a_broker_with_no_order_api(client):
-    """Dhan is quotes/chain/margin only — no place_order/modify/status/cancel — so
-    adapter_can_execute() is False, LiveBroker is never injected, and a LIVE run there would
-    fill on PAPER and "pass" while nothing real happened. For a probe whose ONLY job is
-    proving the real order path that is worse than refusing (VPS, 2026-08-21: the account was
-    armed, which is why its absence from the picker read as a bug)."""
+def test_dhan_is_now_allowed_for_a_live_smoke_test(client):
+    """Phase B (2026-08-21) gave DhanAdapter place/modify/status/cancel, so the order-API
+    refusal no longer applies to it — this is the behaviour change, pinned. (The deploy can
+    still fail further down for want of a session; it must not fail for want of an API.)"""
     from skas_algo.db.base import session_scope
     from skas_algo.db.models import BrokerAccount
 
@@ -173,11 +171,32 @@ def test_a_live_smoke_test_is_refused_on_a_broker_with_no_order_api(client):
         db.flush()
         acct_id = a.id
 
-    body = {"leg": "stock", "symbol": "ITC", "mode": "LIVE", "broker_account_id": acct_id,
-            "quote_source": "dhan"}
-    r = client.post("/api/v1/trade/smoke-test/deploy", json=body)
-    assert r.status_code == 422
-    assert "no order API" in r.json()["detail"]
+    r = client.post("/api/v1/trade/smoke-test/deploy",
+                    json={"leg": "stock", "symbol": "ITC", "mode": "LIVE",
+                          "broker_account_id": acct_id, "quote_source": "dhan"})
+    assert "no order API" not in str(r.json())
+
+
+def test_a_live_smoke_test_is_refused_when_the_adapter_cannot_execute(client, monkeypatch):
+    """The guard itself: a broker with no order surface would be injected with PaperBroker,
+    "pass", and prove nothing — worse than refusing, for a probe whose ONLY job is the real
+    order path. No broker fails this today; the guard stands for the next one that would."""
+    from skas_algo.api.routes import trade as trade_routes
+    from skas_algo.db.base import session_scope
+    from skas_algo.db.models import BrokerAccount
+
+    with session_scope() as db:
+        a = BrokerAccount(broker="dhan", label="NoOrders", user_id="1112402726")
+        db.add(a)
+        db.flush()
+        acct_id = a.id
+
+    monkeypatch.setattr("skas_algo.brokers.live_broker.adapter_can_execute", lambda _a: False)
+    assert trade_routes is not None
+    r = client.post("/api/v1/trade/smoke-test/deploy",
+                    json={"leg": "stock", "symbol": "ITC", "mode": "LIVE",
+                          "broker_account_id": acct_id, "quote_source": "dhan"})
+    assert r.status_code == 422 and "no order API" in r.json()["detail"]
 
 
 def test_paper_is_not_refused_on_a_broker_with_no_order_api(client):

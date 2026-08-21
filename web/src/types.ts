@@ -1244,6 +1244,7 @@ export interface BrokerAccount {
   has_session: boolean;
   session_expires_at: string | null;
   live_trading_enabled: boolean;
+  can_place_orders?: boolean;   // adapter exposes the real order surface (server-side truth)
 }
 
 export interface BrokerConnectRequest {

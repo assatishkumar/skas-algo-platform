@@ -236,7 +236,14 @@ def test_adapter_can_execute_detection():
     assert adapter_can_execute(FakeAdapter())
     from skas_algo.brokers.dhan import DhanAdapter, DhanCredentials
 
-    assert not adapter_can_execute(DhanAdapter(DhanCredentials("1")))  # no order surface yet
+    # Dhan gained the order surface in Phase B (2026-08-21) — it can be injected now.
+    assert adapter_can_execute(DhanAdapter(DhanCredentials("1")))
+
+    class _Partial:                      # place/cancel only — the gate must still refuse
+        def place_order(self, order): ...
+        def cancel_order(self, oid): ...
+
+    assert not adapter_can_execute(_Partial())
 
 
 # ------------------------------------------------------- Zerodha order routing

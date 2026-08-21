@@ -317,13 +317,12 @@ function SmokeTestCard({ accounts, onAction }: {
   accounts: BrokerAccount[];
   onAction: (fn: () => Promise<unknown>, ok: string) => void;
 }) {
-  // Zerodha only: the smoke test's whole job is proving the REAL order path, and
-  // DhanAdapter has no place_order/modify/status/cancel — a LIVE run on it would be
-  // injected with PaperBroker, "pass", and prove nothing. Excluded accounts are NAMED
-  // below rather than silently missing (the owner armed a Dhan account and reasonably
-  // expected it here, 2026-08-21). The deploy route refuses the same case with a 422.
-  const sessioned = accounts.filter((a) => a.has_session && a.broker === "zerodha");
-  const noOrderApi = accounts.filter((a) => a.has_session && a.broker !== "zerodha");
+  // Any logged-in session whose broker can actually place orders. Dhan joined that set on
+  // 2026-08-21 (Phase B); the server is the authority — POST /trade/smoke-test/deploy 422s a
+  // LIVE run on an order-less broker — and `can_place_orders` mirrors it so the picker and
+  // the route can never drift. Excluded accounts are NAMED below, never silently missing.
+  const sessioned = accounts.filter((a) => a.has_session && a.can_place_orders !== false);
+  const noOrderApi = accounts.filter((a) => a.has_session && a.can_place_orders === false);
   const [leg, setLeg] = useState<"option" | "stock">("option");
   const [underlying, setUnderlying] = useState("NIFTY");
   const [right, setRight] = useState<"CE" | "PE">("CE");

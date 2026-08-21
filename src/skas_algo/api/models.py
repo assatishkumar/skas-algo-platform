@@ -792,3 +792,7 @@ class BrokerAccountOut(BaseModel):
     has_session: bool
     session_expires_at: str | None
     live_trading_enabled: bool
+    # Does this broker have a real order surface in Skais? Zerodha and (since 2026-08-21)
+    # Dhan do. The Brokers page keys the smoke-test picker off this rather than hard-coding
+    # broker names, so the UI and the server can never disagree about what can trade.
+    can_place_orders: bool = True

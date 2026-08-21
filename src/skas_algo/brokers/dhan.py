@@ -18,8 +18,13 @@ Column ground truth (verified against the live CSV, 2026-07-03):
   ("2026-07-30 15:30:00"), SEM_STRIKE_PRICE, SEM_OPTION_TYPE (CE/PE), SEM_SERIES.
   BSE derivatives rows exist for the same names — filter to NSE.
 
-Phase B (real orders) will add place/modify/cancel/status behind ``_ensure_armed`` —
-NO order-side code exists here yet, deliberately (CLAUDE.md §1).
+Phase B (real orders, 2026-08-21) adds place/modify/cancel/status + positions behind
+``_ensure_armed`` — the SAME double gate as Zerodha (armed account AND
+SKAS_LIVE_TRADING_ENABLED), and LiveBroker still owns every rail above it. Dhan statuses are
+normalised to the platform's vocabulary here (TRADED→COMPLETE, EXPIRED→CANCELLED) so
+LiveBroker stays broker-agnostic. HARD PREREQUISITE: Dhan only accepts order API calls from
+a STATIC IP whitelisted on the DhanHQ portal — quotes and the scrip master work without it,
+so an unwhitelisted account looks healthy until the first order is rejected.
 """
 
 from __future__ import annotations
@@ -33,8 +38,10 @@ import time as _time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .base import Session
-from .zerodha import BrokerLoginError
+from skas_algo.db.enums import OrderSide, OrderType
+
+from .base import BrokerOrder, Session
+from .zerodha import BrokerLoginError, NotArmedError
 
 DHAN_BASE = "https://api.dhan.co/v2"
 SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
@@ -90,6 +97,22 @@ class _DhanHttp:
         out: dict = r.json()
         return out
 
+    def put(self, path: str, body: dict) -> dict:
+        import requests
+
+        r = requests.put(f"{DHAN_BASE}{path}", json=body, headers=self._headers(), timeout=15)
+        r.raise_for_status()
+        out: dict = r.json()
+        return out
+
+    def delete(self, path: str) -> dict:
+        import requests
+
+        r = requests.delete(f"{DHAN_BASE}{path}", headers=self._headers(), timeout=15)
+        r.raise_for_status()
+        out: dict = r.json()
+        return out
+
     def fetch_master(self) -> str:
         import requests
 
@@ -109,6 +132,10 @@ class _Master:
         self.equity: dict[str, str] = {}
         self.index: dict[str, str] = {}
         self.lot: dict[str, int] = {}          # underlying -> lot size (latest seen)
+        # Dhan's own tradingSymbol per contract ("NIFTY-Aug2026-24000-CE"). Reconciliation
+        # compares OUR book against positions() keyed by exactly this string, so it has to
+        # come from the master rather than be reconstructed.
+        self.option_ts: dict[tuple[str, str, float, str], str] = {}
         self.expiries: dict[str, set[str]] = {}  # underlying -> {expiry_iso}
 
     @classmethod
@@ -138,6 +165,7 @@ class _Master:
                     continue
                 right = row["SEM_OPTION_TYPE"]
                 m.option[(underlying, expiry, strike, right)] = (sid, lot)
+                m.option_ts[(underlying, expiry, strike, right)] = ts
                 m.lot[underlying] = lot
                 m.expiries.setdefault(underlying, set()).add(expiry)
         return m
@@ -174,7 +202,7 @@ def _jwt_expiry(token: str) -> datetime:
 
 
 class DhanAdapter:
-    """Read-side BrokerAdapter for Dhan: session, quotes, chains, margin (Phase A)."""
+    """BrokerAdapter for Dhan: session, quotes, chains, margin, and real orders."""
 
     def __init__(
         self,
@@ -223,6 +251,146 @@ class DhanAdapter:
         return self._master().option.get(
             (inst.underlying.upper(), inst.expiry.isoformat(), float(inst.strike), inst.right)
         )
+
+    def _option_tradingsymbol(self, inst) -> str | None:
+        """Dhan's own tradingSymbol for a contract — the key reconciliation compares the
+        broker's net book on (manager._book_mismatch calls this by name, same as Zerodha)."""
+        return self._master().option_ts.get(
+            (inst.underlying.upper(), inst.expiry.isoformat(), float(inst.strike), inst.right)
+        )
+
+    # ------------------------------------------------------------- real orders
+    # PREREQUISITE, and it is not optional: Dhan requires the account's STATIC IP to be
+    # whitelisted on the DhanHQ portal before /orders will accept anything. Quotes and the
+    # scrip master work without it, so a mis-set account looks perfectly healthy right up
+    # until the first order is rejected.
+    def _ensure_armed(self) -> None:
+        if not (self.armed and self.live_enabled):
+            raise NotArmedError(
+                "Refusing to place a live order: account is not armed or "
+                "SKAS_LIVE_TRADING_ENABLED is false."
+            )
+
+    _ORDER_TYPE_MAP = {
+        OrderType.LIMIT: "LIMIT", OrderType.MARKET: "MARKET",
+        OrderType.SL: "STOP_LOSS", OrderType.SL_M: "STOP_LOSS_MARKET",
+    }
+    # Dhan's vocabulary → the platform's (LiveBroker._TERMINAL is COMPLETE/REJECTED/
+    # CANCELLED and it fills on COMPLETE). Mapping here keeps LiveBroker broker-agnostic.
+    #   TRADED      → COMPLETE     the fill
+    #   EXPIRED     → CANCELLED    terminal, unfilled — same handling as a cancel
+    #   PART_TRADED → left as-is   deliberately NOT terminal, so the escalation keeps
+    #                              working and the remainder is cancelled and booked
+    #   TRANSIT/PENDING → PENDING  still live
+    _STATUS_MAP = {
+        "TRADED": "COMPLETE", "REJECTED": "REJECTED", "CANCELLED": "CANCELLED",
+        "EXPIRED": "CANCELLED", "TRANSIT": "PENDING", "PENDING": "PENDING",
+    }
+
+    def _order_route(self, symbol: str) -> tuple[str, str, str]:
+        """(exchangeSegment, securityId, productType) for an internal symbol. Options
+        resolve through the SAME scrip master quotes use and carry as MARGIN (Dhan's NRML);
+        a plain symbol is an NSE equity and trades CNC. RAISES for anything unresolvable —
+        an order must NEVER fall through to a wrong contract."""
+        from skas_algo.engine.options.instrument import parse
+
+        inst = parse(symbol)
+        if inst is not None:
+            hit = self._option_id(inst)
+            if not hit:
+                raise ValueError(f"no listed Dhan contract for {symbol} in the scrip master")
+            return "NSE_FNO", str(hit[0]), "MARGIN"
+        eq = self._master().equity.get(symbol.upper())
+        if not eq:
+            raise ValueError(f"{symbol} is not a tradable NSE equity in the Dhan scrip master")
+        return "NSE_EQ", str(eq), "CNC"
+
+    @staticmethod
+    def _correlation_id(order: BrokerOrder) -> str:
+        """Dhan caps correlationId at 30 chars and rejects punctuation."""
+        raw = order.tag or order.client_order_id or ""
+        return "".join(c for c in raw if c.isalnum() or c in "_-")[:30]
+
+    def place_order(self, order: BrokerOrder) -> str:
+        """Place a REAL order; returns the Dhan orderId. Double-gated (armed + platform
+        flag), exactly like Zerodha."""
+        self._ensure_armed()
+        segment, security_id, product = self._order_route(order.symbol)
+        body = {
+            "dhanClientId": self.creds.client_id,
+            "transactionType": "BUY" if order.side is OrderSide.BUY else "SELL",
+            "exchangeSegment": segment,
+            "productType": product,
+            "orderType": self._ORDER_TYPE_MAP.get(order.order_type, "MARKET"),
+            "validity": "DAY",
+            "securityId": security_id,
+            "quantity": int(order.quantity),
+            # Dhan wants the field present even for MARKET, where it must be 0.
+            "price": float(order.price or 0.0) if order.order_type is OrderType.LIMIT else 0.0,
+        }
+        if (cid := self._correlation_id(order)):
+            body["correlationId"] = cid
+        out = self._http.post("/orders", body) or {}
+        oid = out.get("orderId")
+        if not oid:
+            # No id back = nothing to poll, cancel or reconcile against. Fail loudly rather
+            # than hand LiveBroker an empty string it would then chase forever.
+            raise BrokerLoginError(f"Dhan accepted no order id: {out}")
+        return str(oid)
+
+    def modify_order(self, broker_order_id: str, *, order_type: OrderType | None = None,
+                     price: float | None = None) -> None:
+        """Modify a pending order — the LIMIT→protected-LIMIT escalation path. Dhan's PUT
+        wants the order restated, so the CURRENT order is read first and the changed fields
+        overlaid; sending a partial body drops quantity/validity and the modify is rejected."""
+        self._ensure_armed()
+        cur = self._http.get(f"/orders/{broker_order_id}") or {}
+        if isinstance(cur, list):          # order-by-id can come back as a 1-element list
+            cur = cur[0] if cur else {}
+        body = {
+            "dhanClientId": self.creds.client_id,
+            "orderId": str(broker_order_id),
+            "orderType": (self._ORDER_TYPE_MAP.get(order_type, "MARKET")
+                          if order_type is not None else cur.get("orderType", "LIMIT")),
+            "quantity": int(cur.get("quantity") or 0),
+            "validity": cur.get("validity") or "DAY",
+            "price": float(price if price is not None else (cur.get("price") or 0.0)),
+        }
+        if cur.get("disclosedQuantity"):
+            body["disclosedQuantity"] = int(cur["disclosedQuantity"])
+        self._http.put(f"/orders/{broker_order_id}", body)
+
+    def order_status(self, broker_order_id: str) -> dict:
+        """{status, average_price, filled_quantity, status_message, price} for one order,
+        in the PLATFORM's vocabulary. Read-only (ungated), like Zerodha's."""
+        raw = self._http.get(f"/orders/{broker_order_id}") or {}
+        if isinstance(raw, list):
+            raw = raw[0] if raw else {}
+        native = str(raw.get("orderStatus") or "UNKNOWN").upper()
+        return {
+            "status": self._STATUS_MAP.get(native, native),
+            "average_price": float(raw.get("averageTradedPrice") or 0.0),
+            "filled_quantity": int(raw.get("filledQty") or 0),
+            "status_message": raw.get("omsErrorDescription") or raw.get("omsErrorCode"),
+            # the order's CURRENT limit price — lets the escalation verify its own modify
+            # actually landed (the 2026-08-11 Zerodha lesson, same check applies here).
+            "price": float(raw.get("price") or 0.0),
+        }
+
+    def cancel_order(self, broker_order_id: str) -> None:
+        self._ensure_armed()
+        self._http.delete(f"/orders/{broker_order_id}")
+
+    def positions(self) -> list[dict]:
+        """Net book in the shape reconciliation expects: ``tradingsymbol`` + ``quantity``
+        per contract (Dhan calls them tradingSymbol / netQty)."""
+        raw = self._http.get("/positions") or []
+        rows = raw if isinstance(raw, list) else (raw.get("data") or [])
+        return [
+            {"tradingsymbol": r.get("tradingSymbol"), "quantity": float(r.get("netQty") or 0)}
+            for r in rows
+            if r.get("tradingSymbol")
+        ]
 
     # ---------------------------------------------------------------- quotes
     def get_quote(self, symbols: list[str]) -> dict[str, float]:
