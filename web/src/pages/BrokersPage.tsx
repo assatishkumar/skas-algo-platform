@@ -330,6 +330,8 @@ function SmokeTestCard({ accounts, onAction }: {
   const [mode, setMode] = useState("PAPER");
   const [accountId, setAccountId] = useState<number | null>(null);
   const acct = accountId ?? sessioned[0]?.id ?? null;
+  const brokerOf = (id: number | null) =>
+    accounts.find((a) => a.id === id)?.broker ?? "zerodha";
   const field = "w-full rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-2.5 py-1.5 text-[13px] text-[var(--strong)]";
 
   function deploy() {
@@ -341,7 +343,11 @@ function SmokeTestCard({ accounts, onAction }: {
     }
     onAction(
       () => api.smokeTestDeploy({
-        leg, mode, broker_account_id: acct, quote_source: "zerodha",
+        // The quote source MUST match the chosen account's broker — start_deployment rejects
+        // a mismatch outright ("quote_source 'zerodha' needs a zerodha account"). Hard-coding
+        // zerodha here was invisible while the picker was Zerodha-only; it 400'd the moment
+        // Dhan became selectable (2026-08-21).
+        leg, mode, broker_account_id: acct, quote_source: brokerOf(acct),
         ...(leg === "option" ? { underlying, right } : { symbol: symbol.trim().toUpperCase() }),
       }),
       `Smoke test deployed (${mode}) — watch the Live page: buy → 60s → sell, then the run stops itself. ` +
