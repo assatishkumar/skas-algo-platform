@@ -116,6 +116,7 @@ const LABELS: Record<string, string> = {
   warn_days_left: "Warn at days of runway",
   funding_buffer_pct: "Funding buffer",
   fund_seed: "Seed the fund source",
+  max_skew_pct: "Max overweight vs avg",
 };
 
 const ORDER = [

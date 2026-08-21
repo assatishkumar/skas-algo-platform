@@ -68,6 +68,15 @@ class ValueInvestingStrategy:
         # "never" = the account already holds the ETF (LIVE default — a fresh deploy must
         # never place a surprise multi-lakh buy). "if_empty" = the backtest bootstrap: turn
         # the opening cash into the fund source on day 1, then drip from day 2.
+        # How the daily budget is spread. "one_share" = the spec: one share of each name,
+        # top-down. That silently weights the portfolio by SHARE PRICE — over 2020-26 on the
+        # owner's list it put 18.9% of the money into TCS (1.2% CAGR) and 4.3% into KTKBANK
+        # (39.1%), and cost ~7 points of XIRR against a plain index SIP. "balanced" keeps the
+        # faller-first walk but SKIPS a name whose cumulative invested is already more than
+        # max_skew_pct above the watchlist average, so the budget flows to the laggards and
+        # the rupees even out over time. Ctor default is the spec (§1).
+        sizing: str = "one_share",          # one_share | balanced
+        max_skew_pct: float = 25.0,         # balanced only: allowed overweight vs the average
         fund_seed: str = "never",
         # Annualised yield the FUND SOURCE really earns, for reporting only. A dividend
         # liquid ETF (LIQUIDBEES) holds NAV at ₹1,000 and pays out as units, so a price-only
@@ -83,7 +92,11 @@ class ValueInvestingStrategy:
         self.fund_source = str(fund_source or "").upper()
         self.warn_days_left = int(warn_days_left)
         self.funding_buffer_pct = float(funding_buffer_pct)
+        self.sizing = str(sizing or "one_share").lower()
+        self.max_skew_pct = float(max_skew_pct)
         self.fund_seed = str(fund_seed or "never").lower()
+        # cumulative rupees put into each name — drives the balanced walk (persisted)
+        self.invested: dict[str, float] = {}
         self.fund_yield_pct = float(fund_yield_pct)
         raw = watchlist if isinstance(watchlist, list) else str(watchlist or "").split(",")
         # The fund source is never bought as a stock, however it is spelled in the list.
@@ -163,6 +176,7 @@ class ValueInvestingStrategy:
             if running_cash < px:
                 break
             running_cash -= px
+            self.invested[sym] = self.invested.get(sym, 0.0) + px
             entries.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG, quantity=1,
                                   reason="drip"))
 
@@ -221,14 +235,44 @@ class ValueInvestingStrategy:
 
     def _shopping_list(self, ranked) -> list[tuple[str, float]]:
         """One share each, top to bottom, no wrap-around. An unaffordable name is skipped and
-        the walk continues; whatever is left over at the bottom evaporates."""
+        the walk continues; whatever is left over at the bottom evaporates.
+
+        In "balanced" mode the same walk additionally skips a name that is already more than
+        ``max_skew_pct`` above the watchlist's average invested — one share of a Rs2,300 stock
+        and one share of a Rs27 stock are not the same bet, and left unchecked the portfolio
+        ends up weighted by share price rather than by conviction."""
         remaining = self.daily_budget
         plan: list[tuple[str, float]] = []
+        balanced = self.sizing == "balanced"
+        # projected book as the walk spends, so one day cannot itself create the skew
+        spent = dict(self.invested)
+        names = [sym for _c, _i, sym, _p in ranked]
         for _chg, _i, sym, px in ranked:
-            if 0 < px <= remaining:
-                plan.append((sym, px))
-                remaining -= px
+            if not (0 < px <= remaining):
+                continue
+            if balanced and self._too_heavy(sym, px, spent, names):
+                continue
+            plan.append((sym, px))
+            remaining -= px
+            spent[sym] = spent.get(sym, 0.0) + px
         return plan
+
+    def _too_heavy(self, sym: str, px: float, spent: dict[str, float],
+                   names: list[str]) -> bool:
+        """Is this name ALREADY unfairly ahead of the pack?
+
+        Tests the name's CURRENT book, not the book after the buy — testing the post-buy
+        figure compares one share's price against a per-name average that starts near zero,
+        so the very first purchase locks out every other name and the strategy grinds to a
+        halt (Rs159 invested over six years, 2026-08-21). Judging what is already owned lets
+        an untouched name through every time and lets an expensive one buy its first share,
+        while a name that has run ahead waits for the others to catch up."""
+        if not names:
+            return False
+        avg = sum(spent.get(n, 0.0) for n in names) / len(names)
+        if avg <= 0:
+            return False
+        return spent.get(sym, 0.0) > avg * (1.0 + self.max_skew_pct / 100.0)
 
     def _fund(self, ctx, plan, cost: float, fund: str, fund_px: float, fund_lots,
               fund_units: int, today: date):
@@ -302,6 +346,7 @@ class ValueInvestingStrategy:
         return {
             "last_shop_day": self.last_shop_day,  # a 15:25 restart must not re-shop
             "seeded": self.seeded,  # never bootstrap the fund source twice
+            "invested": dict(self.invested),  # the balanced walk needs the running book
             "alerted": dict(self._alerted),  # keep the push latch across a restart
             "strategy_alert": self.strategy_alert,  # the banner survives too
         }
@@ -309,5 +354,6 @@ class ValueInvestingStrategy:
     def load_state(self, state: dict) -> None:
         self.last_shop_day = state.get("last_shop_day")
         self.seeded = bool(state.get("seeded", False))
+        self.invested = dict(state.get("invested", {}))
         self._alerted = dict(state.get("alerted", {}))
         self.strategy_alert = state.get("strategy_alert")

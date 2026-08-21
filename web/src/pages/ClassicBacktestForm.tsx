@@ -231,6 +231,11 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   const [viFund, setViFund] = useState("LIQUIDBEES");
   const [viWatchlist, setViWatchlist] = useState("");
   const [viWarnDays, setViWarnDays] = useState(2);
+  // Balanced by default on the FORM: one-share-each weights the book by share price, which
+  // cost ~7 points of XIRR on the owner's list. The ctor default stays the spec (§1).
+  const [viSizing, setViSizing] = useState("balanced");
+  const [viSkew, setViSkew] = useState(25);
+  const [viFundYield, setViFundYield] = useState(6.5);
   const [nsCandidates, setNsCandidates] = useState(5); // rank the N most-below-DMA
   const [nsNewBuys, setNsNewBuys] = useState(2); // Case 1: open up to this many new/day
   const [nsAvgDown, setNsAvgDown] = useState(3); // Case 2: average a name down >this%
@@ -829,6 +834,9 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
             fund_source: viFund.trim().toUpperCase(),
             watchlist: viWatchlist.trim(),
             warn_days_left: viWarnDays,
+            sizing: viSizing,
+            max_skew_pct: viSkew,
+            fund_yield_pct: viFundYield,
             // A backtest starts with cash and no ETF, so day 1 converts the capital into the
             // fund source. The ctor default is "never" — a LIVE deploy must not place this.
             fund_seed: "if_empty",
@@ -1653,6 +1661,22 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                 </Field>
                 <Field label="Warn at days of runway left">
                   <NumberInput className={inputClass} value={viWarnDays} onChange={setViWarnDays} />
+                </Field>
+                <Field label="Sizing">
+                  <select className={inputClass} value={viSizing}
+                    onChange={(e) => setViSizing(e.target.value)}>
+                    <option value="balanced">Balanced — even rupees per name</option>
+                    <option value="one_share">One share each (weights by share price)</option>
+                  </select>
+                </Field>
+                {viSizing === "balanced" && (
+                  <Field label="Max overweight vs average %">
+                    <NumberInput className={inputClass} value={viSkew} onChange={setViSkew} />
+                  </Field>
+                )}
+                <Field label="Fund source yield %/yr (reported only)">
+                  <NumberInput step="0.1" className={inputClass} value={viFundYield}
+                    onChange={setViFundYield} />
                 </Field>
                 <div className="md:col-span-3">
                   <Field label="Watchlist (comma-separated; blank = every symbol above)">

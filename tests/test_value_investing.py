@@ -343,3 +343,56 @@ def test_backtest_and_live_prev_close_agree():
     live.update_quote("AAA", 105.0)
     assert bt.prev_close("AAA") == live.prev_close("AAA") == 100.0
     assert bt.close("AAA") == live.close("AAA") == 105.0
+
+
+# ------------------------------------------------------- balanced sizing
+def test_balanced_mode_skips_a_name_that_has_run_ahead_of_the_pack():
+    """One share of a Rs2,300 stock and one share of a Rs27 stock are not the same bet, so
+    one-share-each silently weights the book by SHARE PRICE. Balanced keeps the faller-first
+    walk but waits for the laggards to catch up."""
+    view = _view({"RICH": (3000, 2900), "MID": (300, 295), "CHEAP": (30, 29.5),
+                  FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 1000)
+    st = _strat(watchlist="RICH,MID,CHEAP", daily_budget=5_000.0, sizing="balanced")
+    st.invested = {"RICH": 10_000.0, "MID": 100.0, "CHEAP": 100.0}   # RICH is way ahead
+    bought = [s.symbol for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
+    assert "RICH" not in bought and set(bought) == {"MID", "CHEAP"}
+
+
+def test_balanced_mode_always_lets_an_untouched_name_buy_its_first_share():
+    """Testing the POST-buy total against a near-zero average locked out every name after the
+    first purchase and the strategy invested Rs159 over six years (2026-08-21). The cap judges
+    what a name ALREADY owns, so a name at zero is never blocked."""
+    view = _view({"RICH": (3000, 2900), "CHEAP": (30, 29.5), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 1000)
+    st = _strat(watchlist="RICH,CHEAP", daily_budget=5_000.0, sizing="balanced")
+    st.invested = {"CHEAP": 500.0}          # RICH has never been bought
+    bought = [s.symbol for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
+    assert "RICH" in bought
+
+
+def test_balanced_mode_is_opt_in_and_one_share_stays_the_default():
+    """CLAUDE.md §1 — the ctor keeps the spec's behaviour; the form opts in."""
+    assert _strat(watchlist="AAA").sizing == "one_share"
+    view = _view({"RICH": (3000, 2900), "CHEAP": (30, 29.5), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 1000)
+    st = _strat(watchlist="RICH,CHEAP", daily_budget=5_000.0)
+    st.invested = {"RICH": 10_000.0}
+    bought = [s.symbol for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
+    assert "RICH" in bought                 # unbalanced: price-weighting is not corrected
+
+
+def test_the_running_book_survives_a_restart():
+    """The balanced walk is only fair if it remembers what it already bought."""
+    view = _view({"AAA": (100, 95), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 1000)
+    st = _strat(watchlist="AAA", sizing="balanced")
+    st.on_slice(ctx)
+    assert st.invested.get("AAA", 0) > 0
+    fresh = _strat(watchlist="AAA", sizing="balanced")
+    fresh.load_state(st.export_state())
+    assert fresh.invested == st.invested
