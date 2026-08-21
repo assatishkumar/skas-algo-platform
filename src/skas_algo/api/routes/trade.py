@@ -851,6 +851,26 @@ async def smoke_test_deploy(
         )
     if body.premium_min <= 0 or body.premium_max < body.premium_min:
         raise HTTPException(status_code=422, detail="premium band must satisfy 0 < min ≤ max")
+    # A LIVE smoke test on a broker with NO order surface is a false negative, not a test:
+    # LiveBroker is never injected, the run paper-fills, wears the "orders PAPER" chip and
+    # "passes" while nothing real happened — for a probe whose ONLY job is proving the real
+    # order path, that is worse than refusing. DhanAdapter is quotes/chain/margin only.
+    # Note this is deliberately NOT an ``armed`` check: a LIVE run on a DISARMED Zerodha
+    # account is a documented, useful negative test — that account can be armed; Dhan cannot
+    # place an order at all. PAPER on any broker stays allowed (it proves session + quotes).
+    if body.mode.upper() == "LIVE" and body.broker_account_id is not None:
+        from skas_algo.brokers.live_broker import adapter_can_execute
+        from skas_algo.db.models import BrokerAccount
+        from skas_algo.services import broker as broker_svc
+
+        acct = db.get(BrokerAccount, body.broker_account_id)
+        if acct is not None and not adapter_can_execute(broker_svc.make_adapter(acct)):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{acct.broker} has no order API in Skais yet, so a LIVE smoke test "
+                f"would fill on PAPER and prove nothing. Use PAPER mode, or a Zerodha "
+                f"account for the real order-path probe.",
+            )
     is_option = leg == "option"
     params = {
         "leg": leg,

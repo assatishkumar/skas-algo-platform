@@ -317,7 +317,13 @@ function SmokeTestCard({ accounts, onAction }: {
   accounts: BrokerAccount[];
   onAction: (fn: () => Promise<unknown>, ok: string) => void;
 }) {
+  // Zerodha only: the smoke test's whole job is proving the REAL order path, and
+  // DhanAdapter has no place_order/modify/status/cancel — a LIVE run on it would be
+  // injected with PaperBroker, "pass", and prove nothing. Excluded accounts are NAMED
+  // below rather than silently missing (the owner armed a Dhan account and reasonably
+  // expected it here, 2026-08-21). The deploy route refuses the same case with a 422.
   const sessioned = accounts.filter((a) => a.has_session && a.broker === "zerodha");
+  const noOrderApi = accounts.filter((a) => a.has_session && a.broker !== "zerodha");
   const [leg, setLeg] = useState<"option" | "stock">("option");
   const [underlying, setUnderlying] = useState("NIFTY");
   const [right, setRight] = useState<"CE" | "PE">("CE");
@@ -400,6 +406,14 @@ function SmokeTestCard({ accounts, onAction }: {
           </select>
         </label>
       </div>
+      {noOrderApi.length > 0 && (
+        <p className="mt-2 text-[11.5px] leading-snug text-[var(--faint)]">
+          {noOrderApi.map((a) => a.label).join(", ")} not listed —{" "}
+          {noOrderApi.length === 1 ? "that broker has" : "those brokers have"} no order API in
+          Skais yet, so a LIVE smoke test there would fill on paper and prove nothing. Arming
+          makes no difference to this.
+        </p>
+      )}
       <button onClick={deploy} disabled={acct == null}
         title={acct == null ? "Needs a logged-in Zerodha session" : undefined}
         className={`mt-3 w-full rounded-[11px] px-3 py-2 text-[13px] font-bold disabled:opacity-50 ${mode === "LIVE"

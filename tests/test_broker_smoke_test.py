@@ -156,3 +156,55 @@ def test_manager_self_stop_seam_guards_on_flat_book(monkeypatch):
     assert stopped == []
     assert manager._maybe_self_stop(live(True, [])) is True       # flat + requested → stop
     assert stopped == [42]
+
+
+def test_a_live_smoke_test_is_refused_on_a_broker_with_no_order_api(client):
+    """Dhan is quotes/chain/margin only — no place_order/modify/status/cancel — so
+    adapter_can_execute() is False, LiveBroker is never injected, and a LIVE run there would
+    fill on PAPER and "pass" while nothing real happened. For a probe whose ONLY job is
+    proving the real order path that is worse than refusing (VPS, 2026-08-21: the account was
+    armed, which is why its absence from the picker read as a bug)."""
+    from skas_algo.db.base import session_scope
+    from skas_algo.db.models import BrokerAccount
+
+    with session_scope() as db:
+        a = BrokerAccount(broker="dhan", label="SmokeDhan", user_id="1112402726")
+        db.add(a)
+        db.flush()
+        acct_id = a.id
+
+    body = {"leg": "stock", "symbol": "ITC", "mode": "LIVE", "broker_account_id": acct_id,
+            "quote_source": "dhan"}
+    r = client.post("/api/v1/trade/smoke-test/deploy", json=body)
+    assert r.status_code == 422
+    assert "no order API" in r.json()["detail"]
+
+
+def test_paper_is_not_refused_on_a_broker_with_no_order_api(client):
+    """PAPER proves session + quotes and places nothing — only LIVE is refused. It may still
+    fail further down (no session, no data), but never with the order-API reason."""
+    from skas_algo.db.base import session_scope
+    from skas_algo.db.models import BrokerAccount
+
+    with session_scope() as db:
+        a = BrokerAccount(broker="dhan", label="SmokePaperDhan", user_id="1112402726")
+        db.add(a)
+        db.flush()
+        acct_id = a.id
+
+    r = client.post("/api/v1/trade/smoke-test/deploy",
+                    json={"leg": "stock", "symbol": "ITC", "mode": "PAPER",
+                          "broker_account_id": acct_id, "quote_source": "dhan"})
+    assert "no order API" not in str(r.json())
+
+
+def test_the_guard_does_not_fire_for_a_disarmed_zerodha_account():
+    """A LIVE run on a DISARMED Zerodha account is a documented, useful negative test — it
+    paper-fills and wears the "orders PAPER" chip. That account CAN be armed; Dhan cannot
+    place an order at all. The guard keys off the ORDER SURFACE, never off ``armed``."""
+    from skas_algo.brokers.live_broker import adapter_can_execute
+    from skas_algo.brokers.zerodha import ZerodhaAdapter, ZerodhaCredentials
+
+    disarmed = ZerodhaAdapter(ZerodhaCredentials(api_key="k", api_secret="s", user_id="u"),
+                              armed=False, live_enabled=False)
+    assert adapter_can_execute(disarmed) is True       # capability, not permission

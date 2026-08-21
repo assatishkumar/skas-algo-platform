@@ -173,7 +173,14 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   APIs" subscription** (error 806 without it; expirylist/funds/orders don't) — verified
   2026-07-03 on the owner's account. quote_source ∈ {cache, zerodha, dhan} — the
   broker sources are gated by `live/quotes.is_broker_source`, and the source must match
-  `account.broker`. **No broker places real orders yet** — even LIVE mode fills via
+  `account.broker`. **DhanAdapter has NO order surface** — no place_order/modify_order/
+  order_status/cancel_order — so `adapter_can_execute` is False and `_maybe_inject_live_broker`
+  can never inject a LiveBroker on a Dhan account, ARMED OR NOT. Consequences: the Brokers
+  page's smoke-test picker lists Zerodha sessions only (and now NAMES the excluded accounts
+  instead of hiding them), and `POST /trade/smoke-test/deploy` 422s a LIVE deploy on any
+  order-less broker — a probe that paper-fills and "passes" is worse than one that refuses.
+  The guard keys off the ORDER SURFACE, never off `armed`: a LIVE run on a DISARMED *Zerodha*
+  account is a documented, useful negative test. **No broker places real orders yet** — even LIVE mode fills via
   PaperBroker; the real order path (LiveBroker, LIMIT-at-touch→protected-limit, double-gated) is the
   planned Phase B and the only place order code may ever be added.
 - **gap_reversal** (`strategies/gap_reversal.py`, Nifty 500 equity, 2026-07-28): daily LONG-only
