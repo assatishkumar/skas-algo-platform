@@ -345,3 +345,76 @@ def test_event_carries_the_overall_pnl_and_per_leg_expiry():
     near = next(lg for lg in m["legs"] if lg["expiry"] == "2026-08-25")
     far = next(lg for lg in m["legs"] if lg["expiry"] == "2026-09-29")
     assert near["open_delta"] is not None and far["open_delta"] is not None
+
+
+def _live_leg(strike, right, entry_dt, premium=100.0):
+    return {"symbol": f"NIFTY|2026-08-25|{strike}|{right}", "underlying": "NIFTY",
+            "strike": strike, "right": right, "expiry": "2026-08-25", "side": "short",
+            "units": 75, "entry_date": entry_dt, "entry_premium": premium,
+            "exit_date": None, "exit_price": None, "pnl": 0.0, "holding_days": None}
+
+
+def _live_cycle(legs):
+    return {"underlying": "NIFTY", "expiry": "2026-08-25", "entry_date": "2026-08-20 09:30",
+            "exit_date": None, "live": True, "net_pnl": None, "underlying_entry": 24000.0,
+            "daily_pnl": [], "legs_detail": legs}          # ← daily_pnl empty = the LIVE shape
+
+
+def test_a_live_cycle_gets_its_unrealized_from_the_store_not_the_daily_series():
+    """A LIVE run's cycles are reconstructed from the trade log and carry NO daily_pnl, so the
+    unrealized and overall lines were simply absent on every live event card (run #203,
+    2026-08-21). The open book is marked from the 1-min store at the event minute instead."""
+    import skas_algo.services.cycle_detail as cd
+
+    cycle = _live_cycle([_live_leg(24200, "CE", "2026-08-20 09:30"),
+                         _live_leg(24300, "CE", "2026-08-21 10:00", premium=80.0)])
+    marks = {"NIFTY|2026-08-25|24200|CE": 60.0, "NIFTY|2026-08-25|24300|CE": 80.0}
+    orig, cd._marks_at = cd._marks_at, lambda syms, ts: {s: marks[s] for s in syms if s in marks}
+    try:
+        m = cd.build_cycle_detail(cycle, [], lambda d: 24000.0, [], index=0, run_id=4,
+                                  strategy_id="delta_neutral_monthly", name="dnm")
+    finally:
+        cd._marks_at = orig
+    entry, later = m["events"][0], m["events"][1]
+    # the entry: everything just opened → 0 by construction, no lookup
+    assert entry["unrealized_eod"] == 0.0 and entry["total_so_far"] == 0.0
+    # the later event: the FIRST leg has decayed 40 points, the new one marks at its entry
+    assert later["unrealized_eod"] == (60.0 - 100.0) * 75 * -1 == 3000.0
+    assert later["unrealized_basis"] == "event"      # the UI labels it "at event", not "EOD"
+    assert later["total_so_far"] == 3000.0           # realized 0 + unrealized
+
+
+def test_an_unpriceable_leg_leaves_the_unrealized_blank_rather_than_partial():
+    """All-or-nothing: a partial sum of a two-leg book reads like a real number and is not one."""
+    import skas_algo.services.cycle_detail as cd
+
+    cycle = _live_cycle([_live_leg(24200, "CE", "2026-08-20 09:30"),
+                         _live_leg(23800, "PE", "2026-08-21 10:00")])
+    orig = cd._marks_at
+    cd._marks_at = lambda syms, ts: {"NIFTY|2026-08-25|24200|CE": 60.0}   # only ONE prints
+    try:
+        m = cd.build_cycle_detail(cycle, [], lambda d: 24000.0, [], index=0, run_id=5,
+                                  strategy_id="delta_neutral_monthly", name="dnm")
+    finally:
+        cd._marks_at = orig
+    later = m["events"][1]
+    assert later["unrealized_eod"] is None and later["total_so_far"] is None
+    assert later["unrealized_basis"] is None
+
+
+def test_a_saved_run_still_uses_its_daily_series():
+    """The EOD path is unchanged for saved backtests — the store lookup is a fallback only."""
+    cycle = {
+        "underlying": "NIFTY", "expiry": "2026-08-25", "entry_date": "2026-08-20 09:30",
+        "exit_date": None, "live": True, "net_pnl": None, "underlying_entry": 24000.0,
+        "daily_pnl": [{"date": "2026-08-20", "pnl": -12000.0}],
+        "legs_detail": [
+            {"symbol": "NIFTY|2026-08-25|24200|CE", "underlying": "NIFTY", "strike": 24200,
+             "right": "CE", "expiry": "2026-08-25", "side": "short", "units": 75,
+             "entry_date": "2026-08-20 09:30", "entry_premium": 100.0, "exit_date": None,
+             "exit_price": None, "pnl": 0.0, "holding_days": None}],
+    }
+    m = build_cycle_detail(cycle, [], lambda d: 24000.0, [], index=0, run_id=6,
+                           strategy_id="delta_neutral_monthly", name="dnm")
+    ev = m["events"][0]
+    assert ev["unrealized_eod"] == -12000.0 and ev["unrealized_basis"] == "eod"

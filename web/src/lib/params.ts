@@ -283,6 +283,7 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
  *  the ratio-family ctor's fixed|margin. */
 export const PARAM_ENUMS: Record<string, string[]> = {
   trail_mode: ["ratchet", "below_peak"],
+  pnl_basis: ["total", "open_legs"],
   same_strike_action: ["reenter", "skip", "hold"],
   down_breach_action: ["none", "roll_long", "recenter"],
   loss_repair: ["none", "roll_short_up"],

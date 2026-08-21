@@ -729,6 +729,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any", unit: "fraction" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 3, { step: "any", unit: "fraction" }),
+        PNL_BASIS,
         f("max_holding_days", "MAX HOLDING DAYS", "number", 20),
         ...cadenceFields("1min", "eod", "15:20"),
       ],
@@ -799,6 +800,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any", unit: "fraction" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 3, { step: "any", unit: "fraction" }),
+        PNL_BASIS,
         f("max_holding_days", "MAX HOLDING DAYS", "number", 20),
         ...cadenceFields("1min", "eod", "15:20"),
       ],
@@ -869,6 +871,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 2.5, { step: "any", unit: "fraction" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 3, { step: "any", unit: "fraction" }),
+        PNL_BASIS,
         f("max_holding_days", "MAX HOLDING DAYS", "number", 20),
         ...cadenceFields("1min", "eod", "15:20"),
       ],
@@ -925,6 +928,7 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       fields: [
         f("profit_target_pct", "PROFIT TARGET %", "number", 1, { step: "any", unit: "fraction" }),
         f("stop_loss_pct", "STOP LOSS %", "number", 1, { step: "any", unit: "fraction" }),
+        PNL_BASIS,
         f("exit_weekday", "FORCE-EXIT WEEKDAY", "select", "4", {
           options: [
             { value: "1", label: "Tuesday" }, { value: "2", label: "Wednesday" },

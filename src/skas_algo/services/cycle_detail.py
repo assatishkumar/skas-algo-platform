@@ -388,16 +388,25 @@ def build_cycle_detail(
             if lg["open_ts"] <= ts and (lg["close_ts"] is None or lg["close_ts"] > ts)
         ]
         net_delta = _net_delta(open_now, spot, expiry, ts, r)
-        # Unrealized on the open book, marked at the EOD of the event's day (the only mark
-        # path we have — the daily MTM series): cumulative EOD MTM − realized so far. The
-        # final flat event is exactly 0 by construction. Honest label: it's an EOD mark,
-        # not the mark at the event's minute.
+        # Unrealized on the open book right after this event. Two sources, in order:
+        #   "eod"   — the cycle's daily MTM series (cumulative EOD MTM − realized so far);
+        #   "event" — every open leg marked from the 1-min store AT THE EVENT MINUTE.
+        # A LIVE run's cycles are reconstructed from the trade log and carry NO daily series
+        # (fixed 2026-08-21: the unrealized and overall lines were simply absent on every live
+        # cycle), so the store path is what gives a running deploy these numbers — and it is
+        # the more precise of the two anyway. Basis is reported so the UI can label it.
         if is_last and is_flat:
-            unrealized = 0.0
+            unrealized, unrealized_basis = 0.0, "eod"
         else:
+            unrealized, unrealized_basis = None, None
             day = ts.strftime("%Y-%m-%d")
             mtm_eod = next((d["pnl"] for d in reversed(daily) if str(d["date"])[:10] <= day), None)
-            unrealized = round(mtm_eod - realized, 2) if mtm_eod is not None else None
+            if mtm_eod is not None:
+                unrealized, unrealized_basis = round(mtm_eod - realized, 2), "eod"
+            else:
+                mtm = _open_mtm_at(open_now, ts)
+                if mtm is not None:
+                    unrealized, unrealized_basis = mtm, "event"
         events.append(
             {
                 "id": eid,
@@ -408,6 +417,7 @@ def build_cycle_detail(
                 "reason": _reason(kind, tags, cycle, opened, closed),
                 "realized_so_far": round(realized, 2),
                 "unrealized_eod": unrealized,
+                "unrealized_basis": unrealized_basis,  # "eod" | "event" — drives the UI label
                 # realized + unrealized: where the cycle STOOD at this event. The two halves
                 # alone made the reader do the arithmetic (owner ask 2026-08-20); None when
                 # there is no mark to add.
@@ -601,6 +611,29 @@ def _net_delta(open_legs, spot, expiry, when, r) -> float | None:
                      r, iv, lg["right"])
         total += lg["dir"] * lg["units"] * d
     return total
+
+
+def _open_mtm_at(open_legs: list[dict], ts: datetime) -> float | None:
+    """MTM of the whole open book at ``ts``, marked from the 1-min store. ALL-OR-NOTHING:
+    one unpriced leg → None, because a partial sum reads like a real number and is not one."""
+    if not open_legs:
+        return 0.0
+    # Every leg opened AT this instant → the book is worth exactly what was just paid for it:
+    # 0 unrealized, by construction, with no lookup needed. This is the entry event of every
+    # cycle, and a store miss there (an entry stamped 00:00 on a date-only row) would
+    # otherwise blank the whole footer on the one card where the answer is certain.
+    if all(lg["open_ts"] == ts for lg in open_legs):
+        return 0.0
+    syms = [lg["symbol"] for lg in open_legs if "|" in str(lg["symbol"])]
+    if len(syms) != len(open_legs):
+        return None  # a non-option leg has no store series
+    marks = _marks_at(syms, ts)
+    if len(marks) != len(open_legs):
+        return None
+    return round(
+        sum((marks[lg["symbol"]] - lg["open_price"]) * lg["units"] * lg["dir"] for lg in open_legs),
+        2,
+    )
 
 
 def _held_rows(held: list[dict], ts: datetime) -> list[dict]:

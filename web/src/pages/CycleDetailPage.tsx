@@ -153,8 +153,11 @@ export function CycleDetail({ m, active, toggle, setActive, onClose }: {
         </div>
       </div>
 
-      {/* timeline + legs table */}
-      <div className="grid gap-[18px] items-start" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(460px,1fr))" }}>
+      {/* Timeline first at full width, legs table BELOW it (2026-08-21). Side by side, the
+          460px column forced every event line to wrap ("SELL CE 59,300 · 25 Aug '26 · 5 lots"
+          over four lines) and squeezed the leg rows into the same shape — both panels are
+          wide-row tables and neither fits half a screen. */}
+      <div className="grid gap-[18px] items-start" style={{ gridTemplateColumns: "1fr" }}>
         <EventTimeline m={m} active={active} toggle={toggle} />
         <LegsTable m={m} toggle={toggle} legState={legState} active={active} />
       </div>
@@ -371,9 +374,12 @@ function EventTimeline({ m, active, toggle }: {
                     <span>net Δ {dΔ(e.net_delta)}</span>
                     <span className={`ml-auto ${e.realized_so_far > 0 ? "text-[var(--pos)]" : ""}`}>realized so far {formatInr(e.realized_so_far)}</span>
                     {e.unrealized_eod != null && e.kind !== "exit" && (
-                      <span title="open-book MTM at that day's EOD mark (not the event minute)"
+                      <span title={e.unrealized_basis === "event"
+                        ? "open-book MTM at this event's minute, marked from the 1-min store"
+                        : "open-book MTM at that day's EOD mark (not the event minute)"}
                         className={e.unrealized_eod > 0 ? "text-[var(--pos)]" : e.unrealized_eod < 0 ? "text-[var(--danger)]" : ""}>
-                        unrealized {formatInr(e.unrealized_eod)} <span className="opacity-60">EOD</span>
+                        unrealized {formatInr(e.unrealized_eod)}{" "}
+                        <span className="opacity-60">{e.unrealized_basis === "event" ? "at event" : "EOD"}</span>
                       </span>
                     )}
                     {/* where the cycle STOOD after this event — realized + unrealized. The two
@@ -432,7 +438,9 @@ function LegsTable({ m, toggle, legState, active }: {
   const rows = [...m.legs].sort((a, b) =>
     a.open_ts.localeCompare(b.open_ts)
     || (a.side === "long" ? 1 : 0) - (b.side === "long" ? 1 : 0) || a.strike - b.strike);
-  const cols = "52px 1.2fr 0.9fr 0.9fr 1.3fr 40px 96px";
+  // Full-width now, so the leg label gets room for "CE 59,300 · 25 Aug '26 · 5 lots · Δ+0.17"
+  // on one line instead of wrapping to four.
+  const cols = "62px minmax(300px,1.6fr) 96px 96px 1.1fr 56px 110px";
   const total = m.legs.reduce((s, l) => s + l.pnl, 0);
   return (
     <div className="flex flex-col gap-[18px]">

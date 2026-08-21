@@ -935,6 +935,10 @@ export interface CycleDetailEvent {
   net_delta: number | null; reason: string; realized_so_far: number;
   unrealized_eod?: number | null; // open-book MTM at the event day's EOD mark (0 on a flat exit)
   total_so_far?: number | null;   // realized + unrealized: where the cycle stood at this event
+  // where `unrealized_eod` came from: "eod" = the cycle's daily MTM series (saved runs),
+  // "event" = every open leg marked from the 1-min store at the event minute (live runs,
+  // which are reconstructed from the trade log and have no daily series)
+  unrealized_basis?: "eod" | "event" | null;
   open_refs?: number[];           // legs still OPEN right after this event (held-through book)
   // legs held THROUGH the event: price = 1-min-store mark at the event minute, realized =
   // that leg's unrealized P&L at that mark; both null when the store has no print (never faked)

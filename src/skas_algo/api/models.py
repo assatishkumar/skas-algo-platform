@@ -358,6 +358,12 @@ class RatioManualDeploy(BaseModel):
     trail_trigger_pct: float = 0.0
     trail_step_pct: float = 0.0
     trail_mode: str = "ratchet"  # "ratchet" | "below_peak"
+    # The %-of-margin target/stop/trail measure the WHOLE cycle (banked rolls + open
+    # MTM). Ctor default stays "open_legs" (§1 — a recovered deploy is unchanged);
+    # every NEW deploy gets "total". Run #203 sat on open_legs, banked Rs1.53L of
+    # rolls its exit check could not see, and peaked 0.2% short of a target the UI
+    # already showed as cleared (2026-08-21).
+    pnl_basis: str = "total"
     profit_check: str = "1min"
     stop_check: str = "eod"
     time_check: str = "eod"
@@ -450,6 +456,8 @@ class DoubleDiagonalDeploy(BaseModel):
     min_adjust_dte: int = 3
     profit_target_pct: float = 1.5  # % of broker margin
     stop_loss_pct: float = 1.5
+    # Whole-cycle measure for the %-thresholds (see RatioManualDeploy) — new deploys only.
+    pnl_basis: str = "total"
     # Two-cadence: deploy default = owner policy (1min); ctor default stays "tick" (recovered
     # runs unchanged — §1). eod_time squares the structure at the near expiry.
     profit_check: str = "1min"

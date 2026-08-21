@@ -748,6 +748,7 @@ async def double_diagonal_deploy(
         "profit_check": body.profit_check,
         "stop_check": body.stop_check,
         "exit_margin_basis": body.exit_margin_basis,
+        "pnl_basis": body.pnl_basis,
         "eod_time": body.eod_time,
         "profit_target_pct": body.profit_target_pct,
         "stop_loss_pct": body.stop_loss_pct,
@@ -809,6 +810,7 @@ async def ratio_manual_deploy(
         "profit_check": body.profit_check,
         "stop_check": body.stop_check,
         "time_check": body.time_check,
+        "pnl_basis": body.pnl_basis,
         "eod_time": body.eod_time,
     }
     req = LiveStartRequest(
