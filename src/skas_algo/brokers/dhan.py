@@ -67,6 +67,19 @@ class DhanCredentials:
     client_id: str
 
 
+class DhanApiError(RuntimeError):
+    """A Dhan HTTP error WITH its response body. requests' raise_for_status() gives only
+    "400 Client Error for url: ...", which on the order path is useless — Dhan puts the
+    actual complaint (errorType / errorCode / errorMessage) in the JSON body, and that
+    string is the whole diagnosis. Losing it cost a live smoke-test round trip on
+    2026-08-21."""
+
+    def __init__(self, verb: str, path: str, status: int, body: str):
+        self.status = status
+        self.body = body
+        super().__init__(f"Dhan {verb} {path} → HTTP {status}: {body}")
+
+
 class _DhanHttp:
     """Thin requests wrapper with the two Dhan headers — injectable for tests."""
 
@@ -81,37 +94,35 @@ class _DhanHttp:
             "Content-Type": "application/json",
         }
 
-    def post(self, path: str, body: dict) -> dict:
+    @staticmethod
+    def _check(r, verb: str, path: str) -> dict:
+        if r.status_code >= 400:
+            body = (r.text or "").strip()[:600]
+            raise DhanApiError(verb, path, r.status_code, body or "<empty body>")
+        try:
+            out: dict = r.json()
+        except ValueError:
+            return {}
+        return out
+
+    def _call(self, verb: str, path: str, body: dict | None = None) -> dict:
         import requests
 
-        r = requests.post(f"{DHAN_BASE}{path}", json=body, headers=self._headers(), timeout=15)
-        r.raise_for_status()
-        out: dict = r.json()
-        return out
+        r = requests.request(verb, f"{DHAN_BASE}{path}", json=body,
+                             headers=self._headers(), timeout=15)
+        return self._check(r, verb, path)
+
+    def post(self, path: str, body: dict) -> dict:
+        return self._call("POST", path, body)
 
     def get(self, path: str) -> dict:
-        import requests
-
-        r = requests.get(f"{DHAN_BASE}{path}", headers=self._headers(), timeout=15)
-        r.raise_for_status()
-        out: dict = r.json()
-        return out
+        return self._call("GET", path)
 
     def put(self, path: str, body: dict) -> dict:
-        import requests
-
-        r = requests.put(f"{DHAN_BASE}{path}", json=body, headers=self._headers(), timeout=15)
-        r.raise_for_status()
-        out: dict = r.json()
-        return out
+        return self._call("PUT", path, body)
 
     def delete(self, path: str) -> dict:
-        import requests
-
-        r = requests.delete(f"{DHAN_BASE}{path}", headers=self._headers(), timeout=15)
-        r.raise_for_status()
-        out: dict = r.json()
-        return out
+        return self._call("DELETE", path)
 
     def fetch_master(self) -> str:
         import requests
@@ -327,10 +338,22 @@ class DhanAdapter:
             "quantity": int(order.quantity),
             # Dhan wants the field present even for MARKET, where it must be 0.
             "price": float(order.price or 0.0) if order.order_type is OrderType.LIMIT else 0.0,
+            # Documented "conditionally required" and present in every sample payload Dhan
+            # publishes — omitting it is a candidate for the bare 400 seen on 2026-08-21.
+            "afterMarketOrder": False,
         }
         if (cid := self._correlation_id(order)):
             body["correlationId"] = cid
-        out = self._http.post("/orders", body) or {}
+        try:
+            out = self._http.post("/orders", body) or {}
+        except DhanApiError as exc:
+            # Re-raise WITH the payload: a rejected order is diagnosed from the pair (what we
+            # sent, what Dhan said), and one live retry is expensive. No secrets here — the
+            # body is order fields only; the token lives in the headers.
+            raise DhanApiError(
+                "POST", f"/orders sent={json.dumps(body, sort_keys=True)}",
+                exc.status, exc.body) from exc
+        out = out or {}
         oid = out.get("orderId")
         if not oid:
             # No id back = nothing to poll, cancel or reconcile against. Fail loudly rather

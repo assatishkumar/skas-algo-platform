@@ -110,6 +110,7 @@ def test_place_order_sends_the_documented_option_payload():
         "securityId": "43492",            # from the scrip master, not guessed
         "quantity": 65,
         "price": 123.45,
+        "afterMarketOrder": False,        # present in every payload Dhan documents
         "correlationId": "dnm_entry",
     }
 
@@ -234,3 +235,24 @@ def test_the_reconciler_can_name_our_contracts_the_way_dhan_does():
 
     a = _adapter(FakeHttp())
     assert a._option_tradingsymbol(parse(OPT)) == "NIFTY-Aug2026-24000-CE"
+
+
+def test_a_rejected_order_reports_both_what_we_sent_and_what_dhan_said():
+    """A bare "400 Client Error" cost a live smoke-test round trip (2026-08-21): Dhan puts the
+    real complaint in the response BODY, and diagnosing a rejection needs the payload beside
+    it. Both must reach the halt message."""
+    from skas_algo.brokers.dhan import DhanApiError
+
+    class Rejecting(FakeHttp):
+        def post(self, path, body):
+            self.calls.append(("POST", path, body))
+            raise DhanApiError("POST", path, 400,
+                               '{"errorType":"Input_Exception","errorMessage":"Invalid Security Id"}')
+
+    http = Rejecting()
+    with pytest.raises(DhanApiError) as ei:
+        _adapter(http).place_order(BrokerOrder(OPT, OrderSide.BUY, 65, OrderType.MARKET))
+    msg = str(ei.value)
+    assert "Invalid Security Id" in msg          # what Dhan said
+    assert '"securityId": "43492"' in msg        # what we sent
+    assert '"orderType": "MARKET"' in msg
