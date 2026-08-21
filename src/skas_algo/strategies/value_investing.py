@@ -44,6 +44,10 @@ from skas_algo.engine.types import Signal, SignalAction
 
 class ValueInvestingStrategy:
     strategy_id = "value_investing"
+    # Ask the backtest service for the accumulation panel (per-holding breakdown, sleeve
+    # XIRR, index-SIP comparison) instead of leaving only the trading metrics, which here
+    # describe the ETF sweeps rather than the investments.
+    report_holdings = True
 
     def __init__(
         self,
@@ -65,6 +69,12 @@ class ValueInvestingStrategy:
         # never place a surprise multi-lakh buy). "if_empty" = the backtest bootstrap: turn
         # the opening cash into the fund source on day 1, then drip from day 2.
         fund_seed: str = "never",
+        # Annualised yield the FUND SOURCE really earns, for reporting only. A dividend
+        # liquid ETF (LIQUIDBEES) holds NAV at ₹1,000 and pays out as units, so a price-only
+        # backtest credits parked money 0% — over a long run that understates the portfolio
+        # badly. Stated as its own report line, NEVER folded into the engine's equity curve.
+        # 0 = report nothing (the honest default when the rate is unknown).
+        fund_yield_pct: float = 0.0,
         **_ignored,
     ):
         self.universe = list(universe or [])
@@ -74,6 +84,7 @@ class ValueInvestingStrategy:
         self.warn_days_left = int(warn_days_left)
         self.funding_buffer_pct = float(funding_buffer_pct)
         self.fund_seed = str(fund_seed or "never").lower()
+        self.fund_yield_pct = float(fund_yield_pct)
         raw = watchlist if isinstance(watchlist, list) else str(watchlist or "").split(",")
         # The fund source is never bought as a stock, however it is spelled in the list.
         self.watchlist = [

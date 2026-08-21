@@ -220,6 +220,24 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
         attach_underlying_timeline(get_data_cache(), report["options"], underlying.upper(),
                                    req.start_date, req.end_date)
     trades = _serialize_trades(result.transactions)
+    # Accumulation panel (value_investing): what is HELD at the end, per name, with the
+    # money-weighted return and the same-cashflows-into-the-index comparison. Attached after
+    # build_report like the other bolt-on sections, so the shared report stays untouched for
+    # every other strategy (§3 parity).
+    if getattr(strategy, "report_holdings", False):
+        from skas_algo.services.holdings import holdings_report
+
+        bench = str(req.params.get("benchmark") or "NIFTYBEES").upper()
+        report["holdings"] = to_native(holdings_report(
+            result.transactions,
+            result.final_marks,
+            as_of=req.end_date,
+            fund_source=getattr(strategy, "fund_source", None),
+            fund_yield_pct=float(getattr(strategy, "fund_yield_pct", 0.0)),
+            equity_curve=report.get("equity_curve"),
+            benchmark=bench,
+            benchmark_prices=_benchmark_closes(loader, bench, req.start_date, req.end_date),
+        ))
     if req.strategy_id == "donchian_strangle_bt" and report.get("options") is not None:
         # Cycle-first basket view (cycle → names → legs) — the generic per-leg positions
         # table is unreadable for a ~50-underlying basket. The UI renders this instead.
@@ -234,6 +252,19 @@ def run_backtest(session: Session, loader: PriceLoader, req: BacktestRequest) ->
         return {"run_id": None, "algo_id": None, "strategy_id": req.strategy_id,
                 "report": report, "trades": trades}
     return persist_backtest(session, req, report, trades)
+
+
+def _benchmark_closes(loader, symbol: str, start, end) -> dict[str, float]:
+    """{date_iso: close} for the index-SIP comparison. Empty on any miss — the panel simply
+    omits the benchmark rather than inventing one."""
+    try:
+        df = loader(symbol, start, end)
+        if df is None or df.empty:
+            return {}
+        return {str(d)[:10]: float(c) for d, c in zip(df["date"], df["close"], strict=False)
+                if c and c > 0}
+    except Exception:  # pragma: no cover - a missing index is not a backtest failure
+        return {}
 
 
 def persist_backtest(session: Session, req: BacktestRequest, report: dict, trades: list[dict]) -> dict:
