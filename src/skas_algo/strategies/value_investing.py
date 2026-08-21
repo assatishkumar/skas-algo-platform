@@ -97,6 +97,14 @@ class ValueInvestingStrategy:
         self.fund_seed = str(fund_seed or "never").lower()
         # cumulative rupees put into each name — drives the balanced walk (persisted)
         self.invested: dict[str, float] = {}
+        # Balance is measured over the CURRENT EPOCH, not since inception. An epoch starts
+        # whenever the watchlist changes: every name's counter is re-based to what it already
+        # holds, so from that day the budget splits evenly among the names now on the list.
+        # Without this a name added to a mature book is bought EVERY day until it reaches the
+        # pack's average — ~18 months and a permanent daily slot on the owner's numbers —
+        # which is catch-up, not ratio maintenance (owner rule 2026-08-21).
+        self.epoch_base: dict[str, float] = {}
+        self.epoch_names: list[str] = []
         self.fund_yield_pct = float(fund_yield_pct)
         raw = watchlist if isinstance(watchlist, list) else str(watchlist or "").split(",")
         # The fund source is never bought as a stock, however it is spelled in the list.
@@ -247,6 +255,13 @@ class ValueInvestingStrategy:
         # projected book as the walk spends, so one day cannot itself create the skew
         spent = dict(self.invested)
         names = [sym for _c, _i, sym, _p in ranked]
+        if balanced:
+            # Roll on the CONFIGURED watchlist, never on the names that happen to have printed
+            # today — one missing quote would otherwise re-base the whole balance and forgive
+            # every accumulated overweight. Fall back to today's names only when no explicit
+            # watchlist is set.
+            self._roll_epoch(self.watchlist or names)
+            names = self.epoch_names or names
         for _chg, _i, sym, px in ranked:
             if not (0 < px <= remaining):
                 continue
@@ -256,6 +271,23 @@ class ValueInvestingStrategy:
             remaining -= px
             spent[sym] = spent.get(sym, 0.0) + px
         return plan
+
+    def _roll_epoch(self, names: list[str]) -> None:
+        """Start a new balance epoch when the watchlist changes — re-base every current name
+        to what it already holds, so the ONGOING flow is what gets split evenly. A name added
+        today then takes its 1/N share from today; it does not chase the incumbents' history.
+
+        Keyed on the CONFIGURED watchlist, so a name that simply did not print today does not
+        look like a watchlist change."""
+        key = sorted(names)
+        if key == self.epoch_names:
+            return
+        self.epoch_names = key
+        self.epoch_base = {n: self.invested.get(n, 0.0) for n in key}
+
+    def _flow(self, sym: str, spent: dict[str, float]) -> float:
+        """Rupees into ``sym`` SINCE the current epoch began."""
+        return max(0.0, spent.get(sym, 0.0) - self.epoch_base.get(sym, 0.0))
 
     def _too_heavy(self, sym: str, px: float, spent: dict[str, float],
                    names: list[str]) -> bool:
@@ -269,10 +301,10 @@ class ValueInvestingStrategy:
         while a name that has run ahead waits for the others to catch up."""
         if not names:
             return False
-        avg = sum(spent.get(n, 0.0) for n in names) / len(names)
+        avg = sum(self._flow(n, spent) for n in names) / len(names)
         if avg <= 0:
             return False
-        return spent.get(sym, 0.0) > avg * (1.0 + self.max_skew_pct / 100.0)
+        return self._flow(sym, spent) > avg * (1.0 + self.max_skew_pct / 100.0)
 
     def _fund(self, ctx, plan, cost: float, fund: str, fund_px: float, fund_lots,
               fund_units: int, today: date):
@@ -347,6 +379,8 @@ class ValueInvestingStrategy:
             "last_shop_day": self.last_shop_day,  # a 15:25 restart must not re-shop
             "seeded": self.seeded,  # never bootstrap the fund source twice
             "invested": dict(self.invested),  # the balanced walk needs the running book
+            "epoch_base": dict(self.epoch_base),   # …measured over the current epoch
+            "epoch_names": list(self.epoch_names),
             "alerted": dict(self._alerted),  # keep the push latch across a restart
             "strategy_alert": self.strategy_alert,  # the banner survives too
         }
@@ -355,5 +389,7 @@ class ValueInvestingStrategy:
         self.last_shop_day = state.get("last_shop_day")
         self.seeded = bool(state.get("seeded", False))
         self.invested = dict(state.get("invested", {}))
+        self.epoch_base = dict(state.get("epoch_base", {}))
+        self.epoch_names = list(state.get("epoch_names", []))
         self._alerted = dict(state.get("alerted", {}))
         self.strategy_alert = state.get("strategy_alert")

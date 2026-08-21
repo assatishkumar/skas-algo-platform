@@ -355,7 +355,9 @@ def test_balanced_mode_skips_a_name_that_has_run_ahead_of_the_pack():
     ctx, pf = _ctx(view)
     _fund_lots(pf, 1000)
     st = _strat(watchlist="RICH,MID,CHEAP", daily_budget=5_000.0, sizing="balanced")
-    st.invested = {"RICH": 10_000.0, "MID": 100.0, "CHEAP": 100.0}   # RICH is way ahead
+    st.epoch_names = ["CHEAP", "MID", "RICH"]                        # an epoch already running
+    st.epoch_base = {"RICH": 0.0, "MID": 0.0, "CHEAP": 0.0}
+    st.invested = {"RICH": 10_000.0, "MID": 100.0, "CHEAP": 100.0}   # RICH ran ahead IN it
     bought = [s.symbol for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
     assert "RICH" not in bought and set(bought) == {"MID", "CHEAP"}
 
@@ -396,3 +398,57 @@ def test_the_running_book_survives_a_restart():
     fresh = _strat(watchlist="AAA", sizing="balanced")
     fresh.load_state(st.export_state())
     assert fresh.invested == st.invested
+
+
+def test_a_new_name_takes_its_share_of_the_FLOW_not_a_catch_up():
+    """Owner rule (2026-08-21): "the ratio should be maintained". A name added to a mature
+    book must NOT be bought every day until it reaches the incumbents' average — on the real
+    numbers that was ~18 months of a permanent daily slot. Changing the watchlist starts a new
+    balance epoch: every name re-bases to what it holds, and the ONGOING budget splits evenly."""
+    view = _view({"OLD1": (300, 295), "OLD2": (300, 296), "NEW": (250, 245), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 1000)
+    st = _strat(watchlist="OLD1,OLD2", daily_budget=5_000.0, sizing="balanced")
+    st.epoch_names = ["OLD1", "OLD2"]
+    st.epoch_base = {"OLD1": 0.0, "OLD2": 0.0}
+    st.invested = {"OLD1": 100_000.0, "OLD2": 100_000.0}      # years of accumulation
+
+    st.watchlist = ["OLD1", "OLD2", "NEW"]                     # the owner adds a name
+    for day in range(4):                                       # a few sessions
+        st.last_shop_day = None
+        bought = [s.symbol for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
+        assert set(bought) == {"OLD1", "OLD2", "NEW"}, f"day {day}: {bought}"
+    # NEW is one of three, not soaking the budget: each got ~one share per session
+    flow = {n: st.invested[n] - st.epoch_base[n] for n in ("OLD1", "OLD2", "NEW")}
+    assert max(flow.values()) / min(flow.values()) < 1.5
+    # and the incumbents' six-figure history did NOT make NEW look starved
+    assert st.epoch_base["OLD1"] == 100_000.0 and st.epoch_base["NEW"] == 0.0
+
+
+def test_dropping_a_name_rebases_the_survivors_too():
+    view = _view({"AAA": (100, 95), "BBB": (100, 96), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 1000)
+    st = _strat(watchlist="AAA,BBB", daily_budget=1_000.0, sizing="balanced")
+    st.epoch_names = ["AAA", "BBB", "CCC"]
+    st.epoch_base = {"AAA": 0.0, "BBB": 0.0, "CCC": 0.0}
+    st.invested = {"AAA": 5_000.0, "BBB": 5_000.0, "CCC": 50_000.0}
+    st.on_slice(ctx)
+    assert st.epoch_names == ["AAA", "BBB"]          # CCC is gone from the balance entirely
+    assert "CCC" not in st.epoch_base
+
+
+def test_a_missing_quote_does_not_reset_the_balance_epoch():
+    """The epoch keys on the CONFIGURED watchlist. Keyed on today's printers instead, a single
+    missing quote would re-base everything and forgive every accumulated overweight — the
+    balance would quietly stop working on exactly the days the data is patchy."""
+    view = _view({"AAA": (100, 95), FUND: (100, 100)})       # BBB has no price today
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 1000)
+    st = _strat(watchlist="AAA,BBB", daily_budget=1_000.0, sizing="balanced")
+    st.epoch_names = ["AAA", "BBB"]
+    st.epoch_base = {"AAA": 0.0, "BBB": 0.0}
+    st.invested = {"AAA": 9_000.0, "BBB": 1_000.0}           # AAA is overweight in-epoch
+    bought = [s.symbol for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
+    assert st.epoch_base == {"AAA": 0.0, "BBB": 0.0}         # epoch intact
+    assert bought == []                                      # AAA still correctly skipped
