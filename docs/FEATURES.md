@@ -88,10 +88,10 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
 
 - **`value_investing` — a daily rupee drip into a watchlist, funded by an ETF.** The platform's
   only pure **accumulation** system: it buys and never sells. Each trading day it sorts the
-  watchlist by **today's change %, biggest faller first**, and walks that list from the top buying
-  **one share of each** while the configured **daily budget** lasts — a name the remaining budget
-  can't afford is skipped and the walk continues to cheaper ones below, there is no wrap-around,
-  and whatever is left over evaporates so the drip stays a predictable size. The cash comes from
+  watchlist by **today's change %, biggest faller first**, and walks that list from the top
+  spending the configured **daily budget** — a name the remaining budget can't afford is skipped
+  and the walk continues to cheaper ones below, there is no wrap-around, and whatever is left over
+  evaporates so the drip stays a predictable size. The cash comes from
   selling exactly enough of a **fund source ETF** (LIQUIDCASE / GOLDBEES / LIQUIDBEES) in the same
   decision — idle cash is spent first, since selling an asset while cash sits idle would be
   strictly worse. Funding is **all-or-nothing**: if the ETF can't cover the day's list, it buys
@@ -104,7 +104,33 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   priced and is named in the alert. FULL backtest, and — unusually for an equity strategy —
   **live-capable from day one**: ranking by daily change reads the new `ctx.prev_close`, which both
   market views answer natively, instead of the `indicators=` precompute that leaves `gap_reversal`
-  and `happy_twins` failing closed live. **Two things to know before deploying:** it needs a
+  and `happy_twins` failing closed live.
+
+  **How the budget is spread across the names (`sizing`) is the single biggest decision here.**
+  The ranking is the same in all three modes; they differ only in how many rupees each name
+  receives. `one_share` is the original spec — one share of each, top-down — which silently
+  weights the portfolio by **share price**, because one share of a ₹2,299 stock is 51× the money
+  of one share of a ₹45 stock. Over 2020-26 on the owner's list that spread the investment from
+  ₹1,383 to ₹2,85,902 per name (**207×**), poured 18.9% of everything into the worst compounder
+  on the list, and finished **7 points of XIRR behind a plain index SIP**. `balanced` keeps the
+  one-share walk but skips a name already more than `max_skew_pct` above the watchlist average —
+  a corrective that steers new money to the laggards without ever undoing a gap already opened.
+  **`equal_value` is the fix, and the form's default**: it separates *allocation* from *timing*.
+  Every name is credited `daily_budget ÷ N` into its own **pot** each day — every name, every
+  day, whatever it did and whether or not it printed — and then buys `floor(pot ÷ price)` shares
+  paid from that pot alone; if the pot can't afford a share the money waits for tomorrow. So the
+  ranking decides only **who spends first** when a day is tight, never who gets the money. Names
+  end up buying at very different rhythms (a ₹2,299 name roughly every second day, a ₹45 name
+  every day) while receiving identical rupees — the only divergence is what is briefly parked in
+  a pot, bounded by one share's price. Same list, same window: **₹75,380 – ₹77,584 per name
+  (1.0×), XIRR 18.87%, +3.14 points ahead of the index SIP.** Editing the watchlist needs no
+  special handling: the split is over the *current* names, so a name added today takes its 1/N
+  from today and never buys catch-up to reach the pack, and a removed name simply stops being
+  credited. An unrecognised `sizing` value **raises** rather than falling back — a run that asked
+  for `equal_value` against a backend that predated it once traded price-weighted and looked
+  entirely healthy.
+
+  **Two things to know before deploying:** it needs a
   **broker quote source** (on the cache source the "live" price *is* yesterday's close, so every
   change reads 0.00% — the strategy detects that and refuses the day rather than ranking noise);
   and read the backtest's **equity curve**, not its trade table, because the only SELLs in the log
@@ -391,6 +417,22 @@ BS delta/IV helpers) · engine services: `black_scholes.py` (IV/delta), `contrac
   drawdown, an **equity curve** (with a 30-day sparkline on the Home page), monthly and yearly
   breakdowns, capital-utilization, and STCG-tax + withdrawal modeling. The Runs page shows CAGR
   (with total return as a sub-line).
+- **Accumulation report** (`services/holdings.py` → the "Portfolio — what you own" panel on a
+  run's report): for a buy-and-hold strategy the trading metrics describe almost nothing — with
+  no round trips, "win rate" and "net realized P&L" measure the ETF funding sweeps while every
+  rupee of real return sits unrealized. Strategies that set `report_holdings` get the panel that
+  does measure it: per name the units, average cost, last price, invested, market value, P&L,
+  weight and its own money-weighted return; plus sleeve totals and the fund source's balance.
+  Three deliberate choices: **XIRR, not CAGR** (units are bought across years, so a start/end
+  CAGR has no single start date — XIRR is what a broker statement would report); **the benchmark
+  is an index SIP, not a lump sum** (the same rupees on the same days into the index, so the
+  verdict isn't an artifact of when money happened to arrive); and **fund yield is stated, never
+  folded in** (a dividend liquid ETF holds NAV flat and pays out as units, so a price-only
+  backtest credits parked money 0% — the panel reports what it *would* have earned at a stated
+  rate and leaves the engine's equity curve untouched). Holdings are marked at the **run's end
+  date**, not at each name's last traded price — reading the last fill instead understated run
+  #278 by ₹3.4L and inflated its heaviest name's weight from 18.9% to 29.0%. Runs saved before
+  the panel existed have it derived at read time.
 - **Point-in-time universes** (the survivorship-bias fix): the **Nifty500 Momentum 50** universe
   can run in `pit_universe` mode — the run trades the UNION of every name that was EVER a member
   and the strategy receives the semi-annual rebalance table, so its daily scan follows the index

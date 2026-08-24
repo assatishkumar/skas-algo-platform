@@ -613,10 +613,11 @@ const STRATEGIES: Rule[] = [
     kind: "Equity",
     bias: "Accumulation \u00b7 buys every day, never sells",
     summary:
-      "A fixed rupee budget goes into your watchlist every single trading day, spent on whatever has fallen the most \u2014 one share each, from the top of the list down. The money comes from selling a little of a liquid ETF you already hold. Nothing is ever sold back; the position only grows.",
+      "A fixed rupee budget goes into your watchlist every single trading day, tilted towards whatever has fallen the most. The money comes from selling a little of a liquid ETF you already hold. Nothing is ever sold back; the position only grows \u2014 and by default every name in the list receives the same rupees over time, whatever its share price.",
     structure: [
       "Your watchlist, sorted each day by today's % change \u2014 the biggest faller at the top.",
-      "BUY 1 share of each name, walking top to bottom while the daily budget lasts. No second share of anything.",
+      "EQUAL VALUE (default): every name is credited an equal share of the day's budget into its own pot, then buys whatever whole shares its pot affords. Money it cannot spend today waits for tomorrow.",
+      "So a \u20b92,300 stock buys roughly every second day and a \u20b945 stock buys daily \u2014 different rhythms, the same rupees. The ranking decides who spends first, not who gets the money.",
       "SELL just enough of the fund source ETF (LIQUIDCASE / GOLDBEES / LIQUIDBEES) to pay for it, in the same decision \u2014 idle cash is spent first.",
       "The watchlist is editable on a running deployment (Edit params) \u2014 no redeploy to change what you are accumulating.",
     ],
@@ -624,6 +625,7 @@ const STRATEGIES: Rule[] = [
       "Once a day at the decision time. A name the remaining budget cannot afford is skipped and the walk continues to cheaper ones below it.",
       "Leftover budget evaporates \u2014 each day gets exactly the amount you configured, which is what keeps the runway forecast honest.",
       "An all-green day still buys: the least-up name tops the list. The discipline is the point.",
+      "Two other sizing modes exist. ONE SHARE is the original idea \u2014 one share of each, top-down \u2014 but it quietly weights the portfolio by share price: on a 2020-26 test it invested \u20b92.86L in the priciest name and \u20b91,383 in the cheapest, a 207\u00d7 gap, and finished 7 points of annual return BEHIND a plain index SIP. BALANCED skips names that have run ahead of the pack average.",
     ],
     exit: [
       "Never. This strategy has no exit \u2014 the stocks are held indefinitely.",
@@ -631,7 +633,7 @@ const STRATEGIES: Rule[] = [
       "If the ETF cannot cover the day's list it buys NOTHING and alerts \u2014 never a half-filled day.",
     ],
     risk:
-      "It is a savings discipline, not a trading edge: it buys weakness without asking whether the weakness is deserved, so the watchlist is the entire risk decision. Warns on the Live page and by push when the fund source has ~2 days of runway left. Needs a BROKER quote source \u2014 on the cache source every change reads 0.00% and the ranking is meaningless (the strategy detects that and refuses the day). In the backtest, read the equity curve: the only SELLs in the trade log are ETF funding sales, so win rate and realized P&L describe a cash sweep.",
+      "It is a savings discipline, not a trading edge: it buys weakness without asking whether the weakness is deserved, so the watchlist is the entire risk decision. Warns on the Live page and by push when the fund source has ~2 days of runway left. Needs a BROKER quote source \u2014 on the cache source every change reads 0.00% and the ranking is meaningless (the strategy detects that and refuses the day). Do not read the trade table: the only SELLs in it are ETF funding sales, so win rate and realized P&L describe a cash sweep. Read the 'Portfolio \u2014 what you own' panel instead \u2014 what you hold, what it is worth, its money-weighted return, and the same rupees on the same days into the index for comparison.",
   },
   {
     id: "happy_twins",
@@ -876,7 +878,7 @@ const META: Record<string, Meta> = {
   value_investing: {
     group: "Equity income", biasKind: "income",
     facts: [["Bias", "Accumulation"], ["Universe", "Your watchlist"],
-            ["Buys", "1 share each, top-down"], ["Funded by", "An ETF you hold"],
+            ["Sizing", "Equal rupees per name"], ["Funded by", "An ETF you hold"],
             ["Exits", "Never"], ["Cadence", "Every trading day"]],
     deployNote: "Backtestable, and live-capable from day one \u2014 but only on a broker quote source (the cache source makes every change read 0.00%).",
     deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },

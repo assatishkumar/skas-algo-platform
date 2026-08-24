@@ -27,6 +27,40 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 - **OWNER DIRECTIVE: Claude never initiates live orders.** Never arm an account, never set the flag,
   never deploy/activate a LIVE run with an armed account, never "verify" with a real order — the
   pilot and every real order is the owner's hand only. Order-path verification = fake-adapter tests.
+- **`touch_fn` is what makes an order a LIMIT — and it was blind to equities until 2026-08-24.**
+  `manager`'s `touch()` reads `market._bid_ask`, which exists ONLY on `LiveOptionsMarketView`
+  and is CHAIN-based, so an equity run (or an equity leg on an options view) got `None`. Two
+  silent consequences: `execute()` sent a naked **MARKET** order, and it gates the ENTIRE
+  escalation ladder on `req.order_type is OrderType.LIMIT` — so an unfilled equity order got
+  **no escalation at all**, was cancelled, and halted the run; and `_check_rails` applies the
+  per-order notional cap only `if ref_price`, so the order ALSO skipped
+  `SKAS_LIVE_MAX_ORDER_NOTIONAL`. `touch()` now falls back to the last live print
+  (`last_close`/`close`) when there is no two-sided book; a real bid/ask still wins. This is
+  what killed the Dhan ITC smoke test (run 20): NSE converted our MARKET to a protected LIMIT
+  at 267.30, it did not fill in 10s, **we** cancelled it — Dhan support had to correct our
+  reading. Coverage: `test_touch_falls_back_*` in tests/test_live_broker.py.
+- **The order path emits a structured trace — read it before reading the code.** Every
+  lifecycle event logs one greppable INFO line `ORDER <event> cid=<id> k=v …`
+  (place/accepted/rejected · status on CHANGE only · timeout · escalate · noescal · modifyerr ·
+  cancel · filled/partial/failed), all sharing one correlation id, with `elapsed` on the
+  terminal line. Before this the whole path had FOUR log statements, three inside the
+  escalation branch — so an order that skipped the ladder left a 10-second hole, and the
+  post-mortem was done by inferring which branch ran (and got it wrong). **Absence of a log
+  line is not evidence.** Grep one order with its `cid=`, or a day's real orders with
+  `"ORDER "`. Pinned end-to-end by
+  `test_the_order_trace_reconstructs_a_cancel_without_reading_the_code`.
+- **The escalation crossing is SEGMENT-AWARE (owner call, 2026-08-24): options 3%, equity 1%.**
+  One constant cannot serve both — option spreads are percents, equity spreads are basis
+  points (3% of a ₹14 premium is 43 paise; 3% of a ₹2,300 stock is ₹69). `protect_pct` (3.0,
+  `SKAS_LIVE_ORDER_PROTECT_PCT`) drives the OPTIONS ladder, `protect_pct_equity` (1.0,
+  `SKAS_LIVE_ORDER_PROTECT_PCT_EQUITY`) the EQUITY one; same 1x/2.7x/6.7x rung shape, chosen
+  per ORDER via `is_option_symbol` (the `_check_rails` pattern). An explicit `protect_ladder`
+  still overrides BOTH. Unchanged: an ENTRY takes one rung (`[:1]`) and an EXIT walks all
+  three. The crossing is a CEILING, not a price — a marketable limit fills at the ask, so 1%
+  binds only when the book ran away since the decision, which is an entry the owner would
+  rather MISS than chase. **An unfilled entry still HALTS the run** (owner call: intervention
+  is wanted; do not quietly retry). Coverage: `test_an_equity_entry_crosses_one_percent_*`,
+  `test_an_option_entry_still_crosses_three_percent` in tests/test_live_broker.py.
 - Safety rails live in LiveBroker pre-flight: per-order notional cap, per-run daily order cap,
   market-hours check, account-level rate governor (settings SKAS_LIVE_MAX_ORDER_NOTIONAL /
   _MAX_ORDERS_PER_DAY / _ORDER_TIMEOUT_S). An `OrderExecutionError` (reject/unfillable) or hourly
@@ -226,9 +260,9 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   `pit_universe` flag on the `nifty500mom50` universe (trades the UNION of ever-members;
   `data/mom50_membership.json` labels each rebalance's source — official capture vs replication).
 - **value_investing** (`strategies/value_investing.py`, equity, 2026-08-20): the platform's
-  only BUY-AND-NEVER-SELL strategy — a fixed `daily_budget` walked down the watchlist (sorted by
-  today's change %, biggest faller first) buying ONE share of each, funded by selling a
-  `fund_source` ETF in the same decision. Owner rules: an unaffordable name is SKIPPED (the walk
+  only BUY-AND-NEVER-SELL strategy — a fixed `daily_budget` spread across the watchlist (sorted by
+  today's change %, biggest faller first), funded by selling a `fund_source` ETF in the same
+  decision. Owner rules: an unaffordable name is SKIPPED (the walk
   continues), NO wrap-around, leftover evaporates, funding is ALL-OR-NOTHING (dry ⇒ buy nothing +
   alert), and an all-green day still buys. Idle cash is spent BEFORE the ETF.
   **Three load-bearing facts.** (1) `SignalAction.EXIT` with a quantity but NO `lot_id` is a
@@ -250,7 +284,38 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   builder is HIDDEN for this id — an override intercepts the strategy's partial EXIT and would
   halve the funding sale, after which the buys overdraw silently. Backtest caveat: the only SELLs
   are ETF funding sales, so read the equity curve, not the trade table (form defaults `tax_rate`
-  0 and `lookback` 1). Coverage: `tests/test_value_investing.py`.
+  0 and `lookback` 1) — or better, the **accumulation panel** (`services/holdings.py`,
+  `report_holdings = True` → "Portfolio — what you own": per-name units/cost/value/weight, sleeve
+  XIRR, and the SAME-rupees-same-days index SIP as the yardstick; marks come from the run's END
+  DATE, never each name's last fill — that bug understated #278 by ₹3.4L and read TCS at 29.0%
+  weight instead of 18.9%).
+  **`sizing` (2026-08-24) is the allocation decision, and the one to get right.** All three modes
+  share the faller-first ranking and differ only in rupees per name. `one_share` (ctor default,
+  §1) is the spec and silently weights by SHARE PRICE — one share of a ₹2,299 name is 51× the
+  money of one ₹45 share: 2020-26 on the owner's list it spread ₹1,383…₹2,85,902 per name (207×)
+  and ran ~7 XIRR points BEHIND a plain index SIP. `balanced` skips a name already `max_skew_pct`
+  above the pack average (corrective; can't undo an existing gap; still whole shares).
+  **`equal_value` (FORM default) separates allocation from timing**: each name is credited
+  `daily_budget/N` into its own POT every day — regardless of rank, and even if it did not print —
+  then buys `floor(pot/price)` from that pot alone, banking the remainder for tomorrow. Rank now
+  decides only WHO SPENDS FIRST on a tight day. Divergence between names is bounded by one share's
+  price → ₹75,380…₹77,584 (1.0×), XIRR 18.87%, +3.14 pts vs the index. No epoch logic needed (the
+  split is over the CURRENT watchlist, so an added name takes 1/N from today with no catch-up, and
+  a removed name stops being credited AND ranked); `_roll_epoch` is `balanced`-only. An unknown
+  mode **RAISES** — it used to fall through to one_share in silence, so #279 asked for
+  `equal_value` against a stale backend, traded price-weighted and looked healthy. Coverage:
+  `tests/test_value_investing.py`, `tests/test_holdings.py`.
+  **Decision time 15:05, declared by the STRATEGY** (`default_decision_time`, 2026-08-24).
+  The platform default is 15:20, which since CAS is PAST the end of continuous cash trading
+  for **F&O-listed** stocks (`live/quotes.FNO_CASH_CONTINUOUS_CLOSE` = 15:15; auction to
+  ~15:35) — an order would rest unfilled and, because an unfilled entry HALTS, stop the run
+  daily. Harmless until now because no equity strategy was live-capable; this one is. The
+  deploy route resolves it (`_resolve_decision_time`: explicit → strategy → 15:20) so API
+  callers get it too, `GET /strategies` publishes `decision_times` so the deploy form shows
+  the same number instead of keeping its own copy, and an equity deploy landing in the
+  auction raises a WARNING alert (never a 422 — a non-F&O-only watchlist is fine at 15:20).
+  `decision_time` is DEPLOY-level and edit-blocklisted: stop + redeploy to change it, and
+  `recovery.py`'s literal "15:20" fallback is untouched so existing deploys are unchanged (§1).
 - **21_ema_momentum** (`strategies/ema21_momentum.py`, NIFTY): daily EMA(21)-on-high/low
   channel; fresh close beyond the band at 15:20 → OTM 100-pt credit spread (bull put /
   bear call), width 300-500, credit ₹80-140 (ideal 90-130 preferred; miss → SKIP and
