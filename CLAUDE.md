@@ -714,6 +714,23 @@ evening restart no longer re-ships ~270MB per boot. Tests must never touch real 
 destinations — `tests/conftest.py` blanks both env keys (before that, every preflight copied
 junk `s-*.db` snapshots into the owner's real Drive).
 
+**NEVER build the UI on the VPS — and never tell the owner to.** The box is a ~911 MB
+swapless Lightsail instance; `npm run build` (Vite + tsc) outgrew it, OOM-thrashes, and hangs
+BEFORE the restart, which leaves the backend dead and the live loop down. `web*/dist` are
+gitignored, so `git pull` never ships a bundle and never clobbers the one that is there.
+Deploying is TWO steps, from two different machines (full runbook: `docs/DEPLOY.md`):
+```bash
+# 1. BACKEND — on the VPS, off-hours. stop → pull (incl. ../skas-data) → pip → start → health.
+#    Always restarts on exit even if a step fails: a failed update must never leave the box dead.
+~/git/skas-algo-platform/scripts/vps-update.sh
+# 2. UI — on the MAC. Builds web/ (+ web-mobile/) and rsyncs dist up. No restart needed:
+#    the backend serves web/dist live, so a UI change never interrupts the live loop.
+scripts/deploy-web.sh <vps-ssh-host>     # then hard-refresh — the PWA SW caches the old bundle
+```
+A bare `git pull` + `systemctl restart` on the box updates the BACKEND ONLY and silently leaves
+the old frontend serving — which reads as "my fix didn't deploy" (2026-08-24: instructions were
+given to `npm run build` on the box, contradicting docs/DEPLOY.md).
+
 **Preflight before any restart/deploy:** `./scripts/preflight.sh` — ruff (advisory) + the FULL
 test suite incl. the parity/mode-equivalence suites + web typecheck. Green = the change didn't
 alter the engine or a live path. It auto-deselects the two DuckDB-cache parity suites while a
