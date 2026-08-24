@@ -436,13 +436,27 @@ def _backfill_holdings(report, run, algo, loader) -> None:
         fund = str(params.get("fund_source") or "").upper() or None
         end = params.get("end_date")
         end = _date.fromisoformat(str(end)[:10]) if end else None
-        # Last traded price per symbol from the run's own tape — the stored report has no
-        # final_marks, and re-pricing from the cache would silently value a 2020 run at
-        # TODAY's prices, which is a different (and wrong) answer.
+        # Mark every holding at its close ON THE RUN'S END DATE. The stored report has no
+        # final_marks, and the two obvious shortcuts are both wrong: today's price values a
+        # 2020 run at 2026 levels, and the last TRADED price values each name at whatever it
+        # last happened to be bought at — which understated run #278 by Rs3.4L (P&L Rs2.86L vs
+        # Rs6.27L, XIRR 4.21% vs 8.30%) and inflated TCS's weight from 18.9% to 29.0%, because
+        # a name last bought years ago is frozen at that price. The tape price is only a
+        # fallback for a symbol the cache cannot serve.
         marks = {}
         for tr in trades:
             if tr.get("ticker") and tr.get("price"):
                 marks[tr["ticker"]] = float(tr["price"])
+        if end is not None:
+            from datetime import timedelta as _td
+
+            for sym in list(marks):
+                try:
+                    df = loader(sym, end - _td(days=10), end)
+                    if df is not None and not df.empty:
+                        marks[sym] = float(df["close"].iloc[-1])
+                except Exception:  # pragma: no cover - keep the tape price for this one
+                    pass
         bench = str(params.get("benchmark") or "NIFTYBEES").upper()
         report["holdings"] = holdings_report(
             trades, marks, as_of=end,

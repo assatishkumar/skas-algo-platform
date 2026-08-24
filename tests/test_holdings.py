@@ -122,3 +122,52 @@ def test_no_benchmark_prices_simply_omits_the_comparison():
     h = holdings_report(tx, {"AAA": 110.0}, as_of=date(2026, 1, 1),
                         benchmark="NIFTYBEES", benchmark_prices={})
     assert "benchmark" not in h        # never an invented index line
+
+
+def test_the_backfill_marks_at_the_run_end_date_not_the_last_traded_price():
+    """A run saved before the panel existed is valued from the cache at ITS OWN end date.
+    Marking at the last TRADED price instead froze every name at whatever it last happened to
+    be bought at: run #278 read Rs2.86L profit instead of Rs6.27L, XIRR 4.21% instead of 8.30%,
+    and TCS's weight inflated 18.9% -> 29.0%. Today's price would be just as wrong the other
+    way for a historical run."""
+    from datetime import date as _date
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from skas_algo.api.routes.backtest import _backfill_holdings
+
+    trades = [{"date": "2024-01-01", "ticker": "AAA", "action": "BUY",
+               "units": 10, "price": 100.0, "amount": 1000.0}]
+    report = {"equity_curve": []}
+    run = SimpleNamespace(id=1, trade_log=trades)
+    algo = SimpleNamespace(strategy_id="value_investing",
+                           params={"end_date": "2025-01-01", "start_date": "2024-01-01"})
+
+    def loader(symbol, start, end):
+        if symbol != "AAA":
+            return None
+        return pd.DataFrame({"date": [pd.Timestamp("2024-12-31")], "close": [250.0]})
+
+    _backfill_holdings(report, run, algo, loader)
+    row = report["holdings"]["rows"][0]
+    assert row["last_price"] == 250.0        # the END-DATE close from the cache…
+    assert row["value"] == 2500.0            # …not 10 x the Rs100 it was bought at
+    assert report["holdings"]["derived"] is True
+
+
+def test_the_backfill_falls_back_to_the_tape_when_the_cache_cannot_price_a_name():
+    """A delisted or uncached name still appears, valued at what it last traded for here —
+    better than dropping the holding silently."""
+    from types import SimpleNamespace
+
+    from skas_algo.api.routes.backtest import _backfill_holdings
+
+    trades = [{"date": "2024-01-01", "ticker": "GONE", "action": "BUY",
+               "units": 10, "price": 100.0, "amount": 1000.0}]
+    report = {"equity_curve": []}
+    run = SimpleNamespace(id=2, trade_log=trades)
+    algo = SimpleNamespace(strategy_id="value_investing",
+                           params={"end_date": "2025-01-01", "start_date": "2024-01-01"})
+    _backfill_holdings(report, run, algo, lambda *a, **k: None)
+    assert report["holdings"]["rows"][0]["last_price"] == 100.0
