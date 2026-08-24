@@ -68,9 +68,26 @@ _INTRADAY_REPLAY = ["intraday_straddle", "straddle_btst", "weekly_intraday_strad
 
 @router.get("/strategies")
 def list_strategies(basis: str = "eod") -> dict:
-    if basis == "intraday":
-        return {"strategies": list(_INTRADAY_REPLAY)}
-    return {"strategies": [s for s in available() if s not in _DEPLOY_ONLY]}
+    """Ids, plus each strategy's own default daily decision time.
+
+    ``decision_times`` is additive (older clients ignore it) and exists so the deploy form
+    shows the SAME number the deploy route would resolve, instead of the UI carrying its own
+    copy that could drift from the strategy class. Only strategies that declare
+    `default_decision_time` differ from the platform's 15:20 — value_investing does, because
+    15:20 is inside the closing auction for F&O-listed cash stocks.
+    """
+    from skas_algo.strategies.registry import get_strategy
+
+    ids = (list(_INTRADAY_REPLAY) if basis == "intraday"
+           else [s for s in available() if s not in _DEPLOY_ONLY])
+
+    def _dt(sid: str) -> str:
+        try:
+            return str(getattr(get_strategy(sid), "default_decision_time", "15:20"))
+        except Exception:
+            return "15:20"
+
+    return {"strategies": ids, "decision_times": {s: _dt(s) for s in ids}}
 
 
 @router.get("/benchmarks")

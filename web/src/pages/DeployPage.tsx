@@ -1,6 +1,6 @@
 import StrategySelect from "../components/StrategySelect";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, brokers } from "../api/client";
 import { Card, ErrorBox, NumberInput } from "../components/ui";
@@ -66,6 +66,18 @@ export default function DeployPage() {
 
   const isFifo = strategyId === "sst_fifo";
   const isOptions = isOptionsStrategy(strategyId);
+  // Daily decision time for EQUITY runs. Seeded from the strategy's own default (the server
+  // is the source of truth — value_investing asks for 15:05 because the platform's 15:20 is
+  // inside the closing auction for F&O-listed cash stocks) and re-seeded whenever the
+  // strategy changes, so switching strategy never silently keeps the previous one's time.
+  const strategyDecisionTime = strategyData?.decision_times?.[strategyId] ?? "15:20";
+  const [decisionTime, setDecisionTime] = useState<string | null>(null);
+  useEffect(() => { setDecisionTime(null); }, [strategyId]);
+  const effectiveDecisionTime = decisionTime ?? strategyDecisionTime;
+  // Continuous cash trading ends 15:15 for F&O-listed names (SEBI's closing auction runs to
+  // ~15:35); an order placed after that rests unfilled and the run halts. Warn, never block —
+  // a watchlist of only non-F&O names is fine later.
+  const auctionRisk = !isOptions && effectiveDecisionTime >= "15:15";
   const CADENCES = ["tick", "1min", "5min", "15min", "30min", "60min", "eod"];
   const sessioned = (accounts ?? []).filter((a) => a.has_session);
 
@@ -106,6 +118,7 @@ export default function DeployPage() {
       quote_source: quoteSource,
       broker_account_id: quoteSource !== "cache" ? accountId : null,
       ignore_market_hours: ignoreHours,
+      ...(isOptions ? {} : { decision_time: effectiveDecisionTime }),
       auto,
       ...(warmFromDate ? { warm_from_date: warmFromDate } : {}),
     };
@@ -328,6 +341,29 @@ export default function DeployPage() {
               {sessioned.length === 0 && (
                 <span className="mt-1 block text-xs text-amber-600 dark:text-amber-400">
                   No logged-in session — <Link to="/brokers" className="underline">log in on Brokers</Link>, or switch Quotes to Cache.
+                </span>
+              )}
+            </label>
+          )}
+          {!isOptions && (
+            <label className="text-sm text-slate-300">
+              Decision time (IST)
+              <input
+                type="time"
+                className={inputClass}
+                value={effectiveDecisionTime}
+                onChange={(e) => setDecisionTime(e.target.value)}
+              />
+              <span className="mt-1 block text-xs text-slate-400">
+                The daily buy/sell decision fires at/after this, once per day. Cannot be
+                changed on a running deployment — stop and redeploy.
+              </span>
+              {auctionRisk && (
+                <span className="mt-1 block text-xs text-amber-600 dark:text-amber-400">
+                  After 15:15 continuous cash trading has ended for <b>F&amp;O-listed</b>
+                  {" "}stocks (closing auction runs to ~15:35). Orders in those names would
+                  rest unfilled and the run would halt daily. Fine only if your watchlist is
+                  entirely non-F&amp;O.
                 </span>
               )}
             </label>

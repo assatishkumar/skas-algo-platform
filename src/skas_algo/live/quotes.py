@@ -109,6 +109,45 @@ def session_close(segment: str = "EQUITY") -> time:
         return _SESSION_CLOSE_FALLBACK[key]
 
 
+# Cash CONTINUOUS trading ends here for F&O-LISTED stocks since SEBI's Closing Auction
+# Session (2026-08-03) — the auction then runs to ~15:35 and `session_close("EQUITY")`
+# (15:30) is the segment boundary, NOT the last minute you can actually trade one of these
+# names. Non-F&O names keep trading continuously to the segment close, which is why this is
+# a WARNING input and never a hard rail: a watchlist of only non-F&O stocks is fine at 15:20.
+FNO_CASH_CONTINUOUS_CLOSE = time(15, 15)
+
+
+def in_closing_auction(t: time) -> bool:
+    """Is ``t`` past continuous trading for an F&O-LISTED cash stock?
+
+    An equity strategy deciding after this lands in the auction: a limit order rests
+    unfilled, the escalation cannot help (there is no continuous book to cross), and the
+    order path then cancels and HALTS the run — every single day. The platform's default
+    decision time was 15:20 and no equity strategy was live-capable until value_investing,
+    so this had never bitten.
+    """
+    return t >= FNO_CASH_CONTINUOUS_CLOSE
+
+
+def auction_warning(decision_time: str, *, segment: str = "EQUITY") -> str | None:
+    """A human warning when a daily EQUITY decision falls inside the auction, else None."""
+    if str(segment).upper() == "DERIV":
+        return None
+    try:
+        hh, mm = str(decision_time).split(":")
+        t = time(int(hh), int(mm))
+    except Exception:
+        return None
+    if not in_closing_auction(t):
+        return None
+    return (
+        f"decision time {decision_time} is past {FNO_CASH_CONTINUOUS_CLOSE.strftime('%H:%M')}, "
+        "when continuous cash trading ends for F&O-LISTED stocks (SEBI's closing auction runs "
+        "to ~15:35). Orders in F&O names would rest unfilled and the run would halt daily. "
+        "Non-F&O-only watchlists are unaffected."
+    )
+
+
 def is_market_open(now: datetime | None = None, *, segment: str = "EQUITY") -> bool:
     """NSE regular session: Mon-Fri, 09:15 → the segment's close, excluding holidays.
 

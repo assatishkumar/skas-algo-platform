@@ -21,6 +21,17 @@ Four rules that are decisions, not details (all confirmed by the owner):
     ``fund_seed`` spends its opening capital and only then reports the fund dry;
   * an all-green day still buys — the least-up name tops the list. The drip is the point.
 
+HOW THE BUDGET IS SPREAD (``sizing``). The spec's one-share-of-each walk turned out to weight
+the book by SHARE PRICE — one share of a ₹2,299 name is 51× the rupees of one share of a ₹45
+name — which over 2020-26 spread the owner's list across ₹1,383 to ₹2,85,902 per name (207×)
+and lost ~7 points of XIRR to a plain index SIP. ``sizing="equal_value"`` separates ALLOCATION
+from TIMING: each name is credited ``daily_budget/N`` into its own pot every day and spends
+only from that pot, so the ranking decides who buys first, never who gets the money. Names buy
+at different rhythms and end up with the same rupees (₹75,380…₹77,584, XIRR 18.87%, +3.14 pts
+vs the index). See the ctor comment for all three modes. An unrecognised mode RAISES — it used
+to fall through to one_share in silence, and a run that asked for equal_value against an older
+backend traded price-weighted while looking perfectly healthy (#279).
+
 WHY THIS ONE DEPLOYS LIVE AND gap_reversal/happy_twins DO NOT. Ranking by daily change needs
 yesterday's close, and the obvious route — the ``indicators=`` precompute — is dead in live
 (nothing seeds ``LiveMarketView.set_indicators``), which is exactly why those two fail closed
@@ -47,6 +58,14 @@ _SIZING_MODES = frozenset({"one_share", "balanced", "equal_value"})
 
 class ValueInvestingStrategy:
     strategy_id = "value_investing"
+    # The platform-wide default is 15:20, which since SEBI's Closing Auction Session
+    # (2026-08-03) is PAST the end of continuous cash trading for F&O-listed stocks — the
+    # order would rest in the auction, never fill, and halt the run daily. That default was
+    # harmless while no equity strategy could deploy live; this one can (it reads
+    # ctx.prev_close, not the dead indicators= precompute), so it names its own. 15:05 keeps
+    # the ranking signal (nearly the whole day's move) while staying clear of the auction.
+    # Deploy-level, so a run that stored 15:20 keeps it until redeployed (§1).
+    default_decision_time = "15:05"
     # Ask the backtest service for the accumulation panel (per-holding breakdown, sleeve
     # XIRR, index-SIP comparison) instead of leaving only the trading metrics, which here
     # describe the ETF sweeps rather than the investments.
@@ -71,13 +90,37 @@ class ValueInvestingStrategy:
         # "never" = the account already holds the ETF (LIVE default — a fresh deploy must
         # never place a surprise multi-lakh buy). "if_empty" = the backtest bootstrap: turn
         # the opening cash into the fund source on day 1, then drip from day 2.
-        # How the daily budget is spread. "one_share" = the spec: one share of each name,
-        # top-down. That silently weights the portfolio by SHARE PRICE — over 2020-26 on the
-        # owner's list it put 18.9% of the money into TCS (1.2% CAGR) and 4.3% into KTKBANK
-        # (39.1%), and cost ~7 points of XIRR against a plain index SIP. "balanced" keeps the
-        # faller-first walk but SKIPS a name whose cumulative invested is already more than
-        # max_skew_pct above the watchlist average, so the budget flows to the laggards and
-        # the rupees even out over time. Ctor default is the spec (§1).
+        # How the daily budget is SPREAD across the watchlist. All three keep the same
+        # faller-first ranking; they differ only in how many rupees each name receives.
+        #
+        #   "one_share"   the spec: one share of each name, top-down. Silently weights the
+        #                 portfolio by SHARE PRICE, because a ₹2,299 name absorbs 51× the
+        #                 rupees of a ₹45 one for the same "one share". Over 2020-26 on the
+        #                 owner's list that put 18.9% of the money into TCS (1.2% CAGR) and
+        #                 4.3% into KTKBANK (39.1%) — invested per name ₹1,383…₹2,85,902, a
+        #                 207× spread — and cost ~7 points of XIRR against a plain index SIP.
+        #   "balanced"    the same one-share walk, but SKIP a name whose cumulative invested
+        #                 already exceeds the watchlist average by max_skew_pct. A corrective
+        #                 overlay: it steers new flow to the laggards but cannot undo a gap
+        #                 already opened, and it still buys in whole shares.
+        #   "equal_value" allocation and timing are SEPARATED, which is what actually fixes
+        #                 it. Every name is credited daily_budget/N into its own POT — every
+        #                 name, every day, whatever it did or whether it even printed. A name
+        #                 then buys floor(pot/price) shares and pays from its OWN pot; if the
+        #                 pot cannot afford one share the money simply waits for tomorrow.
+        #                 The ranking no longer decides allocation, only who spends first when
+        #                 the day is tight. Names therefore buy at different RHYTHMS (a ₹2,299
+        #                 name every ~2 days, a ₹45 name daily) while receiving identical
+        #                 rupees: the only divergence is what is briefly parked in a pot, which
+        #                 is bounded by one share's price. Same list, same window: invested per
+        #                 name ₹75,380…₹77,584 (1.0×), XIRR 18.87%, +3.14 pts vs the index SIP.
+        #                 A watchlist change needs no epoch logic here — the split is over the
+        #                 CURRENT names, so a name added today takes its 1/N from today and
+        #                 never buys catch-up, and a removed name stops being credited (it also
+        #                 stops being ranked, so its leftover pot is inert).
+        #
+        # Ctor default is the spec (§1: a recovered deploy must be byte-identical); the
+        # backtest FORM defaults to equal_value.
         sizing: str = "one_share",  # one_share | balanced | equal_value
         max_skew_pct: float = 25.0,         # balanced only: allowed overweight vs the average
         fund_seed: str = "never",

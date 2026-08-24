@@ -130,7 +130,10 @@ export const api = {
       body: JSON.stringify({ password }),
     }),
   strategies: (basis: "eod" | "intraday" = "eod") =>
-    request<{ strategies: string[] }>(`/strategies?basis=${basis}`),
+    // decision_times: each strategy's OWN default daily decision time, so the deploy form
+    // shows what the deploy route would resolve rather than keeping its own copy.
+    request<{ strategies: string[]; decision_times?: Record<string, string> }>(
+      `/strategies?basis=${basis}`),
   // INTRADAY replays run as a background job: POST returns {job_id}, poll progress for
   // {done,total,day} and the full BacktestResponse-shaped result once status=="done".
   backtestIntraday: (body: BacktestRequest) =>

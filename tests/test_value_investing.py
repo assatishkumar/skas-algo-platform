@@ -514,3 +514,45 @@ def test_an_unknown_sizing_mode_fails_loudly():
         _strat(watchlist="AAA", sizing="equalvalue")
     for good in ("one_share", "balanced", "equal_value"):
         assert _strat(watchlist="AAA", sizing=good).sizing == good
+
+
+# ------------------------------------------- decision time (owner call, 2026-08-24)
+
+def test_value_investing_names_its_own_decision_time_of_15_05():
+    """The platform default is 15:20, which since SEBI's Closing Auction Session is PAST the
+    end of continuous cash trading for F&O-listed stocks — an order would rest in the auction,
+    never fill, and (an unfilled entry halts) stop the run every day. This strategy is the
+    first equity one that can deploy live, so it names its own."""
+    from skas_algo.strategies.value_investing import ValueInvestingStrategy
+
+    assert ValueInvestingStrategy.default_decision_time == "15:05"
+
+
+def test_the_deploy_route_resolves_the_strategys_own_default(client):
+    """Explicit wins; omitted asks the STRATEGY; unknown strategies keep 15:20. Resolved
+    server-side so an API caller gets it too, not just the deploy form."""
+    from skas_algo.api.routes.live import _resolve_decision_time
+
+    assert _resolve_decision_time("value_investing", None) == "15:05"
+    assert _resolve_decision_time("value_investing", "14:30") == "14:30"   # explicit wins
+    assert _resolve_decision_time("sst_lifo", None) == "15:20"             # platform default
+    assert _resolve_decision_time("no_such_strategy", None) == "15:20"     # never raises
+
+
+def test_the_strategies_endpoint_publishes_the_defaults(client):
+    """The deploy form reads these rather than keeping its own copy — one source of truth."""
+    body = client.get("/api/v1/strategies").json()
+    assert body["decision_times"]["value_investing"] == "15:05"
+    assert body["decision_times"]["sst_lifo"] == "15:20"
+
+
+def test_the_auction_window_warns_but_never_blocks():
+    """A hard block would be wrong: a watchlist of only non-F&O names trades continuously to
+    15:30, so 15:20 is legitimate there. The owner is warned and decides."""
+    from skas_algo.live.quotes import auction_warning, in_closing_auction
+    from datetime import time as _t
+
+    assert in_closing_auction(_t(15, 20)) and not in_closing_auction(_t(15, 5))
+    assert "F&O-LISTED" in (auction_warning("15:20") or "")
+    assert auction_warning("15:05") is None
+    assert auction_warning("15:20", segment="DERIV") is None   # index F&O runs to 15:40

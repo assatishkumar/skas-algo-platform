@@ -40,6 +40,28 @@ from skas_algo.services.runs import delete_algo_cascade
 logger = logging.getLogger("skas_algo.live")
 
 router = APIRouter(tags=["live"], prefix="/live")
+
+
+_FALLBACK_DECISION_TIME = "15:20"
+
+
+def _resolve_decision_time(strategy_id: str, requested: str | None) -> str:
+    """Explicit wins; else the STRATEGY's own default; else the platform's 15:20.
+
+    Strategies declare `default_decision_time` when the platform default is wrong for them —
+    value_investing uses 15:05 because 15:20 falls inside the closing auction for F&O-listed
+    cash stocks. Resolved HERE rather than in the model so an API caller gets it too, not
+    just the deploy form.
+    """
+    if requested:
+        return requested
+    from skas_algo.strategies.registry import get_strategy
+
+    try:
+        cls = get_strategy(strategy_id)
+    except Exception:
+        return _FALLBACK_DECISION_TIME
+    return str(getattr(cls, "default_decision_time", _FALLBACK_DECISION_TIME))
 # The WebSocket lives on its OWN router registered WITHOUT the require_auth dependency: a
 # browser can't attach an Authorization header to a WS, so router-level auth would reject
 # every connection. It's gated inline instead (token via ?token=). See app.py.
@@ -116,7 +138,7 @@ def start_deployment(req: LiveStartRequest, db: Session, loader: PriceLoader, av
             quote_source=req.quote_source,
             broker_account_id=req.broker_account_id if is_broker_source(req.quote_source) else None,
             refresh_seconds=req.refresh_seconds,
-            decision_time=req.decision_time,
+            decision_time=_resolve_decision_time(req.strategy_id, req.decision_time),
             ignore_market_hours=req.ignore_market_hours,
             auto=req.auto,
             warm_from_date=req.warm_from_date,
@@ -128,6 +150,17 @@ def start_deployment(req: LiveStartRequest, db: Session, loader: PriceLoader, av
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if req.auto:
         manager.start_loop(live.run_id)
+    # An EQUITY decision inside the closing auction cannot fill in an F&O-listed name, and
+    # the order path halts the run when an entry does not fill — so it would halt every day.
+    # A WARNING, not a 422: a watchlist of only non-F&O names is perfectly fine at 15:20.
+    # Raised here (not in the form) so an API caller hears it too.
+    if not is_deriv:
+        from skas_algo.live.quotes import auction_warning
+        from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+        if (warn := auction_warning(config.decision_time)):
+            build_notifier().send(Alert(
+                f"Deployed in the closing auction: {config.name}", warn, AlertLevel.WARNING))
     # Trading-brain capture: a run-card + a "deploy" journal entry (no-op without a vault).
     from skas_algo.db.models import Algo, AlgoRun
     from skas_algo.services.vault_export import export_run_safe, journal_safe

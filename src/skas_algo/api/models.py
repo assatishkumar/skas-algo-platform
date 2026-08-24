@@ -106,7 +106,11 @@ class LiveStartRequest(BaseModel):
     quote_source: str = "cache"  # "cache" (offline) | "zerodha" (live LTP)
     broker_account_id: int | None = None
     refresh_seconds: int = 30
-    decision_time: str = "15:20"
+    # None = let the STRATEGY choose (its `default_decision_time`, else 15:20). Not a plain
+    # "15:20" default, because then an omitted field and a deliberate 15:20 are the same
+    # value and a strategy could never state its own. Recovery's fallback is untouched — an
+    # existing deploy keeps whatever it stored (§1).
+    decision_time: str | None = None
     ignore_market_hours: bool = False
     auto: bool = False  # start the background refresh/decision loop
     # Options PAPER only: seed from a past date — replay the strategy as a backtest from
