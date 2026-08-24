@@ -502,3 +502,15 @@ def test_equal_value_buys_multiple_shares_when_the_pot_allows():
     st.last_shop_day = None
     sigs = [s for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
     assert sigs[0].quantity == 34             # floor(1000 / 29) — not 1
+
+
+def test_an_unknown_sizing_mode_fails_loudly():
+    """It used to fall through to one_share in silence: run #279 asked for equal_value against
+    a backend that predated the mode, traded price-weighted, and looked perfectly healthy. A
+    sizing typo must never be a silent change of allocation."""
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown sizing"):
+        _strat(watchlist="AAA", sizing="equalvalue")
+    for good in ("one_share", "balanced", "equal_value"):
+        assert _strat(watchlist="AAA", sizing=good).sizing == good

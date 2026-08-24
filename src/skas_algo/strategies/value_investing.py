@@ -42,6 +42,9 @@ from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.types import Signal, SignalAction
 
 
+_SIZING_MODES = frozenset({"one_share", "balanced", "equal_value"})
+
+
 class ValueInvestingStrategy:
     strategy_id = "value_investing"
     # Ask the backtest service for the accumulation panel (per-holding breakdown, sleeve
@@ -93,6 +96,14 @@ class ValueInvestingStrategy:
         self.warn_days_left = int(warn_days_left)
         self.funding_buffer_pct = float(funding_buffer_pct)
         self.sizing = str(sizing or "one_share").lower()
+        # An unrecognised mode used to fall through to one_share SILENTLY: a run asking for
+        # equal_value against a backend that predates it traded price-weighted and looked
+        # perfectly healthy (#279, 2026-08-24). A sizing typo must never be a silent
+        # allocation change — fail at construction, so the deploy/backtest 422s instead.
+        if self.sizing not in _SIZING_MODES:
+            raise ValueError(
+                f"unknown sizing {self.sizing!r} — expected one of {sorted(_SIZING_MODES)}"
+            )
         self.max_skew_pct = float(max_skew_pct)
         self.fund_seed = str(fund_seed or "never").lower()
         # cumulative rupees put into each name — drives the balanced walk (persisted)
