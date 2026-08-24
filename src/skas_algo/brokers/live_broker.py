@@ -98,8 +98,15 @@ class LiveBroker:
         max_orders_per_day: int = 20,
         order_timeout_s: float = 10.0,
         poll_interval_s: float = 2.0,
-        protect_pct: float = 3.0,           # FIRST escalation rung: cross the touch by this %
-        protect_ladder: tuple[float, ...] | None = None,  # None → (protect_pct, x2.7, x6.7)
+        protect_pct: float = 3.0,           # OPTIONS: first rung crosses the touch by this %
+        # EQUITY crossings are an order of magnitude tighter, because equity spreads are
+        # basis points where option spreads are percents — one constant cannot serve both
+        # (3% of a ₹14 premium is 43 paise; 3% of a ₹2,300 stock is ₹69). The crossing is a
+        # CEILING, not a price: a marketable limit fills at the ask, so 1% only binds when
+        # the book has run away since the decision — and an equity entry that stale is one
+        # the owner would rather skip than chase (owner call, 2026-08-24).
+        protect_pct_equity: float = 1.0,
+        protect_ladder: tuple[float, ...] | None = None,  # explicit override — BOTH segments
         notifier=None,
         clock=None,                          # injectable for tests (datetime-like)
     ):
@@ -119,10 +126,21 @@ class LiveBroker:
         # leg to be closed by hand. Each rung RE-READS the touch and crosses it further.
         # Derived from protect_pct so the single knob still steers the whole ladder, and
         # so an explicit protect_pct=0 still means "no crossing".
+        self.protect_pct_equity = float(protect_pct_equity)
+
+        def _derive(base: float) -> tuple[float, ...]:
+            return (base, base * 2.7, base * 6.7)
+
+        # Two ladders, ONE shape: the rung multipliers are shared, only the base % differs
+        # by segment. An explicit `protect_ladder` overrides both — the operator escape
+        # hatch, and the only way to get a non-proportional ladder.
         self.protect_ladder: tuple[float, ...] = tuple(
-            float(x) for x in (protect_ladder
-                               if protect_ladder is not None
-                               else (protect_pct, protect_pct * 2.7, protect_pct * 6.7))
+            float(x) for x in (protect_ladder if protect_ladder is not None
+                               else _derive(protect_pct))
+        )
+        self.protect_ladder_equity: tuple[float, ...] = tuple(
+            float(x) for x in (protect_ladder if protect_ladder is not None
+                               else _derive(self.protect_pct_equity))
         )
         self.notifier = notifier or build_notifier()
         self._clock = clock or datetime
@@ -141,6 +159,25 @@ class LiveBroker:
         else moves (rails, caps and the rate governor are per-account, not per-adapter).
         """
         self.adapter = adapter
+
+    # ------------------------------------------------------------------ trace
+    def _trace(self, cid: str, event: str, **fields) -> None:
+        """One greppable line per order-lifecycle event, keyed by a single id.
+
+        The order path used to log ONLY its escalation — three statements, all inside one
+        branch — so reconstructing what happened to a real order meant reading ``execute()``
+        and inferring which branch ran. On 2026-08-24 that produced a confidently wrong
+        answer: the absence of an ``escalating`` line was read as "we never cancelled", when
+        in fact an equity MARKET order had skipped the ladder entirely and gone straight to
+        cancel. The broker had to correct us. Absence of a log is not evidence; every branch
+        now says what it did.
+
+        Deliberately at INFO and one line per event (status is logged on CHANGE, not per
+        poll), so a whole order costs ~5 lines. Grep an order's life with its cid, or the
+        whole day's real orders with "ORDER ".
+        """
+        kv = " ".join(f"{k}={v}" for k, v in fields.items() if v is not None and v != "")
+        logger.info("ORDER %-9s cid=%s %s", event, cid, kv)
 
     # ------------------------------------------------------------------ rails
     def _check_rails(self, order: BrokerOrder, ref_price: float | None) -> None:
@@ -190,14 +227,31 @@ class LiveBroker:
             price=float(touch) if touch else None,
             client_order_id=client_id, tag=client_id,
         )
+        started = _time.monotonic()
+        # WHY the order looks the way it does — a MARKET here means touch_fn had no price,
+        # which also disables the escalation below. That was invisible until 2026-08-24.
+        self._trace(client_id, "place", symbol=order.symbol, side=order.side.value,
+                    qty=order.quantity, type=req.order_type.value,
+                    price=f"{touch:.2f}" if touch else "none",
+                    touch="book" if touch else "MISSING",
+                    reduce_only=bool(getattr(order, "reduce_only", False)))
         self._governor.wait()
         try:
             broker_id = self.adapter.place_order(req)
         except Exception as exc:
+            self._trace(client_id, "rejected", error=str(exc)[:300])
             raise OrderExecutionError(f"order placement failed: {exc}") from exc
         self._orders_count += 1
+        self._trace(client_id, "accepted", broker_id=broker_id,
+                    orders_today=self._orders_count)
 
-        st = self._await_terminal(broker_id, deadline_s=self.order_timeout_s)
+        st = self._await_terminal(broker_id, deadline_s=self.order_timeout_s,
+                                  cid=client_id, phase="initial")
+        if st["status"] not in _TERMINAL and req.order_type is not OrderType.LIMIT:
+            # The branch that silently ate the 2026-08-24 smoke test: no touch → MARKET →
+            # no ladder. Say so, rather than leaving a 10-second hole in the log.
+            self._trace(client_id, "noescal", reason="order is MARKET (touch_fn gave no "
+                        "price) — the escalation ladder only applies to LIMIT orders")
         if st["status"] not in _TERMINAL and req.order_type is OrderType.LIMIT:
             # Escalate: unfilled at the touch → re-price to a PROTECTED crossing LIMIT
             # (touch RE-READ each rung, pushed further THROUGH the spread). NOT a MARKET
@@ -216,8 +270,13 @@ class LiveBroker:
             # An ENTRY gets the single original rung: there a bad fill is worse than no
             # fill, and chasing 20% through the touch to OPEN a position would be a new
             # risk introduced by the fix for a different one.
-            ladder = (self.protect_ladder if getattr(order, "reduce_only", False)
-                      else self.protect_ladder[:1])
+            # Segment per ORDER, exactly as _check_rails picks its session window — an
+            # option leg and an equity leg can share an account.
+            from skas_algo.engine.options.instrument import is_option_symbol as _is_opt
+
+            full = (self.protect_ladder if _is_opt(order.symbol)
+                    else self.protect_ladder_equity)
+            ladder = full if getattr(order, "reduce_only", False) else full[:1]
             for i, pct in enumerate(ladder):
                 fresh = None
                 if self.touch_fn is not None:
@@ -230,21 +289,26 @@ class LiveBroker:
                 try:
                     self._governor.wait()
                     if base > 0:
-                        logger.info("escalating %s %s rung %.1f%%: touch %.2f → limit %.2f",
-                                    order.symbol, order.side.value, pct, base, want)
+                        self._trace(client_id, "escalate", rung=f"{i + 1}/{len(ladder)}",
+                                    pct=f"{pct:.1f}%", touch=f"{base:.2f}",
+                                    limit=f"{want:.2f}")
                         self.adapter.modify_order(
                             broker_id, order_type=OrderType.LIMIT, price=want)
                     else:
                         # no price basis at all (book vanished) — MARKET is the only lever
                         # left; equities accept it, and an option order always had a touch.
+                        self._trace(client_id, "escalate", rung=f"{i + 1}/{len(ladder)}",
+                                    to="MARKET", reason="no price basis")
                         self.adapter.modify_order(broker_id, order_type=OrderType.MARKET)
                 except Exception as exc:  # pragma: no cover - modify raced a fill
+                    self._trace(client_id, "modifyerr", error=str(exc)[:300])
                     logger.warning("escalation modify failed for %s: %s", broker_id, exc)
                 # first rung keeps the full timeout (unchanged behaviour); the rest are
                 # halved — if it has not filled by now, waiting longer only drifts further.
                 st = self._await_terminal(
                     broker_id,
-                    deadline_s=self.order_timeout_s if i == 0 else self.order_timeout_s / 2)
+                    deadline_s=self.order_timeout_s if i == 0 else self.order_timeout_s / 2,
+                    cid=client_id, phase=f"rung{i + 1}")
                 # Did the re-price actually land? A modify that is silently ignored looks
                 # exactly like one that filled nothing, and on 2026-08-11 we could not tell
                 # the two apart after the fact. Say so in the log while the order is live.
@@ -262,6 +326,8 @@ class LiveBroker:
         if st["status"] == "COMPLETE":
             fill = Fill(order.symbol, order.side, st["filled_quantity"] or order.quantity,
                         st["average_price"], broker_order_id=broker_id)
+            self._trace(client_id, "filled", qty=fill.quantity, avg=f"{fill.price:.2f}",
+                        elapsed=f"{_time.monotonic() - started:.1f}s")
             self._notify(AlertLevel.INFO, "Filled",
                          f"{order.side.value} {fill.quantity} {order.symbol} @ ₹{fill.price:.2f}")
             return fill
@@ -269,20 +335,31 @@ class LiveBroker:
         filled = int(st.get("filled_quantity") or 0)
         if st["status"] not in _TERMINAL:
             # Still pending after escalation — cancel what's left, keep what filled.
+            # THIS is the cancel Dhan reported as "initiated from your end" on 2026-08-24,
+            # and nothing in the log said we had sent it.
+            self._trace(client_id, "cancel", reason="unfilled after escalation",
+                        status=st["status"], filled=f"{filled}/{order.quantity}")
             try:
                 self._governor.wait()
                 self.adapter.cancel_order(broker_id)
-            except Exception:  # pragma: no cover - cancel raced a fill
-                pass
-            st = self._await_terminal(broker_id, deadline_s=5.0)
+            except Exception as exc:  # pragma: no cover - cancel raced a fill
+                self._trace(client_id, "cancelerr", error=str(exc)[:300])
+            st = self._await_terminal(broker_id, deadline_s=5.0,
+                                      cid=client_id, phase="post-cancel")
             filled = int(st.get("filled_quantity") or filled)
         if filled > 0:
+            self._trace(client_id, "partial", qty=f"{filled}/{order.quantity}",
+                        avg=f"{st['average_price']:.2f}",
+                        elapsed=f"{_time.monotonic() - started:.1f}s")
             self._notify(AlertLevel.WARNING, "Partial fill",
                          f"{order.side.value} {filled}/{order.quantity} {order.symbol} "
                          f"@ ₹{st['average_price']:.2f} — remainder cancelled")
             return Fill(order.symbol, order.side, filled, st["average_price"],
                         broker_order_id=broker_id)
         detail = st.get("status_message") or st["status"]
+        self._trace(client_id, "failed", broker_id=broker_id, status=st["status"],
+                    detail=detail, filled=f"{filled}/{order.quantity}",
+                    elapsed=f"{_time.monotonic() - started:.1f}s")
         self._notify(AlertLevel.ERROR, "Order failed",
                      f"{order.side.value} {order.quantity} {order.symbol}: {detail}")
         raise OrderExecutionError(
@@ -299,18 +376,31 @@ class LiveBroker:
         snapped = (math.ceil(ticks) if side is OrderSide.BUY else math.floor(ticks)) * 0.05
         return max(0.05, round(snapped, 2))
 
-    def _await_terminal(self, broker_id: str, deadline_s: float) -> dict:
+    def _await_terminal(self, broker_id: str, deadline_s: float, *,
+                        cid: str = "-", phase: str = "") -> dict:
+        """Poll until terminal or the deadline. Logs each status CHANGE (not each poll — a
+        10s window is ~5 polls and a quiet order would otherwise drown the log), plus any
+        status-read failure, which used to be swallowed entirely: a broker whose status
+        endpoint was erroring looked identical to one reporting a healthy pending order."""
         deadline = _time.monotonic() + deadline_s
         st = {"status": "UNKNOWN", "average_price": 0.0, "filled_quantity": 0,
               "status_message": None}
+        seen: str | None = None
         while _time.monotonic() < deadline:
             try:
                 st = self.adapter.order_status(broker_id)
-            except Exception:  # pragma: no cover - transient status hiccup
-                pass
+            except Exception as exc:  # pragma: no cover - transient status hiccup
+                self._trace(cid, "statuserr", phase=phase, error=str(exc)[:200])
+            if st["status"] != seen:
+                seen = st["status"]
+                self._trace(cid, "status", phase=phase, value=seen,
+                            filled=st.get("filled_quantity"),
+                            msg=st.get("status_message"))
             if st["status"] in _TERMINAL:
                 return st
             _time.sleep(self.poll_interval_s)
+        self._trace(cid, "timeout", phase=phase, after=f"{deadline_s:.0f}s",
+                    status=st["status"])
         return st
 
     def _notify(self, level, title: str, message: str) -> None:

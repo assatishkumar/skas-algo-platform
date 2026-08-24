@@ -90,7 +90,9 @@ class Settings(BaseSettings):
     live_order_timeout_s: float = 10.0  # SKAS_LIVE_ORDER_TIMEOUT_S (LIMIT→escalation)
     # Escalation crosses the touch by this % as a PROTECTED LIMIT (Zerodha rejects naked
     # MARKET option orders via API — the 2026-07-27 square-off cancel/halt).
-    live_order_protect_pct: float = 3.0  # SKAS_LIVE_ORDER_PROTECT_PCT
+    live_order_protect_pct: float = 3.0  # SKAS_LIVE_ORDER_PROTECT_PCT (options)
+    # Equity spreads are basis points, not percents — see LiveBroker.protect_pct_equity.
+    live_order_protect_pct_equity: float = 1.0  # SKAS_LIVE_ORDER_PROTECT_PCT_EQUITY
     # Resume REAL-order management for a LIVE run after a restart/recovery. Default False =
     # fail-safe: a recovered live run keeps PaperBroker (a restart PAUSES real orders until
     # the owner re-activates). When True, recovery re-injects the LiveBroker — but the 4-key

@@ -1214,16 +1214,47 @@ class LiveRunManager:
         market = getattr(session, "market", None)
 
         def touch(symbol: str, side) -> float | None:
-            """LIMIT price at the touch: SELL→bid / BUY→ask from the live chain book."""
-            ba_fn = getattr(market, "_bid_ask", None)
-            ba = ba_fn(symbol) if ba_fn is not None else None
-            if not ba:
-                return None
-            bid, ask = ba
+            """LIMIT price at the touch: SELL→bid / BUY→ask from the live chain book, with a
+            LAST-PRICE fallback for anything that has no two-sided book.
+
+            The fallback is load-bearing, not a nicety. ``_bid_ask`` lives only on
+            LiveOptionsMarketView and is chain-based, so it does not exist for an EQUITY run
+            and returns None for an equity symbol even on an options view. Returning None
+            here has two consequences, and both bit on 2026-08-24:
+
+              * ``execute()`` sends a naked MARKET order, and then gates its ENTIRE escalation
+                ladder on ``req.order_type is OrderType.LIMIT`` — so an equity order that did
+                not fill inside the timeout got NO escalation at all: it was cancelled and the
+                run HALTED. That is what killed the Dhan ITC smoke test (Dhan support confirmed
+                the cancel came from us; the exchange had converted our MARKET to a protected
+                LIMIT at 267.30, it did not fill in 10s, and we cancelled it).
+              * ``_check_rails`` applies the per-order notional cap only ``if ref_price``, so a
+                priceless order ALSO skipped SKAS_LIVE_MAX_ORDER_NOTIONAL entirely.
+
+            A limit at the last print that then escalates through the touch is strictly more
+            controlled than a naked market order, and it restores the cap.
+            """
             from skas_algo.db.enums import OrderSide as _OS
 
-            px = bid if side is _OS.SELL else ask
-            return float(px) if px and px > 0 else None
+            ba_fn = getattr(market, "_bid_ask", None)
+            ba = ba_fn(symbol) if ba_fn is not None else None
+            if ba:
+                bid, ask = ba
+                px = bid if side is _OS.SELL else ask
+                if px and px > 0:
+                    return float(px)
+            # No book (equity, one-sided, or a cache/network hiccup) — the last live print.
+            for name in ("last_close", "close"):
+                fn = getattr(market, name, None)
+                if fn is None:
+                    continue
+                try:
+                    px = float(fn(symbol) or 0.0)
+                except Exception:  # pragma: no cover - a view that cannot price this symbol
+                    continue
+                if px > 0:
+                    return px
+            return None
 
         session.broker = LiveBroker(
             adapter,
@@ -1234,6 +1265,7 @@ class LiveRunManager:
             max_orders_per_day=settings.live_max_orders_per_day,
             order_timeout_s=settings.live_order_timeout_s,
             protect_pct=settings.live_order_protect_pct,
+            protect_pct_equity=settings.live_order_protect_pct_equity,
         )
         logger.warning(
             "REAL-ORDER broker injected for %s (account %s)", config.name, config.broker_account_id
@@ -2093,12 +2125,21 @@ class LiveRunManager:
         """A strategy whose lifecycle is COMPLETE (broker_smoke_test after its one
         buy→hold→sell cycle) sets ``stop_requested``; the loop then stops the run cleanly.
         Guarded on a FLAT book no matter what the strategy claims — a run holding real
-        positions must never stop itself (stopping ends all management of the book)."""
+        positions must never stop itself (stopping ends all management of the book).
+
+        ALSO guarded on an unacknowledged ``order_error`` (2026-08-24). A halted run that
+        stops itself takes the halt off the Live page with it, and ``order_error`` lives only
+        in memory — so the smoke test whose real Dhan buy came back CANCELLED halted at
+        11:57:56, self-stopped 10s later, and left the owner looking at an empty Live page
+        with no idea a real order had just failed. A halt is the single most important thing
+        a run can be showing; it outranks "my lifecycle is done"."""
         strategy = getattr(live.session, "strategy", None)
         if not getattr(strategy, "stop_requested", False):
             return False
         if live.session.portfolio.lot_symbols():
             return False  # still holding — never abandon a live book
+        if live.order_error:
+            return False  # halted — stay visible until the owner acks the failure
         logger.info(
             "run %s (%s) completed its lifecycle — stopping itself", live.run_id, live.config.name
         )

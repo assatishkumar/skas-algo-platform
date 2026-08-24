@@ -732,4 +732,167 @@ def test_escalation_warns_when_the_reprice_does_not_land():
     # everything the 2026-08-11 post-mortem lacked
     assert any("did NOT take effect" in m and "asked 34.80" in m and "shows 33.75" in m
                for m in seen), seen
-    assert any(m.startswith("escalating") and "34.80" in m for m in seen), seen
+    assert any(m.startswith("ORDER escalate") and "limit=34.80" in m for m in seen), seen
+
+
+# ------------------------------------------- touch_fn: equities have no order book
+
+def test_touch_falls_back_to_the_last_price_when_there_is_no_book(monkeypatch):
+    """`_bid_ask` is chain-based and lives only on LiveOptionsMarketView, so an EQUITY run
+    had no touch at all — and a touch of None is not a harmless degradation:
+
+      * execute() sends a naked MARKET order and gates its whole escalation ladder on
+        `req.order_type is LIMIT`, so an unfilled equity order got NO escalation — it was
+        cancelled and the run halted (the 2026-08-24 Dhan ITC smoke test, confirmed by Dhan
+        support as a client-side cancel);
+      * _check_rails applies the notional cap only `if ref_price`, so the order also skipped
+        SKAS_LIVE_MAX_ORDER_NOTIONAL.
+    """
+    from skas_algo.config import get_settings
+    from skas_algo.db.enums import OrderSide
+    from skas_algo.live.manager import manager
+
+    monkeypatch.setattr(get_settings(), "live_trading_enabled", True)
+
+    class _EquityView:                       # no _bid_ask — exactly like LiveMarketView
+        def last_close(self, symbol):
+            return 267.30
+
+    sess = _Sess()
+    sess.market = _EquityView()
+    manager._maybe_inject_live_broker(sess, _cfg("LIVE"), _QS(_ExecAdapter(armed=True)))
+
+    touch = sess.broker.touch_fn
+    assert touch("ITC", OrderSide.BUY) == 267.30     # a LIMIT order, and the cap now applies
+    assert touch("ITC", OrderSide.SELL) == 267.30
+
+
+def test_touch_still_prefers_a_real_two_sided_book(monkeypatch):
+    """The fallback must never displace a genuine bid/ask — options keep buying the ask
+    and selling the bid."""
+    from skas_algo.config import get_settings
+    from skas_algo.db.enums import OrderSide
+    from skas_algo.live.manager import manager
+
+    monkeypatch.setattr(get_settings(), "live_trading_enabled", True)
+
+    class _OptionView:
+        def _bid_ask(self, symbol):
+            return (14.35, 14.80) if symbol.startswith("NIFTY|") else None
+
+        def last_close(self, symbol):
+            return 99.0
+
+    sess = _Sess()
+    sess.market = _OptionView()
+    manager._maybe_inject_live_broker(sess, _cfg("LIVE"), _QS(_ExecAdapter(armed=True)))
+    touch = sess.broker.touch_fn
+
+    sym = "NIFTY|2026-08-25|24500|CE"
+    assert touch(sym, OrderSide.SELL) == 14.35       # sell into the bid
+    assert touch(sym, OrderSide.BUY) == 14.80        # lift the offer
+    # an equity leg on the SAME options-view session still gets a price
+    assert touch("ITC", OrderSide.BUY) == 99.0
+
+
+def test_the_order_trace_reconstructs_a_cancel_without_reading_the_code():
+    """The 2026-08-24 regression test for OBSERVABILITY, not behaviour.
+
+    An equity order went out as MARKET (no touch), which silently disqualified it from the
+    escalation ladder; it did not fill, we cancelled it, and the run halted. The log for
+    those 10 seconds was EMPTY, so the post-mortem was done by reading branches — and got
+    the answer wrong until the broker said "the cancel came from your end". Every step must
+    now be legible from the log alone."""
+    import logging
+
+    class NeverFills(FakeAdapter):
+        def order_status(self, broker_order_id):
+            if self.cancelled:
+                return {"status": "CANCELLED", "average_price": 0.0, "filled_quantity": 0,
+                        "status_message": None, "price": 0.0}
+            return {"status": "PENDING", "average_price": 0.0, "filled_quantity": 0,
+                    "status_message": None, "price": 0.0}
+
+    a = NeverFills(initial=PENDING)
+    lb = make(a, touch_fn=lambda s, side: None)      # no book → MARKET, the trap
+    logger = logging.getLogger("skas_algo.live")
+    seen: list[str] = []
+
+    class Grab(logging.Handler):
+        def emit(self, record):
+            seen.append(record.getMessage())
+
+    h = Grab()
+    logger.addHandler(h)
+    prev = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        with pytest.raises(OrderExecutionError):
+            lb.execute(BrokerOrder("ITC", OrderSide.BUY, 1))
+    finally:
+        logger.removeHandler(h)
+        logger.setLevel(prev)
+
+    log = "\n".join(seen)
+    # 1. the order went out unpriced — the fact that explains everything after it
+    assert "ORDER place" in log and "type=MARKET" in log and "touch=MISSING" in log
+    # 2. the ladder was skipped, and SAYS why (this was the 10-second silence)
+    assert "ORDER noescal" in log and "escalation ladder only applies to LIMIT" in log
+    # 3. WE sent the cancel — the claim the broker had to correct us on
+    assert "ORDER cancel" in log and "unfilled after escalation" in log
+    # 4. and the outcome, with the id you would quote to the broker
+    assert "ORDER failed" in log and "status=CANCELLED" in log
+    # every line is greppable by one correlation id
+    cids = {ln.split("cid=")[1].split()[0] for ln in seen if ln.startswith("ORDER ")}
+    assert len(cids) == 1, cids
+
+
+# ---------------------------------------- segment-aware crossing (owner call 2026-08-24)
+
+def test_an_equity_entry_crosses_one_percent_once_then_gives_up():
+    """3% was tuned for options, where the spread genuinely is a few percent. On a ₹2,300
+    stock it is ₹69. Equity gets 1%, and an ENTRY still gets exactly ONE rung — a decision
+    more than 1% stale is not the decision the strategy made, so we would rather miss the
+    fill than chase it."""
+    a = LadderAdapter(fills_at=1e9)                      # never fills → walks what it may
+    lb = make(a, touch_fn=lambda s, side: 100.0)
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("ITC", OrderSide.BUY, 1))
+    assert [p for (_, t, p) in a.modified if t is OrderType.LIMIT] == [101.0]
+    assert a.cancelled == ["KITE-1"]                     # …then out, and the run halts
+
+
+def test_an_option_entry_still_crosses_three_percent():
+    """The equity number must not tighten options — 3% of a ₹100 premium is ₹3, which is
+    ordinary for a contract whose spread is measured in percents."""
+    a = LadderAdapter(fills_at=1e9)
+    lb = make(a, touch_fn=lambda s, side: 100.0)
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("NIFTY|2026-07-07|24500|CE", OrderSide.BUY, 65))
+    assert [p for (_, t, p) in a.modified if t is OrderType.LIMIT] == [103.0]
+
+
+def test_an_equity_exit_still_walks_a_full_ladder_just_a_tighter_one():
+    """Being stuck in a position is the expensive outcome, so an EXIT keeps all three rungs
+    — the same 1x/2.7x/6.7x shape, based on 1% instead of 3%. Each rung re-reads the touch
+    and stops on fill, so the deep rung is only reached in a genuinely disorderly book."""
+    a = LadderAdapter(fills_at=1e9)
+    lb = make(a, touch_fn=lambda s, side: 100.0)
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("ITC", OrderSide.SELL, 1, reduce_only=True))
+    got = [p for (_, t, p) in a.modified if t is OrderType.LIMIT]
+    # 1% · 2.7% · 6.7% BELOW the touch, snapped OUTWARD to the ₹0.05 tick. 97.25 rather
+    # than 97.30 because 100*(1-0.027) is 97.29999999999998 in float and the snap floors a
+    # SELL — the artifact always errs toward being MORE marketable, never less, so it is
+    # recorded here rather than fixed (the tick logic is shared with options).
+    assert got == [99.0, 97.25, 93.3]
+
+
+def test_an_explicit_ladder_overrides_both_segments():
+    """The operator escape hatch stays absolute — if you name the rungs, you get them on
+    equity too, rather than silently getting the derived equity ladder instead."""
+    a = LadderAdapter(fills_at=1e9)
+    lb = make(a, touch_fn=lambda s, side: 100.0, protect_ladder=(5.0, 25.0))
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("ITC", OrderSide.BUY, 1, reduce_only=True))
+    assert [p for (_, t, p) in a.modified if t is OrderType.LIMIT] == [105.0, 125.0]

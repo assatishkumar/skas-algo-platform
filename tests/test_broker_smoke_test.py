@@ -141,10 +141,11 @@ def test_manager_self_stop_seam_guards_on_flat_book(monkeypatch):
     stopped = []
     monkeypatch.setattr(manager, "stop", lambda rid: stopped.append(rid))
 
-    def live(requested, symbols):
+    def live(requested, symbols, order_error=None):
         return SimpleNamespace(
             run_id=42,
             config=SimpleNamespace(name="smoke"),
+            order_error=order_error,
             session=SimpleNamespace(
                 strategy=SimpleNamespace(stop_requested=requested),
                 portfolio=SimpleNamespace(lot_symbols=lambda: symbols),
@@ -153,6 +154,10 @@ def test_manager_self_stop_seam_guards_on_flat_book(monkeypatch):
 
     assert manager._maybe_self_stop(live(False, [])) is False     # nothing requested
     assert manager._maybe_self_stop(live(True, ["X"])) is False   # holding → refuse
+    # HALTED: flat and lifecycle-complete, but a real order failed. Stopping would drop the
+    # run off the Live page and `order_error` is memory-only, so the halt would vanish with
+    # it — exactly what hid a cancelled Dhan buy from the owner on 2026-08-24.
+    assert manager._maybe_self_stop(live(True, [], "BUY 1 ITC → CANCELLED")) is False
     assert stopped == []
     assert manager._maybe_self_stop(live(True, [])) is True       # flat + requested → stop
     assert stopped == [42]
