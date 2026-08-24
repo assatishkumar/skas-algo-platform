@@ -34,6 +34,7 @@ def _to_out(account: BrokerAccount) -> BrokerAccountOut:
             account.session_expires_at.isoformat() if account.session_expires_at else None
         ),
         live_trading_enabled=get_settings().live_trading_enabled,
+        can_place_orders=broker_svc.can_place_orders(account),
     )
 
 

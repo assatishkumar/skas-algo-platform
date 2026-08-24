@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from skas_algo.brokers.dhan import DhanAdapter, DhanCredentials
+from skas_algo.brokers.live_broker import adapter_can_execute
 from skas_algo.brokers.zerodha import BrokerLoginError, ZerodhaAdapter, ZerodhaCredentials
 
 if TYPE_CHECKING:
@@ -75,6 +76,29 @@ def make_adapter(account: BrokerAccount):
     if token:
         adapter.set_access_token(token)
     return adapter
+
+
+# Adapter CLASS per broker. The capability question — "does this broker have a real order
+# surface at all?" — is answered by the class, so nothing is instantiated and no token is
+# decrypted to answer it.
+_ADAPTER_CLASS = {"zerodha": ZerodhaAdapter, "dhan": DhanAdapter}
+
+
+def can_place_orders(account: BrokerAccount) -> bool:
+    """Does this account's BROKER expose the real order surface LiveBroker needs?
+
+    Reported on ``BrokerAccountOut`` so the Brokers page's smoke-test picker and
+    ``POST /trade/smoke-test/deploy`` answer from ONE source. It was a bare model default of
+    ``True`` until 2026-08-24 — declared, commented as "server-side truth", and never actually
+    assigned by ``_to_out`` — so the picker would have offered an order-less broker and only
+    the deploy would have refused it, which is precisely the drift the field exists to prevent.
+
+    Deliberately independent of ``armed`` and of the session: this is a question about the
+    BROKER, not about today's login. A LIVE smoke test on a disarmed account paper-fills and
+    wears the "orders PAPER" chip — a documented, useful negative test (CLAUDE.md §8).
+    """
+    cls = _ADAPTER_CLASS.get((account.broker or "zerodha").lower())
+    return cls is not None and adapter_can_execute(cls)
 
 
 def make_data_session(account: BrokerAccount) -> SkasData:

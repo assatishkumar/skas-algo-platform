@@ -180,3 +180,38 @@ def test_universe_symbols_cached_only_flag(client: TestClient):
         assert client.get("/api/v1/universes/nope/symbols?cached_only=false").status_code == 404
     finally:
         app.dependency_overrides.pop(get_available_symbols, None)
+
+
+# --------------------------------------------------- can_place_orders (the picker's truth)
+
+def test_can_place_orders_is_actually_reported_not_a_default(client: TestClient):
+    """The Brokers page filters its smoke-test picker on this field, and its model comment
+    promises "the UI and the server can never disagree about what can trade".
+
+    It was declared with a default of ``True`` and never assigned by ``_to_out`` (2026-08-21
+    → 08-24), so every account reported True whatever its broker could do — the picker would
+    have offered an order-less broker and only ``POST /trade/smoke-test/deploy`` would have
+    refused it. Nothing failed, because nothing asserted it. This does."""
+    for broker, payload in (("zerodha", CONNECT), ("dhan", {**CONNECT, "broker": "dhan"})):
+        body = client.post("/api/v1/brokers", json={**payload, "label": f"cpo-{broker}"}).json()
+        assert body["can_place_orders"] is True, f"{broker} has a full order surface"
+
+    # …and it is derived, not hard-coded: a broker with no adapter cannot place orders.
+    with session_scope() as s:
+        acct = BrokerAccount(broker="futurebroker", label="cpo-none", user_id="X1")
+        s.add(acct)
+        s.flush()
+        assert broker_svc.can_place_orders(acct) is False
+
+
+def test_can_place_orders_ignores_armed_and_session(client: TestClient):
+    """A question about the BROKER, not about today's login. A LIVE smoke test on a disarmed
+    account paper-fills and wears the "orders PAPER" chip — a documented negative test
+    (CLAUDE.md §8) — so arming must not gate the picker."""
+    account_id = client.post("/api/v1/brokers", json={**CONNECT, "label": "cpo-arm"}).json()["id"]
+    for verb in ("arm", "disarm"):
+        armed = client.post(f"/api/v1/brokers/{account_id}/{verb}").json()["armed"]
+        assert armed is (verb == "arm")          # the state really did flip
+        body = next(a for a in client.get("/api/v1/brokers").json() if a["id"] == account_id)
+        assert body["can_place_orders"] is True
+        assert body["has_session"] is False      # never logged in, yet still order-capable

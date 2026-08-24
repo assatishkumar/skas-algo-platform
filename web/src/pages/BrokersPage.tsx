@@ -320,9 +320,16 @@ function SmokeTestCard({ accounts, onAction }: {
   // Any logged-in session whose broker can actually place orders. Dhan joined that set on
   // 2026-08-21 (Phase B); the server is the authority — POST /trade/smoke-test/deploy 422s a
   // LIVE run on an order-less broker — and `can_place_orders` mirrors it so the picker and
-  // the route can never drift. Excluded accounts are NAMED below, never silently missing.
+  // the route can never drift.
+  //
+  // EVERY excluded account is NAMED below. That claim used to cover only the no-order-API
+  // case, so an account whose token had simply expired dropped out of the picker with no
+  // explanation at all — the owner hit exactly that on the VPS with Dhan (2026-08-24) and had
+  // no way to tell a dead session from an unsupported broker. The two reasons have different
+  // fixes (log in again vs. nothing you can do), so they are reported separately.
   const sessioned = accounts.filter((a) => a.has_session && a.can_place_orders !== false);
   const noOrderApi = accounts.filter((a) => a.has_session && a.can_place_orders === false);
+  const noSession = accounts.filter((a) => !a.has_session);
   const [leg, setLeg] = useState<"option" | "stock">("option");
   const [underlying, setUnderlying] = useState("NIFTY");
   const [right, setRight] = useState<"CE" | "PE">("CE");
@@ -417,6 +424,14 @@ function SmokeTestCard({ accounts, onAction }: {
           {noOrderApi.length === 1 ? "that broker has" : "those brokers have"} no order API in
           Skais yet, so a LIVE smoke test there would fill on paper and prove nothing. Arming
           makes no difference to this.
+        </p>
+      )}
+      {noSession.length > 0 && (
+        <p className="mt-2 text-[11.5px] leading-snug text-[var(--faint)]">
+          {noSession.map((a) => a.label).join(", ")} not listed —{" "}
+          {noSession.length === 1 ? "no logged-in session" : "no logged-in sessions"}. Log in on
+          {noSession.length === 1 ? " that account" : " those accounts"} above (Dhan tokens last
+          ~24h, Kite until ~06:00 IST), then this list refreshes.
         </p>
       )}
       <button onClick={deploy} disabled={acct == null}
