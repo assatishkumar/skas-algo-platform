@@ -256,3 +256,22 @@ def test_a_rejected_order_reports_both_what_we_sent_and_what_dhan_said():
     assert "Invalid Security Id" in msg          # what Dhan said
     assert '"securityId": "43492"' in msg        # what we sent
     assert '"orderType": "MARKET"' in msg
+
+
+def test_a_benign_oms_description_is_not_reported_as_a_failure():
+    """Dhan fills ``omsErrorDescription`` on healthy orders too. A cancelled ITC buy on
+    2026-08-24 carried omsErrorCode "0" + description "CONFIRMED"; LiveBroker prefers
+    status_message over status when reporting a failure, so the halt read
+    "BUY 1 ITC → CONFIRMED" — a word that names neither the outcome nor the remedy."""
+    http = FakeHttp({("GET", "/orders/221260824507203"): {
+        "orderStatus": "CANCELLED", "filledQty": 0, "averageTradedPrice": 0.0,
+        "price": 267.3, "omsErrorCode": "0", "omsErrorDescription": "CONFIRMED"}})
+    st = _adapter(http).order_status("221260824507203")
+    assert st["status"] == "CANCELLED"
+    assert st["status_message"] is None       # → the caller falls back to the real status
+
+    # A real error code still carries its reason through.
+    http2 = FakeHttp({("GET", "/orders/9"): {
+        "orderStatus": "REJECTED", "omsErrorCode": "DH-906",
+        "omsErrorDescription": "Insufficient funds"}})
+    assert _adapter(http2).order_status("9")["status_message"] == "Insufficient funds"

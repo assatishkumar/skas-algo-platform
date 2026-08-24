@@ -394,11 +394,32 @@ class DhanAdapter:
             "status": self._STATUS_MAP.get(native, native),
             "average_price": float(raw.get("averageTradedPrice") or 0.0),
             "filled_quantity": int(raw.get("filledQty") or 0),
-            "status_message": raw.get("omsErrorDescription") or raw.get("omsErrorCode"),
+            "status_message": self._error_message(raw),
             # the order's CURRENT limit price — lets the escalation verify its own modify
             # actually landed (the 2026-08-11 Zerodha lesson, same check applies here).
             "price": float(raw.get("price") or 0.0),
         }
+
+    @staticmethod
+    def _error_message(raw: dict) -> str | None:
+        """Dhan's OMS description, but ONLY when it describes a FAILURE.
+
+        ``omsErrorDescription`` is populated on healthy orders too. On 2026-08-24 a
+        cancelled ITC buy came back with ``omsErrorCode: "0"`` (i.e. no error) and
+        ``omsErrorDescription: "CONFIRMED"`` — and because LiveBroker prefers
+        ``status_message`` over ``status`` when it reports a failure, the halt read
+        "BUY 1 ITC → CONFIRMED". That word describes neither what happened (the order was
+        CANCELLED) nor what to do about it, and it cost a live debugging session.
+
+        Suppressed ONLY when the code AFFIRMATIVELY says "no error" ("0"/"NA"). A MISSING
+        code is not that claim — a genuine rejection can arrive with a reason and no code,
+        and dropping it would trade one uninformative halt for another. When in doubt, show
+        what the broker said.
+        """
+        code = str(raw.get("omsErrorCode") or "").strip().upper()
+        if code in ("0", "NA", "NONE"):
+            return None
+        return raw.get("omsErrorDescription") or code or None
 
     def cancel_order(self, broker_order_id: str) -> None:
         self._ensure_armed()
