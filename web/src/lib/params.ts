@@ -292,6 +292,7 @@ export const PARAM_ENUMS: Record<string, string[]> = {
   allocation_mode: ["fixed", "equity_scaled"],
   rsi_source: ["ema", "close"],
   fund_seed: ["never", "if_empty"],
+  sizing_mode: ["equal_value", "balanced", "one_share"],
   exit_margin_basis: ["current", "entry"],
   portfolio_basis: ["notional", "margin"],
   breach_basis: ["close", "touch"],

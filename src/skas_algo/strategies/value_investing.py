@@ -75,7 +75,7 @@ class ValueInvestingStrategy:
         # faller-first walk but SKIPS a name whose cumulative invested is already more than
         # max_skew_pct above the watchlist average, so the budget flows to the laggards and
         # the rupees even out over time. Ctor default is the spec (§1).
-        sizing: str = "one_share",          # one_share | balanced
+        sizing: str = "one_share",  # one_share | balanced | equal_value
         max_skew_pct: float = 25.0,         # balanced only: allowed overweight vs the average
         fund_seed: str = "never",
         # Annualised yield the FUND SOURCE really earns, for reporting only. A dividend
@@ -105,6 +105,10 @@ class ValueInvestingStrategy:
         # which is catch-up, not ratio maintenance (owner rule 2026-08-21).
         self.epoch_base: dict[str, float] = {}
         self.epoch_names: list[str] = []
+        # equal_value: each name's unspent share of past budgets. Carrying the remainder is
+        # what makes the rupees equal — an expensive name saves up for a few days instead of
+        # being priced out, and nothing evaporates.
+        self.pot: dict[str, float] = {}
         self.fund_yield_pct = float(fund_yield_pct)
         raw = watchlist if isinstance(watchlist, list) else str(watchlist or "").split(",")
         # The fund source is never bought as a stock, however it is spelled in the list.
@@ -170,7 +174,7 @@ class ValueInvestingStrategy:
             self._alert(f"the daily budget ₹{self.daily_budget:,.0f} does not cover a single "
                         f"share of any watchlist name (cheapest ₹{ranked[-1][3]:,.0f})")
             return []
-        cost = sum(px for _, px in plan)
+        cost = sum(px * u for _, px, u in plan)
 
         exits, running_cash, fund_units = self._fund(ctx, plan, cost, fund, fund_px,
                                                      fund_lots, fund_units, today)
@@ -178,14 +182,15 @@ class ValueInvestingStrategy:
             return []
 
         entries: list[Signal] = []
-        for sym, px in plan:
+        for sym, px, units in plan:
             # The shadow ledger is the ONLY cash check that exists — the engine happily
             # takes portfolio.cash negative (see engine/execution.py::_buy).
-            if running_cash < px:
+            cost = px * units
+            if running_cash < cost:
                 break
-            running_cash -= px
-            self.invested[sym] = self.invested.get(sym, 0.0) + px
-            entries.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG, quantity=1,
+            running_cash -= cost
+            self.invested[sym] = self.invested.get(sym, 0.0) + cost
+            entries.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG, quantity=units,
                                   reason="drip"))
 
         self._check_runway(fund_units, fund_px, running_cash, today)
@@ -241,25 +246,32 @@ class ValueInvestingStrategy:
             return None
         return rows
 
-    def _shopping_list(self, ranked) -> list[tuple[str, float]]:
-        """One share each, top to bottom, no wrap-around. An unaffordable name is skipped and
-        the walk continues; whatever is left over at the bottom evaporates.
+    def _shopping_list(self, ranked) -> list[tuple[str, float, int]]:
+        """(symbol, price, units) for today, in rank order.
 
-        In "balanced" mode the same walk additionally skips a name that is already more than
-        ``max_skew_pct`` above the watchlist's average invested — one share of a Rs2,300 stock
-        and one share of a Rs27 stock are not the same bet, and left unchecked the portfolio
-        ends up weighted by share price rather than by conviction."""
+        "equal_value" — THE fix for the price-weighting problem. Every watchlist name is
+        credited an equal slice of the daily budget into its own running pot; a name buys
+        whole shares only when its pot can afford them, and the remainder carries forward.
+        Rupees in are therefore equal BY CONSTRUCTION regardless of share price: a Rs2,300
+        stock buys one share every six days, a Rs6.53 stock buys 59 in one. Under one-share-
+        each the same 13-name list put Rs2,85,902 into TCS and Rs1,383 into SOUTHBANK — the
+        same number of buys, 207x the money (run #278).
+
+        "one_share" — the original spec: one share each, top to bottom, budget-limited, no
+        wrap-around, leftover evaporates. "balanced" — one_share plus a skew cap.
+        """
+        if self.sizing == "equal_value":
+            return self._equal_value_plan(ranked)
+
         remaining = self.daily_budget
-        plan: list[tuple[str, float]] = []
+        plan: list[tuple[str, float, int]] = []
         balanced = self.sizing == "balanced"
-        # projected book as the walk spends, so one day cannot itself create the skew
-        spent = dict(self.invested)
+        spent = dict(self.invested)     # projected book as the walk spends
         names = [sym for _c, _i, sym, _p in ranked]
         if balanced:
             # Roll on the CONFIGURED watchlist, never on the names that happen to have printed
             # today — one missing quote would otherwise re-base the whole balance and forgive
-            # every accumulated overweight. Fall back to today's names only when no explicit
-            # watchlist is set.
+            # every accumulated overweight.
             self._roll_epoch(self.watchlist or names)
             names = self.epoch_names or names
         for _chg, _i, sym, px in ranked:
@@ -267,9 +279,36 @@ class ValueInvestingStrategy:
                 continue
             if balanced and self._too_heavy(sym, px, spent, names):
                 continue
-            plan.append((sym, px))
+            plan.append((sym, px, 1))
             remaining -= px
             spent[sym] = spent.get(sym, 0.0) + px
+        return plan
+
+    def _equal_value_plan(self, ranked) -> list[tuple[str, float, int]]:
+        """Credit every name an equal share of the budget, then spend what each pot affords."""
+        names = self.watchlist or [s for _c, _i, s, _p in ranked]
+        if not names:
+            return []
+        slice_ = self.daily_budget / len(names)
+        for n in names:                       # credited even when the name did not print —
+            self.pot[n] = self.pot.get(n, 0.0) + slice_   # its money waits, it is not lost
+        remaining = self.daily_budget + sum(self.pot.values())
+        plan: list[tuple[str, float, int]] = []
+        for _chg, _i, sym, px in ranked:      # rank order decides WHO SPENDS FIRST…
+            if px <= 0:
+                continue
+            units = int(self.pot.get(sym, 0.0) // px)     # …not who gets the money
+            if units <= 0:
+                continue
+            cost = units * px
+            if cost > remaining:
+                units = int(remaining // px)
+                cost = units * px
+            if units <= 0:
+                continue
+            self.pot[sym] = self.pot.get(sym, 0.0) - cost
+            remaining -= cost
+            plan.append((sym, px, units))
         return plan
 
     def _roll_epoch(self, names: list[str]) -> None:
@@ -381,6 +420,7 @@ class ValueInvestingStrategy:
             "invested": dict(self.invested),  # the balanced walk needs the running book
             "epoch_base": dict(self.epoch_base),   # …measured over the current epoch
             "epoch_names": list(self.epoch_names),
+            "pot": dict(self.pot),
             "alerted": dict(self._alerted),  # keep the push latch across a restart
             "strategy_alert": self.strategy_alert,  # the banner survives too
         }
@@ -391,5 +431,6 @@ class ValueInvestingStrategy:
         self.invested = dict(state.get("invested", {}))
         self.epoch_base = dict(state.get("epoch_base", {}))
         self.epoch_names = list(state.get("epoch_names", []))
+        self.pot = dict(state.get("pot", {}))
         self._alerted = dict(state.get("alerted", {}))
         self.strategy_alert = state.get("strategy_alert")

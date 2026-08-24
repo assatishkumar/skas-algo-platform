@@ -233,7 +233,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   const [viWarnDays, setViWarnDays] = useState(2);
   // Balanced by default on the FORM: one-share-each weights the book by share price, which
   // cost ~7 points of XIRR on the owner's list. The ctor default stays the spec (§1).
-  const [viSizing, setViSizing] = useState("balanced");
+  const [viSizing, setViSizing] = useState("equal_value");
   const [viSkew, setViSkew] = useState(25);
   const [viFundYield, setViFundYield] = useState(6.5);
   const [nsCandidates, setNsCandidates] = useState(5); // rank the N most-below-DMA
@@ -1665,7 +1665,8 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                 <Field label="Sizing">
                   <select className={inputClass} value={viSizing}
                     onChange={(e) => setViSizing(e.target.value)}>
-                    <option value="balanced">Balanced — even rupees per name</option>
+                    <option value="equal_value">Equal value — same rupees into every name</option>
+                    <option value="balanced">Balanced — one share each, skew-capped</option>
                     <option value="one_share">One share each (weights by share price)</option>
                   </select>
                 </Field>

@@ -452,3 +452,53 @@ def test_a_missing_quote_does_not_reset_the_balance_epoch():
     bought = [s.symbol for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
     assert st.epoch_base == {"AAA": 0.0, "BBB": 0.0}         # epoch intact
     assert bought == []                                      # AAA still correctly skipped
+
+
+# ---------------------------------------------------- equal-value sizing
+def test_equal_value_puts_the_same_RUPEES_into_every_name():
+    """The fix for the 207x imbalance (run #278: TCS Rs2,85,902 vs SOUTHBANK Rs1,383 on the
+    same number of buys). Each name is credited an equal slice of the budget into its own pot
+    and buys whole shares when the pot can afford them, so rupees in are equal by
+    construction however the share prices differ."""
+    view = _view({"RICH": (3000, 2900), "CHEAP": (30, 29), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 10_000)
+    st = _strat(watchlist="RICH,CHEAP", daily_budget=1_000.0, sizing="equal_value")
+    for day in range(40):                     # Rs500/day each
+        st.last_shop_day = None
+        st.on_slice(ctx)
+    # CREDITED rupees are exactly equal — that is the guarantee.
+    credited = {n: st.invested.get(n, 0) + st.pot.get(n, 0) for n in ("RICH", "CHEAP")}
+    assert credited["RICH"] == credited["CHEAP"] == 20_000.0
+    # INVESTED can differ only by what a whole share forces to sit idle: an expensive name
+    # always has more waiting in its pot between purchases. Bounded by one share price.
+    rich, cheap = st.invested["RICH"], st.invested["CHEAP"]
+    assert abs(rich - cheap) < 2_900                       # < one RICH share
+    assert rich > 15_000 and cheap > 15_000                # both really got ~Rs20k
+
+
+def test_an_expensive_name_saves_up_instead_of_being_priced_out():
+    """A Rs2,900 stock on a Rs500/day slice cannot buy daily — its pot carries until it can.
+    Under one-share-each the same name would instead have hoovered up the budget."""
+    view = _view({"RICH": (3000, 2900), "CHEAP": (30, 29), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 10_000)
+    st = _strat(watchlist="RICH,CHEAP", daily_budget=1_000.0, sizing="equal_value")
+    st.last_shop_day = None
+    day1 = [s.symbol for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
+    assert day1 == ["CHEAP"]                  # RICH cannot afford a share on day 1…
+    assert st.pot["RICH"] == 500.0            # …so its money waits
+    for _ in range(5):
+        st.last_shop_day = None
+        st.on_slice(ctx)
+    assert st.invested.get("RICH", 0) >= 2900   # …and buys once the pot is big enough
+
+
+def test_equal_value_buys_multiple_shares_when_the_pot_allows():
+    view = _view({"CHEAP": (30, 29), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 10_000)
+    st = _strat(watchlist="CHEAP", daily_budget=1_000.0, sizing="equal_value")
+    st.last_shop_day = None
+    sigs = [s for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
+    assert sigs[0].quantity == 34             # floor(1000 / 29) — not 1
