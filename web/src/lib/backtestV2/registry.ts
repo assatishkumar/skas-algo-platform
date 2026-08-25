@@ -549,6 +549,10 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         f("roll_days_before", "ROLL (TRADING DAYS BEFORE EXPIRY)", "number", 1,
           { hint: "1 = roll the day before — expiry-day margin on the short weekly spikes" }),
         f("max_rolls", "MAX ROLLS", "number", 0, { hint: "0 = roll until the target hits" }),
+        f("margin_per_set", "MARGIN PER LOT-SET (RS)", "number", 134612, { step: "any",
+          hint: "the % target/stop is measured against this. 0 = use the broker's basket "
+            + "margin instead, which is NOT stable: run 15 froze ~70k/set at entry and the "
+            + "same legs priced 4.5L/set on expiry day with a deep-ITM short" }),
         EXIT_MARGIN_BASIS,
         ...cadenceFields("1min", "1min", "15:20"),
       ],

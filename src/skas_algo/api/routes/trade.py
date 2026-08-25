@@ -670,6 +670,7 @@ async def fair_value_calendar_deploy(
     params = {
         "underlying": body.underlying.upper(),
         "sets": body.sets,
+        "margin_per_set": body.margin_per_set,
         "side_mode": body.side_mode,
         "sell_premium_1": body.sell_premium_1,
         "sell_premium_2": body.sell_premium_2,

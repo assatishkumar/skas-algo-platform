@@ -70,6 +70,23 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
         initial_capital: float = 1_000_000,
         underlying: str | None = None,
         lots: int = 1,
+        # MANUAL margin anchor, ₹ for ONE lot-set of this structure. 0 = off (derive from
+        # the broker push — the historical behaviour, and the ctor default per §1).
+        #
+        # Why it exists (owner, 2026-08-25): the broker basket margin is NOT a stable
+        # anchor. Run 15's fair-value calendar froze ~₹70k/set at entry; the SAME legs
+        # priced on expiry day with a deep-ITM short came back at ₹4.5L/set — a 6x swing.
+        # A "5% of margin" target frozen at entry is therefore a very different fraction of
+        # the margin actually blocked later. Anchoring to a number the owner measures once
+        # on the Kite calculator makes the rupee target/stop predictable and identical
+        # between backtest and live.
+        #
+        # NOTE the two numbers differ by convention: Kite's basket API reports `final.total`
+        # NET of premium receivable (the cash actually blocked), while the web calculator's
+        # headline "Total margin" is span+exposure BEFORE that credit — ₹1,15,288 vs
+        # ₹1,34,612 on the owner's 2026-08-25 basket. Enter whichever you mean to size on;
+        # this value is used verbatim.
+        margin_per_set: float = 0.0,
         target_delta: float = 0.18,
         entry_time: str = "11:00",
         entry_window_end: str = "15:00",
@@ -130,6 +147,7 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
     ):
         self.underlying = (underlying or (universe[0] if universe else "BANKNIFTY")).upper()
         self.lots = max(1, int(lots))
+        self.margin_per_set = max(0.0, float(margin_per_set or 0.0))
         self.target_delta = float(target_delta)
         self.entry_time = _hhmm(entry_time, time(11, 0))
         self.entry_window_end = _hhmm(entry_window_end, time(15, 0))
@@ -191,6 +209,16 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
     # ------------------------------------------------------------ live hooks
     def spot_symbols(self) -> list[str]:
         return [self.underlying]
+
+    def _size_multiple(self) -> int:
+        """How many lot-sets this cycle holds — the multiplier for ``margin_per_set``.
+        Subclasses that size in something other than ``lots`` override it (the fair-value
+        calendar sizes in ``sets``)."""
+        return max(1, int(self.lots))
+
+    def _manual_margin(self) -> float:
+        """The manual anchor for THIS cycle's size, or 0 when the knob is off."""
+        return self.margin_per_set * self._size_multiple() if self.margin_per_set > 0 else 0.0
 
     def set_broker_margin(self, value: float) -> None:
         """Manager push: the real broker basket margin for OUR current legs."""
@@ -390,6 +418,8 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
         margin (owner 2026-07-27: absolute ₹ thresholds fixed at entry; the naked-add's
         ₹1L→₹2.5L SPAN jump must not move the target/stop mid-cycle) — so the six
         structural-change call sites re-arm only while no broker base is frozen yet."""
+        if self.margin_per_set > 0:
+            return  # manual anchor — there is nothing to wait for, and nothing to re-freeze
         if (
             self.exit_margin_basis == "entry"
             and self.margin_source == "broker"
@@ -566,7 +596,16 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
             pnl += self._realized_banked()
         # Freeze / re-freeze the threshold base from the latest BROKER margin push.
         # (Also upgrades runs recovered with an old "model" base — e.g. run 203.)
-        if self._broker_margin and (self._refreeze or self.margin_source != "broker"):
+        if (manual := self._manual_margin()) > 0:
+            # The manual anchor OUTRANKS the broker push and needs no wait: thresholds are
+            # live from the first tick of the cycle, instead of sitting "pending" until the
+            # manager's basket-margin call lands. Re-asserted every slice so it also
+            # upgrades a cycle recovered with a broker/model base.
+            if self.margin_base != manual or self.margin_source != "manual":
+                self.margin_base = manual
+                self.margin_source = "manual"
+            self._refreeze = False
+        elif self._broker_margin and (self._refreeze or self.margin_source != "broker"):
             self.margin_base = self._broker_margin
             self.margin_source = "broker"
             self._refreeze = False
@@ -578,7 +617,7 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
         due_profit = self._due("profit", now)
         due_stop = self._due("stop", now)
         due_adjust = self._due("adjust", now)
-        if self.margin_source == "broker" and self.margin_base > 0:
+        if self.margin_source in ("broker", "manual") and self.margin_base > 0:
             pnl_pct = 100.0 * pnl / self.margin_base
             if due_profit:
                 self._update_peak(pnl_pct)  # lift the trail high-water on the profit cadence

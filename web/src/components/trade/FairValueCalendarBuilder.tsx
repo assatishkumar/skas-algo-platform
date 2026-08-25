@@ -25,6 +25,11 @@ export default function FairValueCalendarBuilder() {
   const [name, setName] = useState("");
   const [sideMode, setSideMode] = useState("ce");
   const [sets, setSets] = useState(1);
+  // Rupee margin for ONE lot-set — the anchor for the % target/stop. Manual by
+  // default: the broker's own number swings with moneyness (~70k/set at entry vs
+  // 4.5L on expiry day with a deep-ITM short), so a % of it means different rupees
+  // at different times. 0 falls back to the broker push.
+  const [marginPerSet, setMarginPerSet] = useState(134612);
   const [prem1, setPrem1] = useState(150);
   const [prem2, setPrem2] = useState(450);
   const [buyPrem, setBuyPrem] = useState(200);
@@ -56,6 +61,7 @@ export default function FairValueCalendarBuilder() {
         name: name.trim() || "FV calendar",
         underlying: "NIFTY",
         sets: Math.max(1, Math.round(sets)),
+        margin_per_set: marginPerSet,
         side_mode: sideMode,
         sell_premium_1: prem1,
         sell_premium_2: prem2,
@@ -91,7 +97,7 @@ export default function FairValueCalendarBuilder() {
         Skips the day when the buy-to-furthest-sell gap exceeds {gapCap} pts. No target by the
         weekly&apos;s expiry → both sells roll to the next weekly at the same strikes; when they
         would land on the buy expiry the <b>cycle closes</b> (the buy leg is never rolled) and a
-        fresh one opens next session. Target +{targetPct}% of the frozen broker margin
+        fresh one opens next session. Target +{targetPct}% of {marginPerSet > 0 ? `₹${(marginPerSet * Math.max(1, Math.round(sets))).toLocaleString("en-IN")} (manual)` : "the frozen broker margin"}
         (~₹1.3L/set measured Aug 2026).
       </div>
 
@@ -107,6 +113,12 @@ export default function FairValueCalendarBuilder() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <label className="block"><span className={lbl}>Lot-sets</span>
           <NumberInput className={inputClass} value={sets} onChange={setSets} /></label>
+        <label className="block"><span className={lbl}>Margin per lot-set (₹)</span>
+          <NumberInput className={inputClass} value={marginPerSet} onChange={setMarginPerSet} />
+          <span className="mt-1 block text-[11px] text-slate-400">
+            What the {targetPct}% target is measured against. 0 = use the broker's basket
+            margin, which moves with moneyness. Editable later on the running tile.
+          </span></label>
         <label className="block"><span className={lbl}>Sell premium 1 (₹)</span>
           <NumberInput className={inputClass} value={prem1} onChange={setPrem1} /></label>
         <label className="block"><span className={lbl}>Sell premium 2 (₹)</span>

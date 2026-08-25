@@ -1063,6 +1063,7 @@ export interface FairValueCalendarDeploy {
   name: string;
   underlying: string;
   sets: number;
+  margin_per_set?: number;           // ₹ per lot-set; the % target/stop anchor (0 = broker)
   side_mode: string;                 // ce | fair_value | both | pe
   sell_premium_1: number;
   sell_premium_2: number;

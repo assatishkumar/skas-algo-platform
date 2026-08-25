@@ -423,3 +423,94 @@ def test_a_missed_early_roll_still_catches_up_on_expiry_day():
     out = tick(st, ctx, at(W2, 9, 30))                    # expiry day, before roll_time
     assert [s.action.name for s in out] == ["EXIT_ALL", "EXIT_ALL",
                                             "ENTER_SHORT", "ENTER_SHORT"]
+
+
+# ------------------------------------ manual margin anchor (owner call, 2026-08-25)
+
+def test_margin_per_set_is_forwarded_through_every_explicit_subclass():
+    """These subclasses declare explicit signatures ending in ``**_ignored``, so a knob the
+    base class defines but the subclass does not FORWARD is accepted and silently dropped —
+    the run then anchors to the broker margin while the form says otherwise. That happened
+    while writing this feature; the ctor accepted margin_per_set and _manual_margin() stayed
+    0. Pin the forwarding, not just the base class."""
+    import inspect
+
+    from skas_algo.strategies.delta_neutral_monthly import DeltaNeutralMonthlyStrategy
+    from skas_algo.strategies.double_diagonal_calendar import DoubleDiagonalCalendarStrategy
+    from skas_algo.strategies.fair_value_calendar import FairValueCalendarStrategy
+
+    for cls in (DeltaNeutralMonthlyStrategy, FairValueCalendarStrategy,
+                DoubleDiagonalCalendarStrategy):
+        assert "margin_per_set" in inspect.signature(cls.__init__).parameters, cls.__name__
+        s = cls(universe=["NIFTY"], underlying="NIFTY", margin_per_set=100_000)
+        assert s.margin_per_set == 100_000, f"{cls.__name__} swallowed it into **_ignored"
+        assert s._manual_margin() > 0, cls.__name__
+
+
+def test_the_manual_anchor_scales_by_sets_not_lots():
+    """The fair-value calendar sizes in lot-SETS; the base class in `lots`. A manual anchor
+    is quoted per SET (what the Kite basket calculator prices), so it must scale by `sets`."""
+    from skas_algo.strategies.fair_value_calendar import FairValueCalendarStrategy
+
+    one = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY", sets=1,
+                                    margin_per_set=134_612)
+    three = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY", sets=3,
+                                      margin_per_set=134_612)
+    assert one._manual_margin() == 134_612
+    assert three._manual_margin() == 403_836          # run 15's real size
+    # …and that is what the 5% target would have been measured against: ₹20,192, not the
+    # ~₹11,242 the broker-derived base actually exited on.
+    assert round(three._manual_margin() * 0.05) == 20_192
+
+
+def test_the_ctor_default_is_off_so_a_recovered_deploy_is_unchanged():
+    """CLAUDE.md §1: a new knob must default to the OLD behaviour. 0 = derive from the
+    broker push exactly as before."""
+    from skas_algo.strategies.fair_value_calendar import FairValueCalendarStrategy
+
+    s = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY", sets=3)
+    assert s.margin_per_set == 0.0
+    assert s._manual_margin() == 0.0
+
+
+def test_the_fair_value_ctor_survived_the_new_knob():
+    """Regression for a real slip: inserting _size_multiple at method indent INSIDE
+    __init__ severed the constructor, leaving every later assignment as dead code after a
+    return. It imported fine and the method existed — both checks passed while the ctor was
+    broken. Assert the fields that came after the insertion point."""
+    from skas_algo.strategies.fair_value_calendar import FairValueCalendarStrategy
+
+    s = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY")
+    assert (s.sell_premium_1, s.sell_premium_2, s.buy_premium) == (150.0, 450.0, 200.0)
+    assert s.buy_lots_per_set == 3 and s.max_gap_points == 900.0 and s.min_sold_dte == 4
+
+
+def test_the_manual_margin_is_hot_editable_on_a_running_deploy():
+    """The owner asked for it to be changeable via the Live tile's Edit params, not only at
+    deploy. The editable surface is every SCALAR ctor knob that is not an infra key, so this
+    qualifies — pin it, because blocklisting it later would silently remove the ability
+    without breaking anything visible."""
+    import inspect
+
+    from skas_algo.live.manager import LiveRun
+    from skas_algo.strategies.fair_value_calendar import FairValueCalendarStrategy
+
+    param = inspect.signature(FairValueCalendarStrategy.__init__).parameters["margin_per_set"]
+    assert isinstance(param.default, float)          # scalar → the modal renders it
+    assert "margin_per_set" not in LiveRun._PARAM_EDIT_BLOCKLIST
+
+
+def test_a_manual_anchor_needs_no_broker_push_so_thresholds_are_live_at_once():
+    """Deriving from the broker leaves margin_source "pending" until the manager's basket
+    call lands, and thresholds do not apply while pending. A manual anchor removes that
+    wait — the point of the knob is a rupee target you can state up front."""
+    from skas_algo.strategies.fair_value_calendar import FairValueCalendarStrategy
+
+    s = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY", sets=2,
+                                  margin_per_set=134_612)
+    s._freeze_margin(None, 0.0)             # what a structural change calls
+    assert s.margin_source != "pending"     # nothing to wait for
+
+    derived = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY", sets=2)
+    derived._freeze_margin(None, 0.0)
+    assert derived.margin_source == "pending"   # unchanged for the broker-derived default

@@ -593,6 +593,23 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   Deploy-only + broker source (`POST /trade/options/fair-value-calendar/deploy` + the Deploy
   page's "FV calendar" builder, 2026-08-19 — deploy default `side_mode="ce"`, the only mode the
   backtest likes); REPLAYABLE on the 1-min store (the first two-expiry strategy WITH a backtest).
+  **`margin_per_set` — a MANUAL margin anchor (owner 2026-08-25).** The % target/stop is
+  measured against `margin_base`, which is normally the frozen BROKER basket margin — and that
+  is not a stable anchor: run 15 froze ~₹70k/set at entry, while the SAME legs priced ₹4.5L/set
+  on expiry day with a deep-ITM short. A "5% of margin" target therefore meant wildly different
+  rupees over one cycle. Set `margin_per_set` (₹ for ONE lot-set) and it OUTRANKS the broker
+  push, scales by `_size_multiple()` (`sets` here, `lots` on the base class), and needs no wait
+  — thresholds are live from the first tick instead of sitting `margin_source="pending"`.
+  `margin_source` reads `"manual"`. Ctor default **0** = derive from the broker exactly as
+  before (§1); FORM + deploy default **134612** (the owner's measured Kite figure), allowlisted
+  in `test_backtest_v2_registry._INTENTIONAL`. Hot-editable on a running tile.
+  **The two margin numbers differ by CONVENTION**: Kite's basket API returns `final.total` NET
+  of premium receivable (cash actually blocked) while the web calculator's headline "Total
+  margin" is span+exposure BEFORE that credit — ₹1,15,288 vs ₹1,34,612 on the same 2026-08-25
+  basket. Enter whichever you mean to size on; the value is used verbatim. Inherited by
+  delta_neutral_monthly / iron_fly_monthly / double_diagonal_calendar — and note each subclass
+  with an explicit signature must FORWARD it, or `**_ignored` swallows it silently (pinned by
+  `test_margin_per_set_is_forwarded_through_every_explicit_subclass`).
   FOOTGUN: the ctor knob is `sets`, but the backtest form's Sizing **LOTS** is the lot-SET count —
   the harness maps `lots`→`sets` (`intraday_replay`), because a `lots` kwarg falls into
   `**_ignored` and silently traded 1 set under a 5-set capital plan until 2026-08-19. Never

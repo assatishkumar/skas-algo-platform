@@ -394,6 +394,13 @@ class FairValueCalendarDeploy(BaseModel):
     notes: str | None = None
     underlying: str = "NIFTY"
     sets: int = 1
+    # Rupee margin for ONE lot-set — the anchor for the % target/stop. The DEPLOY default
+    # is the owner's measured Kite basket figure (2026-08-25); the ctor default stays 0
+    # (= derive from the broker push) so a recovered deploy is unchanged (§1). Manual is
+    # preferred here because the broker number is not stable: run 15 froze ~₹70k/set at
+    # entry and the same legs priced ₹4.5L/set on expiry day with a deep-ITM short, so a
+    # "5% of margin" target meant wildly different rupees at different times.
+    margin_per_set: float = 134612.0
     side_mode: str = "ce"  # ce | fair_value | both | pe
     sell_premium_1: float = 150.0
     sell_premium_2: float = 450.0

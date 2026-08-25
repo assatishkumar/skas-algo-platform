@@ -71,6 +71,7 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
         initial_capital: float = 1_000_000,
         underlying: str | None = None,
         sets: int = 1,
+        margin_per_set: float = 0.0,   # ₹ per lot-SET; 0 = derive from broker
         # --- the premium-matched structure (per set; era-scaled, see module docstring) ---
         sell_premium_1: float = 150.0,
         sell_premium_2: float = 450.0,
@@ -127,6 +128,7 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
             stop_check=stop_check,
             pnl_basis=pnl_basis,
             exit_margin_basis=exit_margin_basis,
+            margin_per_set=margin_per_set,
             min_leg_oi=min_leg_oi,
             lot_overrides=lot_overrides,
         )
@@ -169,6 +171,11 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
         self.entry_scale: float = 1.0
 
     # ------------------------------------------------------------ fair value
+    def _size_multiple(self) -> int:
+        """This strategy sizes in lot-SETS (one sold pair + buy_lots_per_set longs), not the
+        base class's ``lots`` — so a manual ``margin_per_set`` scales by ``sets``."""
+        return max(1, int(self.sets))
+
     def _fair_value(self, today: date) -> float:
         yrs = (today - self.fv_anchor_date).days / 365.25
         return self.fv_anchor_value * (1.0 + self.fv_growth_pct / 100.0) ** yrs

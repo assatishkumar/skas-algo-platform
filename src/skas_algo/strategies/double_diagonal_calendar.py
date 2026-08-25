@@ -93,6 +93,7 @@ class DoubleDiagonalCalendarStrategy(DeltaNeutralMonthlyStrategy):
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
         entry_legs: list[dict] | None = None,  # manual override: explicit legs, skips delta pick
+        margin_per_set: float = 0.0,   # ₹ per lot-set; 0 = derive from broker
         **_ignored,
     ):
         super().__init__(
@@ -100,6 +101,7 @@ class DoubleDiagonalCalendarStrategy(DeltaNeutralMonthlyStrategy):
             initial_capital=initial_capital,
             underlying=(underlying or (universe[0] if universe else "NIFTY")),
             lots=lots,
+            margin_per_set=margin_per_set,
             target_delta=short_target_delta,
             entry_time=entry_time,
             entry_window_end=entry_window_end,

@@ -71,6 +71,13 @@ _INTENTIONAL |= {(sid, "entry_time") for sid in (
 _INTENTIONAL |= {("intraday_straddle", "exit_time"),
                  ("weekly_intraday_straddle", "eod_exit"),
                  ("weekly_intraday_straddle", "entry_cutoff")}
+# The MANUAL margin anchor (owner 2026-08-25). Ctor default 0 = derive from the broker push,
+# so a recovered deploy keeps the base it already froze (§1); the FORM and deploy default to
+# the owner's measured Kite basket figure for one lot-set, because the broker number is not a
+# stable anchor — run 15 froze ~₹70k/set at entry and the SAME legs priced ₹4.5L/set on
+# expiry day with a deep-ITM short, so "5% of margin" meant very different rupees over one
+# cycle.
+_INTENTIONAL |= {("fair_value_calendar", "margin_per_set")}
 
 
 def _ctor_defaults(strategy_id: str) -> dict:
