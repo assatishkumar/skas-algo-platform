@@ -1068,6 +1068,7 @@ export interface FairValueCalendarDeploy {
   sell_premium_1: number;
   sell_premium_2: number;
   buy_premium: number;
+  buy_lots_per_set?: number;         // long lots per set against the 2 sold (deck: 3)
   premium_tolerance_pct: number;
   max_gap_points: number;
   min_sold_dte: number;

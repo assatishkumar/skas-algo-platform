@@ -33,6 +33,9 @@ export default function FairValueCalendarBuilder() {
   const [prem1, setPrem1] = useState(150);
   const [prem2, setPrem2] = useState(450);
   const [buyPrem, setBuyPrem] = useState(200);
+  // Long lots bought per SET. The deck (and the API default) is 3; backtest #273
+  // used 4. It was never exposed here, so every deploy silently traded 3.
+  const [buyLots, setBuyLots] = useState(3);
   const [tolerance, setTolerance] = useState(30);
   const [gapCap, setGapCap] = useState(900);
   const [minDte, setMinDte] = useState(4);
@@ -66,6 +69,7 @@ export default function FairValueCalendarBuilder() {
         sell_premium_1: prem1,
         sell_premium_2: prem2,
         buy_premium: buyPrem,
+        buy_lots_per_set: buyLots,
         premium_tolerance_pct: tolerance,
         max_gap_points: gapCap,
         min_sold_dte: minDte,
@@ -93,7 +97,7 @@ export default function FairValueCalendarBuilder() {
     <Panel className="max-w-3xl p-5">
       <div className="text-sm text-[var(--muted)] mb-3">
         From the 1st of each month (retried daily): sell a ~₹{prem1} and a ~₹{prem2} near-weekly,
-        buy {3 * Math.max(1, sets)} lots of a ~₹{buyPrem} monthly — same side, premium-matched.
+        buy {Math.max(1, buyLots) * Math.max(1, sets)} lots of a ~₹{buyPrem} monthly — same side, premium-matched.
         Skips the day when the buy-to-furthest-sell gap exceeds {gapCap} pts. No target by the
         weekly&apos;s expiry → both sells roll to the next weekly at the same strikes; when they
         would land on the buy expiry the <b>cycle closes</b> (the buy leg is never rolled) and a
@@ -125,6 +129,12 @@ export default function FairValueCalendarBuilder() {
           <NumberInput className={inputClass} value={prem2} onChange={setPrem2} /></label>
         <label className="block"><span className={lbl}>Buy premium (₹)</span>
           <NumberInput className={inputClass} value={buyPrem} onChange={setBuyPrem} /></label>
+        <label className="block"><span className={lbl}>Buy lots per set</span>
+          <NumberInput className={inputClass} value={buyLots} onChange={setBuyLots} />
+          <span className="mt-1 block text-[11px] text-slate-400">
+            Long lots bought per set against the 2 sold. 3 = the deck; backtest #273 used 4.
+            Changing it changes the margin — re-measure the per-set figure above.
+          </span></label>
         <label className="block"><span className={lbl}>Premium tolerance %</span>
           <NumberInput className={inputClass} value={tolerance} onChange={setTolerance} /></label>
         <label className="block"><span className={lbl}>Max gap (pts)</span>

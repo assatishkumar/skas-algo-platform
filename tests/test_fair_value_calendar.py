@@ -514,3 +514,18 @@ def test_a_manual_anchor_needs_no_broker_push_so_thresholds_are_live_at_once():
     derived = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY", sets=2)
     derived._freeze_margin(None, 0.0)
     assert derived.margin_source == "pending"   # unchanged for the broker-derived default
+
+
+def test_buy_lots_per_set_reaches_the_strategy_from_a_deploy():
+    """It is in the deploy model and the route's params dict, but was never on the builder
+    form — so every deploy silently traded the default 3 longs per set while a backtest like
+    #273 used 4, and the two could not be compared. Pin the whole path."""
+    import inspect
+
+    from skas_algo.api.models import FairValueCalendarDeploy
+    from skas_algo.strategies.fair_value_calendar import FairValueCalendarStrategy
+
+    assert FairValueCalendarDeploy.model_fields["buy_lots_per_set"].default == 3
+    assert "buy_lots_per_set" in inspect.signature(FairValueCalendarStrategy.__init__).parameters
+    s = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY", buy_lots_per_set=4)
+    assert s.buy_lots_per_set == 4        # not swallowed by **_ignored
