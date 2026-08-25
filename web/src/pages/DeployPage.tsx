@@ -78,6 +78,18 @@ export default function DeployPage() {
   // ~15:35); an order placed after that rests unfilled and the run halts. Warn, never block —
   // a watchlist of only non-F&O names is fine later.
   const auctionRisk = !isOptions && effectiveDecisionTime >= "15:15";
+  // value_investing shares NONE of the generic equity knobs (capital_parts / profit_target /
+  // max_lots / allocation_mode all land in its ctor's **_ignored). Before this it deployed on
+  // ctor defaults — ₹5,000/day, an empty watchlist and sizing="one_share", the price-weighted
+  // mode the owner rejected — with the form showing knobs that did nothing.
+  const isValueInvesting = strategyId === "value_investing";
+  const [viBudget, setViBudget] = useState(5000);
+  const [viFund, setViFund] = useState("LIQUIDBEES");
+  const [viWatchlist, setViWatchlist] = useState("");
+  const [viWarnDays, setViWarnDays] = useState(2);
+  const [viSizing, setViSizing] = useState("equal_value");
+  const [viSkew, setViSkew] = useState(25);
+  const [viFundYield, setViFundYield] = useState(0);
   const CADENCES = ["tick", "1min", "5min", "15min", "30min", "60min", "eod"];
   const sessioned = (accounts ?? []).filter((a) => a.has_session);
 
@@ -111,10 +123,28 @@ export default function DeployPage() {
       universe: isOptions || isCustom ? null : universe,
       symbols: isOptions ? [] : isCustom ? symbols.split(",").map((s) => s.trim()).filter(Boolean) : [],
       capital,
-      params: isOptions ? { ...pfStrategyParams, ...optionsParams } : pf ? pfStrategyParams : manualParams,
-      tax_rate: pf ? (pfTax ?? 0.2) : isOptions ? 0 : taxRate / 100,
+      params: isOptions
+        ? { ...pfStrategyParams, ...optionsParams }
+        : pf
+        ? pfStrategyParams
+        : isValueInvesting
+        ? {
+            daily_budget: viBudget,
+            fund_source: viFund.trim().toUpperCase(),
+            watchlist: viWatchlist.trim(),
+            warn_days_left: viWarnDays,
+            sizing: viSizing,
+            max_skew_pct: viSkew,
+            fund_yield_pct: viFundYield,
+            // fund_seed is deliberately NOT sent: the ctor default "never" is the safe one
+            // (a deploy must never place a surprise multi-lakh ETF buy — CLAUDE.md §1), and
+            // it is not needed here because idle cash is spent BEFORE the ETF, so a fresh
+            // deploy drips out of its own capital until that runs down.
+          }
+        : manualParams,
+      tax_rate: pf ? (pfTax ?? 0.2) : isOptions || isValueInvesting ? 0 : taxRate / 100,
       withdrawal_rate: pf ? (pfWd ?? 0) : withdrawalRate / 100,
-      lookback: pf ? (pfLookback ?? 20) : lookback,
+      lookback: pf ? (pfLookback ?? 20) : isValueInvesting ? 1 : lookback,
       quote_source: quoteSource,
       broker_account_id: quoteSource !== "cache" ? accountId : null,
       ignore_market_hours: ignoreHours,
@@ -263,6 +293,54 @@ export default function DeployPage() {
                 <span className={lbl}>EOD time (IST)</span>
                 <input className={inputClass} value={eodTime} onChange={(e) => setEodTime(e.target.value)} placeholder="15:15" />
               </label>
+            </div>
+          </div>
+        ) : (!pf && isValueInvesting) ? (
+          <div className="grid md:grid-cols-3 gap-3 mb-3">
+            <label className="block">
+              <span className={lbl}>Daily budget (₹)</span>
+              <NumberInput className={inputClass} value={viBudget} onChange={setViBudget} />
+            </label>
+            <label className="block">
+              <span className={lbl}>Fund source (ETF sold to fund each day)</span>
+              <input className={inputClass} value={viFund}
+                onChange={(e) => setViFund(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className={lbl}>Warn at days of runway left</span>
+              <NumberInput className={inputClass} value={viWarnDays} onChange={setViWarnDays} />
+            </label>
+            <label className="block">
+              <span className={lbl}>Sizing</span>
+              <select className={inputClass} value={viSizing}
+                onChange={(e) => setViSizing(e.target.value)}>
+                <option value="equal_value">Equal value — same rupees into every name</option>
+                <option value="balanced">Balanced — one share each, skew-capped</option>
+                <option value="one_share">One share each (weights by share price)</option>
+              </select>
+            </label>
+            {viSizing === "balanced" && (
+              <label className="block">
+                <span className={lbl}>Max overweight vs average %</span>
+                <NumberInput className={inputClass} value={viSkew} onChange={setViSkew} />
+              </label>
+            )}
+            <label className="block">
+              <span className={lbl}>Fund source yield %/yr (reported only)</span>
+              <NumberInput step="0.1" className={inputClass} value={viFundYield}
+                onChange={setViFundYield} />
+            </label>
+            <div className="md:col-span-3">
+              <label className="block">
+                <span className={lbl}>Watchlist (comma-separated; blank = every symbol above)</span>
+                <input className={inputClass} value={viWatchlist} placeholder="ITC, HDFCBANK, TITAN"
+                  onChange={(e) => setViWatchlist(e.target.value)} />
+              </label>
+              <p className="mt-1 text-xs text-slate-500">
+                Never sells. The fund source is added to the run's symbols automatically; idle
+                cash is spent before it. Editable later on the running tile — the run's symbol
+                list is not, so deploy with a generous superset.
+              </p>
             </div>
           </div>
         ) : (!pf && (

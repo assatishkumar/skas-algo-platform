@@ -556,3 +556,23 @@ def test_the_auction_window_warns_but_never_blocks():
     assert "F&O-LISTED" in (auction_warning("15:20") or "")
     assert auction_warning("15:05") is None
     assert auction_warning("15:20", segment="DERIV") is None   # index F&O runs to 15:40
+
+
+def test_the_forms_params_are_real_ctor_knobs_not_swallowed_by_ignored():
+    """The ctor ends in ``**_ignored``, so a param a FORM sends but the ctor does not define
+    is accepted and silently does nothing.
+
+    The Deploy page did exactly that until 2026-08-25: it sent the generic equity knobs
+    (capital_parts / profit_target / max_lots / allocation_mode), every one of which landed
+    in _ignored, so the run quietly used ctor defaults — ₹5,000/day, an empty watchlist and
+    sizing="one_share", the price-weighted mode the owner had rejected — while the form
+    displayed knobs that did nothing. Renaming any of these without updating both forms
+    would fail exactly as quietly, so pin the names."""
+    import inspect
+
+    from skas_algo.strategies.value_investing import ValueInvestingStrategy
+
+    sent = {"daily_budget", "fund_source", "watchlist", "warn_days_left", "sizing",
+            "max_skew_pct", "fund_yield_pct", "fund_seed"}
+    missing = sent - set(inspect.signature(ValueInvestingStrategy.__init__).parameters)
+    assert not missing, f"forms send params the ctor does not define: {sorted(missing)}"
