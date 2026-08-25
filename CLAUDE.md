@@ -624,6 +624,15 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   the loop task — and hard-guarded on a FLAT book: a run holding positions never self-stops).
   One cycle exercises place → poll → LIMIT-at-touch→protected-limit escalation (the wide OTM spread
   triggers it naturally) → fill → book-sync → reconcile (+ the per-recon Telegram) → exit.
+  **A MANUAL flatten must not restart the cycle (2026-08-25).** `flatten` closes the book and
+  then calls `sync_strategy_book`, which rebuilds `legs` from the now-EMPTY portfolio — so
+  `legs` is `[]`, the "book flat → test complete" guard is unreachable, and `exited` is still
+  False (the strategy never ordered that exit). The run then looked untraded and placed a
+  SECOND REAL BUY four seconds after the owner's exit filled (run 21: BUY 267.90 → manual SELL
+  269.15 → BUY 269.20). The flat-book branch now also stops on `entry_at is not None` — set
+  once at entry, never cleared, persisted. Generalise the lesson: **`sync_strategy_book` wipes
+  a strategy's `legs`, so any "have I traded?" test that reads `legs` is wrong after a manual
+  intervention.**
   Sizes are hard-coded 1 lot / 1 share (not params). Deploy-only, no backtest (paper fills
   always "work"); `POST /trade/smoke-test/deploy`; one class, two deploy modes (DERIV option
   leg / STOCK share leg — `intraday=True` keeps the STOCK run tick-driven). UI gates LIVE

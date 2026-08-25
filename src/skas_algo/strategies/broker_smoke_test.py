@@ -115,8 +115,17 @@ class BrokerSmokeTestStrategy:
                 self.stop_requested = True
                 return []
             return self._maybe_exit(now)
-        if self.exited:
-            # Exit signalled but legs already cleared → flat; stop next pass.
+        if self.exited or self.entry_at is not None:
+            # Flat, and this run has ALREADY traded its one cycle → done. Never re-enter.
+            #
+            # `exited` alone is not enough: a MANUAL flatten closes the book and then calls
+            # sync_strategy_book, which rebuilds `legs` from the now-empty portfolio — so
+            # `legs` is [] and the "book flat → test complete" guard above is unreachable,
+            # while `exited` was never set because the strategy did not order the exit. The
+            # run then looked like a fresh one and placed a second REAL buy four seconds
+            # after the owner's exit filled (run 21, 2026-08-25: BUY 267.90 → manual SELL
+            # 269.15 → BUY 269.20). `entry_at` is set once at entry, never cleared, and is
+            # persisted — so it is the honest "this run has traded" record.
             self.stop_requested = True
             return []
         return self._enter(ctx, now)

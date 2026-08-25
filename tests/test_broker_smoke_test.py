@@ -232,3 +232,28 @@ def test_the_guard_does_not_fire_for_a_disarmed_zerodha_account():
     disarmed = ZerodhaAdapter(ZerodhaCredentials(api_key="k", api_secret="s", user_id="u"),
                               armed=False, live_enabled=False)
     assert adapter_can_execute(disarmed) is True       # capability, not permission
+
+
+def test_a_manual_flatten_never_triggers_a_second_real_buy():
+    """Run 21 (2026-08-25) bought ITC at 267.90, the owner clicked exit (filled 269.15), and
+    the strategy placed ANOTHER real buy at 269.20 four seconds later.
+
+    flatten() closes the book and then calls sync_strategy_book, which rebuilds `legs` from
+    the now-empty portfolio — so `legs` is [] and the "book flat → test complete" guard is
+    skipped, while `exited` stays False because the strategy never ordered that exit. The run
+    then looks like one that has never traded. `entry_at` is the durable record that it has."""
+    s = BrokerSmokeTestStrategy(leg="stock", symbol="ITC", hold_seconds=60)
+    ctx = FakeCtx(FakeMarket(chain()))
+    ctx.market.prices["ITC"] = 267.90
+
+    assert len(tick(s, ctx, T0)) == 1            # the one entry
+    _fill(s, ctx)
+    assert s.entry_at is not None and s.legs
+
+    # …the owner flattens: the book empties AND the engine syncs the strategy's legs off it.
+    ctx.positions.clear()
+    s.legs = []                                  # exactly what sync_strategy_book does
+    assert s.exited is False                     # a manual exit never sets this
+
+    assert tick(s, ctx, T0 + timedelta(hours=3)) == []   # no second buy
+    assert s.stop_requested is True              # the cycle is over — stop the run
