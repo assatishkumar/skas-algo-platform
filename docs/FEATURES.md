@@ -45,7 +45,7 @@ live. The invariant is guarded by golden tests (`tests/test_sst_parity.py`,
 
 ## 3. Strategy catalog
 
-Strategies register in `strategies/registry.py` (33 IDs across 30 files) and onboard there,
+Strategies register in `strategies/registry.py` (34 IDs across 31 files) and onboard there,
 never by editing the engine. `intraday=True` means "decide every tick"; otherwise the run
 decides once per day at a set time. "Backtest" notes whether a strategy runs the FULL shared
 engine, a dedicated Black-Scholes service, or is deploy-only.
@@ -317,6 +317,26 @@ are validated paper-first.
   **+₹147k** (65 cycles, 77% win, max DD ₹52k, t=2.4) is the only positive mode — `fair_value` −₹64k,
   `both` −₹154k, PE-only −₹196k. Monthly re-centering rides the index's upward drift on calls but
   chases crashes down on puts.
+- **`volcano_calendar` — monthly PE butterfly + CE calendar (NIFTY), the "volcano".** Five
+  legs, two monthly expiries, entered ONCE a month on the **last Friday at 15:16 IST** (a
+  holiday Friday enters the prior session — the deck's own June-2026 example entered Thursday
+  the 25th): BUY ATM PE / SELL 2× ATM−400 PE / BUY ATM−800 PE on the **next month's** monthly
+  (the entry month's own expiry is always skipped), plus SELL 1 CE at ATM+200 on that expiry
+  and BUY 1 CE at the **same strike** on the month after. The expiry payoff draws two green
+  peaks with a valley at spot. **The 4% center-credit rule**: if the payoff with spot
+  unchanged, evaluated ON the near expiry (the valley), exceeds 4% of margin, the CE calendar
+  steps 100 pts further out until it complies — the far CE still has a month of life then, so
+  it is Black-Scholes-priced with an IV solved from its own quoted premium, and an
+  unsolvable IV defers the entry rather than guessing. Exits: **+2% target / −2% stop of
+  margin**, anchored to the MANUAL `margin_per_set` (no broker margin exists before the order
+  does, so the manual anchor is effectively required — it makes the thresholds live from the
+  first tick); neither by the near expiry → close ALL FIVE legs at 15:15 that day, and a
+  missed exit gets flat on the very next tick. One cycle per calendar month, stamped at
+  ENTRY only (a cycle entered in April closes on the MAY expiry — stamping May at close
+  would silently skip the May 29 entry). Deploy-only (`POST /trade/options/volcano-calendar/
+  deploy`, the Trade page's "Volcano calendar" card, broker source required — two live
+  chains + an IV solve); **no backtest**: the 1-min store captures only ≤40-DTE expiries and
+  the far CE is ~60 DTE at entry (the double_diagonal precedent).
 - **`momentum_theta_gainer_intra` — 15-min SuperTrend + pivot ATM seller.** Builds its OWN
   15-min candles from live spot ticks; on a closed candle, close > SuperTrend(7,3) AND > pivot
   R1 → SELL the ATM PUT of the nearest weekly (0DTE allowed); the mirror → SELL the ATM CALL.
@@ -778,7 +798,7 @@ strategy knobs), `/adopt-broker-close` (book legs the broker already closed — 
 the shared deployment path: **M** `POST /options/deploy` (custom_options), `/options/fibret/analyze`,
 `/options/donchian/analyze|portfolio|deploy`, `/options/delta-neutral/deploy`,
 `/options/iron-fly/deploy`, `/options/double-diagonal/deploy`,
-`/options/fair-value-calendar/deploy`, `/options/ratio/deploy`,
+`/options/fair-value-calendar/deploy`, `/options/volcano-calendar/deploy`, `/options/ratio/deploy`,
 `/options/intraday-straddle/deploy`, `/options/weekly-intraday-straddle/deploy`,
 `/options/cp-ratio-expiry/deploy`, `/options/momentum-theta/deploy`, `/equity/deploy`,
 `/smoke-test/deploy` (the real-order probe).

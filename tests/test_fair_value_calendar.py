@@ -438,9 +438,10 @@ def test_margin_per_set_is_forwarded_through_every_explicit_subclass():
     from skas_algo.strategies.delta_neutral_monthly import DeltaNeutralMonthlyStrategy
     from skas_algo.strategies.double_diagonal_calendar import DoubleDiagonalCalendarStrategy
     from skas_algo.strategies.fair_value_calendar import FairValueCalendarStrategy
+    from skas_algo.strategies.volcano_calendar import VolcanoCalendarStrategy
 
     for cls in (DeltaNeutralMonthlyStrategy, FairValueCalendarStrategy,
-                DoubleDiagonalCalendarStrategy):
+                DoubleDiagonalCalendarStrategy, VolcanoCalendarStrategy):
         assert "margin_per_set" in inspect.signature(cls.__init__).parameters, cls.__name__
         s = cls(universe=["NIFTY"], underlying="NIFTY", margin_per_set=100_000)
         assert s.margin_per_set == 100_000, f"{cls.__name__} swallowed it into **_ignored"

@@ -21,6 +21,7 @@ from .custom_options import CustomOptionsStrategy
 from .delta_neutral_monthly import DeltaNeutralMonthlyStrategy
 from .double_diagonal_calendar import DoubleDiagonalCalendarStrategy
 from .fair_value_calendar import FairValueCalendarStrategy
+from .volcano_calendar import VolcanoCalendarStrategy
 from .donchian_strangle_bt import DonchianStrangleBtStrategy
 from .iron_fly_monthly import IronFlyMonthlyStrategy
 from .donchian_strangle_monthly import DonchianStrangleMonthlyStrategy
@@ -64,6 +65,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     DeltaNeutralMonthlyStrategy.strategy_id: DeltaNeutralMonthlyStrategy,
     DoubleDiagonalCalendarStrategy.strategy_id: DoubleDiagonalCalendarStrategy,
     FairValueCalendarStrategy.strategy_id: FairValueCalendarStrategy,
+    VolcanoCalendarStrategy.strategy_id: VolcanoCalendarStrategy,
     IronFlyMonthlyStrategy.strategy_id: IronFlyMonthlyStrategy,
     Ema21MomentumStrategy.strategy_id: Ema21MomentumStrategy,
     GapReversalStrategy.strategy_id: GapReversalStrategy,

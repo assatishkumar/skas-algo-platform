@@ -25,6 +25,7 @@ from skas_algo.api.models import (
     EquityTradeDeploy,
     IntradayStraddleDeploy,
     FairValueCalendarDeploy,
+    VolcanoCalendarDeploy,
     IronFlyDeploy,
     LiveStartRequest,
     MomentumThetaDeploy,
@@ -686,6 +687,10 @@ async def fair_value_calendar_deploy(
         "entry_time": body.entry_time,
         "entry_window_end": body.entry_window_end,
         "roll_time": body.roll_time,
+        # Omitted until 2026-08-25 — the model default (1, the owner's roll-day-before rule)
+        # never reached the strategy, so every deploy rolled ON expiry day (ctor 0). Run 15
+        # proved it: params_snapshot had no roll_days_before key at all.
+        "roll_days_before": body.roll_days_before,
         "max_rolls": body.max_rolls,
         "profit_target_pct": body.profit_target_pct,
         "stop_loss_pct": body.stop_loss_pct,
@@ -699,6 +704,61 @@ async def fair_value_calendar_deploy(
     }
     req = LiveStartRequest(
         strategy_id="fair_value_calendar",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=body.underlying.upper(),
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/options/volcano-calendar/deploy")
+async def volcano_calendar_deploy(
+    body: VolcanoCalendarDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the monthly PE-butterfly + CE-calendar (volcano_calendar)."""
+    if body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="strike selection and the 4% center-credit rule read the LIVE chain "
+            "(two expiries, IV solve) — deploy with a broker quote source (zerodha)",
+        )
+    # Every ctor kwarg enumerated — an omitted key silently falls back to the ctor default
+    # (the fvc roll_days_before lesson, fixed above).
+    params = {
+        "underlying": body.underlying.upper(),
+        "lots": body.lots,
+        "margin_per_set": body.margin_per_set,
+        "wing_1": body.wing_1,
+        "wing_2": body.wing_2,
+        "ce_offset": body.ce_offset,
+        "max_credit_pct": body.max_credit_pct,
+        "max_ce_shifts": body.max_ce_shifts,
+        "entry_time": body.entry_time,
+        "entry_window_end": body.entry_window_end,
+        "cycle_exit_time": body.cycle_exit_time,
+        "profit_target_pct": body.profit_target_pct,
+        "stop_loss_pct": body.stop_loss_pct,
+        "force_entry": body.force_entry,
+        "profit_check": body.profit_check,
+        "stop_check": body.stop_check,
+        "pnl_basis": body.pnl_basis,
+        "exit_margin_basis": body.exit_margin_basis,
+        "min_leg_oi": body.min_leg_oi,
+    }
+    req = LiveStartRequest(
+        strategy_id="volcano_calendar",
         name=body.name,
         notes=body.notes,
         instrument_class="DERIV",

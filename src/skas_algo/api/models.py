@@ -439,6 +439,47 @@ class FairValueCalendarDeploy(BaseModel):
     auto: bool = True
 
 
+class VolcanoCalendarDeploy(BaseModel):
+    """Deploy volcano_calendar: the monthly PE butterfly + CE calendar (NIFTY). Entry on
+    the LAST FRIDAY of the month at 15:16 (holiday → the prior session); near = next
+    month's monthly, far = the month after; ±2% of margin target/stop; close all on the
+    near expiry day. The 4% center-credit rule walks the CE calendar out one strike at a
+    time — it needs ``margin_per_set`` (no broker margin exists before the order does),
+    so the deploy default is the owner's measured figure, NOT the ctor's 0. NOTE Kite's
+    basket API reports margin NET of premium receivable while the web calculator's
+    headline is span+exposure BEFORE that credit — enter whichever you mean to size on."""
+
+    name: str
+    notes: str | None = None
+    underlying: str = "NIFTY"
+    lots: int = 1  # lot-SETS (1 set = 5 legs / 6 lots)
+    margin_per_set: float = 190_000.0  # ₹ per set — measure YOUR basket on Kite
+    wing_1: float = 400.0
+    wing_2: float = 800.0
+    ce_offset: float = 200.0
+    max_credit_pct: float = 4.0
+    max_ce_shifts: int = 6
+    entry_time: str = "15:16"
+    entry_window_end: str = "15:29"
+    cycle_exit_time: str = "15:15"
+    profit_target_pct: float = 2.0  # % of margin, whole percent
+    stop_loss_pct: float = 2.0
+    force_entry: bool = False  # enter next window tick, skipping the last-Friday gate
+    # Deploy default = the owner cadence policy (1min); ctor defaults stay "tick" (§1).
+    profit_check: str = "1min"
+    stop_check: str = "1min"
+    pnl_basis: str = "open_legs"
+    exit_margin_basis: str = "entry"
+    min_leg_oi: int = 1
+    capital: float = 500_000
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    refresh_seconds: int = 15
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class DoubleDiagonalDeploy(BaseModel):
     """Deploy double_diagonal_calendar: a NIFTY double-diagonal calendar — a near short strangle +
     farther long hedges (the first TWO-expiry position). Delta-first (shorts ~20-25Δ, hedges

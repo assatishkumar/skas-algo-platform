@@ -275,6 +275,17 @@ Object.assign(LABELS, {
   max_rolls: "Max rolls",
 });
 
+// volcano_calendar
+Object.assign(LABELS, {
+  margin_per_set: "Margin per lot-set (\u20b9)",
+  wing_1: "Butterfly short wing (pts below ATM)",
+  wing_2: "Butterfly far wing (pts below ATM)",
+  ce_offset: "CE calendar offset (pts above ATM)",
+  max_credit_pct: "Max center credit %",
+  max_ce_shifts: "Max CE shifts (100-pt steps)",
+  cycle_exit_time: "Expiry-day exit time",
+});
+
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 /** Enum-valued STRATEGY-CTOR params → their legal values, as the live strategies accept

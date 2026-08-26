@@ -1085,6 +1085,28 @@ export interface FairValueCalendarDeploy {
   auto: boolean;
 }
 
+export interface VolcanoCalendarDeploy {
+  name: string;
+  underlying: string;
+  lots: number;                      // lot-SETS (1 set = 5 legs / 6 lots)
+  margin_per_set: number;            // ₹ per set — anchors the ±% exits AND the 4% rule
+  ce_offset?: number;                // CE calendar base strike: ATM + this (pts)
+  max_credit_pct?: number;           // payoff-at-spot on near expiry cap, % of margin
+  max_ce_shifts?: number;
+  wing_1?: number;
+  wing_2?: number;
+  profit_target_pct: number;
+  stop_loss_pct: number;
+  entry_time: string;                // last Friday of the month, holiday-adjusted
+  cycle_exit_time: string;           // near-expiry-day close-all
+  force_entry: boolean;
+  capital: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  auto: boolean;
+}
+
 export interface IronFlyDeploy {
   name: string;
   underlying: string;

@@ -495,6 +495,31 @@ const STRATEGIES: Rule[] = [
     links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=tn-73I63yBw&t=2162s" }],
   },
   {
+    id: "volcano_calendar",
+    name: "Volcano Calendar (Monthly)",
+    kind: "Options",
+    bias: "Neutral \u00b7 two peaks, a valley at spot",
+    summary:
+      "A monthly NIFTY five-legger whose expiry payoff draws two green peaks with a valley at spot \u2014 the volcano. A PE butterfly on the NEXT month's expiry plus a CE calendar 200 points above ATM (short that expiry, long the month after, one shared strike). Entered once a month on the LAST FRIDAY at 15:16; \u00b12% of margin decides the cycle, the near expiry ends it.",
+    structure: [
+      "BUY 1 ATM PE, SELL 2 ATM\u2212400 PE, BUY 1 ATM\u2212800 PE \u2014 the butterfly, all on the NEXT month's monthly expiry (the entry month's own expiry is skipped).",
+      "SELL 1 CE at ATM+200 on that same expiry; BUY 1 CE at the SAME strike on the month after \u2014 the calendar. Both legs always move together.",
+      "THE 4% RULE: if the payoff with spot unchanged at the near expiry (the valley) exceeds 4% of margin, the CE calendar steps 100 pts further out until it doesn't. The far CE is BS-priced with an IV solved from its own premium \u2014 an unverifiable IV defers the entry rather than guessing.",
+    ],
+    entry: [
+      "Last Friday of every month at 15:16 IST \u2014 a holiday Friday enters the prior session (the deck's own June-2026 example entered Thursday the 25th).",
+      "A missed Friday (restart, data hiccup) still enters later the same month \u2014 the gate is \u2265, not =.",
+      "One cycle per calendar month, stamped at entry.",
+    ],
+    exit: [
+      "Target +2% of margin, stop \u22122% \u2014 both anchored to the MANUAL margin_per_set (no broker margin exists before the order does), so the rupee thresholds are live from the first tick.",
+      "Neither by the near monthly's expiry \u2192 close ALL FIVE legs (the far CE included) at 15:15 that day.",
+      "Past the expiry still holding (missed exit) \u2192 flat on the very next tick.",
+    ],
+    risk:
+      "Short 2 PE and 1 near CE against 3 longs: a crash through the butterfly's lower wing or a rip past the calendar is where it loses \u2014 the \u00b12% brackets are the working bound, and the near-expiry close is the structural one. DEPLOY-ONLY, no backtest: the 1-min store captures only \u226440-DTE expiries and the far CE is ~60 DTE at entry, so a store replay cannot price it. Needs a broker quote source (two live chains + an IV solve). Sized in lot-sets; measure margin_per_set on the Kite basket calculator \u2014 every threshold hangs off it.",
+  },
+  {
     id: "double_diagonal_calendar",
     name: "Double Diagonal Calendar",
     kind: "Options",
@@ -836,6 +861,14 @@ const META: Record<string, Meta> = {
             ["Target", "+5% of margin (whole cycle)"], ["Cadence", "Monthly · weekly rolls"]],
     deployNote: "Backtested on the 1-min store; CE-only is the only positive mode. Deploy (broker quotes) for the paper forward test.",
     deployCta: { label: "Deploy FV calendar", to: "/trade" },
+  },
+  volcano_calendar: {
+    group: "Ratio & income", biasKind: "neutral",
+    facts: [["Bias", "Neutral \u00b7 valley at spot"], ["Instrument", "NIFTY monthly \u00d7 2"],
+            ["Structure", "PE fly 1-2-1 + CE calendar"], ["Entry", "Last Friday \u00b7 15:16"],
+            ["Exits", "\u00b12% of margin \u00b7 near expiry"], ["Rule", "Center credit \u2264 4%"]],
+    deployNote: "Deploy-only (broker quotes; the far leg is ~60 DTE, beyond the 1-min store's capture). Paper first.",
+    deployCta: { label: "Deploy Volcano calendar", to: "/trade" },
   },
   double_diagonal_calendar: {
     group: "Premium selling", biasKind: "neutral",

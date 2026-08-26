@@ -617,6 +617,33 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   ce +₹147k (65 cycles, 77% win, DD ₹52k, t=2.4) · fair_value −₹64k · both −₹154k · pe −₹196k —
   monthly re-centering rides the drift on calls, chases crashes down on puts. Coverage:
   `tests/test_fair_value_calendar.py`.
+- **volcano_calendar** (`strategies/volcano_calendar.py`, NIFTY, 2026-08-25; owner video
+  deck): monthly PE butterfly (ATM / −400 ×2 / −800) on the NEXT month's monthly + a CE
+  calendar at ATM+200 (short that expiry, long the month after, ONE shared strike — the legs
+  move together). Entry the **last Friday of the month at 15:16** via module helper
+  `last_trading_friday` (walks back over weekends/`is_nse_holiday`; validated against the
+  deck's own Jun-2026 example, which entered THURSDAY the 25th because Friday was a holiday).
+  The gate is `today >= last_friday` + an entered_month latch — **stamped at ENTRY ONLY**: a
+  cycle entered in April closes on the MAY expiry, and stamping May at close would silently
+  skip the May-29 entry (six cycles a year instead of twelve; caught by test before it
+  shipped). **The 4% center-credit rule** (owner's reading, settled 2026-08-25): payoff at
+  the entry spot evaluated ON the near expiry (the valley between the peaks) as % of margin;
+  while > `max_credit_pct` the CE strike steps out 100 pts (≤ `max_ce_shifts`).
+  `_payoff_on_near_expiry` prices near legs at `bs.intrinsic` and the far CE at `bs.price`
+  with `t_resid` + an IV solved from its own LTP — NOT the base `_payoff_at`, which intrinsics
+  every leg and would misprice the calendar's whole point; an unsolvable IV DEFERS the entry
+  (all-or-nothing, no latch). **`margin_per_set` is effectively required**: the rule needs a
+  denominator BEFORE the order exists (broker margin is pushed only after a fill) — with 0
+  the walk is skipped + `strategy_alert`, base strike stands. It also anchors the ±2%
+  target/stop (margin_source="manual", live from the first tick). Exits: ±2%, else close ALL
+  five legs (far CE included) at `cycle_exit_time` (15:15) on the near expiry — checked FIRST
+  in `_manage`, never cadence-gated — with a past-expiry `volcano_cycle_end_late` backstop.
+  Subclasses DeltaNeutralMonthly, `phase="volcano"` (base adjustments inert). Deploy-only
+  (`POST /trade/options/volcano-calendar/deploy` + Trade-page card, broker source required);
+  **no backtest** — the 1-min store captures ≤40-DTE expiries and the far CE is ~60 DTE at
+  entry. Also fixed while wiring: the fvc deploy route never forwarded `roll_days_before`
+  (model default 1 silently unused — run 15's expiry-day roll). Coverage:
+  `tests/test_volcano_calendar.py`.
 - **broker_smoke_test** (Brokers-page card, 2026-07-18): the end-to-end REAL-order probe —
   BUY 1 lot of a cheap OTM weekly (premium band ₹5–20, nearest ₹10, OI floor) or 1 share of
   a stock (default ITC), hold ~60s, SELL, then the run **stops itself** (`stop_requested` →

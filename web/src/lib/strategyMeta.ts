@@ -74,6 +74,7 @@ const CATEGORY_OF: Record<string, LiveCategoryId> = {
   put_condor: "positional",
   donchian_strangle_bt: "positional",
   fair_value_calendar: "positional",      // monthly cycle, weekly rolls — holds overnight
+  volcano_calendar: "positional",         // monthly cycle, holds to the near expiry
 };
 
 /** Human names for the pickers. The raw ids stay the API/URL currency everywhere else —
@@ -104,6 +105,7 @@ export const STRATEGY_NAMES: Record<string, string> = {
   double_diagonal_calendar: "Double Diagonal Calendar",
   put_condor: "Put Condor — Monthly (defined risk)",
   fair_value_calendar: "Fair-Value Calendar — Monthly (premium-matched)",
+  volcano_calendar: "Volcano Calendar — Monthly (PE fly + CE calendar)",
   donchian_strangle_monthly: "Donchian Basket Strangle",
   donchian_strangle_bt: "Donchian Strangle — Backtest",
   straddle_btst: "Straddle BTST (overnight long)",
