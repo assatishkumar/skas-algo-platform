@@ -177,7 +177,13 @@ export default function DeployView() {
   }, [spec.id]);
 
   const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
-  const sessioned = (accounts ?? []).filter((a) => a.has_session);
+  // Accounts must MATCH the chosen feed: the backend rejects a quote_source that disagrees
+  // with the account's broker, so offering a Dhan account under "Zerodha (live)" would only
+  // produce a 422. The old bespoke builders hardcoded `broker === "zerodha"` and so hid Dhan
+  // entirely — which is why Volcano showed only SatishKite on the VPS (owner, 2026-08-28).
+  const sessioned = (accounts ?? []).filter(
+    (a) => a.has_session && (quoteSource === "cache" || (a.broker || "zerodha") === quoteSource),
+  );
   const brokerOk = quoteSource === "cache" || accountId != null;
   const needsAccount = spec.needsBroker && quoteSource === "cache";
 
@@ -350,7 +356,7 @@ export default function DeployView() {
                 </select></label>
               <label className="block"><span className={lbl}>Quotes</span>
                 <select className={inputClass} value={quoteSource}
-                  onChange={(e) => setQuoteSource(e.target.value)}>
+                  onChange={(e) => { setQuoteSource(e.target.value); setAccountId(null); }}>
                   <option value="zerodha">Zerodha (live)</option>
                   <option value="dhan">Dhan (live)</option>
                   {!spec.needsBroker && <option value="cache">Cache (last close, offline)</option>}
