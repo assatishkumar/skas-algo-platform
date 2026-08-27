@@ -8,7 +8,9 @@ import type { Holdings } from "../types";
  *  that funded the buying, and every rupee of real return sits unrealized in open positions.
  *  This is the view that actually measures it. CAGR here is XIRR (money-weighted): units are
  *  bought across years, so a start/end CAGR has no single start date. */
-export default function HoldingsReport({ holdings }: { holdings: Holdings }) {
+export default function HoldingsReport(
+  { holdings, finalEquity, cash }: { holdings: Holdings; finalEquity?: number; cash?: number },
+) {
   const { rows, totals, fund, benchmark } = holdings;
   if (!rows?.length) return null;
 
@@ -28,14 +30,44 @@ export default function HoldingsReport({ holdings }: { holdings: Holdings }) {
 
       {/* headline: the three numbers that describe an accumulation run */}
       <div className="grid gap-px bg-slate-200 dark:bg-slate-800 rounded-md overflow-hidden
-                      grid-cols-2 md:grid-cols-4">
+                      grid-cols-2 md:grid-cols-4 lg:grid-cols-5">
         <Tile label="Invested" value={formatInr(totals.invested)} />
         <Tile label="Market value" value={formatInr(totals.value)} />
         <Tile label="Gain" value={formatInr(totals.pnl)} sub={pct(totals.pnl_pct)}
               cls={sign(totals.pnl)} />
         <Tile label="CAGR (XIRR)" value={pct(totals.xirr_pct, 2)} cls={sign(totals.xirr_pct)}
               sub="money-weighted" />
+        {fund && (
+          <Tile label={`Fund source · ${fund.symbol}`} value={formatInr(fund.value)}
+                sub={`${fund.units.toLocaleString("en-IN")} units unsold`} />
+        )}
       </div>
+
+      {/* Where the money is. Final equity counts the fund source and cash; the table above
+          counts only the stocks the strategy bought — so the two differ by exactly this, and
+          without saying so the gap reads like a bug (it was asked about on run #284, where
+          ₹1.10cr of GOLDBEES was 45% of final equity). */}
+      {finalEquity != null && fund && (
+        <div className="rounded-md border border-slate-200 dark:border-slate-800 px-3 py-2 text-sm">
+          <span className="text-slate-500">Where the money is:</span>{" "}
+          <span className="font-medium tabular-nums">{formatInr(totals.value)}</span>
+          <span className="text-slate-500"> in stocks + </span>
+          <span className="font-medium tabular-nums">{formatInr(fund.value)}</span>
+          <span className="text-slate-500"> still in {fund.symbol}</span>
+          {cash != null && (
+            <>
+              <span className="text-slate-500"> + </span>
+              <span className="font-medium tabular-nums">{formatInr(cash)}</span>
+              <span className="text-slate-500"> cash</span>
+            </>
+          )}
+          <span className="text-slate-500"> = </span>
+          <span className="font-medium tabular-nums">{formatInr(finalEquity)}</span>
+          <span className="text-slate-500"> final equity. The CAGR tile above is the
+            STRATEGY&apos;s return on the stocks it bought; the run&apos;s headline CAGR also
+            includes however the fund source itself moved while it sat there.</span>
+        </div>
+      )}
 
       {/* the comparison that answers "should I just have bought the index?" */}
       {benchmark && (
@@ -109,8 +141,11 @@ export default function HoldingsReport({ holdings }: { holdings: Holdings }) {
 
       {fund && (
         <p className="text-xs text-slate-500 leading-relaxed">
-          <strong>Fund source {fund.symbol}</strong>: {fund.units.toLocaleString("en-IN")} units
-          = {formatInr(fund.value)}.
+          {/* units + value now live in the tile above — this note keeps only what the tile
+              cannot say: whether a yield is being modelled, and the trap of double-counting
+              one on a source that already appreciates in the curve. */}
+          <strong>{fund.symbol}</strong> is the funding source — sold down to buy the names
+          above, never bought back.
           {fund.yield_credited > 0 ? (
             <>
               {" "}A price-only backtest cannot see a dividend liquid ETF's yield (NAV stays
@@ -121,8 +156,10 @@ export default function HoldingsReport({ holdings }: { holdings: Holdings }) {
             </>
           ) : (
             <>
-              {" "}Set <code>fund_yield_pct</code> to credit what the parked balance really
-              earns — a dividend liquid ETF holds NAV flat, so the backtest scores it 0%.
+              {" "}Set <code>fund_yield_pct</code> only for a NAV-FLAT dividend ETF
+              (LIQUIDBEES/LIQUIDCASE), which a price-only backtest scores at 0%. Leave it at 0
+              for a growth source like GOLDBEES or a stock — its appreciation is already in
+              the value above, and crediting a yield on top would count it twice.
             </>
           )}
         </p>

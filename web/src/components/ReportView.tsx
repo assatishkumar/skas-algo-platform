@@ -426,7 +426,11 @@ export default function ReportView({
       {/* Accumulation runs: the holdings panel goes ABOVE the equity chart — for a strategy
           that never sells, "what do I own and how has it grown" is the headline, and the
           trade table below it is the least interesting thing on the page. */}
-      {report.holdings && <HoldingsReport holdings={report.holdings} />}
+      {report.holdings && (
+        <HoldingsReport holdings={report.holdings}
+          finalEquity={report.metrics?.["Final Equity"] as number | undefined}
+          cash={report.metrics?.["Cash Balance"] as number | undefined} />
+      )}
       <EquityChart report={report} runId={runId} defaultBenchmark={defaultBenchmark} />
       <YearlyTable report={report} />
       <MonthlyGrid
