@@ -325,6 +325,21 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   never happened. Same-day funding hid it (the sale always covered the plan); settled-cash
   gating would have hit it daily. The planner now takes the spendable `cap` so plan ==
   emission (`cap=None` preserves the historical unbounded walk).
+  **LIVE OPERATING MODEL (owner 2026-08-27): capital is tiny, the ETF is refilled OUTSIDE
+  the strategy, and the ETF is treated as an effectively infinite source.** Two consequences
+  are load-bearing. (1) The platform only knows lots the RUN created and an EXIT without a
+  `lot_id` is a silent no-op — so ETF units bought directly in the broker were UNSELLABLE,
+  and a run deployed with capital ≈ one day's budget would report FUND DRY on day one while
+  the account held lakhs. `manager._maybe_adopt_fund_holding` now adopts the shortfall via
+  the new `LiveSession.adopt_broker_holding` (the mirror of `adopt_broker_close`: books an
+  entry that already happened, no order, no charges, and NO cash movement — the units were
+  paid for at the broker; `Portfolio.buy` always debits cash and is shared engine code the
+  parity suites pin, so the balance is restored explicitly rather than adding a param there).
+  It only ever ADDS: a broker showing FEWER units is a real divergence and reconciliation's
+  job. Needs `adapter.holdings()` — NEW on both adapters, and distinct from `positions()`,
+  which is the day's book and would not show an ETF bought weeks ago. (2) A dry fund source
+  WARNS LOUDLY AND KEEPS RUNNING — banner + one push a day — and buying continues on whatever
+  has settled. Never say "the drip stops"; it degrades.
   **`sizing` (2026-08-24) is the allocation decision, and the one to get right.** All three modes
   share the faller-first ranking and differ only in rupees per name. `one_share` (ctor default,
   §1) is the spec and silently weights by SHARE PRICE — one share of a ₹2,299 name is 51× the

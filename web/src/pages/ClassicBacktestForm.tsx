@@ -840,6 +840,13 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
             // A backtest starts with cash and no ETF, so day 1 converts the capital into the
             // fund source. The ctor default is "never" — a LIVE deploy must not place this.
             fund_seed: "if_empty",
+            // T+1, the SAME as live. An equity CNC sale's proceeds are not spendable the day
+            // they are raised, so a backtest that credits them instantly deploys each day's
+            // money one session early and flatters the drip. The ctor default is 0 (§1:
+            // recovered deploys unchanged) — the policy lives here and in the deploy form, so
+            // backtest == live, which is the whole point of the one-engine rule.
+            settlement_days: 1,
+            funding_buffer_pct: 10,
           }
         : isNiftyShop
         ? {

@@ -194,6 +194,21 @@ class ZerodhaAdapter:
     def positions(self) -> list[dict]:
         return self._kite_client().positions().get("net", [])
 
+    def holdings(self) -> dict[str, dict]:
+        """{symbol: {"units", "avg_price"}} for DELIVERY holdings (T+1 settled and beyond).
+
+        Distinct from ``positions()``, which is the day's book: an ETF bought weeks ago sits
+        in holdings and appears in positions not at all. value_investing needs this because
+        the owner tops its funding ETF up directly in the broker, outside the run.
+        """
+        out: dict[str, dict] = {}
+        for h in self._kite_client().holdings() or []:
+            sym = str(h.get("tradingsymbol") or "").upper()
+            qty = float(h.get("quantity") or 0) + float(h.get("t1_quantity") or 0)
+            if sym and qty > 0:
+                out[sym] = {"units": qty, "avg_price": float(h.get("average_price") or 0.0)}
+        return out
+
     def funds(self) -> Funds:
         margins = self._kite_client().margins(segment="equity")
         available = margins.get("available", {}).get("live_balance", 0.0)

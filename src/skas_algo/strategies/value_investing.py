@@ -362,10 +362,15 @@ class ValueInvestingStrategy:
         want = ceil(need / fund_px)
         sell = min(want, fund_units)
         if sell <= 0:
-            self._alert(f"FUND DRY — {fund} has nothing left to sell; tomorrow's ₹"
-                        f"{self.daily_budget:,.0f} budget is unfunded. Top it up.")
+            # LOUD, but never a halt (owner 2026-08-27): the ETF is refilled outside the
+            # strategy, so a dry moment is a top-up reminder, not a failure. Cash already
+            # settled keeps buying — the drip degrades, it does not stop dead.
+            self._alert(f"FUND DRY — {fund} has nothing left to sell, so tomorrow's ₹"
+                        f"{self.daily_budget:,.0f} budget is unfunded. Top it up in the "
+                        f"broker; the drip continues on whatever cash has settled.")
             self._notify_once("fund_dry", today,
-                              f"{fund} is empty — the drip stops after today.")
+                              f"{fund} is empty — top it up. Buying continues on settled "
+                              f"cash only, so the drip will thin out within a day.")
             return [], fund_units
         if sell < want:
             self._alert(f"{fund} could only cover ₹{sell * fund_px:,.0f} of tomorrow's ₹"

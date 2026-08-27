@@ -601,6 +601,7 @@ class LiveRun:
         self.session.update_quotes(quotes)
         self._maybe_refresh_margin()
         self._maybe_refresh_funds()
+        self._maybe_adopt_fund_holding()
         self._maybe_reconcile()
         snap = self.snapshot()
         with session_scope() as db:
@@ -734,6 +735,50 @@ class LiveRun:
                 push(float(f.available))
             except Exception:  # pragma: no cover
                 logger.exception("set_broker_funds failed for run %s", self.run_id)
+
+    def _maybe_adopt_fund_holding(self) -> None:
+        """Adopt fund-source units the BROKER holds but the platform's ledger does not.
+
+        The owner tops the funding ETF up directly in the broker, outside the run (2026-08-27),
+        and the platform only knows lots the RUN created. An EXIT without a ``lot_id`` is a
+        silent no-op, so those units are unsellable — a fresh live run deployed with
+        capital ≈ one day's budget would report FUND DRY on day one while the account held
+        lakhs of the ETF. Adopting closes that gap; from the strategy's side the ETF then
+        behaves as the effectively infinite source the owner asked for, and its own runway
+        warning is what flags a real depletion.
+
+        Only ever ADDS (broker > ledger). A broker showing FEWER units is a genuine
+        divergence — reconciliation's job, not something to paper over here."""
+        strategy = getattr(self.session, "strategy", None)
+        fund = getattr(strategy, "fund_source", None)
+        if not fund or self.config.instrument_class.upper() == "DERIV":
+            return
+        if not is_broker_source(self.config.quote_source) or not is_market_open(
+            segment=self.config.segment
+        ):
+            return
+        adapter = getattr(self.quote_source, "adapter", None)
+        if adapter is None or not hasattr(adapter, "holdings"):
+            return
+        try:
+            held = adapter.holdings().get(str(fund).upper())
+        except Exception:  # pragma: no cover - a holdings call must never break the loop
+            return
+        if not held:
+            return
+        ours = sum(lot.units for lot in self.session.portfolio.lots(fund))
+        missing = float(held.get("units") or 0) - ours
+        if missing < 1:
+            return
+        price = float(held.get("avg_price") or 0.0)
+        if price <= 0:
+            return
+        try:
+            self.session.adopt_broker_holding(datetime.now(IST), fund, missing, price)
+            logger.info("adopted %s %s units held at the broker but not in the ledger "
+                        "(run %s)", missing, fund, self.run_id)
+        except Exception:  # pragma: no cover
+            logger.exception("adopting %s failed for run %s", fund, self.run_id)
 
     def _maybe_refresh_margin(self) -> None:
         """Throttled (~1/min) real Zerodha basket margin, built from our own legs. Falls
@@ -1046,6 +1091,7 @@ class LiveRun:
         self._tag_underlying_spot(events)
         self._maybe_refresh_margin()
         self._maybe_refresh_funds()
+        self._maybe_adopt_fund_holding()
         snap = self.snapshot()
         with session_scope() as db:
             if events:

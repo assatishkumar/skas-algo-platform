@@ -217,6 +217,31 @@ class LiveSession:
         self._record_history(ts)
         return events
 
+    def adopt_broker_holding(self, ts: date | datetime, symbol: str, units: float,
+                             price: float, *, reason: str = "broker_holding") -> None:
+        """Book units the BROKER already holds but the platform's ledger does not — WITHOUT
+        sending an order. The mirror of ``adopt_broker_close``: that books an exit that
+        already happened, this books an entry that already happened.
+
+        Why it exists (owner, 2026-08-27): value_investing funds itself by SELLING a
+        fund-source ETF, and the owner tops that ETF up directly in the broker, outside the
+        strategy. The platform only knows lots the RUN created, and an EXIT without a
+        ``lot_id`` is a silent no-op (engine/overrides.py) — so those units were unsellable
+        and a fresh live run said FUND DRY on day one while the account held plenty.
+
+        No order, no charges: the units and their cost basis already exist at the broker, and
+        inventing a fill would double-count both the trade and its cost.
+        """
+        if units <= 0 or price <= 0:
+            return
+        # Portfolio.buy always debits cash, and it is SHARED engine code the parity suites
+        # pin — so restore the balance here rather than adding a parameter to it. No cash
+        # moved in this account: the units were paid for at the broker, outside the run.
+        before = self.portfolio.cash
+        self.portfolio.buy(symbol, int(units), float(price), ts)
+        self.portfolio.cash = before
+        self.sync_strategy_book(ts)
+
     def manual_order(self, ts: date | datetime, *, closes=None, opens=None,
                      tag: str = "MANUAL") -> list[dict]:
         """Close selected legs/lots and/or open new legs immediately, at live prices.

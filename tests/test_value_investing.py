@@ -702,3 +702,46 @@ def test_the_settlement_ledger_survives_a_restart():
     fresh.load_state(st.export_state())
     assert fresh.pending_credits == st.pending_credits
     assert fresh.settled_cash == st.settled_cash
+
+
+def test_a_depleted_fund_source_warns_loudly_but_never_stops_the_run():
+    """Owner's model (2026-08-27): the ETF is topped up OUTSIDE the strategy, so treat it as
+    an effectively infinite source and make a real depletion VISIBLE — a banner plus a
+    once-a-day push — without halting. Settled cash keeps buying whatever it can."""
+    sent: list[tuple[str, str]] = []
+    view = _view({"AAA": (100, 95), FUND: (100, 100)})
+    ctx, pf = _ctx(view)                       # NO fund lots at all — fully depleted
+    st = _t1(watchlist="AAA", daily_budget=1_000.0)
+    st.set_notify_fn(lambda u, m: sent.append((u, m)))
+    st.settled_cash = 500.0                    # …but cash HAS settled from an earlier sale
+
+    sigs = st.on_slice(ctx)
+    bought = [s for s in sigs if s.action is SignalAction.ENTER_LONG]
+    assert bought, "settled cash must keep working even with the ETF empty"
+    assert "FUND DRY" in (st.strategy_alert or ""), "the banner must say so"
+    assert sent, "and it must push"
+    assert any("top it up" in m.lower() for _sym, m in sent), sent
+    assert not any("stops" in m for _sym, m in sent), "it does NOT stop — do not say it does"
+    assert st.last_shop_day is not None, "the run carries on — no halt, no stall"
+
+
+def test_units_the_broker_holds_but_the_ledger_does_not_are_adoptable():
+    """The refill reaches the strategy by ADOPTION. The platform only knows lots the RUN
+    created, and an EXIT without a lot_id is a silent no-op — so an ETF topped up in the
+    broker was unsellable, and a live run with capital ≈ one day's budget said FUND DRY on
+    day one while the account held plenty."""
+    from skas_algo.engine.live import LiveSession
+
+    sess = LiveSession(_strat(watchlist="AAA"), initial_capital=5_000.0, lookback=1)
+    assert sess.portfolio.lots(FUND) == []
+    cash_before = sess.portfolio.cash
+
+    sess.adopt_broker_holding(D1, FUND, 45, 114.8)
+
+    lots = sess.portfolio.lots(FUND)
+    assert sum(lot.units for lot in lots) == 45
+    assert lots[0].price == 114.8, "the broker's own cost basis, not an invented one"
+    assert sess.portfolio.cash == cash_before, "no cash moves — it was spent at the broker"
+
+    # …and the lots are now real EXIT targets, which is the entire point.
+    assert all(lot.id is not None for lot in lots)

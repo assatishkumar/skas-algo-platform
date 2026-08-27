@@ -439,6 +439,18 @@ class DhanAdapter:
         self._ensure_armed()
         self._http.delete(f"/orders/{broker_order_id}")
 
+    def holdings(self) -> dict[str, dict]:
+        """{symbol: {"units", "avg_price"}} for DELIVERY holdings — the Dhan twin of
+        ZerodhaAdapter.holdings(). ``totalQty`` already includes the T+1 tranche."""
+        out: dict[str, dict] = {}
+        raw = self._http.get("/holdings")
+        for h in (raw if isinstance(raw, list) else []):
+            sym = str(h.get("tradingSymbol") or "").upper()
+            qty = float(h.get("totalQty") or h.get("availableQty") or 0)
+            if sym and qty > 0:
+                out[sym] = {"units": qty, "avg_price": float(h.get("avgCostPrice") or 0.0)}
+        return out
+
     def funds(self) -> Funds:
         """The account's REAL available balance. Read-only (ungated) — /fundlimit is already
         the endpoint the token check uses. Dhan's key really is spelled "availabelBalance".
