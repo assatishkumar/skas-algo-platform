@@ -621,6 +621,35 @@ class ValueInvestingStrategy:
             "Never sells a stock — accumulation only",
         ]
 
+    def basket_status(self, market, portfolio, margin: float | None = None) -> dict:
+        """The FUNDING LEDGER, for the Live tile. Everything this strategy does hinges on
+        three numbers that were previously invisible: what is spendable today, what is in
+        flight from a sale that has not settled, and how much fund source is left. Without
+        them a quiet day and a broken one look identical (owner, 2026-08-28)."""
+        fund_units = sum(lot.units for lot in portfolio.lots(self.fund_source))
+        px = 0.0
+        try:
+            close = getattr(market, "close", None)
+            px = float(close(self.fund_source)) if close else 0.0
+        except Exception:  # pragma: no cover - an unpriced fund source must not break the tile
+            px = 0.0
+        fund_value = fund_units * px
+        return {
+            "kind": "value_investing",
+            "settled_cash": round(self.settled_cash or 0.0, 2),
+            "pending_credits": [
+                {"lands": d, "amount": round(float(a), 2)} for d, a in self.pending_credits
+            ],
+            "pending_total": round(self._pending_total(), 2),
+            "fund_source": self.fund_source,
+            "fund_units": fund_units,
+            "fund_value": round(fund_value, 2),
+            "runway_days": int(fund_value // self.daily_budget) if self.daily_budget > 0 else 0,
+            "daily_budget": self.daily_budget,
+            "settlement_days": self.settlement_days,
+            "broker_funds": self._broker_funds,
+        }
+
     # ------------------------------------------------------------------ state
     def export_state(self) -> dict:
         return {

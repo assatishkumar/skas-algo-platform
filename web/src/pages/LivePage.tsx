@@ -861,6 +861,16 @@ function RunCard({
         <div className="text-slate-500 text-sm mt-3">No open positions.</div>
       )}
 
+      {/* The FUNDING LEDGER. This strategy's whole behaviour is "buy from settled cash, sell
+          to pre-fund tomorrow", and none of those numbers were visible anywhere — so a quiet
+          day and a broken one looked identical (owner, 2026-08-28). */}
+      {/* basket_status() is a per-strategy shape keyed by `kind`; the typed field models
+          donchian's, so narrow here rather than widening the type and costing that page
+          its narrowing. */}
+      {(run.basket as unknown as { kind?: string } | null)?.kind === "value_investing" && (
+        <FundingLedger b={run.basket as unknown as Record<string, unknown>} />
+      )}
+
       {/* A basket spans many underlyings → its rich per-name monitor lives on a dedicated page
           (the single-spot payoff is meaningless for a basket). */}
       {isDonchian ? (
@@ -1008,11 +1018,64 @@ function LivePulse({ flash, label }: { flash: boolean; label: string }) {
   );
 }
 
+/** value_investing's funding ledger — settled vs in-flight cash, and how much fund source is
+ *  left. `runway_days` is what turns "FUND DRY" from a surprise into a countdown. */
+function FundingLedger({ b }: { b: Record<string, unknown> }) {
+  const n = (k: string) => Number(b[k] ?? 0);
+  const inr = (v: number) => `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+  const pending = (b.pending_credits as { lands: string; amount: number }[] | undefined) ?? [];
+  const runway = n("runway_days");
+  const dry = n("fund_units") <= 0;
+  const low = !dry && runway <= 2;
+  return (
+    <div className="mt-3 rounded-[12px] border border-[var(--border)] bg-[var(--field)] px-3 py-2.5">
+      <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[12.5px] md:grid-cols-4">
+        <div>
+          <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Spendable today</div>
+          <div className="font-medium tabular-nums">{inr(n("settled_cash"))}</div>
+        </div>
+        <div>
+          <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Settling (T+{n("settlement_days")})</div>
+          <div className="font-medium tabular-nums">{inr(n("pending_total"))}</div>
+          {pending[0] && (
+            <div className="text-[11px] text-[var(--faint)]">lands {pending[0].lands}</div>
+          )}
+        </div>
+        <div>
+          <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">{String(b.fund_source)}</div>
+          <div className="font-medium tabular-nums">{inr(n("fund_value"))}</div>
+          <div className="text-[11px] text-[var(--faint)]">{n("fund_units").toLocaleString("en-IN")} units</div>
+        </div>
+        <div>
+          <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Runway</div>
+          <div className={`font-medium tabular-nums ${
+            dry || low ? "text-amber-600 dark:text-amber-400" : ""}`}>
+            {dry ? "empty" : `${runway} day${runway === 1 ? "" : "s"}`}
+          </div>
+          <div className="text-[11px] text-[var(--faint)]">at {inr(n("daily_budget"))}/day</div>
+        </div>
+      </div>
+      {(dry || low) && (
+        <div className="mt-2 text-[11.5px] text-amber-600 dark:text-amber-400">
+          Top up {String(b.fund_source)} in the broker — the strategy adopts it automatically.
+          Buying continues on settled cash meanwhile, so the drip thins rather than stopping.
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Quote-source / broker-connection chip: green when live & connected, rose when the
  *  zerodha session is down (or it has fallen back to cache), plain badge for cache runs. */
 function BrokerChip({ dep }: { dep: Deployment }) {
-  if (dep.quote_source !== "zerodha") return <Badge>cache quotes</Badge>;
-  const label = dep.broker_label || "Zerodha";
+  // ANY broker feed is a live feed. This tested `!== "zerodha"` and so labelled a DHAN run
+  // "cache quotes" — not cosmetic: it says the run is on yesterday's closes when it is on a
+  // live feed, and for value_investing a cache source is precisely the state in which the
+  // strategy refuses to trade (owner, 2026-08-28).
+  if (dep.quote_source !== "zerodha" && dep.quote_source !== "dhan") {
+    return <Badge>cache quotes</Badge>;
+  }
+  const label = dep.broker_label || (dep.quote_source === "dhan" ? "Dhan" : "Zerodha");
   const fallback = dep.on_cache_fallback === true;
   // A live-quote error (e.g. a token Zerodha rejected) means "connected" per the stored session
   // timestamp is misleading — flag it red as expired regardless of the timestamp check.
