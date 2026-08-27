@@ -439,6 +439,48 @@ class FairValueCalendarDeploy(BaseModel):
     auto: bool = True
 
 
+class IntradayStrangleComboDeploy(BaseModel):
+    """Deploy intraday_strangle_combo: sell OTM3 CE+PE on the current weekly at 09:16,
+    flat by exit_time; each leg managed INDEPENDENTLY (40% stop / 70% target on its OWN
+    premium, re-entering at a freshly recomputed OTM3, separate SL/target budgets).
+
+    One INDEX per deploy — the strategy reads it from the run's universe, and the
+    day_schedule then gates which weekdays that index trades (deck: Mon NIFTY · Tue BOTH ·
+    Wed/Thu SENSEX · Fri NIFTY). NIFTY uses the LISTING grid (50-pt steps) via the
+    needs_listing_grid carve-out — the ONE documented exemption from the round-strikes
+    rule, which is why this had no backtest-form checkbox and deploys were API-only until
+    2026-08-27. Deploy exit default 15:20 (the intraday-family rule: Zerodha auto-squares
+    at 15:26, a 15:25 exit leaves no room to retry); ctor stays 15:25 (§1)."""
+
+    name: str
+    notes: str | None = None
+    underlying: str = "NIFTY"  # NIFTY | SENSEX (SENSEX is unvalidated in replay — 23 days)
+    lots: int = 1
+    otm_steps: int = 3  # listing-grid steps; 0 = straddle
+    entry_time: str = "09:16"
+    exit_time: str = "15:20"
+    reentry_cutoff: str = "15:00"
+    leg_stop_pct: float = 40.0
+    leg_target_pct: float = 70.0
+    max_sl_reentries: int = 2
+    max_target_reentries: int = 2
+    same_strike_action: str = "reenter"  # reenter (deck) | skip | hold
+    wing_steps: int = 0  # >0 = iron fly/condor wings that many grid steps beyond each short
+    # Rupee MTM stop per lot for THIS index (scalar — a deploy is one index). Deck: NIFTY
+    # 1500, SENSEX 0 (off). Day-cumulative, outranks a leg stop in the same tick.
+    mtm_stop_per_lot: float = 1500.0
+    # Deploy default = the owner cadence policy (1min); ctor default stays "tick" (§1).
+    stop_check: str = "1min"
+    min_leg_oi: int = 1
+    capital: float = 500_000
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    refresh_seconds: int = 15
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class VolcanoCalendarDeploy(BaseModel):
     """Deploy volcano_calendar: the monthly PE butterfly + CE calendar (NIFTY). Entry on
     the LAST FRIDAY of the month at 15:16 (holiday → the prior session); near = next

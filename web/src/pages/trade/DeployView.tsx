@@ -4,6 +4,7 @@ import DeltaNeutralBuilder from "../../components/trade/DeltaNeutralBuilder";
 import EquityTradeBuilder from "../../components/trade/EquityTradeBuilder";
 import FairValueCalendarBuilder from "../../components/trade/FairValueCalendarBuilder";
 import VolcanoCalendarBuilder from "../../components/trade/VolcanoCalendarBuilder";
+import StrangleComboBuilder from "../../components/trade/StrangleComboBuilder";
 import IntradayStraddleBuilder from "../../components/trade/IntradayStraddleBuilder";
 import IronFlyBuilder from "../../components/trade/IronFlyBuilder";
 import MomentumThetaBuilder from "../../components/trade/MomentumThetaBuilder";
@@ -72,6 +73,13 @@ const STRATS: Managed[] = [
     cadence: "MONTHLY",
     blurb: "Premium-matched ratio calendar, weekly rolls, cycle ends at buy expiry",
     builder: <FairValueCalendarBuilder />,
+  },
+  {
+    id: "strangle_combo",
+    name: "Strangle combo",
+    cadence: "INTRADAY",
+    blurb: "OTM3 CE+PE, independent legs, 40/70 exits with re-entries",
+    builder: <StrangleComboBuilder />,
   },
   {
     id: "volcano",

@@ -51,6 +51,7 @@ import type {
   Universe,
   CpRatioExpiryDeploy,
   FairValueCalendarDeploy,
+  IntradayStrangleComboDeploy,
   VolcanoCalendarDeploy,
   IntradayStraddleDeploy,
   DeltaNeutralDeploy,
@@ -297,6 +298,8 @@ export const api = {
     request<LiveRunSnapshot>("/trade/options/fair-value-calendar/deploy", { method: "POST", body: JSON.stringify(body) }),
   volcanoCalendarDeploy: (body: VolcanoCalendarDeploy) =>
     request<LiveRunSnapshot>("/trade/options/volcano-calendar/deploy", { method: "POST", body: JSON.stringify(body) }),
+  strangleComboDeploy: (body: IntradayStrangleComboDeploy) =>
+    request<LiveRunSnapshot>("/trade/options/strangle-combo/deploy", { method: "POST", body: JSON.stringify(body) }),
   cpRatioExpiryDeploy: (body: CpRatioExpiryDeploy) =>
     request<LiveRunSnapshot>("/trade/options/cp-ratio-expiry/deploy", { method: "POST", body: JSON.stringify(body) }),
   intradayStraddleDeploy: (body: IntradayStraddleDeploy) =>

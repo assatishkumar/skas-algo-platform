@@ -1085,6 +1085,27 @@ export interface FairValueCalendarDeploy {
   auto: boolean;
 }
 
+export interface IntradayStrangleComboDeploy {
+  name: string;
+  underlying: string;                // NIFTY | SENSEX — ONE index per deploy
+  lots: number;
+  otm_steps?: number;                // listing-grid steps; 0 = straddle
+  leg_stop_pct?: number;
+  leg_target_pct?: number;
+  max_sl_reentries?: number;
+  max_target_reentries?: number;
+  same_strike_action?: string;       // reenter (deck) | skip | hold
+  wing_steps?: number;               // >0 = iron-fly wings
+  mtm_stop_per_lot?: number;         // ₹/lot, day-cumulative; deck NIFTY 1500 / SENSEX 0
+  entry_time?: string;
+  exit_time?: string;
+  capital: number;
+  mode: string;
+  quote_source: string;
+  broker_account_id: number | null;
+  auto: boolean;
+}
+
 export interface VolcanoCalendarDeploy {
   name: string;
   underlying: string;

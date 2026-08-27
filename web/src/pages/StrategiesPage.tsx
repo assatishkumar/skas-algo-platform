@@ -883,8 +883,8 @@ const META: Record<string, Meta> = {
     facts: [["Bias", "Neutral · intraday"], ["Underlyings", "NIFTY + SENSEX by weekday"],
             ["Structure", "OTM3 strangle / ATM straddle / +wings"], ["Per leg", "40% stop · 70% target"],
             ["Per index", "Rupee MTM stop per lot"], ["Flat by", "15:25 — always"]],
-    deployNote: "Deploy-capable (paper-tested since 2026-08-13) with a 1-min-store backtest — check the sweep before enabling SL re-entries.",
-    deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+    deployNote: "Deploys from the Trade page's Strangle combo card (one index per deploy; broker quotes). 1-min-store backtest — check the sweep before enabling SL re-entries.",
+    deployCta: { label: "Deploy Strangle combo", to: "/trade" },
   },
   put_condor: {
     group: "Directional tilt", biasKind: "bear",

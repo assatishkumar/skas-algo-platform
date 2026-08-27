@@ -728,3 +728,20 @@ def test_wing_state_round_trips():
     fresh.load_state(st.export_state())
     assert fresh.export_state() == st.export_state()
     assert fresh.sides["NIFTY"]["PE"]["wing"]["strike"] == 24850.0
+
+
+def test_every_deploy_model_field_is_a_real_ctor_kwarg():
+    """The deploy route enumerates kwargs by hand and the ctor ends in **_ignored, so a
+    typo'd or unforwarded knob is accepted and silently dropped (the fvc roll_days_before
+    lesson). The strategy had NO deploy surface until 2026-08-27 — the Aug-13 live
+    carve-out was engine-only and deploys were raw-API only."""
+    import inspect
+
+    from skas_algo.api.models import IntradayStrangleComboDeploy
+
+    ctor = set(inspect.signature(IntradayStrangleComboStrategy.__init__).parameters)
+    infra = {"name", "notes", "underlying", "capital", "mode", "quote_source",
+             "broker_account_id", "refresh_seconds", "ignore_market_hours", "auto"}
+    strategy_fields = set(IntradayStrangleComboDeploy.model_fields) - infra
+    missing = strategy_fields - ctor
+    assert not missing, f"deploy model sends non-ctor params: {sorted(missing)}"

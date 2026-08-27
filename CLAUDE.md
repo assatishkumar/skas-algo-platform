@@ -387,6 +387,12 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   and a SENSEX run gave BOTH the whole weekday schedule, so on a shared day each would have
   doubled the other's book. The replay harness pins `underlyings`, which is why no test caught
   it; there is one now.
+  **Deploy surface (2026-08-27):** `POST /trade/options/strangle-combo/deploy` + the Trade
+  page's "Strangle combo" card — until then the Aug-13 live carve-out was ENGINE-only and
+  the only way in was a raw `/live/start` call (the owner hit this on the VPS). One INDEX
+  per deploy (the ctor's universe precedence); `mtm_stop_per_lot` is a SCALAR there (one
+  index — the ctor spreads it); deploy exit default 15:20 per the intraday-family rule,
+  ctor stays 15:25 (§1). Model→route→ctor contract pinned in its test file.
   **`same_strike_action`** (2026-08-14) decides what happens when a leg's exit fires but the
   recomputed OTM3 is the strike it is ALREADY on — spot must move half a grid step (25 pts
   NIFTY / 50 SENSEX) before the strike shifts, so until then the deck's re-entry repositions

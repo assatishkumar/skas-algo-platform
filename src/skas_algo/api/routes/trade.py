@@ -25,6 +25,7 @@ from skas_algo.api.models import (
     EquityTradeDeploy,
     IntradayStraddleDeploy,
     FairValueCalendarDeploy,
+    IntradayStrangleComboDeploy,
     VolcanoCalendarDeploy,
     IronFlyDeploy,
     LiveStartRequest,
@@ -708,6 +709,60 @@ async def fair_value_calendar_deploy(
         notes=body.notes,
         instrument_class="DERIV",
         underlying=body.underlying.upper(),
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/options/strangle-combo/deploy")
+async def strangle_combo_deploy(
+    body: IntradayStrangleComboDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the intraday OTM3 strangle with independent legs (intraday_strangle_combo)."""
+    if body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="OTM3 selection reads the LIVE chain on the listing grid — deploy with "
+            "a broker quote source (zerodha)",
+        )
+    u = body.underlying.upper()
+    if u not in ("NIFTY", "SENSEX"):
+        raise HTTPException(status_code=422, detail="underlying must be NIFTY or SENSEX")
+    # Every ctor kwarg enumerated — an omitted key silently falls back to the ctor default
+    # (the fvc roll_days_before lesson). The strategy reads its ONE index from the run's
+    # universe; day_schedule stays the deck default and gates which weekdays it trades.
+    params = {
+        "lots": body.lots,
+        "otm_steps": body.otm_steps,
+        "entry_time": body.entry_time,
+        "exit_time": body.exit_time,
+        "reentry_cutoff": body.reentry_cutoff,
+        "leg_stop_pct": body.leg_stop_pct,
+        "leg_target_pct": body.leg_target_pct,
+        "max_sl_reentries": body.max_sl_reentries,
+        "max_target_reentries": body.max_target_reentries,
+        "same_strike_action": body.same_strike_action,
+        "wing_steps": body.wing_steps,
+        "mtm_stop_per_lot": body.mtm_stop_per_lot,
+        "stop_check": body.stop_check,
+        "min_leg_oi": body.min_leg_oi,
+    }
+    req = LiveStartRequest(
+        strategy_id="intraday_strangle_combo",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=u,
         capital=body.capital,
         params=params,
         mode=body.mode,
