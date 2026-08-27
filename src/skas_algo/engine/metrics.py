@@ -51,9 +51,15 @@ def compute_metrics(
     # withdrawals are added back (your distributions, not losses), taxes are a real
     # cost already reflected in final equity. So both metrics share this base value.
     total_value = final_equity + total_withdrawals
-    total_return = (total_value - initial_capital) / initial_capital * 100
+    # A ZERO starting capital is legitimate for a strategy whose funding comes from selling
+    # a holding rather than from a cash float — value_investing deployed live at capital 0
+    # (2026-08-28), where any figure would have been fiction. Percent-of-capital is simply
+    # undefined then, so report 0 rather than raising: an unguarded divide here took out the
+    # whole report — the Live tile, the snapshot and Analyze all build one.
+    total_return = ((total_value - initial_capital) / initial_capital * 100
+                    if initial_capital > 0 else 0.0)
     cagr = 0.0
-    if years > 0 and total_value > 0:
+    if years > 0 and total_value > 0 and initial_capital > 0:
         cagr = (total_value / initial_capital) ** (1 / years) - 1
 
     # Average monthly figures over the months the run spans.
@@ -124,7 +130,7 @@ def _deployed_idle_metrics(history, years, total_value, initial_capital, idle_re
             idle_interest = idle_interest * growth + history[i - 1].get("cash", 0.0) * (growth - 1)
         out["Idle Interest (assumed)"] = idle_interest
         idle_total = total_value + idle_interest
-        if years > 0 and idle_total > 0:
+        if years > 0 and idle_total > 0 and initial_capital > 0:   # see the guard above
             label = f"CAGR (idle @ {round(idle_return * 100)}%) %"
             out[label] = ((idle_total / initial_capital) ** (1 / years) - 1) * 100
     return out

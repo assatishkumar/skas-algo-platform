@@ -745,3 +745,21 @@ def test_units_the_broker_holds_but_the_ledger_does_not_are_adoptable():
 
     # …and the lots are now real EXIT targets, which is the entire point.
     assert all(lot.id is not None for lot in lots)
+
+
+def test_a_zero_starting_capital_does_not_blow_up_the_report():
+    """Legitimate for a strategy funded by SELLING a holding rather than from a cash float —
+    the owner deployed live at capital 0 (2026-08-28) because any figure would have been
+    fiction. Percent-of-capital is undefined then, but an unguarded divide took out the WHOLE
+    report, and the Live tile, the snapshot and Analyze all build one."""
+    from skas_algo.engine.metrics import compute_metrics
+    from skas_algo.engine.runner import RunResult
+
+    res = RunResult(history=[
+        {"date": date(2026, 1, 1), "total_equity": 0.0, "cash": 0.0, "holdings_value": 0.0},
+        {"date": date(2026, 6, 1), "total_equity": 5_000.0, "cash": 0.0,
+         "holdings_value": 5_000.0},
+    ])
+    m = compute_metrics(res, 0.0)          # must not raise
+    assert m["Total Return %"] == 0.0
+    assert m["CAGR %"] == 0.0
