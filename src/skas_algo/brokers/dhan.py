@@ -400,26 +400,40 @@ class DhanAdapter:
             "price": float(raw.get("price") or 0.0),
         }
 
-    @staticmethod
-    def _error_message(raw: dict) -> str | None:
+    #: Descriptions Dhan attaches to HEALTHY orders. They are not failure reasons, and
+    #: LiveBroker prefers status_message over status when it reports one — so left alone
+    #: they produce halts like "BUY 1 ITC → CONFIRMED" (2026-08-24), which names neither
+    #: the outcome nor the remedy.
+    _BENIGN_OMS = ("CONFIRMED", "TRADE CONFIRMED", "TRADED", "OK", "SUCCESS")
+
+    @classmethod
+    def _error_message(cls, raw: dict) -> str | None:
         """Dhan's OMS description, but ONLY when it describes a FAILURE.
 
-        ``omsErrorDescription`` is populated on healthy orders too. On 2026-08-24 a
-        cancelled ITC buy came back with ``omsErrorCode: "0"`` (i.e. no error) and
-        ``omsErrorDescription: "CONFIRMED"`` — and because LiveBroker prefers
-        ``status_message`` over ``status`` when it reports a failure, the halt read
-        "BUY 1 ITC → CONFIRMED". That word describes neither what happened (the order was
-        CANCELLED) nor what to do about it, and it cost a live debugging session.
+        THE STATUS DECIDES, NOT THE CODE (2026-08-27). The first cut of this gate keyed off
+        ``omsErrorCode == "0"`` meaning "no error" — but Dhan sends code "0" for BOTH a
+        healthy fill ("TRADE CONFIRMED") AND a genuine rejection carrying the real reason.
+        So a KTKBANK buy rejected with
 
-        Suppressed ONLY when the code AFFIRMATIVELY says "no error" ("0"/"NA"). A MISSING
-        code is not that claim — a genuine rejection can arrive with a reason and no code,
-        and dropping it would trade one uninformative halt for another. When in doubt, show
-        what the broker said.
+            omsErrorCode "0" / "RMS:…:You have insufficient funds. Please add Rs.83.48…"
+
+        surfaced as a bare "BUY 1 KTKBANK → REJECTED" and the owner had to ask Dhan support
+        for a reason our own API response already contained. Fixing an uninformative halt
+        must not create a differently uninformative one.
+
+        A REJECTED order's description is ALWAYS the reason — surface it whatever the code
+        says. Otherwise suppress only text that is a known benign confirmation.
         """
-        code = str(raw.get("omsErrorCode") or "").strip().upper()
-        if code in ("0", "NA", "NONE"):
+        desc = (raw.get("omsErrorDescription") or "").strip()
+        status = str(raw.get("orderStatus") or "").strip().upper()
+        if status == "REJECTED":
+            return desc or str(raw.get("omsErrorCode") or "").strip() or None
+        if desc.upper() in cls._BENIGN_OMS:
             return None
-        return raw.get("omsErrorDescription") or code or None
+        code = str(raw.get("omsErrorCode") or "").strip().upper()
+        if code in ("0", "NA", "NONE") and not desc:
+            return None
+        return desc or (code if code not in ("0", "NA", "NONE") else None) or None
 
     def cancel_order(self, broker_order_id: str) -> None:
         self._ensure_armed()

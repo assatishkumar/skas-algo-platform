@@ -275,3 +275,29 @@ def test_a_benign_oms_description_is_not_reported_as_a_failure():
         "orderStatus": "REJECTED", "omsErrorCode": "DH-906",
         "omsErrorDescription": "Insufficient funds"}})
     assert _adapter(http2).order_status("9")["status_message"] == "Insufficient funds"
+
+
+def test_a_rejection_reason_survives_dhans_zero_error_code():
+    """THE STATUS DECIDES, NOT THE CODE (2026-08-27 regression).
+
+    The first version of the benign-description gate keyed off ``omsErrorCode == "0"``
+    meaning "no error" — but Dhan sends "0" for BOTH a healthy fill AND a genuine rejection
+    whose description IS the reason. A live KTKBANK buy was rejected with code "0" and
+    "RMS:…insufficient funds. Please add Rs.83.48 to trade", the gate threw it away, the
+    halt read a bare "BUY 1 KTKBANK → REJECTED", and the owner had to ask Dhan support for
+    a reason our own API response already held."""
+    http = FakeHttp({("GET", "/orders/34126082749003"): {
+        "orderStatus": "REJECTED", "filledQty": 0, "omsErrorCode": "0",
+        "omsErrorDescription":
+            "RMS:34126082749003:You have insufficient funds. Please add Rs.83.48 to trade."}})
+    st = _adapter(http).order_status("34126082749003")
+    assert st["status"] == "REJECTED"
+    assert "insufficient funds" in st["status_message"]
+    assert "83.48" in st["status_message"], "the actionable number must reach the halt banner"
+
+    # …while a HEALTHY order's confirmation text is still suppressed (the 08-24 fix holds).
+    for benign in ("TRADE CONFIRMED", "CONFIRMED"):
+        h = FakeHttp({("GET", "/orders/9"): {
+            "orderStatus": "TRADED", "filledQty": 1, "omsErrorCode": "0",
+            "omsErrorDescription": benign}})
+        assert _adapter(h).order_status("9")["status_message"] is None, benign

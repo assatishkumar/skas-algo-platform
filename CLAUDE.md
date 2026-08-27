@@ -222,6 +222,13 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   **modify RESTATES the order** (Dhan's PUT rejects a partial body, so the live order is read
   first and the changed fields overlaid); options route NSE_FNO+MARGIN, equity NSE_EQ+CNC, and
   an unresolvable symbol RAISES rather than falling through to a wrong `securityId`.
+  **`_error_message`: THE STATUS DECIDES, NOT THE CODE** (2026-08-27). Dhan sends
+  `omsErrorCode "0"` for BOTH a healthy fill ("TRADE CONFIRMED") AND a genuine rejection whose
+  description IS the reason — so a gate keyed on the code either leaks "CONFIRMED" into a halt
+  banner (08-24) or swallows "RMS:…insufficient funds. Please add Rs.83.48 to trade" (08-27,
+  the owner had to ask Dhan support for a reason our own API response already held). A
+  REJECTED order's description is ALWAYS surfaced; benign confirmation text is suppressed by
+  VALUE (`_BENIGN_OMS`), never by code alone.
   `positions()` reshapes tradingSymbol/netQty into the reconciler's tradingsymbol/quantity and
   `_option_tradingsymbol` comes from the scrip master (never reconstructed).
   `BrokerAccountOut.can_place_orders` reports `adapter_can_execute` so the Brokers page's
