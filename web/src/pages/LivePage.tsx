@@ -414,9 +414,16 @@ function QuoteSwitch({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () =
     }
   }
 
-  if (run.quote_source === "zerodha") {
+  // Already on a BROKER feed → the only move is back to cache. This used to test
+  // `=== "zerodha"` only, so a run on DHAN quotes was offered "Go live ⚡" — which the owner
+  // reasonably read as "switch to LIVE trading" on a run that was already LIVE with LIVE
+  // orders. It only ever meant "use a live QUOTE feed" (2026-08-27).
+  if (run.quote_source === "zerodha" || run.quote_source === "dhan") {
+    const feed = run.quote_source === "dhan" ? "Dhan" : "Zerodha";
     return (
-      <button onClick={() => go("cache", null)} disabled={busy} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
+      <button onClick={() => go("cache", null)} disabled={busy}
+        title={`Quotes come from ${feed} right now — switch to cached last-close prices`}
+        className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
         Use cache quotes
       </button>
     );
@@ -424,8 +431,10 @@ function QuoteSwitch({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () =
   return (
     <span className="inline-flex items-center gap-1">
       {!open ? (
-        <button onClick={() => setOpen(true)} className="rounded bg-emerald-900 hover:bg-emerald-800 text-white px-3 py-1.5 text-xs">
-          Go live ⚡
+        <button onClick={() => setOpen(true)}
+          title="Switch this run's QUOTE feed from cached closes to a live broker feed. This does not change PAPER/LIVE trading mode."
+          className="rounded bg-emerald-900 hover:bg-emerald-800 text-white px-3 py-1.5 text-xs">
+          Live quotes ⚡
         </button>
       ) : (
         <>
@@ -445,6 +454,13 @@ function QuoteSwitch({ run, onChanged }: { run: LiveRunSnapshot; onChanged: () =
     </span>
   );
 }
+
+/** Strategies whose "Signals" panel means something: the Donchian-breakout family, whose
+ *  watchlist columns ARE 20d high/low + distance-to-breakout. Anything else gets no panel
+ *  rather than a table of another strategy's vocabulary. */
+const _DONCHIAN_SIGNALS = new Set([
+  "sst_lifo", "sst_fifo", "sst_weekly", "sst_weekly_fifo", "supertrend_momentum", "nifty_shop",
+]);
 
 /** Full live detail for an active deployment — positions, signals, interventions. */
 /** Edit a running deployment's loop controls + exclusion list (no new entries). */
@@ -623,6 +639,17 @@ function RunCard({
   // instrument class (covers custom_options, which has no `lots` attr), matching the tile.
   const isOptions =
     run.instrument_class === "DERIV" || isOptionsStrategy(run.strategy_id) || run.lots != null;
+  // …but "not options" was never the same as "Donchian breakout". The signals table is the
+  // 20d-high/low watchlist of the SST FAMILY; on value_investing (which ranks by today's
+  // change % and never sells) it rendered SST's vocabulary — "At 20-day low", "→ breakout"
+  // — for a strategy that has no such concept (owner, 2026-08-27).
+  const hasDonchianSignals = !isOptions && _DONCHIAN_SIGNALS.has(run.strategy_id);
+  // Intervene applies a profit-target / trailing-stop EXIT override. value_investing NEVER
+  // sells except to fund the day's buys, and an override intercepting that partial EXIT
+  // would HALVE the funding sale and let the buys overdraw silently — which is exactly why
+  // the backtest form hides its override builder too (CLAUDE.md §8). Not just irrelevant
+  // here: actively unsafe.
+  const canIntervene = run.strategy_id !== "value_investing";
   // A donchian basket shows ONE combined per-name table (DonchianBasketPanel) instead of the raw
   // per-leg positions table — the basket view clubs CE+PE and carries the same leg economics.
   const isDonchian = run.strategy_id === "donchian_strangle_monthly";
@@ -653,9 +680,18 @@ function RunCard({
     }
     return sortDir === "asc" ? c : -c;
   });
+  // A busy flag so an action REACTS immediately. Without it "Acknowledge & resume" looked
+  // dead for the round-trip and got clicked several times (owner, 2026-08-27).
+  const [busy, setBusy] = useState(false);
   const act = async (fn: () => Promise<unknown>) => {
-    await fn();
-    onChanged();
+    if (busy) return;
+    setBusy(true);
+    try {
+      await fn();
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
   };
   // Refresh relies on the WebSocket snapshot to update the card + bump the signals
   // version (which refetches with keepPreviousData) — no full page re-seed, so the
@@ -671,10 +707,18 @@ function RunCard({
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-rose-300 bg-rose-100 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300 px-3 py-2 text-sm">
           <span>🛑 ORDERS HALTED: {run.order_error}. Review the broker book before resuming.</span>
           <button
-            onClick={() => { if (confirm("Acknowledge the order failure and resume decisions? Review the Kite order/position book first — whatever filled before the failure is real.")) act(() => api.liveAckOrderError(run.run_id)); }}
+            disabled={busy}
+            onClick={() => {
+              // Name the run's OWN broker — this used to say "Kite" whatever the account
+              // was, and run 23's rejection was on DHAN (2026-08-27).
+              const bk = run.quote_source === "dhan" ? "Dhan" : "Kite";
+              if (confirm(`Acknowledge the order failure and resume decisions? Review the ${bk} order/position book first — whatever filled before the failure is real.`)) {
+                act(() => api.liveAckOrderError(run.run_id));
+              }
+            }}
             className="rounded bg-rose-700 hover:bg-rose-800 text-white px-2.5 py-1 text-xs font-medium"
           >
-            Acknowledge &amp; resume
+            {busy ? "Resuming…" : <>Acknowledge &amp; resume</>}
           </button>
         </div>
       )}
@@ -870,7 +914,7 @@ function RunCard({
               </button>
             )}
             <Link to={`/analyze?run=${run.run_id}`} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs" title="Round-trips, per-stock charts & P&L for this deployment">Analyze →</Link>
-            {!isOptions && (
+            {hasDonchianSignals && (
               <button onClick={() => setShowSignals((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
                 {showSignals ? "Hide signals" : "Signals"}
               </button>
@@ -878,7 +922,9 @@ function RunCard({
             <button onClick={() => setShowControls((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">
               {showControls ? "Hide controls" : "Controls"}
             </button>
-            <button onClick={() => setShowOverride((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Intervene…</button>
+            {canIntervene && (
+              <button onClick={() => setShowOverride((v) => !v)} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Intervene…</button>
+            )}
             {isOptions && run.positions?.length ? (
               <button
                 onClick={() => {
@@ -914,7 +960,7 @@ function RunCard({
             ) : (
               <OverridePanel runId={run.run_id} onDone={() => setShowOverride(false)} />
             ))}
-          {showSignals && !isOptions && (
+          {showSignals && hasDonchianSignals && (
             <SignalsPanel runId={run.run_id} version={version} supertrend={run.strategy_id === "supertrend_momentum"} />
           )}
         </>

@@ -15,12 +15,21 @@ function RunParams({ params, capital }: { params: Record<string, unknown>; capit
     <Card>
       <div className="text-sm font-medium text-slate-300 mb-2">Run parameters</div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1 text-sm">
-        {keys.map((k) => (
-          <div key={k} className="flex justify-between gap-3 border-b border-slate-800/50 py-0.5">
-            <span className="text-slate-400">{paramLabel(k)}</span>
-            <span className="tabular-nums">{formatParamValue(k, merged[k])}</span>
-          </div>
-        ))}
+        {keys.map((k) => {
+          const val = formatParamValue(k, merged[k]);
+          // A long value (value_investing's 57-name watchlist) has no break points, so in a
+          // fixed 4-column cell it overflowed and printed ON TOP of its neighbours. Give it
+          // the whole row and let it wrap (owner, 2026-08-27).
+          const long = String(val).length > 44;
+          return (
+            <div key={k}
+              className={`border-b border-slate-800/50 py-0.5 ${
+                long ? "col-span-2 md:col-span-4 flex flex-col gap-0.5" : "flex justify-between gap-3"}`}>
+              <span className="text-slate-400 shrink-0">{paramLabel(k)}</span>
+              <span className={long ? "break-words leading-snug" : "tabular-nums truncate"}>{val}</span>
+            </div>
+          );
+        })}
       </div>
     </Card>
   );
