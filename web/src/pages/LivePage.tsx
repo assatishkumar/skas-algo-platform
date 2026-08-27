@@ -1790,7 +1790,7 @@ export default function LivePage() {
               Market data · {connected ? "live" : "offline"}
             </span>
           </div>
-          <Link to="/live/new" className="rounded-[11px] bg-[var(--ft)] text-white px-4 py-2 text-sm font-semibold">+ Deploy new strategy</Link>
+          <Link to="/trade" className="rounded-[11px] bg-[var(--ft)] text-white px-4 py-2 text-sm font-semibold">+ Deploy new strategy</Link>
         </div>
 
         {filtered.length > 0 && <HeroStrip deployments={filtered} />}
@@ -1815,7 +1815,7 @@ export default function LivePage() {
             {mode === "live" && tab === "active" ? (
               <>No live-money deployments yet — promote a paper deployment via ⋯ → Go LIVE once you trust it.</>
             ) : tab === "active" ? (
-              <>No active {mode} deployments. <Link to="/live/new" className="text-[var(--accent-deep)] hover:underline">Deploy a strategy →</Link></>
+              <>No active {mode} deployments. <Link to="/trade" className="text-[var(--accent-deep)] hover:underline">Deploy a strategy →</Link></>
             ) : (
               `No ${tab} ${mode} deployments.`
             )}

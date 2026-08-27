@@ -298,6 +298,11 @@ export const api = {
     request<LiveRunSnapshot>("/trade/options/fair-value-calendar/deploy", { method: "POST", body: JSON.stringify(body) }),
   volcanoCalendarDeploy: (body: VolcanoCalendarDeploy) =>
     request<LiveRunSnapshot>("/trade/options/volcano-calendar/deploy", { method: "POST", body: JSON.stringify(body) }),
+  /** Deploy through a strategy's OWN route, chosen from lib/deploy/registry. The registry
+   *  page needs one call that works for every named route; the typed per-strategy methods
+   *  above stay for anything that still calls them directly. */
+  deployByRoute: (route: string, body: Record<string, unknown>) =>
+    request<LiveRunSnapshot>(route, { method: "POST", body: JSON.stringify(body) }),
   strangleComboDeploy: (body: IntradayStrangleComboDeploy) =>
     request<LiveRunSnapshot>("/trade/options/strangle-combo/deploy", { method: "POST", body: JSON.stringify(body) }),
   cpRatioExpiryDeploy: (body: CpRatioExpiryDeploy) =>

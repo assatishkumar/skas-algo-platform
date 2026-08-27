@@ -894,6 +894,9 @@ export interface StartLiveRequest {
   underlying?: string;
   capital: number;
   params: Record<string, unknown>;
+  // PAPER | LIVE. The backend model has always had it; the old generic form never sent it,
+  // so every deploy from that page was PAPER whatever you picked elsewhere.
+  mode?: string;
   tax_rate: number;
   withdrawal_rate: number;
   lookback: number;

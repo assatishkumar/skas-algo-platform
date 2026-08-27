@@ -715,6 +715,38 @@ don't regress that. The backend's mobile surface: `GET/POST /alerts*` (fed by
 app are typed-confirmation-gated (ARM, LIVE deploy) on top of the unchanged §1 gates —
 the app is the OWNER's hand, never Claude's.
 
+## 8c. Deploying is ONE registry-driven page (`/trade` → Deploy, 2026-08-27)
+Every deployable strategy is declared as DATA in `web/src/lib/deploy/registry.ts`; the page
+(`pages/trade/DeployView.tsx`) renders the left rail grouped by HOLD LENGTH (intraday /
+weekly / monthly / positional), a summary panel, and only that strategy's own knobs.
+- **Why:** deploying used to split across two pages on the invisible line "does it have a
+  backtest?" — generic form at `/live/new` vs hand-built cards on `/trade`. Options
+  strategies lived on BOTH, with no cross-link. It cost real time twice in two days
+  (value_investing deployed PAPER by accident; `intraday_strangle_combo` looked unavailable
+  when it simply had no card — it had been live-capable and unreachable since 08-13).
+- **The generic form was also a CORRECTNESS bug, not just UX.** Ctors end in `**_ignored`,
+  so a form field that isn't a real kwarg is silently dropped — `supertrend_momentum` had
+  been receiving `max_lots`, which it does not define, for as long as that form existed.
+  The registry test caught it on the first run.
+- **`tests/test_deploy_registry.py` is what makes the data safe** — it parses the TS and
+  asserts, per strategy: the id is registered, any `route` exists on the FastAPI app, every
+  field `param` is a real ctor kwarg **walked across the MRO** (subclass params hide behind
+  `*args/**kwargs` — the `test_backtest_v2_registry._ctor_defaults` trick), and a /docs card
+  exists for the summary panel. Plus `test_every_strategy_has_a_deploy_path`: a strategy is
+  either in the registry or in `_DEPLOYS_ELSEWHERE` with the page that owns it (smoke test →
+  Brokers, custom_options → Build, donchian → Screener). A new strategy with no deploy path
+  now FAILS rather than being quietly unreachable.
+- **Deploy defaults live in the registry, ctor defaults stay put** (§1) — intraday exits
+  15:20 vs ctor 15:25, cadences 1min vs tick, fvc side "ce" vs "fair_value".
+- **The summary panel reads `web/src/lib/strategyDocs.ts`** — the STRATEGIES/META tables
+  EXTRACTED from StrategiesPage so `/docs` and the deploy page share ONE copy.
+  `test_strategy_docs_coverage` now parses that file, not the page.
+- `custom_equity` is the ONE non-declarative entry (`custom: "equity"`) — a manual position,
+  not a parameterized strategy; it keeps its bespoke form and has no docs card.
+- `/live/new` renders the SAME component so old links and the forward-test router state keep
+  working — a `<Navigate>` redirect would have dropped `state.prefill` (§9's documented
+  footgun). Prefill only applies knobs that exist on the selected strategy.
+
 ## 9. Frontend (`web/`) gotchas
 - **Router state vs legacy redirects:** several old paths are `<Navigate to=... replace />` redirects in
   `App.tsx` (e.g. `/new` → `/backtest?tab=new`). `<Navigate>` **drops `location.state`**, so navigating

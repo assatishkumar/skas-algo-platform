@@ -3,7 +3,8 @@
 Two doc surfaces rot silently when a strategy lands:
   * `docs/FEATURES.md` §3 — the plain-language catalog a fresh session (or the owner) reads
     to learn WHAT the platform does;
-  * `web/src/pages/StrategiesPage.tsx` — the in-app `/docs` reference cards, the only
+  * `web/src/lib/strategyDocs.ts` — the in-app `/docs` reference cards (extracted from
+    StrategiesPage 2026-08-27 so the Trade deploy page shares ONE copy), the only
     strategy documentation a non-developer ever sees.
 Nothing in the browser or the API fails when a card is missing; the strategy simply doesn't
 exist as far as the docs are concerned (fair_value_calendar, happy_twins, intraday_straddle,
@@ -19,7 +20,9 @@ from pathlib import Path
 from skas_algo.strategies.registry import available
 
 _ROOT = Path(__file__).resolve().parents[1]
-_DOCS_PAGE = _ROOT / "web" / "src" / "pages" / "StrategiesPage.tsx"
+# The DATA moved to lib/strategyDocs.ts (2026-08-27); the page now renders it and the
+# Trade deploy form reads the same table for its summary panel — one source, no drift.
+_DOCS_PAGE = _ROOT / "web" / "src" / "lib" / "strategyDocs.ts"
 _FEATURES = _ROOT / "docs" / "FEATURES.md"
 
 # Registered, but deliberately NOT a card on /docs — these are tools, not strategies the

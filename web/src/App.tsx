@@ -10,7 +10,6 @@ import BacktestPage from "./pages/BacktestPage";
 import BrokersPage from "./pages/BrokersPage";
 import ComparePage from "./pages/ComparePage";
 import DataPage from "./pages/DataPage";
-import DeployPage from "./pages/DeployPage";
 import DonchianLivePage from "./pages/DonchianLivePage";
 import HomePage from "./pages/HomePage";
 import LivePage from "./pages/LivePage";
@@ -197,7 +196,9 @@ export default function App() {
           <Route path="/backtest" element={<BacktestPage />} />
           <Route path="/trade" element={<TradePage />} />
           <Route path="/live" element={<LivePage />} />
-          <Route path="/live/new" element={<DeployPage />} />
+          {/* Legacy path — renders the SAME registry-driven page so old links and
+              the forward-test router state keep working (a <Navigate> would drop state). */}
+          <Route path="/live/new" element={<TradePage />} />
           <Route path="/live/:id" element={<DonchianLivePage />} />
           <Route path="/docs" element={<StrategiesPage />} />
           <Route path="/analyze" element={<AnalysisPage />} />
