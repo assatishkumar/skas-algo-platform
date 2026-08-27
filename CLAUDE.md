@@ -296,6 +296,35 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   XIRR, and the SAME-rupees-same-days index SIP as the yardstick; marks come from the run's END
   DATE, never each name's last fill — that bug understated #278 by ₹3.4L and read TCS at 29.0%
   weight instead of 18.9%).
+  **T+1 SETTLEMENT (`settlement_days`, owner 2026-08-27) — the funding model was a backtest
+  fiction.** The strategy used to sell the ETF and spend the proceeds in the SAME decision.
+  Correct in a backtest (the engine credits a sale synchronously), impossible live: an equity
+  CNC sale settles T+1 (Dhan confirmed in writing). Live run 23 showed both halves of the
+  failure — capital was ₹1,00,00,000 so "idle cash is spent before the ETF" never fired the
+  sale at all, while the real Dhan balance was ₹146.03; MANAPPURAM filled and KTKBANK was
+  rejected for want of ₹83.48, halting the run. Now: **buy from SETTLED cash, then pre-sell
+  for tomorrow.** The strategy owns a settlement ledger (`settled_cash` + `pending_credits`,
+  both persisted) and ages credits on `live/holidays.next_trading_day` (NEW — the mirror of
+  `previous_trading_day`), so a Friday sale funds Monday and a holiday shifts again.
+  **The float target covers the POTS' claims** (`max(daily_budget, sum(pot)) × (1+buffer)`),
+  not just one day's budget — a ₹2,900 name saving six days needs ₹2,900 on the day it fires,
+  and capping at the daily budget would price it out forever (caught by an existing test).
+  **SIGNAL ORDER FLIPPED — and the old comment was actively wrong to keep.** It used to read
+  "the sale funds the same tick, so every EXIT must precede every buy". The sale no longer
+  funds today at all, yet must STILL go first: a rejected BUY halts the run, and a sale queued
+  behind the buys would then never fire, starving TOMORROW too.
+  **LIVE reconciles against the broker**: `manager._maybe_refresh_funds` (mirrors
+  `_maybe_refresh_margin` — STOCK + broker source, market hours, ~1/min, `getattr`-probed)
+  pushes `adapter.funds().available`, and the ledger is capped at `min(ledger, broker)` —
+  `Funds` already existed in `brokers/base.py`, `ZerodhaAdapter.funds()` was implemented and
+  called by NOBODY, `DhanAdapter.funds()` is new (`/fundlimit`).
+  Ctor default `settlement_days=0` = the historical same-day path, kept verbatim in
+  `_legacy_fund` (§1); FORM/deploy default 1, buffer 10%.
+  **Fixed in the same change:** `_equal_value_plan` DEBITED a name's pot while planning, but
+  the caller could stop emitting when cash ran out — so money vanished from pots for buys that
+  never happened. Same-day funding hid it (the sale always covered the plan); settled-cash
+  gating would have hit it daily. The planner now takes the spendable `cap` so plan ==
+  emission (`cap=None` preserves the historical unbounded walk).
   **`sizing` (2026-08-24) is the allocation decision, and the one to get right.** All three modes
   share the faller-first ranking and differ only in rupees per name. `one_share` (ctor default,
   §1) is the spec and silently weights by SHARE PRICE — one share of a ₹2,299 name is 51× the

@@ -40,7 +40,7 @@ from datetime import UTC, datetime, timedelta
 
 from skas_algo.db.enums import OrderSide, OrderType
 
-from .base import BrokerOrder, Session
+from .base import BrokerOrder, Funds, Session
 from .zerodha import BrokerLoginError, NotArmedError
 
 DHAN_BASE = "https://api.dhan.co/v2"
@@ -438,6 +438,19 @@ class DhanAdapter:
     def cancel_order(self, broker_order_id: str) -> None:
         self._ensure_armed()
         self._http.delete(f"/orders/{broker_order_id}")
+
+    def funds(self) -> Funds:
+        """The account's REAL available balance. Read-only (ungated) — /fundlimit is already
+        the endpoint the token check uses. Dhan's key really is spelled "availabelBalance".
+
+        Consumed by value_investing's T+1 funding: an equity CNC sale settles overnight, so a
+        strategy that trusts its own ledger will overdraw (live run 23, 2026-08-27 — a ₹1cr
+        ledger against a ₹146.03 balance)."""
+        raw = self._http.get("/fundlimit") or {}
+        return Funds(
+            available=float(raw.get("availabelBalance") or 0.0),
+            used=float(raw.get("utilizedAmount") or 0.0),
+        )
 
     def positions(self) -> list[dict]:
         """Net book in the shape reconciliation expects: ``tradingsymbol`` + ``quantity``

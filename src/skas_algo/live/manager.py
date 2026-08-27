@@ -366,6 +366,7 @@ class LiveRun:
         # Real Zerodha basket margin, refreshed ~1/min (overrides the model estimate).
         self._margin: float | None = None
         self._last_margin_at: datetime | None = None
+        self._last_funds_at: datetime | None = None
         self._wire_quote_source()
 
     def _wire_quote_source(self) -> None:
@@ -599,6 +600,7 @@ class LiveRun:
                     self.session.market.set_index_spot(name, quotes.pop(key))
         self.session.update_quotes(quotes)
         self._maybe_refresh_margin()
+        self._maybe_refresh_funds()
         self._maybe_reconcile()
         snap = self.snapshot()
         with session_scope() as db:
@@ -695,6 +697,43 @@ class LiveRun:
             build_notifier().send(Alert(title, body, getattr(AlertLevel, level)))
         except Exception:  # pragma: no cover - alerts are best-effort
             pass
+
+    def _maybe_refresh_funds(self) -> None:
+        """Throttled (~1/min) REAL available balance for a cash-equity run, pushed to any
+        strategy that wants it (``set_broker_funds``, probed like ``set_broker_margin``).
+
+        Why it exists: a strategy's own cash ledger is whatever `capital` was typed at deploy,
+        which has no connection to the account. value_investing was deployed at ₹1,00,00,000
+        against a ₹146.03 Dhan balance, so it never sold its funding ETF and then had a buy
+        rejected for want of ₹83.48 (live run 23, 2026-08-27). The broker is truth.
+
+        STOCK + broker source only, market hours only, and never breaks the loop on failure —
+        the same shape as the margin push above it."""
+        if self.config.instrument_class.upper() == "DERIV" or not is_broker_source(
+            self.config.quote_source
+        ):
+            return
+        push = getattr(getattr(self.session, "strategy", None), "set_broker_funds", None)
+        if push is None:
+            return
+        if not is_market_open(segment=self.config.segment):
+            return
+        now = datetime.now(IST)
+        if self._last_funds_at and (now - self._last_funds_at).total_seconds() < 60:
+            return
+        self._last_funds_at = now
+        adapter = getattr(self.quote_source, "adapter", None)
+        if adapter is None or not hasattr(adapter, "funds"):
+            return
+        try:
+            f = adapter.funds()
+        except Exception:  # pragma: no cover - a funds call must never break the loop
+            return
+        if f is not None:
+            try:
+                push(float(f.available))
+            except Exception:  # pragma: no cover
+                logger.exception("set_broker_funds failed for run %s", self.run_id)
 
     def _maybe_refresh_margin(self) -> None:
         """Throttled (~1/min) real Zerodha basket margin, built from our own legs. Falls
@@ -1006,6 +1045,7 @@ class LiveRun:
         """Persist + broadcast after a manual flatten/order (mirrors run_decision)."""
         self._tag_underlying_spot(events)
         self._maybe_refresh_margin()
+        self._maybe_refresh_funds()
         snap = self.snapshot()
         with session_scope() as db:
             if events:

@@ -301,3 +301,17 @@ def test_a_rejection_reason_survives_dhans_zero_error_code():
             "orderStatus": "TRADED", "filledQty": 1, "omsErrorCode": "0",
             "omsErrorDescription": benign}})
         assert _adapter(h).order_status("9")["status_message"] is None, benign
+
+
+def test_funds_reads_the_real_available_balance():
+    """value_investing's T+1 funding asks the BROKER what it can spend, because its own cash
+    ledger is whatever `capital` was typed at deploy — ₹1,00,00,000 against a ₹146.03 balance
+    on live run 23. Note Dhan really does spell it "availabelBalance"."""
+    http = FakeHttp({("GET", "/fundlimit"): {
+        "availabelBalance": 146.03, "utilizedAmount": 387.0, "sodLimit": 533.03}})
+    f = _adapter(http).funds()
+    assert f.available == 146.03 and f.used == 387.0
+
+    # A missing/empty payload must read as ZERO, never as "unknown" — a strategy that treats
+    # None as "no cap" would go right back to overdrawing.
+    assert _adapter(FakeHttp({("GET", "/fundlimit"): {}})).funds().available == 0.0

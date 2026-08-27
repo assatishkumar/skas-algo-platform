@@ -51,6 +51,7 @@ from math import ceil
 
 from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.types import Signal, SignalAction
+from skas_algo.live.holidays import next_trading_day
 
 
 _SIZING_MODES = frozenset({"one_share", "balanced", "equal_value"})
@@ -121,6 +122,13 @@ class ValueInvestingStrategy:
         #
         # Ctor default is the spec (§1: a recovered deploy must be byte-identical); the
         # backtest FORM defaults to equal_value.
+        # T+1 SETTLEMENT (owner 2026-08-27). An Indian equity CNC sale's proceeds are NOT
+        # spendable the same day — Dhan confirmed it in writing after live run 23 halted on
+        # "insufficient funds". 0 = the historical same-day funding, so a recovered deploy is
+        # byte-identical (§1); the FORM and deploy default to 1. Modelled in BOTH modes, so
+        # backtest == live (the founding parity rule) rather than the backtest flattering
+        # itself by deploying a day early.
+        settlement_days: int = 0,
         sizing: str = "one_share",  # one_share | balanced | equal_value
         max_skew_pct: float = 25.0,         # balanced only: allowed overweight vs the average
         fund_seed: str = "never",
@@ -138,6 +146,7 @@ class ValueInvestingStrategy:
         self.fund_source = str(fund_source or "").upper()
         self.warn_days_left = int(warn_days_left)
         self.funding_buffer_pct = float(funding_buffer_pct)
+        self.settlement_days = max(0, int(settlement_days))
         self.sizing = str(sizing or "one_share").lower()
         # An unrecognised mode used to fall through to one_share SILENTLY: a run asking for
         # equal_value against a backend that predates it traded price-weighted and looked
@@ -149,6 +158,15 @@ class ValueInvestingStrategy:
             )
         self.max_skew_pct = float(max_skew_pct)
         self.fund_seed = str(fund_seed or "never").lower()
+        # ---- the settlement ledger (persisted) ----
+        # `settled_cash` is what is spendable NOW; `pending_credits` are sale proceeds and the
+        # trading day they land. The strategy owns this rather than reading ctx.cash because
+        # the ENGINE credits a sale synchronously — which is exactly the fiction T+1 breaks.
+        # None = uninitialised; seeded on the first decision (broker funds live, ctx.cash in
+        # backtest).
+        self.settled_cash: float | None = None
+        self.pending_credits: list[list] = []          # [[iso_date, amount], …]
+        self._broker_funds: float | None = None        # manager push; transient, not persisted
         # cumulative rupees put into each name — drives the balanced walk (persisted)
         self.invested: dict[str, float] = {}
         # Balance is measured over the CURRENT EPOCH, not since inception. An epoch starts
@@ -223,36 +241,52 @@ class ValueInvestingStrategy:
                         "nothing to rank, nothing bought")
             return []
 
-        plan = self._shopping_list(ranked)
+        # SPEND ONLY WHAT HAS SETTLED. Under T+1 the money for today's buys was raised on a
+        # PREVIOUS day, and today's sale funds tomorrow. The two models are kept strictly
+        # apart: settlement_days=0 is the historical same-day path, byte-identical (§1).
+        spendable = self._settle(ctx, today)
+        # equal_value's POTS already do the budgeting (a name may only spend its own pot), so
+        # its cap is purely the cash. one_share/balanced have no pots, so the day's budget is
+        # the discipline. cap=None → the historical unbounded walk.
+        if self.settlement_days:
+            cap = spendable if self.sizing == "equal_value" else min(self.daily_budget, spendable)
+        else:
+            cap = None
+
+        plan = self._shopping_list(ranked, cap)
         if not plan:
-            self._alert(f"the daily budget ₹{self.daily_budget:,.0f} does not cover a single "
-                        f"share of any watchlist name (cheapest ₹{ranked[-1][3]:,.0f})")
-            return []
-        cost = sum(px * u for _, px, u in plan)
+            if self.settlement_days and spendable < 1.0:
+                self._alert("nothing has settled yet — today's fund-source sale lands "
+                            "tomorrow (T+1), and the drip starts from it")
+            else:
+                self._alert(f"the daily budget ₹{self.daily_budget:,.0f} does not cover a "
+                            f"single share of any watchlist name "
+                            f"(cheapest ₹{ranked[-1][3]:,.0f})")
 
-        exits, running_cash, fund_units = self._fund(ctx, plan, cost, fund, fund_px,
-                                                     fund_lots, fund_units, today)
-        if exits is None:  # dry — _fund alerted
-            return []
-
-        entries: list[Signal] = []
-        for sym, px, units in plan:
-            # The shadow ledger is the ONLY cash check that exists — the engine happily
-            # takes portfolio.cash negative (see engine/execution.py::_buy).
-            cost = px * units
-            if running_cash < cost:
-                break
-            running_cash -= cost
-            self.invested[sym] = self.invested.get(sym, 0.0) + cost
-            entries.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG, quantity=units,
-                                  reason="drip"))
+        if self.settlement_days:
+            # BUY from settled cash…
+            entries, running_cash = self._emit(plan, spendable)
+            self.settled_cash = running_cash
+            # …then raise TOMORROW's float.
+            exits, fund_units = self._presell(fund, fund_px, fund_lots, fund_units, today)
+        else:
+            cost = sum(px * u for _, px, u in plan)
+            exits, running_cash, fund_units = self._legacy_fund(
+                ctx, cost, fund, fund_px, fund_lots, fund_units, today)
+            if exits is None:                    # dry — _legacy_fund alerted
+                return []
+            entries, running_cash = self._emit(plan, running_cash)
 
         self._check_runway(fund_units, fund_px, running_cash, today)
         self._flag_unpriced(present)
-        if entries:
+        if entries or exits:
             self.last_shop_day = day
-        # ORDER IS LOAD-BEARING: the engine executes signals in list order and credits a
-        # sale's cash synchronously, so every fund-source EXIT must precede every buy.
+        # ORDER IS LOAD-BEARING, but under T+1 for a NEW reason. It used to be "the sale funds
+        # the same tick, so every fund-source EXIT must precede every buy". The sale no longer
+        # funds today at all — yet it must STILL come first, because a rejected BUY halts the
+        # run (order_error) and a sale queued behind the buys would then never fire, starving
+        # TOMORROW as well. Pre-funding the next session is the more important half, and is
+        # harmless if the buys then fail.
         return exits + entries
 
     # ------------------------------------------------------------------ pieces
@@ -275,6 +309,90 @@ class ValueInvestingStrategy:
         self.last_shop_day = day
         return [Signal(symbol=fund, action=SignalAction.ENTER_LONG, quantity=units,
                        reason="fund_seed")]
+
+    # ------------------------------------------------------- the settlement ledger
+    def set_broker_funds(self, value: float) -> None:
+        """Manager push: the account's REAL available balance. Live only — probed by
+        ``getattr`` exactly like ``set_broker_margin``, so nothing else has to know."""
+        if value is not None and value >= 0:
+            self._broker_funds = float(value)
+
+    def _settle(self, ctx, today: date) -> float:
+        """Age pending credits into spendable cash and return what may be spent today.
+
+        LIVE, the BROKER is truth: the ledger drifts (charges, and the same account funds
+        other runs), so the spendable figure is capped at what the account actually holds.
+        Run 23 is the case in point — a ₹1,00,00,000 ledger against a ₹146.03 balance, which
+        is how a ₹329.40 buy came to be rejected for want of ₹83.48."""
+        if self.settled_cash is None:                    # first decision of this run
+            self.settled_cash = float(ctx.cash)
+        due = [c for c in self.pending_credits if date.fromisoformat(c[0]) <= today]
+        for c in due:
+            self.settled_cash += float(c[1])
+        if due:
+            self.pending_credits = [
+                c for c in self.pending_credits if date.fromisoformat(c[0]) > today
+            ]
+        if self._broker_funds is not None:
+            self.settled_cash = min(self.settled_cash, self._broker_funds)
+        return max(0.0, self.settled_cash)
+
+    def _pending_total(self) -> float:
+        return sum(float(c[1]) for c in self.pending_credits)
+
+    def _presell(self, fund: str, fund_px: float, fund_lots, fund_units: int,
+                 today: date) -> tuple[list[Signal], int]:
+        """Top the settled-cash float up for the NEXT session — the T+1 half of the model.
+
+        Target is one day's budget plus ``funding_buffer_pct`` (the owner's ~10%), and we
+        sell only the DIFFERENCE: cash already settled and sales already in flight both
+        count, so a day that underspent does not trigger a second sale and the float never
+        ratchets up."""
+        if fund_px <= 0 or self.daily_budget <= 0:
+            return [], fund_units
+        # Pots are CLAIMS on cash, so the float has to cover them — a ₹2,900 name saving for
+        # six days needs ₹2,900 on the day it fires, not one day's ₹1,000. In steady state
+        # sum(pot) is a few days of budget (each pot is < one share's price), so this settles
+        # naturally rather than growing.
+        claims = sum(self.pot.values()) if self.sizing == "equal_value" else 0.0
+        target = max(self.daily_budget, claims) * (1.0 + self.funding_buffer_pct / 100.0)
+        need = target - max(0.0, self.settled_cash or 0.0) - self._pending_total()
+        if need <= 0:
+            return [], fund_units                        # the float is already covered
+        want = ceil(need / fund_px)
+        sell = min(want, fund_units)
+        if sell <= 0:
+            self._alert(f"FUND DRY — {fund} has nothing left to sell; tomorrow's ₹"
+                        f"{self.daily_budget:,.0f} budget is unfunded. Top it up.")
+            self._notify_once("fund_dry", today,
+                              f"{fund} is empty — the drip stops after today.")
+            return [], fund_units
+        if sell < want:
+            self._alert(f"{fund} could only cover ₹{sell * fund_px:,.0f} of tomorrow's ₹"
+                        f"{need:,.0f} top-up — the drip will be short.")
+        # One EXIT per LOT: an EXIT with a quantity but no lot_id is a SILENT no-op and the
+        # quantity is clamped to that single lot (engine/overrides.py) — there is no
+        # cross-lot partial sell. Portfolio order is purchase order → FIFO, the Indian tax
+        # treatment too.
+        exits: list[Signal] = []
+        left = sell
+        for lot in fund_lots:
+            if left <= 0:
+                break
+            take = min(left, lot.units)
+            exits.append(Signal(symbol=fund, action=SignalAction.EXIT, lot_id=lot.id,
+                                quantity=take, reason="fund_source", meta={"tag": "FUND"}))
+            left -= take
+        # The proceeds are NOT spendable today. Park them on the settlement date; the engine
+        # will still credit portfolio.cash immediately, and this ledger is what the strategy
+        # actually spends against.
+        landing = next_trading_day(today, self.settlement_days) if self.settlement_days else today
+        proceeds = sell * fund_px
+        if self.settlement_days:
+            self.pending_credits.append([landing.isoformat(), proceeds])
+        else:
+            self.settled_cash = (self.settled_cash or 0.0) + proceeds
+        return exits, fund_units - sell
 
     def _rank(self, ctx, present: set[str]) -> list[tuple[float, int, str, float]] | None:
         """(change, watchlist index, symbol, price), biggest faller first. None = the feed is
@@ -300,7 +418,7 @@ class ValueInvestingStrategy:
             return None
         return rows
 
-    def _shopping_list(self, ranked) -> list[tuple[str, float, int]]:
+    def _shopping_list(self, ranked, cap: float | None) -> list[tuple[str, float, int]]:
         """(symbol, price, units) for today, in rank order.
 
         "equal_value" — THE fix for the price-weighting problem. Every watchlist name is
@@ -315,9 +433,9 @@ class ValueInvestingStrategy:
         wrap-around, leftover evaporates. "balanced" — one_share plus a skew cap.
         """
         if self.sizing == "equal_value":
-            return self._equal_value_plan(ranked)
+            return self._equal_value_plan(ranked, cap)
 
-        remaining = self.daily_budget
+        remaining = self.daily_budget if cap is None else max(0.0, cap)
         plan: list[tuple[str, float, int]] = []
         balanced = self.sizing == "balanced"
         spent = dict(self.invested)     # projected book as the walk spends
@@ -338,15 +456,27 @@ class ValueInvestingStrategy:
             spent[sym] = spent.get(sym, 0.0) + px
         return plan
 
-    def _equal_value_plan(self, ranked) -> list[tuple[str, float, int]]:
-        """Credit every name an equal share of the budget, then spend what each pot affords."""
+    def _equal_value_plan(self, ranked, cap: float | None) -> list[tuple[str, float, int]]:
+        """Credit every name an equal share of the budget, then spend what each pot affords.
+
+        ``cap`` is the rupees actually spendable today (settled cash under T+1). It bounds the
+        walk so the PLAN equals what gets EMITTED — previously the caller could stop emitting
+        when its cash ran out AFTER this method had already debited those names' pots, and
+        that money silently vanished. Same-day funding hid it (the sale always covered the
+        plan); settled-cash gating would have hit it almost daily. It also replaces a
+        `daily_budget + sum(pot)` ceiling that double-counted the day's credit and so never
+        actually bound."""
         names = self.watchlist or [s for _c, _i, s, _p in ranked]
         if not names:
             return []
         slice_ = self.daily_budget / len(names)
         for n in names:                       # credited even when the name did not print —
             self.pot[n] = self.pot.get(n, 0.0) + slice_   # its money waits, it is not lost
-        remaining = self.daily_budget + sum(self.pot.values())
+        # cap None = the historical unbounded walk (settlement_days=0, byte-identical per §1).
+        # A pot exists precisely so an expensive name can SAVE UP and then spend more than one
+        # day's slice, so the cap must be spendable CASH — capping at daily_budget would price
+        # a ₹2,900 stock out forever on a ₹1,000 budget (caught by an existing test).
+        remaining = (self.daily_budget + sum(self.pot.values())) if cap is None else max(0.0, cap)
         plan: list[tuple[str, float, int]] = []
         for _chg, _i, sym, px in ranked:      # rank order decides WHO SPENDS FIRST…
             if px <= 0:
@@ -399,10 +529,15 @@ class ValueInvestingStrategy:
             return False
         return self._flow(sym, spent) > avg * (1.0 + self.max_skew_pct / 100.0)
 
-    def _fund(self, ctx, plan, cost: float, fund: str, fund_px: float, fund_lots,
-              fund_units: int, today: date):
-        """Sell just enough of the fund source. Returns (exits, running_cash, units left), or
-        (None, …) when the holding cannot cover the day — all-or-nothing, per the owner."""
+    def _legacy_fund(self, ctx, cost: float, fund: str, fund_px: float, fund_lots,
+                     fund_units: int, today: date):
+        """The PRE-T+1 model, kept verbatim for ``settlement_days=0`` (§1: a recovered deploy
+        must be byte-identical). Sell just enough of the fund source to cover TODAY's basket
+        and spend the proceeds in the same tick. Returns (exits, running_cash, units left), or
+        (None, …) when the holding cannot cover the day — all-or-nothing, per the owner.
+
+        Correct in a backtest, impossible live: an equity CNC sale settles T+1. See _presell
+        for the model that replaced it."""
         need = cost * (1.0 + self.funding_buffer_pct / 100.0) - ctx.cash
         running_cash = ctx.cash
         exits: list[Signal] = []
@@ -431,6 +566,21 @@ class ValueInvestingStrategy:
             left -= take
             running_cash += take * fund_px
         return exits, running_cash, fund_units - sell_units
+
+    def _emit(self, plan, cash: float) -> tuple[list[Signal], float]:
+        """Turn the plan into BUY signals, stopping when ``cash`` runs out. The shadow ledger
+        is the ONLY cash check that exists — the engine takes portfolio.cash negative without
+        complaint (engine/execution.py::_buy)."""
+        out: list[Signal] = []
+        for sym, px, units in plan:
+            cost = px * units
+            if cash < cost:
+                break
+            cash -= cost
+            self.invested[sym] = self.invested.get(sym, 0.0) + cost
+            out.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG, quantity=units,
+                              reason="drip"))
+        return out, cash
 
     def _check_runway(self, fund_units: int, fund_px: float, cash: float, today: date) -> None:
         """Days of budget the fund source still covers, measured AFTER today's sale."""
@@ -471,6 +621,8 @@ class ValueInvestingStrategy:
         return {
             "last_shop_day": self.last_shop_day,  # a 15:25 restart must not re-shop
             "seeded": self.seeded,  # never bootstrap the fund source twice
+            "settled_cash": self.settled_cash,
+            "pending_credits": [[str(d), float(a)] for d, a in self.pending_credits],
             "invested": dict(self.invested),  # the balanced walk needs the running book
             "epoch_base": dict(self.epoch_base),   # …measured over the current epoch
             "epoch_names": list(self.epoch_names),
@@ -482,6 +634,10 @@ class ValueInvestingStrategy:
     def load_state(self, state: dict) -> None:
         self.last_shop_day = state.get("last_shop_day")
         self.seeded = bool(state.get("seeded", False))
+        sc = state.get("settled_cash")
+        self.settled_cash = None if sc is None else float(sc)
+        self.pending_credits = [[str(d), float(a)]
+                                for d, a in (state.get("pending_credits") or [])]
         self.invested = dict(state.get("invested", {}))
         self.epoch_base = dict(state.get("epoch_base", {}))
         self.epoch_names = list(state.get("epoch_names", []))

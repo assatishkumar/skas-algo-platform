@@ -499,6 +499,13 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       }),
       f("max_skew_pct", "Max overweight vs average %", "number", 25,
         { step: "any", showIf: (p) => p.sizing === "balanced" }),
+      f("settlement_days", "Settlement days (T+1)", "number", 1, {
+        hint: "an equity CNC sale's proceeds are NOT spendable the same day — buy from settled "
+          + "cash and pre-sell for tomorrow. 0 = the old same-day model (backtest-only fiction)",
+      }),
+      f("funding_buffer_pct", "Pre-sale buffer %", "number", 10, {
+        step: "any", hint: "sell this much above tomorrow's budget so a price move cannot leave it short",
+      }),
       f("fund_yield_pct", "Fund source yield %/yr (reported only)", "number", 0, { step: "any" }),
       f("watchlist", "Watchlist (comma-separated; blank = every symbol)", "text", "", {
         wide: true,

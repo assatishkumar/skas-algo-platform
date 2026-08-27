@@ -84,6 +84,24 @@ def holiday_name(d: date) -> str | None:
     return "NSE holiday" if is_nse_holiday(d) else None
 
 
+def next_trading_day(d: date, n: int = 1) -> date:
+    """The NSE trading day ``n`` sessions AFTER ``d`` — skips weekends and listed holidays.
+
+    The mirror of ``previous_trading_day``, added for T+1 settlement (2026-08-27): an equity
+    CNC sale's proceeds land on the next TRADING day, so a Friday sale funds Monday and a
+    holiday shifts it again. Same bounded walk per step, for the same reason — a bad
+    ``NSE_HOLIDAYS_ADD`` env must never spin.
+    """
+    cur = d
+    for _ in range(max(0, n)):
+        cur += timedelta(days=1)
+        for _ in range(15):
+            if cur.weekday() < 5 and not is_nse_holiday(cur):
+                break
+            cur += timedelta(days=1)
+    return cur
+
+
 def previous_trading_day(d: date) -> date:
     """The most recent NSE trading day STRICTLY BEFORE ``d`` — skips weekends and listed
     holidays. Used to detect a stale daily-data source (a pivot's prior day that isn't the

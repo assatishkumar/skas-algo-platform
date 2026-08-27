@@ -576,3 +576,129 @@ def test_the_forms_params_are_real_ctor_knobs_not_swallowed_by_ignored():
             "max_skew_pct", "fund_yield_pct", "fund_seed"}
     missing = sent - set(inspect.signature(ValueInvestingStrategy.__init__).parameters)
     assert not missing, f"forms send params the ctor does not define: {sorted(missing)}"
+
+
+# ─────────────────────────────────── T+1 settlement (owner decision, 2026-08-27)
+
+def _t1(**kw) -> ValueInvestingStrategy:
+    kw.setdefault("settlement_days", 1)
+    kw.setdefault("funding_buffer_pct", 10.0)
+    return _strat(**kw)
+
+
+def test_sale_proceeds_are_not_spendable_the_same_day():
+    """The whole point. An equity CNC sale settles T+1 — Dhan confirmed it in writing after
+    live run 23 halted. Day one raises the float and buys nothing; day two spends it."""
+    view = _view({"AAA": (100, 95), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 200)                       # ₹20,000 of ETF, ₹0 cash
+    st = _t1(watchlist="AAA", daily_budget=1_000.0)
+
+    day1 = st.on_slice(ctx)
+    assert [s.action for s in day1] == [SignalAction.EXIT], "day 1 sells only — nothing settled"
+    assert st.pending_credits and st.pending_credits[0][0] == "2026-01-05"  # Fri → Mon
+    assert st.settled_cash == 0.0
+
+    # …the money lands on the settlement day, and only then does the drip buy. (A fresh view
+    # because the settlement day needs its own price bar; the strategy carries the ledger.)
+    d2 = pd.Timestamp("2026-01-05")
+    view2 = MarketView(lookback=1)
+    for sym, (prev, last) in {"AAA": (100, 95), FUND: (100, 100)}.items():
+        view2.add_symbol(sym, pd.DataFrame({"date": [D1, d2], "close": [prev, last]}))
+    view2.finalize()
+    view2.set_date(d2)
+    ctx2 = AlgoContext(None, {}, pf, view2)
+    st.last_shop_day = None
+    day2 = [s for s in st.on_slice(ctx2) if s.action is SignalAction.ENTER_LONG]
+    assert day2 and day2[0].symbol == "AAA", "the settled money is now spendable"
+
+
+def test_the_sell_is_emitted_before_every_buy():
+    """Order is load-bearing for a NEW reason: a rejected BUY halts the run, and a sale queued
+    behind the buys would then never fire — starving tomorrow as well as today."""
+    view = _view({"AAA": (100, 95), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 200)
+    st = _t1(watchlist="AAA", daily_budget=1_000.0)
+    st.settled_cash = 200.0                   # enough to buy, low enough to need a top-up
+    sigs = st.on_slice(ctx)
+    kinds = [s.action for s in sigs]
+    assert SignalAction.EXIT in kinds and SignalAction.ENTER_LONG in kinds
+    assert kinds.index(SignalAction.EXIT) < kinds.index(SignalAction.ENTER_LONG)
+
+
+def test_the_float_tops_up_by_the_difference_only():
+    """Sell only the DIFFERENCE, so cash already settled (and sales already in flight) count
+    and the float never ratchets up. Target = 1.1 x ₹1,000 = ₹1,100."""
+    view = _view({"AAA": (100, 95), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 500)
+    st = _t1(watchlist="AAA", daily_budget=1_000.0, sizing="one_share")
+    st.settled_cash = 1_000.0                 # buys ₹95 → ₹905 left, so ₹195 short of target
+    sold = [s for s in st.on_slice(ctx) if s.action is SignalAction.EXIT]
+    assert sum(s.quantity for s in sold) == 2, "2 x ₹100 covers the ₹195 gap — not a whole float"
+
+    # …and with the float already covered and nothing bought, it sells NOTHING.
+    st2 = _t1(watchlist="AAA", daily_budget=1_000.0, sizing="one_share")
+    st2.settled_cash = 5_000.0
+    st2.pot.clear()
+    view_rich = _view({"AAA": (100, 9_999), FUND: (100, 100)})   # unaffordable → no buys
+    ctx_rich, pf_rich = _ctx(view_rich)
+    _fund_lots(pf_rich, 500)
+    assert [s for s in st2.on_slice(ctx_rich) if s.action is SignalAction.EXIT] == []
+
+
+def test_a_shortfall_spends_what_settled_and_leaves_the_pot_intact():
+    """Owner's call: buy down the list until the settled cash runs out. And the money for a
+    buy that did NOT happen must stay in its pot — the planner used to debit pots for buys
+    the caller then declined to emit, silently losing that money."""
+    view = _view({"AAA": (100, 90), "BBB": (100, 92), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 500)
+    st = _t1(watchlist="AAA,BBB", daily_budget=1_000.0, sizing="equal_value")
+    st.settled_cash = 90.0                    # exactly one AAA share, nothing for BBB
+    bought = [s.symbol for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
+    assert bought == ["AAA"]
+    assert st.pot["BBB"] == 500.0, "BBB never bought — its whole slice must still be there"
+
+
+def test_live_reconciliation_caps_at_the_brokers_real_balance():
+    """Run 23, exactly: a ₹1,00,00,000 ledger against a ₹146.03 Dhan balance. The strategy
+    bought MANAPPURAM at ₹346.50 and then had KTKBANK rejected for want of ₹83.48. The broker
+    is truth, and min() is the conservative side — the account may fund other runs too."""
+    view = _view({"MANAPPURAM": (350, 346.5), FUND: (100, 100)})
+    ctx, pf = _ctx(view, cash=10_000_000.0)
+    _fund_lots(pf, 500)
+    pf.cash = 10_000_000.0
+    st = _t1(watchlist="MANAPPURAM", daily_budget=5_000.0)
+    st.set_broker_funds(146.03)
+    bought = [s for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
+    assert bought == [], "₹146 cannot buy a ₹346.50 share — and must not try"
+    assert st.settled_cash <= 146.03
+
+
+def test_settlement_days_zero_is_the_historical_behaviour():
+    """CLAUDE.md §1 — a recovered deploy must be byte-identical. 0 keeps the same-day model:
+    the sale funds the same tick and the buys go out with it."""
+    view = _view({"AAA": (100, 95), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 200)
+    st = _strat(watchlist="AAA", daily_budget=1_000.0)          # settlement_days defaults to 0
+    assert st.settlement_days == 0
+    sigs = st.on_slice(ctx)
+    assert any(s.action is SignalAction.EXIT for s in sigs)
+    assert any(s.action is SignalAction.ENTER_LONG for s in sigs)   # bought the SAME day
+    assert st.pending_credits == []
+
+
+def test_the_settlement_ledger_survives_a_restart():
+    view = _view({"AAA": (100, 95), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 200)
+    st = _t1(watchlist="AAA", daily_budget=1_000.0)
+    st.on_slice(ctx)
+    assert st.pending_credits
+    fresh = _t1(watchlist="AAA", daily_budget=1_000.0)
+    fresh.load_state(st.export_state())
+    assert fresh.pending_credits == st.pending_credits
+    assert fresh.settled_cash == st.settled_cash

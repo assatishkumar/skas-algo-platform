@@ -106,6 +106,17 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   market views answer natively, instead of the `indicators=` precompute that leaves `gap_reversal`
   and `happy_twins` failing closed live.
 
+  **Funding is settlement-aware (T+1).** An Indian equity delivery sale's proceeds are not
+  spendable the same day, so the strategy does not sell-and-spend in one decision: it **buys
+  from cash that has already settled** and **sells the fund source to pre-fund tomorrow**,
+  targeting roughly one day's budget plus a buffer (and enough to cover what the per-name pots
+  are saving up for). Sale proceeds are parked against the next TRADING day, so a Friday sale
+  funds Monday and a holiday shifts it again. A short day buys fewer names rather than
+  overdrawing, and the unspent money stays in each name's pot. Live, the spendable figure is
+  capped at the broker's REAL available balance — the strategy's own ledger is only as honest
+  as the `capital` figure typed at deploy, and trusting it is what got a live buy rejected for
+  want of ₹83.48. `settlement_days=0` restores the old same-day model for backtests that want it.
+
   **How the budget is spread across the names (`sizing`) is the single biggest decision here.**
   The ranking is the same in all three modes; they differ only in how many rupees each name
   receives. `one_share` is the original spec — one share of each, top-down — which silently
