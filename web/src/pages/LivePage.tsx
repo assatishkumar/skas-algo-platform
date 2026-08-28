@@ -896,7 +896,34 @@ function RunCard({
         <>
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={refresh} className="rounded bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs">Refresh</button>
-            <button onClick={() => act(() => api.liveRunDecision(run.run_id))} className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs">Run decision</button>
+            {/* Run decision FORCES a decision now, bypassing the strategy's own time gate — it
+                can enter or exit, and on a LIVE run those are real orders. It used to fire on
+                a single click with no confirmation: that is how run 23 bought MANAPPURAM at
+                14:40 when its decision time was 15:05, and the owner reasonably read the fill
+                as a scheduling bug (2026-08-27). */}
+            <button
+              disabled={busy}
+              onClick={() => {
+                // order_broker is what fills orders RIGHT NOW — truer than mode, since a
+                // LIVE run demoted to paper by a restart must not raise a false alarm.
+                const real = run.order_broker === "live";
+                const what = run.positions?.length
+                    ? "It may ADD TO or EXIT the open position"
+                    : "It may OPEN a position";
+                if (!confirm(
+                  `Run the decision NOW for ${run.name}?\n\n${what}, ignoring the strategy's `
+                  + `own schedule (its next scheduled decision is unaffected).\n\n`
+                  + (real
+                      ? "This run places REAL orders on the broker — anything it decides will be "
+                        + "executed for real money."
+                      : "This run is PAPER — fills are simulated.")
+                )) return;
+                act(() => api.liveRunDecision(run.run_id));
+              }}
+              className="rounded bg-brand hover:bg-brand-light px-3 py-1.5 text-xs disabled:opacity-50"
+            >
+              {busy ? "Deciding…" : "Run decision"}
+            </button>
             {run.supports_force_entry && (
               <button
                 onClick={async () => {
