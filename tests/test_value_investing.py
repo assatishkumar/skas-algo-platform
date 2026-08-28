@@ -36,6 +36,23 @@ def _view(bars: dict[str, tuple[float, float]]) -> MarketView:
     return view
 
 
+def _next_day(st, ctx, view, bars: dict[str, tuple[float, float]], n: int = 1):
+    """Advance to the next trading day properly — a new DATE, not just a cleared latch.
+
+    These tests used to fake a day by resetting `last_shop_day` while the view stayed on D1.
+    That let a per-CALL pot credit masquerade as a per-day one, which is exactly how the
+    double-credit bug survived to production (2026-08-28)."""
+    d = pd.Timestamp(view._current) if hasattr(view, "_current") else D1
+    nxt = d + pd.Timedelta(days=n)
+    v = MarketView(lookback=1)
+    for sym, (prev, last) in bars.items():
+        v.add_symbol(sym, pd.DataFrame({"date": [d, nxt], "close": [prev, last]}))
+    v.finalize()
+    v.set_date(nxt)
+    st.last_shop_day = None
+    return AlgoContext(None, {}, ctx.portfolio, v), v
+
+
 def _ctx(view: MarketView, cash: float = 0.0) -> tuple[AlgoContext, Portfolio]:
     pf = Portfolio(cash=cash)
     return AlgoContext(None, {}, pf, view), pf
@@ -464,8 +481,9 @@ def test_equal_value_puts_the_same_RUPEES_into_every_name():
     ctx, pf = _ctx(view)
     _fund_lots(pf, 10_000)
     st = _strat(watchlist="RICH,CHEAP", daily_budget=1_000.0, sizing="equal_value")
-    for day in range(40):                     # Rs500/day each
-        st.last_shop_day = None
+    bars = {"RICH": (3000, 2900), "CHEAP": (30, 29), FUND: (100, 100)}
+    for _day in range(40):                    # Rs500/day each, on 40 REAL days
+        ctx, view = _next_day(st, ctx, view, bars)
         st.on_slice(ctx)
     # CREDITED rupees are exactly equal — that is the guarantee.
     credited = {n: st.invested.get(n, 0) + st.pot.get(n, 0) for n in ("RICH", "CHEAP")}
@@ -489,7 +507,7 @@ def test_an_expensive_name_saves_up_instead_of_being_priced_out():
     assert day1 == ["CHEAP"]                  # RICH cannot afford a share on day 1…
     assert st.pot["RICH"] == 500.0            # …so its money waits
     for _ in range(5):
-        st.last_shop_day = None
+        ctx, view = _next_day(st, ctx, view, {"RICH": (3000, 2900), "CHEAP": (30, 29), FUND: (100, 100)})
         st.on_slice(ctx)
     assert st.invested.get("RICH", 0) >= 2900   # …and buys once the pot is big enough
 
@@ -674,7 +692,12 @@ def test_live_reconciliation_caps_at_the_brokers_real_balance():
     st.set_broker_funds(146.03)
     bought = [s for s in st.on_slice(ctx) if s.action is SignalAction.ENTER_LONG]
     assert bought == [], "₹146 cannot buy a ₹346.50 share — and must not try"
-    assert st.settled_cash <= 146.03
+    # The cap bounds what may be SPENT; it must NOT be written back into the ledger. The
+    # broker balance is shared with every other run on the account, so an options run
+    # blocking margin would otherwise destroy the difference permanently (2026-08-28).
+    assert st.settled_cash == 10_000_000.0, "the ledger is untouched — only the spend is capped"
+    st.set_broker_funds(10_000_000.0)          # margin released
+    assert st._settle(ctx, date(2026, 1, 2)) == 10_000_000.0, "and it recovers in full"
 
 
 def test_settlement_days_zero_is_the_historical_behaviour():
@@ -798,3 +821,35 @@ def test_an_accumulation_run_can_be_stopped_even_while_holding():
     assert 'getattr(strategy, "never_sells", False)' in src, (
         "the stop guard must exempt strategies that cannot exit by design"
     )
+
+
+def test_the_broker_cap_never_destroys_ledger_cash():
+    """The account is SHARED — an options run blocking margin drops `available` for everyone.
+    Capping by assignment meant ₹5,500 of settled cash clamped to ₹200 stayed ₹200 after the
+    margin released, because the ledger is persisted and nothing restores it. The cap is a
+    ceiling on today's SPEND only."""
+    st = _t1(watchlist="AAA", daily_budget=5_000.0)
+    st.settled_cash = 5_500.0
+    ctx, _pf = _ctx(_view({"AAA": (100, 95), FUND: (100, 100)}))
+
+    st.set_broker_funds(200.0)
+    assert st._settle(ctx, date(2026, 1, 2)) == 200.0, "today's spend is capped…"
+    assert st.settled_cash == 5_500.0, "…but the ledger is NOT rewritten"
+
+    st.set_broker_funds(5_500.0)
+    assert st._settle(ctx, date(2026, 1, 2)) == 5_500.0, "and it is all still there"
+
+
+def test_pots_are_credited_once_a_day_however_often_the_decision_runs():
+    """A manual "Run decision", or a day that produced no signals and so never latched, used
+    to add ANOTHER full day's budget to every pot. sum(pot) drives the pre-sale float target,
+    so the error compounds into real ETF selling."""
+    st = _t1(watchlist="AAA,BBB", daily_budget=2_000.0, sizing="equal_value")
+    ranked = [(-0.05, 0, "AAA", 99_999.0), (-0.04, 1, "BBB", 99_999.0)]   # nothing affordable
+
+    for _ in range(5):                       # five decisions, same day
+        st._shopping_list(ranked, 0.0, "2026-01-02")
+    assert st.pot["AAA"] == 1_000.0, "one day, one slice — not five"
+
+    st._shopping_list(ranked, 0.0, "2026-01-05")   # a NEW day credits again
+    assert st.pot["AAA"] == 2_000.0

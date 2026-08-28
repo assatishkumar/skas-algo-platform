@@ -171,6 +171,7 @@ class ValueInvestingStrategy:
         # backtest).
         self.settled_cash: float | None = None
         self.pending_credits: list[list] = []          # [[iso_date, amount], …]
+        self.pot_day: str | None = None                # the day each pot was last credited
         self._broker_funds: float | None = None        # manager push; transient, not persisted
         # cumulative rupees put into each name — drives the balanced walk (persisted)
         self.invested: dict[str, float] = {}
@@ -258,7 +259,7 @@ class ValueInvestingStrategy:
         else:
             cap = None
 
-        plan = self._shopping_list(ranked, cap)
+        plan = self._shopping_list(ranked, cap, day)
         if not plan:
             if self.settlement_days and spendable < 1.0:
                 self._alert("nothing has settled yet — today's fund-source sale lands "
@@ -270,8 +271,11 @@ class ValueInvestingStrategy:
 
         if self.settlement_days:
             # BUY from settled cash…
-            entries, running_cash = self._emit(plan, spendable)
-            self.settled_cash = running_cash
+            entries, remaining = self._emit(plan, spendable)
+            # Debit what was actually SPENT. Assigning `remaining` would silently discard any
+            # ledger balance the broker cap held back this tick (see _settle).
+            self.settled_cash = max(0.0, (self.settled_cash or 0.0) - (spendable - remaining))
+            running_cash = self.settled_cash
             # …then raise TOMORROW's float.
             exits, fund_units = self._presell(fund, fund_px, fund_lots, fund_units, today)
         else:
@@ -338,9 +342,15 @@ class ValueInvestingStrategy:
             self.pending_credits = [
                 c for c in self.pending_credits if date.fromisoformat(c[0]) > today
             ]
+        # The cap is a CEILING ON TODAY'S SPEND, never written back into the ledger. It used
+        # to assign — and the broker balance is shared with every other run on the account, so
+        # one options run blocking margin permanently destroyed the difference: ₹5,500 of
+        # settled cash clamped to ₹200 stayed ₹200 after the margin released, because the
+        # ledger is persisted and nothing restores it. Cap the return value only.
+        spendable = self.settled_cash
         if self._broker_funds is not None:
-            self.settled_cash = min(self.settled_cash, self._broker_funds)
-        return max(0.0, self.settled_cash)
+            spendable = min(spendable, self._broker_funds)
+        return max(0.0, spendable)
 
     def _pending_total(self) -> float:
         return sum(float(c[1]) for c in self.pending_credits)
@@ -428,7 +438,7 @@ class ValueInvestingStrategy:
             return None
         return rows
 
-    def _shopping_list(self, ranked, cap: float | None) -> list[tuple[str, float, int]]:
+    def _shopping_list(self, ranked, cap: float | None, day: str) -> list[tuple[str, float, int]]:
         """(symbol, price, units) for today, in rank order.
 
         "equal_value" — THE fix for the price-weighting problem. Every watchlist name is
@@ -443,7 +453,7 @@ class ValueInvestingStrategy:
         wrap-around, leftover evaporates. "balanced" — one_share plus a skew cap.
         """
         if self.sizing == "equal_value":
-            return self._equal_value_plan(ranked, cap)
+            return self._equal_value_plan(ranked, cap, day)
 
         remaining = self.daily_budget if cap is None else max(0.0, cap)
         plan: list[tuple[str, float, int]] = []
@@ -466,7 +476,7 @@ class ValueInvestingStrategy:
             spent[sym] = spent.get(sym, 0.0) + px
         return plan
 
-    def _equal_value_plan(self, ranked, cap: float | None) -> list[tuple[str, float, int]]:
+    def _equal_value_plan(self, ranked, cap: float | None, day: str) -> list[tuple[str, float, int]]:
         """Credit every name an equal share of the budget, then spend what each pot affords.
 
         ``cap`` is the rupees actually spendable today (settled cash under T+1). It bounds the
@@ -479,9 +489,15 @@ class ValueInvestingStrategy:
         names = self.watchlist or [s for _c, _i, s, _p in ranked]
         if not names:
             return []
-        slice_ = self.daily_budget / len(names)
-        for n in names:                       # credited even when the name did not print —
-            self.pot[n] = self.pot.get(n, 0.0) + slice_   # its money waits, it is not lost
+        # ONCE PER DAY, keyed by date. Crediting per CALL meant any second decision in the
+        # same day — a manual "Run decision", or a day that produced no signals and so never
+        # set last_shop_day — added another full day's budget to every pot. sum(pot) drives
+        # the pre-sale float target, so the error compounds into real ETF selling.
+        if self.pot_day != day:
+            slice_ = self.daily_budget / len(names)
+            for n in names:                   # credited even when the name did not print —
+                self.pot[n] = self.pot.get(n, 0.0) + slice_   # its money waits, not lost
+            self.pot_day = day
         # cap None = the historical unbounded walk (settlement_days=0, byte-identical per §1).
         # A pot exists precisely so an expensive name can SAVE UP and then spend more than one
         # day's slice, so the cap must be spendable CASH — capping at daily_budget would price
@@ -672,6 +688,7 @@ class ValueInvestingStrategy:
             "seeded": self.seeded,  # never bootstrap the fund source twice
             "settled_cash": self.settled_cash,
             "pending_credits": [[str(d), float(a)] for d, a in self.pending_credits],
+            "pot_day": self.pot_day,
             "invested": dict(self.invested),  # the balanced walk needs the running book
             "epoch_base": dict(self.epoch_base),   # …measured over the current epoch
             "epoch_names": list(self.epoch_names),
@@ -687,6 +704,7 @@ class ValueInvestingStrategy:
         self.settled_cash = None if sc is None else float(sc)
         self.pending_credits = [[str(d), float(a)]
                                 for d, a in (state.get("pending_credits") or [])]
+        self.pot_day = state.get("pot_day")
         self.invested = dict(state.get("invested", {}))
         self.epoch_base = dict(state.get("epoch_base", {}))
         self.epoch_names = list(state.get("epoch_names", []))
