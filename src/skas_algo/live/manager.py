@@ -766,7 +766,17 @@ class LiveRun:
             return
         if not held:
             return
-        ours = sum(lot.units for lot in self.session.portfolio.lots(fund))
+        # Count what EVERY live run on this account already holds, not just this one. The
+        # broker holding is per-ACCOUNT, so a per-run check let two value_investing runs on
+        # one Dhan account each adopt the same 798 LIQUIDCASE units — platform +1596 vs
+        # broker +798, and reconciliation (which aggregates the same way) halted them both
+        # (2026-08-28). Mirror reconciliation's scope exactly, or the two can never agree.
+        acct = self.config.broker_account_id
+        ours = 0.0
+        for run in manager.runs.values():
+            if run.config.broker_account_id != acct:
+                continue
+            ours += sum(lot.units for lot in run.session.portfolio.lots(fund))
         missing = float(held.get("units") or 0) - ours
         if missing < 1:
             return

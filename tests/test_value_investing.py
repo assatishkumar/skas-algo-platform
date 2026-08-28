@@ -763,3 +763,19 @@ def test_a_zero_starting_capital_does_not_blow_up_the_report():
     m = compute_metrics(res, 0.0)          # must not raise
     assert m["Total Return %"] == 0.0
     assert m["CAGR %"] == 0.0
+
+
+def test_adoption_is_account_scoped_not_per_run():
+    """The broker holding is per-ACCOUNT. A per-run check let TWO value_investing runs on one
+    Dhan account each adopt the same 798 LIQUIDCASE units — platform +1596 vs broker +798 —
+    and reconciliation, which aggregates across runs, halted them both (live, 2026-08-28).
+    Adoption must count the same book reconciliation does, or the two can never agree."""
+    import inspect
+
+    from skas_algo.live.manager import LiveRun
+
+    src = inspect.getsource(LiveRun._maybe_adopt_fund_holding)
+    assert "manager.runs.values()" in src, "adoption must scan every run on the account"
+    assert "broker_account_id" in src, "…and scope that scan to THIS account"
+    # the per-run form that caused the double-adopt must not come back
+    assert "sum(lot.units for lot in self.session.portfolio.lots(fund))" not in src
