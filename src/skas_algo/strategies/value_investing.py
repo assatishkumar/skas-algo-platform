@@ -634,9 +634,19 @@ class ValueInvestingStrategy:
         except Exception:  # pragma: no cover - an unpriced fund source must not break the tile
             px = 0.0
         fund_value = fund_units * px
+        # Before the FIRST decision the ledger is genuinely unset — _settle seeds it inside
+        # on_slice — so reporting 0 claims "you cannot spend anything" when the account holds
+        # money (owner, 2026-08-28: ₹5,342 in Dhan, tile said ₹0). Project what _settle will
+        # compute instead, and flag it as a projection.
+        projected = self.settled_cash is None
+        spendable = (self.settled_cash if not projected
+                     else min(self.initial_capital,
+                              self._broker_funds if self._broker_funds is not None
+                              else self.initial_capital))
         return {
             "kind": "value_investing",
-            "settled_cash": round(self.settled_cash or 0.0, 2),
+            "settled_cash": round(spendable or 0.0, 2),
+            "settled_projected": projected,
             "pending_credits": [
                 {"lands": d, "amount": round(float(a), 2)} for d, a in self.pending_credits
             ],

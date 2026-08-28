@@ -1060,6 +1060,9 @@ function FundingLedger({ b }: { b: Record<string, unknown> }) {
         <div>
           <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Spendable today</div>
           <div className="font-medium tabular-nums">{inr(n("settled_cash"))}</div>
+          {b.settled_projected === true && (
+            <div className="text-[11px] text-[var(--faint)]">projected · set at first decision</div>
+          )}
         </div>
         <div>
           <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Settling (T+{n("settlement_days")})</div>

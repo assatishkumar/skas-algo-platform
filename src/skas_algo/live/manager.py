@@ -1474,6 +1474,24 @@ class LiveRunManager:
             broker_net = {
                 p["tradingsymbol"]: float(p.get("quantity") or 0) for p in adapter.positions()
             }
+            # DELIVERY equity lives in HOLDINGS, not positions. positions() is the day's book:
+            # a CNC stock bought weeks ago is absent from it entirely, so reconciling a
+            # cash-equity run against positions alone reports "broker +0" for everything it
+            # owns and HALTS. That is exactly what the adopted LIQUIDCASE did — platform +798
+            # vs broker +0 — while the account genuinely held all 798 (2026-08-28). Equity
+            # runs previously "passed" only because their buys were same-day and still in the
+            # day book.
+            #
+            # HOLDINGS WINS where both report a symbol: it is the authoritative delivery
+            # record and already includes the T+1 tranche (Dhan totalQty = dpQty + t1Qty;
+            # Kite quantity + t1_quantity), so summing the two would double-count a purchase
+            # that is settling. positions() still covers a same-day buy that has not reached
+            # holdings yet.
+            if hasattr(adapter, "holdings"):
+                for sym, h in (adapter.holdings() or {}).items():
+                    units = float(h.get("units") or 0)
+                    if units:
+                        broker_net[sym] = units
         except Exception as exc:
             # Couldn't READ the broker book (expired overnight Kite token / API blip). This is NOT a
             # mismatch — raise a distinct transient signal so the caller retries instead of HALTING

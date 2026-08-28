@@ -240,3 +240,33 @@ def test_exit_rules_surface_the_check_cadence():
     rules_1m = HniWeeklyStrategy(
         universe=["NIFTY"], initial_capital=1_000_000, profit_check="1min").exit_rules()
     assert any("checked every 1 min" in r for r in rules_1m)
+
+
+def test_reconciliation_counts_delivery_holdings_not_just_the_day_book():
+    """positions() is the DAY's book. A CNC stock bought weeks ago is absent from it, so an
+    equity run reconciled against positions alone reports "broker +0" for everything it owns
+    and HALTS — which is what the adopted LIQUIDCASE did on live run 26: platform +798 vs
+    broker +0, while the account genuinely held all 798 (2026-08-28). Equity runs had only
+    "passed" before because their buys were same-day and still in the day book."""
+    from skas_algo.live.manager import manager
+
+    class _Adapter:
+        armed = True
+
+        def positions(self):
+            return [{"tradingsymbol": "INFY", "quantity": 3}]   # bought TODAY, not yet in holdings
+        def holdings(self):
+            return {
+                "LIQUIDCASE": {"units": 798.0, "avg_price": 115.64},   # long-held delivery
+                "INFY": {"units": 3.0, "avg_price": 1500.0},           # ALSO here (t1 tranche)
+            }
+        def _option_tradingsymbol(self, inst):
+            return None
+
+    # No LIVE runs registered → `ours` is empty, so no mismatch is reported either way; what
+    # this pins is the BROKER side of the comparison, captured via the details dict.
+    details: dict = {}
+    manager.reconcile_account_book(-1, _Adapter(), details)
+    book = details["broker"]
+    assert book["LIQUIDCASE"] == 798.0, "delivery holdings must be visible to reconciliation"
+    assert book["INFY"] == 3.0, "a symbol in BOTH books counts once — holdings wins, no doubling"
