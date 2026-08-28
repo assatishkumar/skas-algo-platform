@@ -662,8 +662,13 @@ async def add_override(run_id: int, override: OverrideInput) -> dict:
 async def stop_live(run_id: int) -> dict:
     """Stop the deployment (→ Stopped tab). Blocked while positions are open — exit them first."""
     live = _get(run_id)
-    open_syms = live.session.portfolio.lot_symbols()
-    if open_syms:
+    strategy = getattr(live.session, "strategy", None)
+    open_syms = list(live.session.portfolio.lot_symbols())
+    # An ACCUMULATION strategy never sells, so "exit them first" is an instruction it can
+    # never satisfy — the guard made such a run permanently unstoppable (run 23, 2026-08-28).
+    # Its holdings are delivery stock that simply stays in the broker account; stopping ends
+    # the platform's management of it, it does not abandon anything that needs managing.
+    if open_syms and not getattr(strategy, "never_sells", False):
         raise HTTPException(
             status_code=409,
             detail=f"Exit the {len(open_syms)} open position(s) before stopping — use Exit.",

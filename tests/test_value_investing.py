@@ -779,3 +779,22 @@ def test_adoption_is_account_scoped_not_per_run():
     assert "broker_account_id" in src, "…and scope that scan to THIS account"
     # the per-run form that caused the double-adopt must not come back
     assert "sum(lot.units for lot in self.session.portfolio.lots(fund))" not in src
+
+
+def test_an_accumulation_run_can_be_stopped_even_while_holding():
+    """The stop route 409s while positions are open — sound for a strategy that manages a
+    book, impossible for one that NEVER sells: run 23 could not be stopped from the UI at all
+    and had to be archived out (2026-08-28). The holdings are delivery stock that stays in the
+    broker account either way; stopping just ends platform management of it."""
+    from skas_algo.strategies.value_investing import ValueInvestingStrategy
+
+    assert ValueInvestingStrategy.never_sells is True
+
+    import inspect
+
+    from skas_algo.api.routes import live as live_routes
+
+    src = inspect.getsource(live_routes.stop_live)
+    assert 'getattr(strategy, "never_sells", False)' in src, (
+        "the stop guard must exempt strategies that cannot exit by design"
+    )

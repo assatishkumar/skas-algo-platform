@@ -59,6 +59,11 @@ _SIZING_MODES = frozenset({"one_share", "balanced", "equal_value"})
 
 class ValueInvestingStrategy:
     strategy_id = "value_investing"
+    # ACCUMULATION: this strategy never sells a stock, and its fund source is a funding float
+    # rather than a trade. The stop guard ("exit the open positions first") therefore makes a
+    # run permanently unstoppable — run 23 could not be stopped from the UI at all and had to
+    # be archived out (2026-08-28). Declaring it lets stop allow what "exit first" cannot.
+    never_sells = True
     # The platform-wide default is 15:20, which since SEBI's Closing Auction Session
     # (2026-08-03) is PAST the end of continuous cash trading for F&O-listed stocks — the
     # order would rest in the auction, never fill, and halt the run daily. That default was
