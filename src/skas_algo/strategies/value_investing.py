@@ -261,13 +261,22 @@ class ValueInvestingStrategy:
 
         plan = self._shopping_list(ranked, cap, day)
         if not plan:
-            if self.settlement_days and spendable < 1.0:
-                self._alert("nothing has settled yet — today's fund-source sale lands "
-                            "tomorrow (T+1), and the drip starts from it")
+            # NAME THE REAL REASON. This used to blame the daily budget whenever anything at
+            # all had settled — reporting "₹1,000 does not cover a single share (cheapest
+            # ₹45)" on a day when the budget was fine and only ₹15 had actually settled. A
+            # diagnostic that points at the wrong cause is worse than none.
+            cheapest = min(px for _c, _i, _s, px in ranked)
+            if self.settlement_days and spendable < cheapest:
+                self._alert(
+                    f"only ₹{spendable:,.0f} has settled — the cheapest watchlist name is "
+                    f"₹{cheapest:,.0f}. Today's fund-source sale lands tomorrow (T+1)."
+                    if spendable >= 1.0 else
+                    "nothing has settled yet — today's fund-source sale lands tomorrow "
+                    "(T+1), and the drip starts from it"
+                )
             else:
                 self._alert(f"the daily budget ₹{self.daily_budget:,.0f} does not cover a "
-                            f"single share of any watchlist name "
-                            f"(cheapest ₹{ranked[-1][3]:,.0f})")
+                            f"single share of any watchlist name (cheapest ₹{cheapest:,.0f})")
 
         if self.settlement_days:
             # BUY from settled cash…

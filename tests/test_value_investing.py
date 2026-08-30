@@ -853,3 +853,19 @@ def test_pots_are_credited_once_a_day_however_often_the_decision_runs():
 
     st._shopping_list(ranked, 0.0, "2026-01-05")   # a NEW day credits again
     assert st.pot["AAA"] == 2_000.0
+
+
+def test_a_no_buy_day_names_the_REAL_reason():
+    """A diagnostic that points at the wrong cause is worse than none. This used to report
+    "the daily budget ₹1,000 does not cover a single share (cheapest ₹45)" on a day when the
+    budget was fine and only ₹15 had settled — blaming the budget for a settlement shortfall
+    (found in the 2026-08-30 audit sim, not in production)."""
+    view = _view({"CHEAP": (46, 45), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 50)
+    st = _t1(watchlist="CHEAP", daily_budget=1_000.0)
+    st.settled_cash = 15.0                     # plenty of budget, almost no settled cash
+    st.on_slice(ctx)
+    alert = st.strategy_alert or ""
+    assert "only ₹15" in alert and "cheapest watchlist name is ₹45" in alert, alert
+    assert "daily budget" not in alert, "the budget is not the problem — do not blame it"
