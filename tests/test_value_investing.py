@@ -869,3 +869,30 @@ def test_a_no_buy_day_names_the_REAL_reason():
     alert = st.strategy_alert or ""
     assert "only ₹15" in alert and "cheapest watchlist name is ₹45" in alert, alert
     assert "daily budget" not in alert, "the budget is not the problem — do not blame it"
+
+
+def test_an_unread_fund_source_is_not_reported_as_dry():
+    """Adoption is market-hours gated, so before the first open tick the platform ledger is
+    empty while the broker may hold lakhs. The tile must tell "not looked yet" apart from
+    "looked and found none" — reporting the first as FUND DRY told the owner to top up an
+    ETF that already held ~90k (2026-08-31)."""
+    view = _view({"AAA": (100, 95), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    st = _strat(watchlist="AAA")
+
+    b = st.basket_status(view, pf)
+    assert b["fund_units"] == 0
+    assert b["fund_checked"] is False, "nothing has read the broker yet — do not claim empty"
+
+    st._fund_checked = True              # the manager's stamp, after a holdings() read
+    assert st.basket_status(view, pf)["fund_checked"] is True   # now it IS a real empty
+
+
+def test_fund_checked_is_transient_across_a_restart():
+    """A recovered run has not read the broker either, so the flag must not persist."""
+    st = _strat(watchlist="AAA")
+    st._fund_checked = True
+    assert "fund_checked" not in st.export_state()
+    fresh = _strat(watchlist="AAA")
+    fresh.load_state(st.export_state())
+    assert fresh._fund_checked is False

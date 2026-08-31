@@ -764,6 +764,13 @@ class LiveRun:
             held = adapter.holdings().get(str(fund).upper())
         except Exception:  # pragma: no cover - a holdings call must never break the loop
             return
+        # We have now actually LOOKED. Stamp it before the empty check, so a genuinely
+        # empty broker still counts as checked — the tile needs 'looked and found none'
+        # to read differently from 'has not looked yet'.
+        try:
+            strategy._fund_checked = True
+        except Exception:  # pragma: no cover - a strategy without the field is fine
+            pass
         if not held:
             return
         # Count what EVERY live run on this account already holds, not just this one. The

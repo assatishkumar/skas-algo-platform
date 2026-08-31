@@ -173,6 +173,12 @@ class ValueInvestingStrategy:
         self.pending_credits: list[list] = []          # [[iso_date, amount], …]
         self.pot_day: str | None = None                # the day each pot was last credited
         self._broker_funds: float | None = None        # manager push; transient, not persisted
+        # Has the manager actually READ the broker's holding yet? Adoption is market-hours
+        # gated, so before the first open tick the platform ledger is legitimately empty
+        # while the broker holds lakhs — reporting that as FUND DRY told the owner to top
+        # up an ETF that already had ~90k in it (2026-08-31). Transient: a restart has not
+        # looked either, which is exactly what this must say.
+        self._fund_checked: bool = False               # manager stamp; transient, not persisted
         # cumulative rupees put into each name — drives the balanced walk (persisted)
         self.invested: dict[str, float] = {}
         # Balance is measured over the CURRENT EPOCH, not since inception. An epoch starts
@@ -688,6 +694,7 @@ class ValueInvestingStrategy:
             "daily_budget": self.daily_budget,
             "settlement_days": self.settlement_days,
             "broker_funds": self._broker_funds,
+            "fund_checked": self._fund_checked,
         }
 
     # ------------------------------------------------------------------ state

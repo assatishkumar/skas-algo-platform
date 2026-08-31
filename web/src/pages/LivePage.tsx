@@ -1052,8 +1052,13 @@ function FundingLedger({ b }: { b: Record<string, unknown> }) {
   const inr = (v: number) => `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
   const pending = (b.pending_credits as { lands: string; amount: number }[] | undefined) ?? [];
   const runway = n("runway_days");
-  const dry = n("fund_units") <= 0;
-  const low = !dry && runway <= 2;
+  // Adoption of the broker holding is MARKET-HOURS gated, so before the first open tick
+  // the platform ledger is empty while the broker may hold lakhs. Calling that "empty"
+  // told the owner to top up an ETF holding ~90k (2026-08-31). Only claim dry once the
+  // manager has actually read the holding.
+  const checked = b.fund_checked === true;
+  const dry = checked && n("fund_units") <= 0;
+  const low = checked && !dry && runway <= 2;
   return (
     <div className="mt-3 rounded-[12px] border border-[var(--border)] bg-[var(--field)] px-3 py-2.5">
       <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[12.5px] md:grid-cols-4">
@@ -1074,15 +1079,19 @@ function FundingLedger({ b }: { b: Record<string, unknown> }) {
         <div>
           <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">{String(b.fund_source)}</div>
           <div className="font-medium tabular-nums">{inr(n("fund_value"))}</div>
-          <div className="text-[11px] text-[var(--faint)]">{n("fund_units").toLocaleString("en-IN")} units</div>
+          <div className="text-[11px] text-[var(--faint)]">
+            {checked ? `${n("fund_units").toLocaleString("en-IN")} units` : "awaiting broker read"}
+          </div>
         </div>
         <div>
           <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Runway</div>
           <div className={`font-medium tabular-nums ${
             dry || low ? "text-amber-600 dark:text-amber-400" : ""}`}>
-            {dry ? "empty" : `${runway} day${runway === 1 ? "" : "s"}`}
+            {!checked ? "—" : dry ? "empty" : `${runway} day${runway === 1 ? "" : "s"}`}
           </div>
-          <div className="text-[11px] text-[var(--faint)]">at {inr(n("daily_budget"))}/day</div>
+          <div className="text-[11px] text-[var(--faint)]">
+            {checked ? `at ${inr(n("daily_budget"))}/day` : "not read yet — checked in market hours"}
+          </div>
         </div>
       </div>
       {(dry || low) && (
