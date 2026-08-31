@@ -697,7 +697,11 @@ function RunCard({
   // version (which refetches with keepPreviousData) — no full page re-seed, so the
   // scroll position and sort order stay put.
   const refresh = () => {
-    api.liveRefresh(run.run_id, true).catch(() => {}); // re-price AND act on profit/SL
+    // RE-PRICE ONLY. This used to pass decide=true, which runs a full decision — the
+    // owner pressed "Refresh" to update prices on 2026-08-31 and it placed EIGHT REAL
+    // orders on a live equity run, hours before its 15:05 decision time. A button does
+    // what its label says; acting is "Run decision", which is typed-confirm gated.
+    api.liveRefresh(run.run_id).catch(() => {});
   };
   const stopped = run.status === "stopped";
   const upnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
@@ -1119,8 +1123,14 @@ function BrokerChip({ dep }: { dep: Deployment }) {
   // A live-quote error (e.g. a token Zerodha rejected) means "connected" per the stored session
   // timestamp is misleading — flag it red as expired regardless of the timestamp check.
   const err = !!dep.quote_error;
+  // "expired" is a DIAGNOSIS, and it was wrong: a Dhan HTTP 429 ("Too many requests") is
+  // rate-limiting, not a dead login, and the red "expired" chip sent the owner hunting a
+  // token that was perfectly valid (2026-08-31). Name what actually happened.
+  const rateLimited = err && /\b429\b|too many requests/i.test(String(dep.quote_error));
   const ok = dep.broker_connected === true && !fallback && !err;
-  const suffix = err ? "expired" : ok ? "live" : fallback ? "cache" : "offline";
+  const suffix = rateLimited
+    ? "rate limited"
+    : err ? "expired" : ok ? "live" : fallback ? "cache" : "offline";
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
@@ -1191,7 +1201,7 @@ function DeploymentTile({
     setRefreshing(true);
     setErr(null);
     try {
-      await api.liveRefresh(dep.run_id, true); // re-price AND act on profit/SL
+      await api.liveRefresh(dep.run_id); // RE-PRICE ONLY — see the note on `refresh` above
       onChanged();
     } catch (e) {
       setErr((e as Error).message);

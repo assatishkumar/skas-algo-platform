@@ -215,6 +215,12 @@ def _jwt_expiry(token: str) -> datetime:
 class DhanAdapter:
     """BrokerAdapter for Dhan: session, quotes, chains, margin, and real orders."""
 
+    # Dhan reports the day's trades in positions() ONLY — a share bought today is not
+    # yet in holdings, and one SOLD today has not left it (verified against the live
+    # account on 2026-08-31). So the real delivery book is holdings + positions; see
+    # live.manager._broker_delivery_book, which halted run 28 without this.
+    holdings_exclude_today = True
+
     def __init__(
         self,
         creds: DhanCredentials,

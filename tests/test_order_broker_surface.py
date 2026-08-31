@@ -270,3 +270,31 @@ def test_reconciliation_counts_delivery_holdings_not_just_the_day_book():
     book = details["broker"]
     assert book["LIQUIDCASE"] == 798.0, "delivery holdings must be visible to reconciliation"
     assert book["INFY"] == 3.0, "a symbol in BOTH books counts once — holdings wins, no doubling"
+
+
+def test_a_dhan_style_broker_nets_the_day_onto_settled_holdings():
+    """Dhan reports the day's trades in positions() ONLY: a share bought today is not yet in
+    holdings, and one SOLD today has not left it (verified live 2026-08-31). Reading holdings
+    alone halted run 28 — WIPRO platform +2 vs broker +1 — and made adoption re-add the 24
+    LIQUIDCASE units the strategy had just sold. Adapters that fold the day into holdings keep
+    the default above; this one opts in."""
+    from skas_algo.live.manager import manager
+
+    class _Adapter:
+        armed = True
+        holdings_exclude_today = True
+
+        def positions(self):
+            return [{"tradingsymbol": "WIPRO", "quantity": 2},          # bought today
+                    {"tradingsymbol": "LIQUIDCASE", "quantity": -24}]   # SOLD today
+        def holdings(self):
+            return {"WIPRO": {"units": 1.0, "avg_price": 180.0},        # yesterday's
+                    "LIQUIDCASE": {"units": 778.0, "avg_price": 115.64}}
+        def _option_tradingsymbol(self, inst):
+            return None
+
+    details: dict = {}
+    manager.reconcile_account_book(-1, _Adapter(), details)
+    book = details["broker"]
+    assert book["WIPRO"] == 3.0, "today's buy is invisible to holdings — it must still count"
+    assert book["LIQUIDCASE"] == 754.0, "the 24 sold today are gone, even though holdings lags"

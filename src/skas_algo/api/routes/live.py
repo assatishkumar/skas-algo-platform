@@ -419,8 +419,21 @@ async def reconnect_quotes(run_id: int, db: Session = Depends(get_db)) -> dict:
 @router.post("/{run_id}/refresh")
 async def refresh_live(run_id: int, decide: bool = False) -> dict:
     """Re-price all positions. With ``decide=true`` it then runs a decision so any
-    profit-booking / stop-loss that an auto-refresh would trigger fires now too."""
+    profit-booking / stop-loss that an auto-refresh would trigger fires now too.
+
+    ``decide`` IS A TRADING ACTION and is gated exactly like ``/run-decision``. It was not,
+    and that gap was live: the Live tile's "Refresh" button passed decide=true, so pressing
+    it to update prices ran a full decision — eight real orders on run 28 on 2026-08-31,
+    hours before its 15:05 decision time — through a path that ALSO skipped the
+    reconcile-pending check the explicit button honours. The UI no longer sends decide from
+    Refresh; this guard is the backstop, so no future caller can trade through the cheap
+    door either."""
     live = _get(run_id)
+    if decide and getattr(live, "reconcile_pending", False):
+        raise HTTPException(
+            status_code=409,
+            detail="run is reconciling its broker book — decisions are held until it clears",
+        )
     live.refresh()
     if decide:
         live.run_decision()

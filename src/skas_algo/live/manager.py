@@ -321,6 +321,46 @@ def _lot_sets_attr(strategy) -> str | None:
     return None
 
 
+
+def _broker_delivery_book(adapter, holdings: dict | None = None) -> dict[str, float]:
+    """What the broker ACTUALLY holds right now, per tradingsymbol.
+
+    ``holdings()`` is the SETTLED delivery record and lags a day in BOTH directions: a share
+    bought today is not in it yet, and a share SOLD today has not left it. ``positions()`` is
+    the day's book and carries exactly that missing delta. The two are DISJOINT — holdings
+    covers prior days (Dhan totalQty = dpQty + t1Qty; Kite quantity + t1_quantity), positions
+    covers today — so the real book is their SUM.
+
+    It used to be "holdings WINS", which silently discarded the day. That cost two incidents
+    within one hour on 2026-08-31, both on run 28:
+      * reconciliation halted it — WIPRO platform +2 vs broker +1, MANAPPURAM +1 vs +2 —
+        because today's buys were invisible while run 26's older shares were not;
+      * adoption re-added the 24 LIQUIDCASE units the strategy had just SOLD, because the
+        sale was still sitting in holdings, so the ledger read 778 when it owned 754.
+    Both are the same T+1 lag that the cash side already models. Adoption and reconciliation
+    MUST read the book through this one function or they can never agree with each other.
+    """
+    book = {p["tradingsymbol"]: float(p.get("quantity") or 0) for p in adapter.positions()}
+    # ``holdings`` may be passed in by a caller that already fetched it — these are
+    # rate-limited endpoints (Dhan 429'd run 28 off its quotes on 2026-08-31), so never make
+    # the same call twice in one pass.
+    if holdings is None and hasattr(adapter, "holdings"):
+        holdings = adapter.holdings()
+    # WHETHER to add depends on the broker, and only Dhan is VERIFIED (2026-08-31: WIPRO
+    # bought at 12:24 showed positions +2 while holdings still read 1; LIQUIDCASE sold that
+    # minute still read 778). An adapter whose holdings ALREADY fold in the day would double
+    # count, so summing is opt-in per adapter and every other broker keeps the previous
+    # holdings-wins behaviour untouched (CLAUDE.md §1). Verify against a real account before
+    # setting this on a new broker.
+    add_today = bool(getattr(adapter, "holdings_exclude_today", False))
+    if holdings:
+        for sym, h in (holdings or {}).items():
+            units = float(h.get("units") or 0)
+            if units:
+                book[sym] = (book.get(sym, 0.0) + units) if add_today else units
+    return book
+
+
 class LiveRun:
     def __init__(self, run_id, algo_id, config, session, quote_source, broadcaster):
         self.run_id = run_id
@@ -757,11 +797,24 @@ class LiveRun:
             segment=self.config.segment
         ):
             return
+        # THROTTLE. This used to call holdings() on EVERY tick — twice a minute, all session,
+        # long after there was anything left to adopt. On 2026-08-31 the Dhan account was
+        # rate-limited into HTTP 429 ("Too many requests") and run 28 lost live quotes with
+        # its 15:05 decision still ahead of it. What this catches is the owner topping the
+        # ETF up by hand, which happens days apart, so a 5-minute cadence loses nothing and
+        # cuts the call volume 10x. Its siblings _maybe_refresh_funds/_maybe_refresh_margin
+        # were throttled from the start; this one simply was not, and shares their budget.
+        now = datetime.now(IST)
+        last = getattr(self, "_last_fund_adopt_at", None)
+        if last is not None and (now - last).total_seconds() < 300:
+            return
         adapter = getattr(self.quote_source, "adapter", None)
         if adapter is None or not hasattr(adapter, "holdings"):
             return
         try:
-            held = adapter.holdings().get(str(fund).upper())
+            prices = adapter.holdings() or {}              # ONE call, reused below
+            book = _broker_delivery_book(adapter, prices)   # T+1-correct; see that function
+            self._last_fund_adopt_at = now   # arm only on a call that actually completed
         except Exception:  # pragma: no cover - a holdings call must never break the loop
             return
         # We have now actually LOOKED. Stamp it before the empty check, so a genuinely
@@ -771,7 +824,22 @@ class LiveRun:
             strategy._fund_checked = True
         except Exception:  # pragma: no cover - a strategy without the field is fine
             pass
-        if not held:
+        # WHICH symbols this run is allowed to adopt. Default: the fund source alone, which
+        # is all this did originally. A strategy that NEVER SELLS its stock (value_investing)
+        # also declares its watchlist, so shares left in the account by an earlier, archived
+        # run are taken over rather than sitting there as a permanent reconciliation
+        # mismatch — run 26's SOUTHBANK/IDFCFIRSTB/… halted run 28 on 2026-08-31 (owner:
+        # "pls adopt the stray shares"). Never adopt a symbol the run is not configured for.
+        wanted: list[str] = []
+        getter = getattr(strategy, "adoptable_symbols", None)
+        if callable(getter):
+            try:
+                wanted = [str(x).upper() for x in (getter() or [])]
+            except Exception:  # pragma: no cover - a bad hook must not break the loop
+                wanted = []
+        if not wanted and fund:
+            wanted = [str(fund).upper()]
+        if not wanted:
             return
         # Count what EVERY live run on this account already holds, not just this one. The
         # broker holding is per-ACCOUNT, so a per-run check let two value_investing runs on
@@ -779,23 +847,32 @@ class LiveRun:
         # broker +798, and reconciliation (which aggregates the same way) halted them both
         # (2026-08-28). Mirror reconciliation's scope exactly, or the two can never agree.
         acct = self.config.broker_account_id
-        ours = 0.0
-        for run in manager.runs.values():
-            if run.config.broker_account_id != acct:
+        for sym in wanted:
+            ours = 0.0
+            for run in manager.runs.values():
+                if run.config.broker_account_id != acct:
+                    continue
+                ours += sum(lot.units for lot in run.session.portfolio.lots(sym))
+            missing = book.get(sym, 0.0) - ours
+            if missing < 1:
+                continue          # broker has FEWER — a real divergence, reconciliation's job
+            # Cost basis: the broker's own average for a settled holding. A share bought
+            # TODAY is not in holdings yet, so fall back to the live mark — it was bought
+            # minutes ago, and a wrong-but-close basis beats refusing to adopt and halting.
+            price = float((prices.get(sym) or {}).get("avg_price") or 0.0)
+            if price <= 0:
+                try:
+                    price = float(self.session.market.last_close(sym) or 0.0)
+                except Exception:  # pragma: no cover
+                    price = 0.0
+            if price <= 0:
                 continue
-            ours += sum(lot.units for lot in run.session.portfolio.lots(fund))
-        missing = float(held.get("units") or 0) - ours
-        if missing < 1:
-            return
-        price = float(held.get("avg_price") or 0.0)
-        if price <= 0:
-            return
-        try:
-            self.session.adopt_broker_holding(datetime.now(IST), fund, missing, price)
-            logger.info("adopted %s %s units held at the broker but not in the ledger "
-                        "(run %s)", missing, fund, self.run_id)
-        except Exception:  # pragma: no cover
-            logger.exception("adopting %s failed for run %s", fund, self.run_id)
+            try:
+                self.session.adopt_broker_holding(datetime.now(IST), sym, missing, price)
+                logger.info("adopted %s %s units held at the broker but not in the ledger "
+                            "(run %s)", missing, sym, self.run_id)
+            except Exception:  # pragma: no cover
+                logger.exception("adopting %s failed for run %s", sym, self.run_id)
 
     def _maybe_refresh_margin(self) -> None:
         """Throttled (~1/min) real Zerodha basket margin, built from our own legs. Falls
@@ -1488,9 +1565,7 @@ class LiveRunManager:
                         ts = adapter._option_tradingsymbol(inst)
                     ours[ts or sym] = ours.get(ts or sym, 0.0) + lot.direction * lot.units
         try:
-            broker_net = {
-                p["tradingsymbol"]: float(p.get("quantity") or 0) for p in adapter.positions()
-            }
+            broker_net = _broker_delivery_book(adapter)
             # DELIVERY equity lives in HOLDINGS, not positions. positions() is the day's book:
             # a CNC stock bought weeks ago is absent from it entirely, so reconciling a
             # cash-equity run against positions alone reports "broker +0" for everything it
@@ -1504,11 +1579,6 @@ class LiveRunManager:
             # Kite quantity + t1_quantity), so summing the two would double-count a purchase
             # that is settling. positions() still covers a same-day buy that has not reached
             # holdings yet.
-            if hasattr(adapter, "holdings"):
-                for sym, h in (adapter.holdings() or {}).items():
-                    units = float(h.get("units") or 0)
-                    if units:
-                        broker_net[sym] = units
         except Exception as exc:
             # Couldn't READ the broker book (expired overnight Kite token / API blip). This is NOT a
             # mismatch — raise a distinct transient signal so the caller retries instead of HALTING

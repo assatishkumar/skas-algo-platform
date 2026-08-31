@@ -657,6 +657,22 @@ class ValueInvestingStrategy:
             "Never sells a stock — accumulation only",
         ]
 
+    def adoptable_symbols(self) -> list[str]:
+        """Symbols the manager may take over from the broker when the account holds more
+        than this run's ledger does.
+
+        The fund source has always been adopted (the owner tops it up by hand). The WATCHLIST
+        is here because this strategy NEVER SELLS its stock: shares left behind by an earlier,
+        archived run sit in the account owned by nobody, and reconciliation — which compares
+        the whole account — then halts every run forever. That is exactly what stopped run 28
+        on 2026-08-31 (run 26's SOUTHBANK 7, IDFCFIRSTB 4, MANAPPURAM 2 …). Adopting is safe
+        HERE precisely because the strategy cannot sell them; do not copy this onto a strategy
+        that manages a book, or it would trade shares it never bought."""
+        out = [self.fund_source] if self.fund_source else []
+        out.extend(self.watchlist or [])
+        seen: set[str] = set()
+        return [s for s in out if s and not (s.upper() in seen or seen.add(s.upper()))]
+
     def basket_status(self, market, portfolio, margin: float | None = None) -> dict:
         """The FUNDING LEDGER, for the Live tile. Everything this strategy does hinges on
         three numbers that were previously invisible: what is spendable today, what is in

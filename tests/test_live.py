@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
@@ -819,3 +821,48 @@ def test_tick_driven_runs_actually_roll_the_day_forward(monkeypatch):
     eq = make_live(segment="EQUITY")
     tick_at(15, 35, eq)
     assert calls == {"decisions": 0, "end_days": 1}  # shut at 15:30, so no decision
+
+
+def test_refresh_cannot_trade_through_the_cheap_door(monkeypatch):
+    """The Live tile's "Refresh" button passed decide=true, so pressing it to update prices
+    ran a full decision — EIGHT real orders on run 28 on 2026-08-31, hours before its 15:05
+    decision time — and that path skipped the reconcile-pending guard /run-decision honours.
+    A refresh re-prices; deciding is gated exactly like the explicit trigger."""
+    import inspect
+
+    from skas_algo.api.routes import live as route
+
+    src = inspect.getsource(route.refresh_live)
+    assert "reconcile_pending" in src, "decide=true must honour the reconcile gate"
+    assert "409" in src or "status_code=409" in src
+
+    ui = (Path(__file__).resolve().parents[1] / "web/src/pages/LivePage.tsx").read_text()
+    assert "liveRefresh(run.run_id, true)" not in ui, "Refresh must not ask the backend to decide"
+    assert "liveRefresh(dep.run_id, true)" not in ui, "…on the collapsed tile either"
+
+
+def test_the_daily_cache_refresh_never_stores_todays_half_formed_bar(monkeypatch):
+    """It ran with end=today, and fires as soon as a Zerodha session appears — so on a day
+    the owner logged in DURING market hours it cached a PARTIAL bar for today, which
+    use_cache=True then never corrects. The VPS carried wrong closes for 26/27/28 Aug 2026
+    (TMPV 314.10 vs a real 319.40) and value_investing ranks its biggest faller on exactly
+    that number."""
+    from datetime import date as _date
+
+    from skas_algo.services import market_data as md
+
+    seen = {}
+
+    class _SD:
+        def get_prices(self, sym, start_date=None, end_date=None, **kw):
+            seen["end"] = end_date
+            return None
+
+    monkeypatch.setattr(md.broker_svc, "make_data_session", lambda acct: _SD())
+    md.refresh_cache(object(), ["TMPV"])
+    today = datetime.now(md.IST).date()
+    assert seen["end"] < today, f"must settle on a COMPLETED session, got {seen['end']}"
+    # an explicit end that is still in the future is clamped the same way
+    seen.clear()
+    md.refresh_cache(object(), ["TMPV"], end=_date(2099, 1, 1))
+    assert seen["end"] < today

@@ -896,3 +896,110 @@ def test_fund_checked_is_transient_across_a_restart():
     fresh = _strat(watchlist="AAA")
     fresh.load_state(st.export_state())
     assert fresh._fund_checked is False
+
+
+def test_fund_adoption_is_throttled_not_called_every_tick(monkeypatch):
+    """holdings() used to run on EVERY tick — twice a minute, all session, long after there
+    was anything left to adopt. It shares a rate-limit budget with quotes, and on 2026-08-31
+    the Dhan account was pushed into HTTP 429: run 28 lost live quotes with its 15:05
+    decision still ahead of it. What this catches is the owner topping the ETF up by hand,
+    days apart, so a 5-minute cadence loses nothing."""
+    from datetime import datetime, timedelta
+    from types import SimpleNamespace
+
+    from skas_algo.live import manager as mgr
+    from skas_algo.live.manager import IST, LiveRun
+
+    monkeypatch.setattr(mgr, "is_market_open", lambda **kw: True)
+    calls = {"n": 0}
+
+    class _Adapter:
+        def positions(self):
+            return []
+
+        def holdings(self):
+            calls["n"] += 1
+            return {}
+
+    stub = SimpleNamespace(
+        session=SimpleNamespace(strategy=SimpleNamespace(fund_source="LIQUIDCASE")),
+        config=SimpleNamespace(instrument_class="STOCK", quote_source="dhan",
+                               segment="EQUITY", broker_account_id=2),
+        quote_source=SimpleNamespace(adapter=_Adapter()),
+        run_id=28,
+    )
+    for _ in range(20):                      # 20 ticks ~ 10 minutes at the 30s tick
+        LiveRun._maybe_adopt_fund_holding(stub)
+    assert calls["n"] == 1, f"throttled to one broker call, got {calls['n']}"
+
+    stub._last_fund_adopt_at = datetime.now(IST) - timedelta(seconds=301)
+    LiveRun._maybe_adopt_fund_holding(stub)
+    assert calls["n"] == 2, "after the window it must look again — a top-up must be seen"
+
+
+def test_the_broker_book_nets_todays_trades_against_settled_holdings():
+    """holdings() lags a day BOTH ways: today's buy is not in it, today's SALE has not left
+    it. Reading holdings alone halted run 28 (WIPRO platform +2 vs broker +1) and made
+    adoption re-add the 24 LIQUIDCASE units it had just sold (2026-08-31). Real numbers."""
+    from skas_algo.live.manager import _broker_delivery_book
+
+    class _Adapter:
+        holdings_exclude_today = True              # Dhan-verified; see _broker_delivery_book
+
+        def positions(self):                       # today's book
+            return [{"tradingsymbol": "WIPRO", "quantity": 2},        # bought today
+                    {"tradingsymbol": "LIQUIDCASE", "quantity": -24},  # SOLD today
+                    {"tradingsymbol": "MANAPPURAM", "quantity": 1}]
+        def holdings(self):                        # settled, a day behind
+            return {"WIPRO": {"units": 1}, "LIQUIDCASE": {"units": 778},
+                    "MANAPPURAM": {"units": 2}}
+
+    book = _broker_delivery_book(_Adapter())
+    assert book["WIPRO"] == 3            # 1 settled + 2 bought today
+    assert book["LIQUIDCASE"] == 754     # 778 on record MINUS the 24 sold today
+    assert book["MANAPPURAM"] == 3
+    # the sold units must NOT look adoptable: platform already booked the sale
+    assert book["LIQUIDCASE"] - 754 < 1
+
+
+def test_a_never_sells_run_adopts_shares_an_archived_run_left_behind(monkeypatch):
+    """Run 26 was archived holding SOUTHBANK/IDFCFIRSTB/…; the shares stayed in the Dhan
+    account owned by no run, so reconciliation — which compares the whole account — halted
+    run 28 and would have every day after (2026-08-31, owner: "pls adopt the stray shares")."""
+    from types import SimpleNamespace
+
+    from skas_algo.live import manager as mgr
+    from skas_algo.live.manager import LiveRun
+
+    monkeypatch.setattr(mgr, "is_market_open", lambda **kw: True)
+    monkeypatch.setattr(mgr.manager, "runs", {}, raising=False)
+    adopted = []
+
+    class _Adapter:
+        holdings_exclude_today = True              # Dhan-verified; see _broker_delivery_book
+
+        def positions(self):
+            return [{"tradingsymbol": "SOUTHBANK", "quantity": 7}]   # run 28 bought today
+        def holdings(self):
+            return {"SOUTHBANK": {"units": 7, "avg_price": 45.41},   # run 26's strays
+                    "LIQUIDCASE": {"units": 778, "avg_price": 115.64},
+                    "ITC": {"units": 1, "avg_price": 269.2}}         # NOT on the watchlist
+
+    st = _strat(watchlist="SOUTHBANK,INFY", fund_source="LIQUIDCASE")
+    stub = SimpleNamespace(
+        session=SimpleNamespace(
+            strategy=st,
+            portfolio=SimpleNamespace(lots=lambda s: []),
+            adopt_broker_holding=lambda *a: adopted.append((a[1], a[2], a[3])),
+            market=SimpleNamespace(last_close=lambda s: None),
+        ),
+        config=SimpleNamespace(instrument_class="STOCK", quote_source="dhan",
+                               segment="EQUITY", broker_account_id=2),
+        quote_source=SimpleNamespace(adapter=_Adapter()),
+        run_id=28,
+    )
+    LiveRun._maybe_adopt_fund_holding(stub)
+    got = {sym: units for sym, units, _px in adopted}
+    assert got["SOUTHBANK"] == 14, "7 strays + 7 bought today, all now this run's"
+    assert got["LIQUIDCASE"] == 778
+    assert "ITC" not in got, "never adopt a symbol the run is not configured for"

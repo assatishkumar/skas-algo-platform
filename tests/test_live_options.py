@@ -318,3 +318,4 @@ def test_adopt_broker_close_refuses_nonsense():
         sess.adopt_broker_close(ts, {held: 0.0})
     # Nothing was booked by any of the three refusals.
     assert held in sess.portfolio.lot_symbols()
+

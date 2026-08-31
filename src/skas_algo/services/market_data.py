@@ -7,9 +7,13 @@ for trading — no separate skas-data authentication.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from skas_algo.db.models import BrokerAccount
 from skas_algo.services import broker as broker_svc
+
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def refresh_cache(
@@ -24,7 +28,19 @@ def refresh_cache(
 
     Returns ``{symbol: {"rows": n, "last_date": iso} | {"error": msg}}``.
     """
-    end = end or datetime.now(UTC).date()
+    # NEVER fetch TODAY. This ran with end=today, and the daily refresh fires as soon as a
+    # Zerodha session appears — so on any day the owner logged in DURING market hours it
+    # cached a half-formed bar for today, and `use_cache=True` means that row is never
+    # re-fetched or corrected. The VPS cache carried wrong closes for 26/27/28 Aug 2026 that
+    # way (TMPV 314.10 against a real 319.40), which is what value_investing ranks its
+    # "biggest faller" on. Settle on the last COMPLETED session instead; today's live price
+    # comes from the broker, never from here.
+    from skas_algo.live.holidays import previous_trading_day
+
+    today = datetime.now(IST).date()
+    end = end or previous_trading_day(today + timedelta(days=1))
+    if end >= today:
+        end = previous_trading_day(today)
     start = start or (end - timedelta(days=30))
     sd = broker_svc.make_data_session(account)
 
