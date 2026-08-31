@@ -33,6 +33,7 @@ import base64
 import csv
 import io
 import json
+import os
 import threading
 import time as _time
 from dataclasses import dataclass
@@ -105,9 +106,65 @@ class _DhanHttp:
             return {}
         return out
 
+
+class DhanThrottled(Exception):
+    """Our OWN rate gate refused a call — shed rather than queue. Callers already treat a
+    failed data read as transient (quotes fall back to the last mark, reconciliation reports
+    ReconcileUnavailable), so this degrades instead of halting."""
+
+
+# Dhan's limits are per ACCOUNT, so per-run throttles cannot enforce them: two runs on 60s
+# timers are independent clocks and nothing stops them firing in the same second — adding
+# strategies makes a collision MORE likely, not less. On 2026-08-31 a single paper run
+# polling the chain every 15s pushed the account into HTTP 429 and took the LIVE equity
+# run's quotes down with it. So the budget is enforced HERE, at the one choke point every
+# request passes through, keyed by client id and endpoint class.
+#
+# ORDERS ARE DELIBERATELY EXEMPT. Dhan allows orders a far larger budget (25/s vs a chain
+# endpoint documented at ~1 per 3s), orders are rare, and a delayed exit is far worse than a
+# rejected quote. Never gate the order path to protect a data poll.
+_RATE_LOCK = threading.Lock()
+_RATE_LAST: dict[tuple[str, str], float] = {}
+_MIN_GAP = {"chain": 3.0, "quote": 1.0, "data": 1.0}
+_MAX_WAIT = 4.0          # queue this long at most, then shed
+
+
+def _rate_kind(path: str) -> str | None:
+    """Endpoint class for the gate, or None for the exempt order path."""
+    if path.startswith("/orders"):
+        return None
+    low = path.lower()
+    if "optionchain" in low or "expirylist" in low:
+        return "chain"
+    if "marketfeed" in low:
+        return "quote"
+    return "data"
+
+
+def _rate_gate(client_id: str, path: str) -> None:
+    kind = _rate_kind(path)
+    if kind is None:
+        return
+    gap = float(os.environ.get(f"SKAS_DHAN_GAP_{kind.upper()}", _MIN_GAP[kind]))
+    key = (client_id, kind)
+    with _RATE_LOCK:
+        now = _time.monotonic()
+        earliest = _RATE_LAST.get(key, 0.0) + gap
+        wait = max(0.0, earliest - now)
+        if wait > _MAX_WAIT:
+            # Too many callers want this endpoint. Shedding keeps the ACCOUNT under its
+            # budget, which is what protects the live run; queueing would just move the
+            # 429 later and stall the loop meanwhile.
+            raise DhanThrottled(f"{path}: account gate busy, {wait:.1f}s behind")
+        _RATE_LAST[key] = max(now, earliest)   # reserve the slot before releasing the lock
+    if wait > 0:
+        _time.sleep(wait)
+
+
     def _call(self, verb: str, path: str, body: dict | None = None) -> dict:
         import requests
 
+        _rate_gate(self.client_id, path)
         r = requests.request(verb, f"{DHAN_BASE}{path}", json=body,
                              headers=self._headers(), timeout=15)
         return self._check(r, verb, path)

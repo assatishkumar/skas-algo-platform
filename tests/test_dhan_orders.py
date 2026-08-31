@@ -315,3 +315,45 @@ def test_funds_reads_the_real_available_balance():
     # A missing/empty payload must read as ZERO, never as "unknown" — a strategy that treats
     # None as "no cap" would go right back to overdrawing.
     assert _adapter(FakeHttp({("GET", "/fundlimit"): {}})).funds().available == 0.0
+
+
+def test_the_account_rate_gate_holds_no_matter_how_many_runs_ask():
+    """Dhan's limits are per ACCOUNT, so per-run throttles cannot enforce them: two runs on
+    60s timers are independent clocks and nothing stops them firing in the same second —
+    more strategies makes a collision MORE likely, not less (owner, 2026-08-31). One paper
+    run polling the chain every 15s pushed the account to HTTP 429 and took the LIVE equity
+    run's quotes down with it. The budget is enforced at the single choke point instead."""
+    import threading
+
+    from skas_algo.brokers.dhan import _RATE_LAST, DhanThrottled, _rate_gate, _rate_kind
+
+    assert _rate_kind("/orders") is None, "the ORDER path is never gated"
+    assert _rate_kind("/orders/123") is None
+    assert _rate_kind("/v2/optionchain") == "chain"
+    assert _rate_kind("/marketfeed/ltp") == "quote"
+    assert _rate_kind("/holdings") == "data"
+
+    _RATE_LAST.clear()
+    ok, shed = [], []
+
+    def ask():
+        try:
+            _rate_gate("CID", "/v2/optionchain")
+            ok.append(1)
+        except DhanThrottled:
+            shed.append(1)
+
+    threads = [threading.Thread(target=ask) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # 8 simultaneous askers, a 3s gap and a 4s queue cap → a couple pace through, the rest
+    # SHED. Shedding is the point: callers fall back to their last mark, and the account
+    # stays under budget so the live run keeps its quotes.
+    assert ok and shed, f"expected pacing AND shedding, got {len(ok)}/{len(shed)}"
+    assert len(ok) <= 3, "the account must not exceed roughly one chain call per 3s"
+
+    _RATE_LAST.clear()
+    for _ in range(5):                       # orders never queue behind a data poll
+        _rate_gate("CID", "/orders")
