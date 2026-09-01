@@ -954,7 +954,7 @@ def test_the_broker_book_nets_todays_trades_against_settled_holdings():
             return {"WIPRO": {"units": 1}, "LIQUIDCASE": {"units": 778},
                     "MANAPPURAM": {"units": 2}}
 
-    book = _broker_delivery_book(_Adapter())
+    book = _broker_delivery_book(_Adapter(), traded_today={"WIPRO", "LIQUIDCASE", "MANAPPURAM"})
     assert book["WIPRO"] == 3            # 1 settled + 2 bought today
     assert book["LIQUIDCASE"] == 754     # 778 on record MINUS the 24 sold today
     assert book["MANAPPURAM"] == 3
@@ -966,6 +966,7 @@ def test_a_never_sells_run_adopts_shares_an_archived_run_left_behind(monkeypatch
     """Run 26 was archived holding SOUTHBANK/IDFCFIRSTB/…; the shares stayed in the Dhan
     account owned by no run, so reconciliation — which compares the whole account — halted
     run 28 and would have every day after (2026-08-31, owner: "pls adopt the stray shares")."""
+    from datetime import datetime
     from types import SimpleNamespace
 
     from skas_algo.live import manager as mgr
@@ -989,6 +990,7 @@ def test_a_never_sells_run_adopts_shares_an_archived_run_left_behind(monkeypatch
     stub = SimpleNamespace(
         session=SimpleNamespace(
             strategy=st,
+            transactions=[{"date": datetime.now(mgr.IST), "ticker": "SOUTHBANK"}],
             portfolio=SimpleNamespace(lots=lambda s: []),
             adopt_broker_holding=lambda *a: adopted.append((a[1], a[2], a[3])),
             market=SimpleNamespace(last_close=lambda s: None),

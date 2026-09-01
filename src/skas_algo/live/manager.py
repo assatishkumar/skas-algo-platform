@@ -322,42 +322,61 @@ def _lot_sets_attr(strategy) -> str | None:
 
 
 
-def _broker_delivery_book(adapter, holdings: dict | None = None) -> dict[str, float]:
+def _traded_today(runs) -> set[str]:
+    """Symbols any of ``runs`` filled TODAY — i.e. exactly the trades that holdings cannot
+    have absorbed yet. Read off the sessions' own fills, which is information we are certain
+    of, rather than inferred from the broker."""
+    today = datetime.now(IST).date()
+    out: set[str] = set()
+    for run in runs:
+        for ev in getattr(run.session, "transactions", None) or ():
+            d = ev.get("date")
+            d = d.date() if isinstance(d, datetime) else d
+            if d == today:
+                out.add(str(ev.get("ticker") or "").upper())
+    return out
+
+
+def _broker_delivery_book(adapter, holdings=None, traded_today=None) -> dict[str, float]:
     """What the broker ACTUALLY holds right now, per tradingsymbol.
 
     ``holdings()`` is the SETTLED delivery record and lags a day in BOTH directions: a share
-    bought today is not in it yet, and a share SOLD today has not left it. ``positions()`` is
-    the day's book and carries exactly that missing delta. The two are DISJOINT — holdings
-    covers prior days (Dhan totalQty = dpQty + t1Qty; Kite quantity + t1_quantity), positions
-    covers today — so the real book is their SUM.
+    bought today is not in it yet, and one SOLD today has not left it. ``positions()`` is the
+    session book and carries exactly that missing delta. Reading holdings alone halted run 28
+    (WIPRO platform +2 vs broker +1) and made adoption re-add the 24 LIQUIDCASE units the
+    strategy had just sold (2026-08-31).
 
-    It used to be "holdings WINS", which silently discarded the day. That cost two incidents
-    within one hour on 2026-08-31, both on run 28:
-      * reconciliation halted it — WIPRO platform +2 vs broker +1, MANAPPURAM +1 vs +2 —
-        because today's buys were invisible while run 26's older shares were not;
-      * adoption re-added the 24 LIQUIDCASE units the strategy had just SOLD, because the
-        sale was still sitting in holdings, so the ledger read 778 when it owned 754.
-    Both are the same T+1 lag that the cash side already models. Adoption and reconciliation
-    MUST read the book through this one function or they can never agree with each other.
+    But the two CANNOT simply be summed. Dhan's positions endpoint does not roll over at
+    midnight: at 06:11 the next morning it still reported yesterday's fills (JYOTHYLAB
+    dayBuyQty 1, carryForward 0) while holdings had ALREADY absorbed them — summing there
+    gives SOUTHBANK 21 when the truth is 14. There is no date on a position row to tell the
+    two apart, and guessing when a broker rolls its session is exactly the kind of assumption
+    that produced the bug above.
+
+    So the day book is folded in ONLY for symbols WE filled today (``traded_today``). That is
+    precisely the set holdings cannot have absorbed yet, it comes from our own fills rather
+    than from a broker field whose semantics we would be guessing at, and it is self-clearing:
+    tomorrow the same rows are stale, we did not trade them today, and holdings alone is
+    believed. Symbols we did not trade are read from holdings, always.
     """
-    book = {p["tradingsymbol"]: float(p.get("quantity") or 0) for p in adapter.positions()}
-    # ``holdings`` may be passed in by a caller that already fetched it — these are
-    # rate-limited endpoints (Dhan 429'd run 28 off its quotes on 2026-08-31), so never make
-    # the same call twice in one pass.
+    book: dict[str, float] = {}
     if holdings is None and hasattr(adapter, "holdings"):
         holdings = adapter.holdings()
-    # WHETHER to add depends on the broker, and only Dhan is VERIFIED (2026-08-31: WIPRO
-    # bought at 12:24 showed positions +2 while holdings still read 1; LIQUIDCASE sold that
-    # minute still read 778). An adapter whose holdings ALREADY fold in the day would double
-    # count, so summing is opt-in per adapter and every other broker keeps the previous
-    # holdings-wins behaviour untouched (CLAUDE.md §1). Verify against a real account before
-    # setting this on a new broker.
-    add_today = bool(getattr(adapter, "holdings_exclude_today", False))
-    if holdings:
-        for sym, h in (holdings or {}).items():
-            units = float(h.get("units") or 0)
-            if units:
-                book[sym] = (book.get(sym, 0.0) + units) if add_today else units
+    for sym, h in (holdings or {}).items():
+        units = float(h.get("units") or 0)
+        if units:
+            book[sym] = units
+    # Whether the day book is DISJOINT from holdings is broker-specific, and only Dhan is
+    # verified (2026-08-31). Every other adapter keeps the previous holdings-wins behaviour
+    # (CLAUDE.md §1) — an adapter that already folds the day in would double count.
+    fold_day = bool(getattr(adapter, "holdings_exclude_today", False))
+    for p in adapter.positions():
+        sym = p["tradingsymbol"]
+        qty = float(p.get("quantity") or 0)
+        if not fold_day:
+            book.setdefault(sym, qty)          # day-only symbol still visible, as before
+        elif traded_today is None or sym.upper() in traded_today:
+            book[sym] = book.get(sym, 0.0) + qty
     return book
 
 
@@ -813,7 +832,9 @@ class LiveRun:
             return
         try:
             prices = adapter.holdings() or {}              # ONE call, reused below
-            book = _broker_delivery_book(adapter, prices)   # T+1-correct; see that function
+            book = _broker_delivery_book(          # T+1-correct; see that function
+                adapter, prices, traded_today=_traded_today([self])
+            )
             self._last_fund_adopt_at = now   # arm only on a call that actually completed
         except Exception:  # pragma: no cover - a holdings call must never break the loop
             return
@@ -1550,6 +1571,7 @@ class LiveRunManager:
         from skas_algo.engine.options.instrument import parse
 
         ours: dict[str, float] = {}
+        _acct_runs = []
         for run in self.runs.values():
             if run.config.mode.upper() != "LIVE":
                 continue
@@ -1557,6 +1579,7 @@ class LiveRunManager:
                 continue
             if not isinstance(getattr(run.session, "broker", None), LiveBroker):
                 continue
+            _acct_runs.append(run)
             for sym in run.session.portfolio.lot_symbols():
                 for lot in run.session.portfolio.lots(sym):
                     inst = parse(sym)
@@ -1565,7 +1588,9 @@ class LiveRunManager:
                         ts = adapter._option_tradingsymbol(inst)
                     ours[ts or sym] = ours.get(ts or sym, 0.0) + lot.direction * lot.units
         try:
-            broker_net = _broker_delivery_book(adapter)
+            broker_net = _broker_delivery_book(
+                adapter, traded_today=_traded_today(_acct_runs)
+            )
             # DELIVERY equity lives in HOLDINGS, not positions. positions() is the day's book:
             # a CNC stock bought weeks ago is absent from it entirely, so reconciling a
             # cash-equity run against positions alone reports "broker +0" for everything it

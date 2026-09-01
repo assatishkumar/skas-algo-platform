@@ -276,9 +276,8 @@ def test_a_dhan_style_broker_nets_the_day_onto_settled_holdings():
     """Dhan reports the day's trades in positions() ONLY: a share bought today is not yet in
     holdings, and one SOLD today has not left it (verified live 2026-08-31). Reading holdings
     alone halted run 28 — WIPRO platform +2 vs broker +1 — and made adoption re-add the 24
-    LIQUIDCASE units the strategy had just sold. Adapters that fold the day into holdings keep
-    the default above; this one opts in."""
-    from skas_algo.live.manager import manager
+    LIQUIDCASE units the strategy had just sold."""
+    from skas_algo.live.manager import _broker_delivery_book
 
     class _Adapter:
         armed = True
@@ -288,13 +287,34 @@ def test_a_dhan_style_broker_nets_the_day_onto_settled_holdings():
             return [{"tradingsymbol": "WIPRO", "quantity": 2},          # bought today
                     {"tradingsymbol": "LIQUIDCASE", "quantity": -24}]   # SOLD today
         def holdings(self):
-            return {"WIPRO": {"units": 1.0, "avg_price": 180.0},        # yesterday's
-                    "LIQUIDCASE": {"units": 778.0, "avg_price": 115.64}}
-        def _option_tradingsymbol(self, inst):
-            return None
+            return {"WIPRO": {"units": 1.0}, "LIQUIDCASE": {"units": 778.0}}
 
-    details: dict = {}
-    manager.reconcile_account_book(-1, _Adapter(), details)
-    book = details["broker"]
+    book = _broker_delivery_book(_Adapter(), traded_today={"WIPRO", "LIQUIDCASE"})
     assert book["WIPRO"] == 3.0, "today's buy is invisible to holdings — it must still count"
     assert book["LIQUIDCASE"] == 754.0, "the 24 sold today are gone, even though holdings lags"
+
+
+def test_a_stale_day_book_is_not_added_twice_after_settlement():
+    """Dhan's positions endpoint does NOT roll over at midnight. At 06:11 the morning after,
+    it still reported yesterday's fills (JYOTHYLAB dayBuyQty 1, carryForward 0) while
+    holdings had ALREADY absorbed them — a blanket sum gave SOUTHBANK 21 against a truth of
+    14, which would have halted the run just as surely as reading holdings alone.
+
+    A position row carries no date, so the day book is folded in only for symbols WE filled
+    today. Tomorrow those same rows are stale, we did not trade them, and holdings alone is
+    believed — self-clearing, with no guess about when a broker rolls its session."""
+    from skas_algo.live.manager import _broker_delivery_book
+
+    class _Adapter:
+        armed = True
+        holdings_exclude_today = True
+
+        def positions(self):                        # STALE: yesterday's session, not cleared
+            return [{"tradingsymbol": "SOUTHBANK", "quantity": 7},
+                    {"tradingsymbol": "LIQUIDCASE", "quantity": -24}]
+        def holdings(self):                         # settled overnight — already includes them
+            return {"SOUTHBANK": {"units": 14.0}, "LIQUIDCASE": {"units": 754.0}}
+
+    book = _broker_delivery_book(_Adapter(), traded_today=set())   # we traded nothing today
+    assert book["SOUTHBANK"] == 14.0, "a stale day row must not be added to settled holdings"
+    assert book["LIQUIDCASE"] == 754.0, "…nor subtracted from them a second time"
