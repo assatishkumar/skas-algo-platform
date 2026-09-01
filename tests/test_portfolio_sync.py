@@ -585,3 +585,52 @@ def test_selling_out_at_one_broker_zeroes_only_that_slice(fake_broker):
         assert row.units == pytest.approx(100.0)
         db.delete(row)
         db.commit()
+
+
+def test_a_holding_priced_by_one_account_still_has_its_slice_at_another_refreshed(monkeypatch):
+    """ITC is priced from Zerodha but part of it sits at Dhan, where value_investing buys it
+    daily. Grouping only by the quote account means Dhan's pass never visits the row and the
+    slice goes stale forever — the exact daily update this exists to provide."""
+    from skas_algo.db.models import BrokerAccount
+
+    class _Zerodha:
+        def holdings(self): return {"ITC": {"units": 7769.0, "avg_price": 300.0}}
+        def day_quotes(self, syms): return {s: {"last": 260.0, "prev_close": 250.0} for s in syms}
+
+    class _Dhan:
+        def holdings(self): return {"ITC": {"units": 25.0, "avg_price": 269.0}}
+        def day_quotes(self, syms): return {}
+
+    with session_scope() as db:
+        z = BrokerAccount(broker="zerodha", label="z", user_id="Z1")
+        d = BrokerAccount(broker="dhan", label="d", user_id="D1")
+        db.add_all([z, d])
+        db.commit()
+        zid, did = z.id, d.id
+
+    monkeypatch.setattr(
+        "skas_algo.services.broker.make_adapter",
+        lambda a: _Zerodha() if (a.broker or "") == "zerodha" else _Dhan(),
+    )
+    with session_scope() as db:
+        row = PortfolioHolding(
+            name="ITC", asset_class="stk", sync="auto", sync_source="broker", sync_ref="ITC",
+            broker_account_id=zid,                       # priced by Zerodha…
+            units=7781.0, units_locked=True,
+            broker_units={"static": 7769.0, f"account:{did}": 12.0},   # …units at BOTH
+        )
+        db.add(row)
+        db.commit()
+
+        sync_portfolio(db, holding_ids=[row.id])
+        row = db.get(PortfolioHolding, row.id)
+
+        assert row.broker_units[f"account:{did}"] == pytest.approx(25.0)  # Dhan's pass ran
+        assert row.broker_units["static"] == pytest.approx(7769.0)        # statement held
+        assert row.units == pytest.approx(7794.0)
+        assert row.last_price == pytest.approx(260.0)                     # Zerodha priced it
+
+        db.delete(row)
+        for acct_id in (zid, did):
+            db.delete(db.get(BrokerAccount, acct_id))
+        db.commit()

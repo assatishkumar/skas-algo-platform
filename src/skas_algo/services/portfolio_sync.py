@@ -187,10 +187,32 @@ def _sync_global(db: Session, holdings: list[PortfolioHolding], report: SyncRepo
         report.updated.append(h.name)
 
 
+def _slice_accounts(h: PortfolioHolding) -> set[int]:
+    """Broker accounts whose UNITS this holding tracks, from its per-source breakdown."""
+    out: set[int] = set()
+    for key in (h.broker_units or {}):
+        if key.startswith("account:"):
+            try:
+                out.add(int(key.split(":", 1)[1]))
+            except ValueError:  # a malformed key is data, not a crash
+                continue
+    return out
+
+
 def _sync_broker(
     db: Session, account: BrokerAccount, holdings: list[PortfolioHolding], report: SyncReport
 ) -> None:
+    """One account's pass. An account plays TWO independent roles here and they must not be
+    conflated: it may be the holding's QUOTE source (``broker_account_id``, exactly one per
+    holding), and it may hold some of its UNITS (a slice in ``broker_units``, any number).
+
+    A merged position is priced by Zerodha while part of it sits at Dhan — group only by the
+    quote account and Dhan's slice never refreshes, which is precisely the daily update this
+    exists to provide."""
     from skas_algo.services.broker import make_adapter
+
+    prices_here = [h for h in holdings if h.broker_account_id == account.id]
+    holds_here = [h for h in holdings if account.id in _slice_accounts(h)]
 
     try:
         adapter = make_adapter(account)
@@ -201,7 +223,24 @@ def _sync_broker(
             report.issues.append({"holding": h.name, "reason": f"{account.broker}: {exc}"})
         return
 
-    symbols = [(h.sync_ref or "").strip().upper() for h in holdings]
+    # --- units first: only the slice this account owns, then re-total.
+    key = f"account:{account.id}"
+    for h in holds_here:
+        sym = (h.sync_ref or "").strip().upper()
+        held = book.get(sym)
+        # A successful read that omits the symbol means zero held HERE — a real sell-out.
+        updated = dict(h.broker_units or {})
+        updated[key] = float(held["units"]) if held else 0.0
+        h.broker_units = updated
+        h.units = round(sum(float(v) for v in updated.values()), 4)
+        if h not in prices_here:
+            report.updated.append(h.name)
+
+    if not prices_here:
+        return
+
+    # --- then prices, for the holdings this account is the quote source for.
+    symbols = [(h.sync_ref or "").strip().upper() for h in prices_here]
     quotes: dict[str, dict] = {}
     fetch = getattr(adapter, "day_quotes", None)
     if fetch is not None and symbols:
@@ -216,49 +255,31 @@ def _sync_broker(
                 for s, p in adapter.get_quote([s for s in symbols if s]).items()
             }
         except Exception as exc:
-            for h in holdings:
+            for h in prices_here:
                 report.issues.append({"holding": h.name, "reason": f"quote failed: {exc}"})
             return
 
     today = date.today().isoformat()
-    for h in holdings:
+    for h in prices_here:
         sym = (h.sync_ref or "").strip().upper()
-        held = book.get(sym)
         quote = quotes.get(sym)
         if quote is None or not quote.get("last"):
             report.issues.append({"holding": h.name, "reason": f"No quote for {sym}"})
             continue
 
+        # Units already settled above for a sliced holding; locked ones are never touched.
+        if h.broker_units or h.units_locked:
+            _apply_price(
+                h, last=float(quote["last"]), prev_close=quote.get("prev_close"),
+                asof=today, units=h.units,
+            )
+            report.updated.append(h.name)
+            continue
+
+        held = book.get(sym)
         ledger_units = _ledger_units(db, h.id)
         broker_units = float(held["units"]) if held else None
         units = ledger_units if ledger_units is not None else broker_units
-
-        # An aggregate broken down per source: refresh ONLY this account's slice and re-total.
-        # A successful book read that does not list the symbol means zero held HERE — which is
-        # a real reduction (the strategy sold out) and must be recorded, not skipped.
-        if h.broker_units:
-            slice_key = f"account:{account.id}"
-            if slice_key in h.broker_units:
-                updated = dict(h.broker_units)
-                updated[slice_key] = broker_units or 0.0
-                h.broker_units = updated
-                h.units = round(sum(float(v) for v in updated.values()), 4)
-            _apply_price(
-                h, last=float(quote["last"]), prev_close=quote.get("prev_close"),
-                asof=today, units=h.units,
-            )
-            report.updated.append(h.name)
-            continue
-
-        # An aggregate across brokers: price it, never touch its units, and never compare it
-        # against one account's book — the account legitimately holds only part of it.
-        if h.units_locked:
-            _apply_price(
-                h, last=float(quote["last"]), prev_close=quote.get("prev_close"),
-                asof=today, units=h.units,
-            )
-            report.updated.append(h.name)
-            continue
 
         # The ledger is the owner's record; the broker is the broker's. Where they disagree,
         # say so and change nothing — a silent overwrite of either would destroy the only
@@ -286,16 +307,13 @@ def _sync_broker(
             })
 
         _apply_price(
-            h,
-            last=float(quote["last"]),
-            prev_close=quote.get("prev_close"),
-            asof=today,
-            units=units,
+            h, last=float(quote["last"]), prev_close=quote.get("prev_close"),
+            asof=today, units=units,
         )
         report.updated.append(h.name)
 
     # Anything the broker holds that isn't tracked here — offered, never auto-added.
-    tracked = {s for s in symbols if s}
+    tracked = {(h.sync_ref or "").strip().upper() for h in holdings}
     for sym, row in book.items():
         if sym not in tracked:
             report.discovered.append({
@@ -321,8 +339,15 @@ def sync_portfolio(db: Session, *, holding_ids: list[int] | None = None) -> Sync
     by_global = [h for h in rows if (h.sync_source or "") == "global"]
     by_broker: dict[int, list[PortfolioHolding]] = {}
     for h in rows:
-        if (h.sync_source or "") == "broker" and h.broker_account_id:
-            by_broker.setdefault(h.broker_account_id, []).append(h)
+        if (h.sync_source or "") == "broker":
+            # A holding is visited by its QUOTE account and by every account holding a slice
+            # of its units — those are different roles and often different accounts.
+            for account_id in ({h.broker_account_id} | _slice_accounts(h)) - {None}:
+                by_broker.setdefault(account_id, []).append(h)
+            if not h.broker_account_id and not _slice_accounts(h):
+                report.issues.append({
+                    "holding": h.name, "reason": "Broker-priced but no account is set",
+                })
         elif (h.sync_source or "") not in ("amfi", "broker", "global"):
             report.issues.append({
                 "holding": h.name,
