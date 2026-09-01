@@ -96,6 +96,10 @@ export default function PortfolioPage() {
     mutationFn: (class_targets: Record<string, number>) => papi.saveTargets({ class_targets }),
     onSuccess,
   });
+  const saveKindTargets = useMutation({
+    mutationFn: (kind_targets: Record<string, number>) => papi.saveTargets({ kind_targets }),
+    onSuccess,
+  });
 
   // Real estate is lumpy, illiquid and revalued by guesswork — including it can swing every
   // allocation figure on the page. The toggle affects the WHOLE screen, so it lives here.
@@ -107,9 +111,11 @@ export default function PortfolioPage() {
   const t = useMemo(() => {
     const value = rows.reduce((a, h) => a + h.value, 0);
     const invested = rows.reduce((a, h) => a + h.invested, 0);
-    const byKind = { equity: 0, debt: 0, alt: 0 } as Record<string, number>;
-    for (const h of rows) byKind[h.kind] += h.value;
-    const share = (v: number) => (value > 0 ? Math.round((v / value) * 100) : 0);
+    const byKind: Record<string, number> = {};
+    for (const h of rows) byKind[h.kind] = (byKind[h.kind] ?? 0) + h.value;
+    for (const k of Object.keys(byKind)) {
+      byKind[k] = value > 0 ? (byKind[k] / value) * 100 : 0;
+    }
     return {
       value,
       invested,
@@ -119,7 +125,7 @@ export default function PortfolioPage() {
       blended: value > 0
         ? rows.reduce((a, h) => a + (h.xirr_pct ?? 0) * h.value, 0) / value
         : 0,
-      mix: `${share(byKind.equity)} : ${share(byKind.debt)} : ${share(byKind.alt)}`,
+      mix: byKind,
       auto: rows.filter((h) => h.sync === "auto").length,
       manual: rows.filter((h) => h.sync === "manual").length,
     };
@@ -146,9 +152,12 @@ export default function PortfolioPage() {
     );
   }
 
-  const kindTargets = data
-    ? `${data.kind_targets.equity} : ${data.kind_targets.debt} : ${data.kind_targets.alt}`
-    : "";
+  // With five tags a ratio string ("55 : 25 : 10 : 7 : 3") is unreadable in a tile, so this
+  // card answers the question the mix is actually for — how much risk am I carrying, and how
+  // far is that from what I chose. The full breakdown lives in Allocation and Rebalance.
+  const equityShare = t.mix.equity;
+  const equityTarget = data?.kind_targets.equity ?? 0;
+  const equityDrift = equityShare - equityTarget;
 
   return (
     <div className="mx-auto max-w-[1340px] px-4 pb-[72px] pt-[26px] sm:px-8">
@@ -156,18 +165,27 @@ export default function PortfolioPage() {
         <h1 className="m-0 text-[27px] font-bold [font-family:'Space_Grotesk',system-ui,sans-serif] text-[var(--strong)]">
           Portfolio
         </h1>
+        {/* A status pill that happened to be clickable read as decoration — the one action
+            that makes every number on the page current has to look like a button. */}
         <button
           onClick={() => syncNow.mutate()}
           disabled={syncNow.isPending}
-          title="Refresh linked holdings — broker positions and AMFI NAVs. Manual holdings keep the value you entered. Also records today's history point."
-          className="inline-flex items-center gap-[7px] rounded-full border-[1.5px] border-[var(--tint-border)] bg-[var(--tint)] px-3.5 py-2 text-[12.5px] font-extrabold text-[var(--accent-deep)] disabled:opacity-60"
+          title="Refresh every live price: broker quotes for equities and ETFs, AMFI NAVs for funds, and the US / crypto feed. Hand-entered holdings keep the value you typed. Also records today's history point."
+          className="inline-flex items-center gap-2 rounded-[11px] bg-[var(--accent)] px-[18px] py-2.5 text-[13.5px] font-extrabold text-white disabled:opacity-60"
+        >
+          <span className={syncNow.isPending ? "animate-spin" : ""}>⟳</span>
+          {syncNow.isPending ? "Refreshing…" : "Refresh prices"}
+        </button>
+        <span
+          className="inline-flex items-center gap-[7px] rounded-full border-[1.5px] border-[var(--tint-border)] bg-[var(--tint)] px-3.5 py-2 text-[12.5px] font-extrabold text-[var(--accent-deep)]"
+          title={lastSync ? "When a live price was last written" : "Nothing has been priced yet"}
         >
           <span
             className="inline-block h-[7px] w-[7px] rounded-full"
-            style={{ background: syncNow.isPending ? "var(--warn-text)" : "var(--pos)" }}
+            style={{ background: lastSync ? "var(--pos)" : "var(--faint)" }}
           />
-          {syncNow.isPending ? "Syncing…" : lastSync ? `Synced ${stampLabel(lastSync)}` : "Sync now"}
-        </button>
+          {lastSync ? stampLabel(lastSync) : "never priced"}
+        </span>
         <Pill title="Auto holdings refresh from a broker or AMFI. Manual ones keep what you typed.">
           {t.auto} auto · {t.manual} manual
         </Pill>
@@ -176,10 +194,10 @@ export default function PortfolioPage() {
           <button
             onClick={() => refreshNavs.mutate()}
             disabled={refreshNavs.isPending}
-            title="Download today's AMFI NAV file. Needed once before funds can be searched or priced."
+            title="Pull today's AMFI NAV file on its own. 'Refresh prices' already does this — you need it separately only to search for a fund before adding it."
             className="rounded-[11px] border-[1.5px] border-[var(--field-border)] px-3.5 py-2 text-[12.5px] font-extrabold text-[var(--muted)] disabled:opacity-60"
           >
-            {refreshNavs.isPending ? "Fetching…" : "Refresh NAVs"}
+            {refreshNavs.isPending ? "Fetching…" : "NAV file"}
           </button>
           <button
             onClick={() => setSeeding(true)}
@@ -190,7 +208,7 @@ export default function PortfolioPage() {
           </button>
           <button
             onClick={() => setEditing("new")}
-            className="rounded-[11px] bg-[var(--accent)] px-[18px] py-2.5 text-[13.5px] font-extrabold text-white"
+            className="rounded-[11px] border-[1.5px] border-[var(--accent)] px-[18px] py-2.5 text-[13.5px] font-extrabold text-[var(--accent-deep)]"
           >
             + Add holding
           </button>
@@ -276,8 +294,14 @@ export default function PortfolioPage() {
           help="Today's move in holdings that actually reprice. The percentage is measured against those holdings' value yesterday — EPF, PPF and hand-entered items are left out of it, or a still portfolio would look calmer than it was. A fund's NAV is a day behind by design."
         />
         <Kpi
-          label="EQUITY : DEBT : ALT" value={t.mix} sub={`targets ${kindTargets}`}
-          help="Your real risk mix. Drift from targets changes your risk even in a month you changed nothing — see Rebalance."
+          label="EQUITY SHARE"
+          value={`${equityShare.toFixed(0)}%`}
+          sub={Math.abs(equityDrift) < 1
+            ? `on target (${equityTarget.toFixed(0)}%)`
+            : `${equityDrift > 0 ? "+" : ""}${equityDrift.toFixed(0)} pts vs ${equityTarget.toFixed(0)}% target`}
+          subColor={Math.abs(equityDrift) < 1 ? "var(--pos)"
+            : equityDrift > 0 ? "var(--note)" : "var(--accent-deep)"}
+          help="How much of the book carries equity risk, against the target you set. This is the single number that decides how a bad year feels. The full five-tag breakdown is on Allocation, and Rebalance says what to move."
         />
       </div>
 
@@ -347,6 +371,7 @@ export default function PortfolioPage() {
             <RebalanceView
               rows={rows} payload={data}
               onSaveTargets={(targets) => saveTargets.mutate(targets)}
+              onSaveKindTargets={(targets) => saveKindTargets.mutate(targets)}
             />
           )}
           {tab === "Tax" && <TaxView rows={rows} payload={data} />}

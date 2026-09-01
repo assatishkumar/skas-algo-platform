@@ -161,13 +161,13 @@ export default function HoldingModal({
           <select
             className={selectClass}
             value={draft.kind_override ?? ""}
-            title="Overrides the class default — an arbitrage or balanced fund sits in 'mutual funds' but behaves like debt, and taxes like equity."
+            title="The tag this holding is rebalanced under. Overrides the class default — an arbitrage or balanced fund sits in 'mutual funds' but behaves like debt."
             onChange={(e) => set({ kind_override: (e.target.value || null) as Kind | null })}
           >
             <option value="">Default for type ({defaultKind})</option>
-            <option value="equity">Equity</option>
-            <option value="debt">Debt</option>
-            <option value="alt">Alternatives</option>
+            {payload.kinds.map((k) => (
+              <option key={k.key} value={k.key}>{k.label}</option>
+            ))}
           </select>
         </Field>
 

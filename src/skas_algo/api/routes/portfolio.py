@@ -104,6 +104,9 @@ def get_portfolio(db: Session = Depends(get_db)) -> dict:
             k: {"label": v["label"], "kind": v["kind"], "color": v["color"]}
             for k, v in pf.ASSET_CLASSES.items()
         },
+        "kinds": [
+            {"key": k, "label": pf.KIND_LABELS[k], "color": pf.KIND_COLORS[k]} for k in pf.KINDS
+        ],
         "class_targets": _setting(db, _CLASS_TARGETS_KEY, default_class),
         "kind_targets": _setting(db, _KIND_TARGETS_KEY, pf.KIND_TARGETS),
         "benchmarks": pf.BENCHMARKS,

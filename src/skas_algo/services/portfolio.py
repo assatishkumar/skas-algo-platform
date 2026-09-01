@@ -33,15 +33,34 @@ ASSET_CLASSES: dict[str, dict] = {
     "etf": {"label": "ETFs", "kind": "equity", "target": 8.0, "color": "#0d8a7e"},
     "mf": {"label": "Mutual funds", "kind": "equity", "target": 20.0, "color": "#0f9d63"},
     "us": {"label": "US stocks", "kind": "equity", "target": 10.0, "color": "#5b62e8"},
-    "btc": {"label": "Crypto", "kind": "alt", "target": 3.0, "color": "#8b90f2"},
+    "btc": {"label": "Crypto", "kind": "crypto", "target": 3.0, "color": "#8b90f2"},
     "bank": {"label": "Bank · FD", "kind": "debt", "target": 6.0, "color": "#66c29a"},
     "ppf": {"label": "PPF", "kind": "debt", "target": 8.0, "color": "#b07d10"},
     "epf": {"label": "EPF", "kind": "debt", "target": 10.0, "color": "#e8a13c"},
-    "gold": {"label": "Gold", "kind": "alt", "target": 4.0, "color": "#c2661d"},
-    "re": {"label": "Real estate", "kind": "alt", "target": 9.0, "color": "#7a8a86"},
+    "gold": {"label": "Gold", "kind": "gold", "target": 4.0, "color": "#c2661d"},
+    "re": {"label": "Real estate", "kind": "realestate", "target": 9.0, "color": "#7a8a86"},
 }
 
-KIND_TARGETS = {"equity": 60.0, "debt": 24.0, "alt": 16.0}
+# The tag every holding carries, and the level rebalancing happens at. Deliberately coarser
+# than asset class: a portfolio's real risk is "how much equity, how much debt", not "how many
+# mid-cap funds". Crypto is its own tag rather than folded into equity or an "alternatives"
+# catch-all — nothing else on the screen behaves like it, and averaging it into either hides
+# exactly the position an investor most wants stated.
+KINDS: tuple[str, ...] = ("equity", "debt", "gold", "realestate", "crypto")
+
+KIND_LABELS = {
+    "equity": "Equity", "debt": "Debt", "gold": "Gold",
+    "realestate": "Real estate", "crypto": "Crypto",
+}
+
+KIND_COLORS = {
+    "equity": "#12b3a4", "debt": "#e8a13c", "gold": "#c2661d",
+    "realestate": "#7a8a86", "crypto": "#8b90f2",
+}
+
+KIND_TARGETS = {
+    "equity": 55.0, "debt": 25.0, "gold": 10.0, "realestate": 7.0, "crypto": 3.0,
+}
 
 # Long-run assumptions behind the Goals tab's benchmark comparison. These are ASSUMPTIONS,
 # not measurements — the UI states the rate next to every delta so the number is never read
@@ -65,9 +84,9 @@ def class_label(cls: str) -> str:
 
 
 def kind_of(cls: str, override: str | None = None) -> str:
-    if override in ("equity", "debt", "alt"):
+    if override in KINDS:
         return override
-    return ASSET_CLASSES.get(cls, {}).get("kind", "alt")
+    return ASSET_CLASSES.get(cls, {}).get("kind", "equity")
 
 
 # ---------------------------------------------------------------- FIFO lots

@@ -1,26 +1,53 @@
 import { useMemo, useState } from "react";
 import {
-  byClass, money, rebalanceMoves, type Holding, type PortfolioPayload,
+  byClass, KIND_META, KINDS, money, rebalanceMoves,
+  type Holding, type Kind, type PortfolioPayload,
 } from "../../lib/portfolio";
-import { Card, Dot, Notice } from "./primitives";
+import { Card, Dot, Notice, Segments } from "./primitives";
 
 /** Percentage points of drift that count as "on target". Below this, the cost of trading
  * exceeds the benefit of being exactly right. */
 const DEAD_BAND = 0.8;
 
 export default function RebalanceView({
-  rows, payload, onSaveTargets,
+  rows, payload, onSaveTargets, onSaveKindTargets,
 }: {
   rows: Holding[];
   payload: PortfolioPayload;
   onSaveTargets: (targets: Record<string, number>) => void;
+  onSaveKindTargets: (targets: Record<string, number>) => void;
 }) {
   const [draft, setDraft] = useState<Record<string, string>>({});
+  // Tag level is the DEFAULT. Asset class answers "how many mid-cap funds"; the tag answers
+  // "how much equity risk", which is the decision actually being made here — and the one a
+  // ten-row class table buries.
+  const [level, setLevel] = useState<"tag" | "class">("tag");
 
-  const classes = useMemo(
-    () => byClass(rows, payload.asset_classes, payload.class_targets),
-    [rows, payload.asset_classes, payload.class_targets],
-  );
+  const classes = useMemo(() => {
+    if (level === "class") {
+      return byClass(rows, payload.asset_classes, payload.class_targets);
+    }
+    const total = rows.reduce((a, h) => a + h.value, 0);
+    return KINDS.map((k) => {
+      const members = rows.filter((h) => h.kind === k);
+      const value = members.reduce((a, h) => a + h.value, 0);
+      const share = total > 0 ? (value / total) * 100 : 0;
+      const target = payload.kind_targets[k] ?? 0;
+      const invested = members.reduce((a, h) => a + h.invested, 0);
+      const xw = value > 0
+        ? members.reduce((a, h) => a + (h.xirr_pct ?? 0) * h.value, 0) / value : 0;
+      return {
+        key: k as string, label: KIND_META[k as Kind].label.replace(/^(.)(.*)$/,
+          (_m, a: string, b: string) => a + b.toLowerCase()),
+        color: KIND_META[k as Kind].color, kind: k as Kind,
+        value, invested, share, target, drift: share - target, xirr: xw,
+        count: members.length,
+      };
+    });
+  }, [level, rows, payload.asset_classes, payload.class_targets, payload.kind_targets]);
+
+  const save = level === "class" ? onSaveTargets : onSaveKindTargets;
+  const current = level === "class" ? payload.class_targets : payload.kind_targets;
   const total = classes.reduce((a, c) => a + c.value, 0);
   const shown = classes.filter((c) => c.value > 0 || c.target > 0);
   const targetSum = shown.reduce((a, c) => a + c.target, 0);
@@ -51,6 +78,21 @@ export default function RebalanceView({
 
   return (
     <div>
+      <div className="mb-3.5 flex flex-wrap items-center gap-3">
+        <Segments
+          size="sm" value={level} onChange={setLevel}
+          options={[
+            { value: "tag", label: "By tag" },
+            { value: "class", label: "By asset class" },
+          ]}
+        />
+        <span className="text-[11.5px] font-semibold text-[var(--faint)]">
+          {level === "tag"
+            ? "Equity, debt, gold, real estate and crypto — the level risk actually lives at."
+            : "The finer split, for deciding which fund inside a tag to add to."}
+        </span>
+      </div>
+
       <div className="mb-3.5">
         {adds.length === 0 && trims.length === 0 ? (
           <Notice>
@@ -83,7 +125,7 @@ export default function RebalanceView({
         <div className="overflow-x-auto">
           <div className="min-w-[720px]">
             <div className="grid grid-cols-[1.4fr_.7fr_.6fr_2fr_1.1fr] gap-2.5 border-b border-[var(--border)] px-0.5 py-2 text-[11px] font-extrabold tracking-[.05em] text-[var(--faint)]">
-              <span>ASSET CLASS</span>
+              <span>{level === "tag" ? "TAG" : "ASSET CLASS"}</span>
               <span className="text-right" title="Editable — your intended share of the whole portfolio.">
                 TARGET
               </span>
@@ -117,8 +159,8 @@ export default function RebalanceView({
                       onBlur={() => {
                         const next = Number(draft[c.key] ?? c.target);
                         if (Number.isFinite(next) && next !== c.target) {
-                          onSaveTargets({
-                            ...payload.class_targets,
+                          save({
+                            ...current,
                             [c.key]: Math.max(0, Math.min(100, next)),
                           });
                         }

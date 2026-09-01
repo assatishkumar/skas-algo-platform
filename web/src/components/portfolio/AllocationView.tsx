@@ -1,13 +1,15 @@
 import { useMemo } from "react";
 import {
-  byClass, KIND_META, money, type Holding, type Kind, type PortfolioPayload,
+  byClass, KIND_META, KINDS, money, type Holding, type Kind, type PortfolioPayload,
 } from "../../lib/portfolio";
 import { Card, Dot } from "./primitives";
 
 const KIND_PILL: Record<Kind, { bg: string; color: string }> = {
   equity: { bg: "var(--tint)", color: "var(--accent-deep)" },
   debt: { bg: "var(--warn-bg)", color: "var(--warn-text)" },
-  alt: { bg: "var(--chip)", color: "var(--chip-text)" },
+  gold: { bg: "var(--warn-bg)", color: "var(--note)" },
+  realestate: { bg: "var(--chip)", color: "var(--chip-text)" },
+  crypto: { bg: "var(--opt-bg)", color: "var(--opt-text)" },
 };
 
 /** One stacked bar, segments proportional to value. A 2px surface gap between fills keeps
@@ -43,8 +45,8 @@ export default function AllocationView({
   const total = classes.reduce((a, c) => a + c.value, 0);
 
   const byKind = useMemo(() => {
-    const acc: Record<Kind, number> = { equity: 0, debt: 0, alt: 0 };
-    for (const h of rows) acc[h.kind] += h.value;
+    const acc = Object.fromEntries(KINDS.map((k) => [k, 0])) as Record<Kind, number>;
+    for (const h of rows) acc[h.kind] = (acc[h.kind] ?? 0) + h.value;
     return acc;
   }, [rows]);
 
@@ -139,21 +141,21 @@ export default function AllocationView({
         <Card pad="p-5">
           <div
             className="mb-3 text-[15px] font-extrabold text-[var(--strong)]"
-            title="Equity compounds, debt cushions, alternatives hedge. Drift from these targets changes your real risk level even in a month you changed nothing."
+            title="Your real risk mix, at the level you rebalance. Drift from these targets changes your exposure even in a month you changed nothing."
           >
-            Equity · Debt · Alternatives
+            By tag
           </div>
           <div className="mb-3.5">
             <StackedBar
-              segments={(["equity", "debt", "alt"] as Kind[]).map((k) => ({
+              segments={KINDS.map((k) => ({
                 width: (byKind[k] / total) * 100,
                 color: KIND_META[k].color,
                 label: KIND_META[k].label,
               }))}
             />
           </div>
-          <div className="grid grid-cols-3 gap-2.5">
-            {(["equity", "debt", "alt"] as Kind[]).map((k) => {
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
+            {KINDS.map((k) => {
               const share = (byKind[k] / total) * 100;
               const target = payload.kind_targets[k] ?? 0;
               const off = share - target;

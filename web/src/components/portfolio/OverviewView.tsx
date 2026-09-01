@@ -7,7 +7,23 @@ import {
 } from "../../lib/portfolio";
 import { Card, ConfirmAction, Dot, Pill } from "./primitives";
 
-type SortKey = "name" | "value" | "gain" | "xirr";
+type SortKey =
+  | "name" | "units" | "avg" | "ltp" | "invested" | "value" | "gain" | "xirr" | "today";
+
+/** What each column sorts on. Money columns default to DESCENDING because the question is
+ * almost always "what's biggest" — landing on the smallest holding first would make every
+ * header a two-click affair. */
+const SORTERS: Record<SortKey, { pick: (h: Holding) => number | string | null; desc: boolean }> = {
+  name: { pick: (h) => h.name.toLowerCase(), desc: false },
+  units: { pick: (h) => h.units, desc: true },
+  avg: { pick: (h) => avgPrice(h), desc: true },
+  ltp: { pick: (h) => h.last_price, desc: true },
+  invested: { pick: (h) => h.invested, desc: true },
+  value: { pick: (h) => h.value, desc: true },
+  gain: { pick: (h) => h.gain_pct, desc: true },
+  xirr: { pick: (h) => h.xirr_pct, desc: true },
+  today: { pick: (h) => dayPct(h), desc: true },
+};
 
 /** Column widths, applied as an INLINE STYLE rather than a Tailwind `grid-cols-[…]` class.
  *
@@ -37,6 +53,28 @@ const BASIS_HELP: Record<Holding["return_basis"], string> = {
     + "Correct only if the money went in all at once. Add the ledger for a real XIRR.",
   stated: "The figure you entered yourself — nothing derived here overrides it.",
 };
+
+function SortHead({
+  k, label, sortKey, desc, onSort, title, align = "right",
+}: {
+  k: SortKey; label: string; sortKey: SortKey; desc: boolean;
+  onSort: (k: SortKey) => void; title?: string; align?: "left" | "right";
+}) {
+  const on = sortKey === k;
+  return (
+    <button
+      onClick={() => onSort(k)}
+      title={title}
+      className={align === "left" ? "text-left" : "text-right"}
+      style={{ color: on ? "var(--accent-deep)" : "var(--faint)" }}
+    >
+      {label}
+      {/* The arrow shows DIRECTION on the active column and only availability elsewhere —
+          a row of identical arrows tells you nothing about how the table is ordered. */}
+      <span className="ml-0.5 opacity-70">{on ? (desc ? "\u2193" : "\u2191") : "\u21c5"}</span>
+    </button>
+  );
+}
 
 function ClassCard({
   agg, active, onClick,
@@ -80,6 +118,13 @@ export default function OverviewView({
   const [filter, setFilter] = useState<AssetClassKey | null>(null);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("value");
+  const [sortDesc, setSortDesc] = useState(true);
+
+  const sortBy = (k: SortKey) => {
+    if (k === sortKey) { setSortDesc((d) => !d); return; }
+    setSortKey(k);
+    setSortDesc(SORTERS[k].desc);
+  };
 
   const classes = useMemo(
     () => byClass(rows, payload.asset_classes, payload.class_targets),
@@ -93,20 +138,38 @@ export default function OverviewView({
         (!filter || h.asset_class === filter) &&
         (!q || h.name.toLowerCase().includes(q) || h.class_label.toLowerCase().includes(q)),
     );
+    const pick = SORTERS[sortKey].pick;
     return [...filtered].sort((a, b) => {
-      if (sortKey === "name") return a.name.localeCompare(b.name);
-      if (sortKey === "gain") {
-        return (b.gain_pct ?? -Infinity) - (a.gain_pct ?? -Infinity);
+      const x = pick(a);
+      const y = pick(b);
+      if (typeof x === "string" || typeof y === "string") {
+        const cmp = String(x ?? "").localeCompare(String(y ?? ""));
+        return sortDesc ? -cmp : cmp;
       }
-      if (sortKey === "xirr") return (b.xirr_pct ?? -Infinity) - (a.xirr_pct ?? -Infinity);
-      return b.value - a.value;
+      // A holding with no value for this column sorts LAST either way — an unknown return is
+      // not "the worst return", and floating it to the top of an ascending sort would say so.
+      if (x === null || x === undefined) return 1;
+      if (y === null || y === undefined) return -1;
+      return sortDesc ? y - x : x - y;
     });
-  }, [rows, filter, search, sortKey]);
+  }, [rows, filter, search, sortKey, sortDesc]);
+
+  /** Totals over exactly what is on screen — the filter and the search both bite, because a
+   * summary that ignored them would contradict the rows directly above it. */
+  const summary = useMemo(() => {
+    const value = list.reduce((a, h) => a + h.value, 0);
+    const invested = list.reduce((a, h) => a + h.invested, 0);
+    const day = list.reduce((a, h) => a + h.day_change, 0);
+    const priced = list.filter((h) => h.day_change !== 0);
+    const priorDay = priced.reduce((a, h) => a + (h.value - h.day_change), 0);
+    return {
+      value, invested, gain: value - invested,
+      gainPct: invested > 0 ? ((value - invested) / invested) * 100 : null,
+      day, dayPct: priorDay > 0 ? (day / priorDay) * 100 : null,
+    };
+  }, [list]);
 
   const rowPad = density === "compact" ? "py-[7px]" : "py-3";
-  const sortColor = (k: SortKey) =>
-    sortKey === k ? "var(--accent-deep)" : "var(--faint)";
-
   return (
     <div>
       <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
@@ -146,48 +209,22 @@ export default function OverviewView({
               className="grid items-center gap-2 border-b border-[var(--border)] px-2.5 py-2 text-[11px] font-extrabold tracking-[.05em]"
               style={{ gridTemplateColumns: COLS }}
             >
-              <button onClick={() => setSortKey("name")} className="text-left" style={{ color: sortColor("name") }}>
-                HOLDING ↕
-              </button>
-              <span
-                className="text-right text-[var(--faint)]"
-                title="Units held. For a holding spread across brokers this is the total; for a PF balance there are no units."
-              >
-                UNITS
-              </span>
-              <span
-                className="text-right text-[var(--faint)]"
-                title="Cost per unit — what you paid on average. Blank where units aren't tracked (a PF balance has no per-unit price)."
-              >
-                AVG
-              </span>
-              <span
-                className="text-right text-[var(--faint)]"
-                title="Last traded price, or a fund's latest NAV. The date it is as of shows on the SOURCE chip."
-              >
-                LTP
-              </span>
-              <span className="text-right text-[var(--faint)]">INVESTED</span>
-              <button onClick={() => setSortKey("value")} className="text-right" style={{ color: sortColor("value") }}>
-                CURRENT ↕
-              </button>
-              <button onClick={() => setSortKey("gain")} className="text-right" style={{ color: sortColor("gain") }}>
-                GAIN ↕
-              </button>
-              <button
-                onClick={() => setSortKey("xirr")}
-                title="Annualised return. Above ~12% comfortably beats inflation plus an FD; negative needs a look."
-                className="text-right"
-                style={{ color: sortColor("xirr") }}
-              >
-                RETURN ↕
-              </button>
-              <span
-                className="text-right text-[var(--faint)]"
-                title="Today's change — market-linked holdings only. A fund's NAV is a day behind by design."
-              >
-                TODAY
-              </span>
+              <SortHead k="name" label="HOLDING" sortKey={sortKey} desc={sortDesc}
+                onSort={sortBy} align="left" />
+              <SortHead k="units" label="UNITS" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
+                title="Units held. For a holding spread across brokers this is the total; for a PF balance there are no units." />
+              <SortHead k="avg" label="AVG" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
+                title="Cost per unit — what you paid on average. Blank where units aren't tracked (a PF balance has no per-unit price)." />
+              <SortHead k="ltp" label="LTP" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
+                title="Last traded price, or a fund's latest NAV. Hover a row's figure for the date it is as of." />
+              <SortHead k="invested" label="INVESTED" sortKey={sortKey} desc={sortDesc}
+                onSort={sortBy} />
+              <SortHead k="value" label="CURRENT" sortKey={sortKey} desc={sortDesc} onSort={sortBy} />
+              <SortHead k="gain" label="GAIN" sortKey={sortKey} desc={sortDesc} onSort={sortBy} />
+              <SortHead k="xirr" label="RETURN" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
+                title="Annualised return. Above ~12% comfortably beats inflation plus an FD; negative needs a look." />
+              <SortHead k="today" label="TODAY" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
+                title="Today's change — market-linked holdings only. A fund's NAV is a day behind by design." />
               <span className="text-right text-[var(--faint)]">ACTIONS</span>
             </div>
 
@@ -196,6 +233,46 @@ export default function OverviewView({
                 {rows.length === 0
                   ? "Nothing tracked yet — add your first holding to start."
                   : "No holding matches that filter."}
+              </div>
+            )}
+
+            {list.length > 0 && (
+              <div
+                className="grid items-center gap-2 border-b-2 border-[var(--border)] bg-[var(--stat)] px-2.5 py-2.5 text-[12.5px] font-extrabold"
+                style={{ gridTemplateColumns: COLS }}
+              >
+                <span className="text-[var(--strong)]">
+                  {filter || search ? "Filtered total" : "Total"}
+                  <span className="ml-1.5 text-[11px] font-bold text-[var(--faint)]">
+                    {list.length} of {rows.length}
+                  </span>
+                </span>
+                <span /><span /><span />
+                <span className="text-right tabular-nums text-[var(--muted)]">
+                  {money(summary.invested)}
+                </span>
+                <span className="text-right tabular-nums text-[var(--strong)]">
+                  {money(summary.value)}
+                </span>
+                <span
+                  className="text-right tabular-nums"
+                  style={{ color: summary.gain >= 0 ? "var(--pos)" : "var(--danger)" }}
+                >
+                  {signedMoney(summary.gain)}
+                  {summary.gainPct !== null && ` · ${pct(summary.gainPct)}`}
+                </span>
+                <span />
+                <span
+                  className="text-right tabular-nums"
+                  style={{ color: summary.day > 0 ? "var(--pos)"
+                    : summary.day < 0 ? "var(--danger)" : "var(--faint)" }}
+                >
+                  {summary.day === 0 ? "—" : signedMoney(summary.day)}
+                  {summary.dayPct !== null && (
+                    <span className="ml-1 opacity-80">· {pct(summary.dayPct)}</span>
+                  )}
+                </span>
+                <span />
               </div>
             )}
 

@@ -14,7 +14,12 @@
 export type AssetClassKey =
   | "stk" | "etf" | "mf" | "us" | "btc" | "bank" | "ppf" | "epf" | "gold" | "re";
 
-export type Kind = "equity" | "debt" | "alt";
+/** The tag a holding carries, and the level rebalancing happens at — coarser than asset
+ *  class on purpose: real risk is "how much equity, how much debt", not "how many mid-cap
+ *  funds". Crypto is its own tag; averaging it into equity hides the position most worth
+ *  stating. */
+export type Kind = "equity" | "debt" | "gold" | "realestate" | "crypto";
+export const KINDS: Kind[] = ["equity", "debt", "gold", "realestate", "crypto"];
 
 export interface TaxLot {
   on_date: string;
@@ -124,6 +129,7 @@ export interface PortfolioPayload {
   asset_classes: Record<AssetClassKey, { label: string; kind: Kind; color: string }>;
   class_targets: Record<string, number>;
   kind_targets: Record<Kind, number>;
+  kinds: { key: Kind; label: string; color: string }[];
   benchmarks: Record<string, number>;
   tax: { estimate_total: number; equity_ltcg_exemption: number };
   growth: GrowthSeries;
@@ -152,7 +158,9 @@ export const CHART_PALETTE = [
 export const KIND_META: Record<Kind, { label: string; color: string }> = {
   equity: { label: "EQUITY", color: "#12b3a4" },
   debt: { label: "DEBT", color: "#e8a13c" },
-  alt: { label: "ALTERNATIVES", color: "#8b90f2" },
+  gold: { label: "GOLD", color: "#c2661d" },
+  realestate: { label: "REAL ESTATE", color: "#7a8a86" },
+  crypto: { label: "CRYPTO", color: "#8b90f2" },
 };
 
 // ------------------------------------------------------------------ formatting
@@ -256,8 +264,8 @@ function valueWeighted(rows: Holding[], pick: (h: Holding) => number | null): nu
 export function totals(rows: Holding[]): Totals {
   const value = rows.reduce((a, h) => a + h.value, 0);
   const invested = rows.reduce((a, h) => a + h.invested, 0);
-  const byKind: Record<Kind, number> = { equity: 0, debt: 0, alt: 0 };
-  for (const h of rows) byKind[h.kind] += h.value;
+  const byKind = Object.fromEntries(KINDS.map((k) => [k, 0])) as Record<Kind, number>;
+  for (const h of rows) byKind[h.kind] = (byKind[h.kind] ?? 0) + h.value;
   const share = (v: number) => (value > 0 ? (v / value) * 100 : 0);
   return {
     value,
@@ -268,9 +276,9 @@ export function totals(rows: Holding[]): Totals {
     blendedXirr: valueWeighted(rows, (h) => h.xirr_pct),
     realized: rows.reduce((a, h) => a + h.realized, 0),
     byKind,
-    kindShare: {
-      equity: share(byKind.equity), debt: share(byKind.debt), alt: share(byKind.alt),
-    },
+    kindShare: Object.fromEntries(
+      KINDS.map((k) => [k, share(byKind[k])]),
+    ) as Record<Kind, number>,
     autoCount: rows.filter((h) => h.sync === "auto").length,
     manualCount: rows.filter((h) => h.sync === "manual").length,
   };

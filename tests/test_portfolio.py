@@ -263,3 +263,45 @@ def test_deleting_a_holding_prunes_it_from_buckets_and_goals(client: TestClient)
     assert next(g for g in body["goals"] if g["id"] == gid)["holding_ids"] == []
     client.delete(f"/api/v1/portfolio/buckets/{bid}")
     client.delete(f"/api/v1/portfolio/goals/{gid}")
+
+
+# ------------------------------------------------------------------ the tag taxonomy
+
+
+def test_every_asset_class_maps_to_a_real_tag_and_the_targets_sum_to_100():
+    """The tag is the level rebalancing happens at, so an unmapped class would be money with
+    no target — invisible to the one screen meant to catch drift."""
+    assert set(pf.KIND_TARGETS) == set(pf.KINDS)
+    assert sum(pf.KIND_TARGETS.values()) == pytest.approx(100.0)
+    for key, meta in pf.ASSET_CLASSES.items():
+        assert meta["kind"] in pf.KINDS, key
+        assert key in {k: v for k, v in pf.ASSET_CLASSES.items()}
+    assert set(pf.KIND_LABELS) == set(pf.KINDS) == set(pf.KIND_COLORS)
+
+
+def test_gold_and_property_are_their_own_tags_not_an_alternatives_bucket():
+    """Lumping them together hides the two positions most worth stating separately: one is a
+    liquid inflation hedge, the other is a house."""
+    assert pf.ASSET_CLASSES["gold"]["kind"] == "gold"
+    assert pf.ASSET_CLASSES["re"]["kind"] == "realestate"
+    assert pf.ASSET_CLASSES["btc"]["kind"] == "crypto"
+
+
+def test_an_unrecognised_tag_falls_back_to_the_class_default():
+    """A typo in an override must not create a sixth tag that no target covers."""
+    assert pf.kind_of("mf", "debt") == "debt"
+    assert pf.kind_of("mf", "nonsense") == "equity"
+    assert pf.kind_of("gold", None) == "gold"
+
+
+def test_a_debt_tagged_fund_is_still_taxed_at_slab(client: TestClient):
+    """The tag drives BOTH allocation and the tax regime, so retagging a fund as debt must
+    keep taxing it at slab — silently changing one and not the other would misstate a bill."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Debt fund", "asset_class": "mf", "kind_override": "debt",
+        "invested": 100_000, "units": 1000, "value": 130_000, "buy_month": "2020-01",
+    }).json()["id"]
+    row = next(h for h in client.get("/api/v1/portfolio").json()["holdings"] if h["id"] == hid)
+    assert row["kind"] == "debt"
+    assert row["tax"]["lots"][0]["regime"] == "Slab rate"
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")

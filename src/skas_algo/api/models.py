@@ -916,7 +916,9 @@ class PortfolioHoldingInput(BaseModel):
 
     name: str = Field(min_length=1, max_length=120)
     asset_class: str = Field(pattern="^(stk|etf|mf|us|btc|bank|ppf|epf|gold|re)$")
-    kind_override: str | None = Field(default=None, pattern="^(equity|debt|alt)$")
+    kind_override: str | None = Field(
+        default=None, pattern="^(equity|debt|gold|realestate|crypto)$"
+    )
     invested: float = Field(default=0.0, ge=0)
     units: float | None = Field(default=None, ge=0)
     value: float = Field(default=0.0, ge=0)
