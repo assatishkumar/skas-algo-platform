@@ -81,32 +81,6 @@ class DhanApiError(RuntimeError):
         super().__init__(f"Dhan {verb} {path} → HTTP {status}: {body}")
 
 
-class _DhanHttp:
-    """Thin requests wrapper with the two Dhan headers — injectable for tests."""
-
-    def __init__(self, client_id: str):
-        self.client_id = client_id
-        self.token: str | None = None
-
-    def _headers(self) -> dict:
-        return {
-            "access-token": self.token or "",
-            "client-id": self.client_id,
-            "Content-Type": "application/json",
-        }
-
-    @staticmethod
-    def _check(r, verb: str, path: str) -> dict:
-        if r.status_code >= 400:
-            body = (r.text or "").strip()[:600]
-            raise DhanApiError(verb, path, r.status_code, body or "<empty body>")
-        try:
-            out: dict = r.json()
-        except ValueError:
-            return {}
-        return out
-
-
 class DhanThrottled(Exception):
     """Our OWN rate gate refused a call — shed rather than queue. Callers already treat a
     failed data read as transient (quotes fall back to the last mark, reconciliation reports
@@ -159,6 +133,32 @@ def _rate_gate(client_id: str, path: str) -> None:
         _RATE_LAST[key] = max(now, earliest)   # reserve the slot before releasing the lock
     if wait > 0:
         _time.sleep(wait)
+
+
+class _DhanHttp:
+    """Thin requests wrapper with the two Dhan headers — injectable for tests."""
+
+    def __init__(self, client_id: str):
+        self.client_id = client_id
+        self.token: str | None = None
+
+    def _headers(self) -> dict:
+        return {
+            "access-token": self.token or "",
+            "client-id": self.client_id,
+            "Content-Type": "application/json",
+        }
+
+    @staticmethod
+    def _check(r, verb: str, path: str) -> dict:
+        if r.status_code >= 400:
+            body = (r.text or "").strip()[:600]
+            raise DhanApiError(verb, path, r.status_code, body or "<empty body>")
+        try:
+            out: dict = r.json()
+        except ValueError:
+            return {}
+        return out
 
 
     def _call(self, verb: str, path: str, body: dict | None = None) -> dict:

@@ -357,3 +357,15 @@ def test_the_account_rate_gate_holds_no_matter_how_many_runs_ask():
     _RATE_LAST.clear()
     for _ in range(5):                       # orders never queue behind a data poll
         _rate_gate("CID", "/orders")
+
+
+def test_the_http_client_keeps_every_method():
+    """A module-level block was once inserted INSIDE this class body, which silently ended
+    the class early and stripped every method after it — Dhan quotes died on the VPS with
+    "'_DhanHttp' object has no attribute 'fetch_master'" (2026-09-01). Imports still passed,
+    so nothing caught it until a live run tried to read a price. Second time this shape of
+    edit has bitten (volcano's _size_multiple, 2026-08-25); pin the surface."""
+    from skas_algo.brokers.dhan import _DhanHttp
+
+    for name in ("_headers", "_check", "_call", "post", "get", "put", "delete", "fetch_master"):
+        assert callable(getattr(_DhanHttp, name, None)), f"_DhanHttp lost {name}()"
