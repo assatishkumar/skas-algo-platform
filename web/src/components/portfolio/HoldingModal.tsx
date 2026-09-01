@@ -158,7 +158,7 @@ export default function HoldingModal({
           </select>
         </Field>
 
-        <Field label="RISK BUCKET">
+        <Field label="TAG">
           <select
             className={selectClass}
             value={draft.kind_override ?? ""}

@@ -345,6 +345,8 @@ export default function PortfolioPage() {
               rows={rows} payload={data} density={density}
               onEdit={setEditing} onLedger={setLedger}
               onDelete={(h) => removeHolding.mutate(h.id)}
+              onSetTag={(h, kind) =>
+                saveHolding.mutate({ id: h.id, body: { ...toInput(h), kind_override: kind } })}
             />
           )}
           {tab === "Allocation" && <AllocationView rows={rows} payload={data} />}

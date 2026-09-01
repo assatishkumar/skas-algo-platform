@@ -1,20 +1,22 @@
 import { useMemo, useState } from "react";
 import {
-  ageLabel, avgPrice, byClass, dayLabel, dayPct, money, nativeAvg, nativeLabel, pct,
-  priceLabel, signedMoney, stampLabel,
-  unitsLabel,
+  ageLabel, avgPrice, byClass, dayLabel, dayPct, KIND_META, KINDS, money, nativeAvg,
+  nativeLabel, pct, priceLabel, signedMoney, stampLabel, unitsLabel,
+  type Kind,
   type AssetClassKey, type ClassAgg, type Holding, type PortfolioPayload,
 } from "../../lib/portfolio";
 import { Card, ConfirmAction, Dot, Pill } from "./primitives";
 
 type SortKey =
-  | "name" | "units" | "avg" | "ltp" | "invested" | "value" | "gain" | "xirr" | "today";
+  | "name" | "tag" | "units" | "avg" | "ltp" | "invested" | "value" | "gain"
+  | "xirr" | "today";
 
 /** What each column sorts on. Money columns default to DESCENDING because the question is
  * almost always "what's biggest" — landing on the smallest holding first would make every
  * header a two-click affair. */
 const SORTERS: Record<SortKey, { pick: (h: Holding) => number | string | null; desc: boolean }> = {
   name: { pick: (h) => h.name.toLowerCase(), desc: false },
+  tag: { pick: (h) => h.kind, desc: false },
   units: { pick: (h) => h.units, desc: true },
   avg: { pick: (h) => avgPrice(h), desc: true },
   ltp: { pick: (h) => h.last_price, desc: true },
@@ -35,8 +37,9 @@ const SORTERS: Record<SortKey, { pick: (h: Holding) => number | string | null; d
  * headers — `truncate` never fires because the column grows instead of clipping.
  */
 const COLS = [
-  "minmax(0,2fr)",    // holding
-  "minmax(0,.85fr)",  // units
+  "minmax(0,1.75fr)", // holding
+  "minmax(0,.95fr)",  // tag
+  "minmax(0,.8fr)",   // units
   "minmax(0,.8fr)",   // avg
   "minmax(0,.8fr)",   // ltp
   "minmax(0,.9fr)",   // invested
@@ -106,16 +109,18 @@ function ClassCard({
 }
 
 export default function OverviewView({
-  rows, payload, onEdit, onDelete, onLedger, density,
+  rows, payload, onEdit, onDelete, onLedger, onSetTag, density,
 }: {
   rows: Holding[];
   payload: PortfolioPayload;
   onEdit: (h: Holding) => void;
   onDelete: (h: Holding) => void;
   onLedger: (h: Holding) => void;
+  onSetTag: (h: Holding, kind: Kind) => void;
   density: "comfortable" | "compact";
 }) {
   const [filter, setFilter] = useState<AssetClassKey | null>(null);
+  const [tagFilter, setTagFilter] = useState<Kind | null>(null);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("value");
   const [sortDesc, setSortDesc] = useState(true);
@@ -136,6 +141,7 @@ export default function OverviewView({
     const filtered = rows.filter(
       (h) =>
         (!filter || h.asset_class === filter) &&
+        (!tagFilter || h.kind === tagFilter) &&
         (!q || h.name.toLowerCase().includes(q) || h.class_label.toLowerCase().includes(q)),
     );
     const pick = SORTERS[sortKey].pick;
@@ -152,7 +158,7 @@ export default function OverviewView({
       if (y === null || y === undefined) return -1;
       return sortDesc ? y - x : x - y;
     });
-  }, [rows, filter, search, sortKey, sortDesc]);
+  }, [rows, filter, tagFilter, search, sortKey, sortDesc]);
 
   /** Totals over exactly what is on screen — the filter and the search both bite, because a
    * summary that ignored them would contradict the rows directly above it. */
@@ -183,10 +189,49 @@ export default function OverviewView({
         ))}
       </div>
 
+      {/* Tag chips: the tag is a lens as well as a label — "show me the debt" is the
+          question the five-way split exists to answer. */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-extrabold tracking-[.05em] text-[var(--faint)]">
+          TAG
+        </span>
+        {KINDS.map((k) => {
+          const slice = rows.filter((h) => h.kind === k);
+          if (!slice.length) return null;
+          const on = tagFilter === k;
+          const value = slice.reduce((a, h) => a + h.value, 0);
+          return (
+            <button
+              key={k}
+              onClick={() => setTagFilter(on ? null : k)}
+              className="inline-flex items-center gap-1.5 rounded-full border-[1.5px] px-3 py-1.5 text-[11.5px] font-extrabold"
+              style={{
+                background: on ? "var(--tint)" : "var(--card)",
+                borderColor: on ? "var(--accent)" : "var(--border)",
+                color: on ? "var(--strong)" : "var(--muted)",
+              }}
+            >
+              <span className="inline-block h-2 w-2 rounded-full"
+                style={{ background: KIND_META[k].color }} />
+              {KIND_META[k].label}
+              <span className="text-[var(--faint)]">{money(value)}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <Card>
         <div className="mb-3 flex flex-wrap items-center gap-2.5">
           <span className="text-[15px] font-extrabold text-[var(--strong)]">Holdings</span>
           <Pill>{list.length}</Pill>
+          {tagFilter && (
+            <button
+              onClick={() => setTagFilter(null)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--tint-border)] bg-[var(--tint)] px-3 py-[5px] text-[11.5px] font-extrabold text-[var(--accent-deep)]"
+            >
+              {KIND_META[tagFilter].label} ✕
+            </button>
+          )}
           {filter && (
             <button
               onClick={() => setFilter(null)}
@@ -204,13 +249,16 @@ export default function OverviewView({
         </div>
 
         <div className="overflow-x-auto">
-          <div className="min-w-[1060px]">
+          <div className="min-w-[1180px]">
             <div
               className="grid items-center gap-2 border-b border-[var(--border)] px-2.5 py-2 text-[11px] font-extrabold tracking-[.05em]"
               style={{ gridTemplateColumns: COLS }}
             >
               <SortHead k="name" label="HOLDING" sortKey={sortKey} desc={sortDesc}
                 onSort={sortBy} align="left" />
+              <SortHead k="tag" label="TAG" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
+                align="left"
+                title="Equity, debt, gold, real estate or crypto — the level Rebalance works at. Change it here; it also decides the tax regime." />
               <SortHead k="units" label="UNITS" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
                 title="Units held. For a holding spread across brokers this is the total; for a PF balance there are no units." />
               <SortHead k="avg" label="AVG" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
@@ -242,12 +290,12 @@ export default function OverviewView({
                 style={{ gridTemplateColumns: COLS }}
               >
                 <span className="text-[var(--strong)]">
-                  {filter || search ? "Filtered total" : "Total"}
+                  {filter || tagFilter || search ? "Filtered total" : "Total"}
                   <span className="ml-1.5 text-[11px] font-bold text-[var(--faint)]">
                     {list.length} of {rows.length}
                   </span>
                 </span>
-                <span /><span /><span />
+                <span /><span /><span /><span />
                 <span className="text-right tabular-nums text-[var(--muted)]">
                   {money(summary.invested)}
                 </span>
@@ -313,6 +361,20 @@ export default function OverviewView({
                         · {auto ? "auto" : "manual"}
                       </span>
                     </span>
+                  </span>
+
+                  <span>
+                    <select
+                      value={h.kind}
+                      onChange={(e) => onSetTag(h, e.target.value as Kind)}
+                      title="The tag this holding is rebalanced under, and taxed by."
+                      className="w-full cursor-pointer rounded-[7px] border-[1.5px] border-transparent bg-transparent px-1.5 py-1 text-[11px] font-extrabold outline-none hover:border-[var(--field-border)] focus:border-[var(--accent)] focus:bg-[var(--field)]"
+                      style={{ color: KIND_META[h.kind].color }}
+                    >
+                      {KINDS.map((k) => (
+                        <option key={k} value={k}>{KIND_META[k].label}</option>
+                      ))}
+                    </select>
                   </span>
 
                   <span
