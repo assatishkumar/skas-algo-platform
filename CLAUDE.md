@@ -941,6 +941,13 @@ weekly / monthly / positional), a summary panel, and only that strategy's own kn
   footgun). Prefill only applies knobs that exist on the selected strategy.
 
 ## 9. Frontend (`web/`) gotchas
+- **A page renders BEFORE its query resolves.** Anything derived from `data?.x ?? []`
+  runs on that first pass with an EMPTY list, so a `useMemo` that builds a keyed object
+  from rows returns `{}` — and one dot-access into it (`mix.equity.toFixed()`) throws
+  before a single pixel paints. That reads to the user as "the page doesn't load",
+  not as an error, and no amount of testing the API will surface it. Guard every read
+  out of a derived map, and OPEN THE PAGE after changing one (2026-09-01: /portfolio
+  shipped in exactly this state).
 - **Router state vs legacy redirects:** several old paths are `<Navigate to=... replace />` redirects in
   `App.tsx` (e.g. `/new` → `/backtest?tab=new`). `<Navigate>` **drops `location.state`**, so navigating
   to a redirect path with state (e.g. `clonePrefill`) silently loses it — land on the real route

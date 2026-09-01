@@ -157,7 +157,10 @@ export default function PortfolioPage() {
   // With five tags a ratio string ("55 : 25 : 10 : 7 : 3") is unreadable in a tile, so this
   // card answers the question the mix is actually for — how much risk am I carrying, and how
   // far is that from what I chose. The full breakdown lives in Allocation and Rebalance.
-  const equityShare = t.mix.equity;
+  // ?? 0, because this runs on the FIRST render too — before the fetch resolves, `rows` is
+  // empty, so no tag has a value and `t.mix.equity` is undefined. `.toFixed()` on that threw
+  // before anything painted, which reads as "the page doesn't load" rather than as an error.
+  const equityShare = t.mix.equity ?? 0;
   const equityTarget = data?.kind_targets.equity ?? 0;
   const equityDrift = equityShare - equityTarget;
 
