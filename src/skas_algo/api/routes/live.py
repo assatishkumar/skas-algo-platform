@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
     AdoptBrokerCloseInput,
+    SetHoldingInput,
     DeploymentUpdate,
     GoLiveRequest,
     LiveControlsInput,
@@ -612,6 +613,28 @@ async def adopt_broker_close(run_id: int, body: AdoptBrokerCloseInput) -> dict:
                  strategy=live.config.strategy_id, run_id=run_id,
                  detail=f"booked {len(events)} leg(s) with no order: {detail}")
     return {"run_id": run_id, "closed": len(events), "snapshot": live.snapshot()}
+
+
+@router.post("/{run_id}/set-holding")
+async def set_holding(run_id: int, body: SetHoldingInput) -> dict:
+    """Force the platform's unit count for one symbol. Places NO order.
+
+    Adoption only ever ADDS — a broker showing fewer units is usually a real divergence, and
+    deleting the platform's book on a bad read would be worse than halting. That leaves no
+    way back from an OVER-count, which is where run 28 ended up on 2026-08-31: 778 LIQUIDCASE
+    against a true 754, halting every reconciliation. Redeploying would have fixed the count
+    and thrown away the settlement ledger and the pots with it.
+    """
+    live = _get(run_id)
+    try:
+        out = live.set_holding_units(body.symbol, body.units)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from skas_algo.services.vault_export import journal_safe
+    journal_safe("intervene", f"Set {out['symbol']} units on {live.config.name}",
+                 strategy=live.config.strategy_id, run_id=run_id,
+                 detail=f"{out['before']:g} -> {out['after']:g} by hand, no order placed")
+    return {"run_id": run_id, **out, "snapshot": live.snapshot()}
 
 
 @router.post("/{run_id}/params")

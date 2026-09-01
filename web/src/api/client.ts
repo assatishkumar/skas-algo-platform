@@ -401,6 +401,15 @@ export const api = {
       `/live/${id}/adopt-broker-close`,
       { method: "POST", body: JSON.stringify({ legs }) },
     ),
+  // Force the platform's unit count for one symbol to match the broker. Places NO order.
+  // Adoption only ever ADDS, so there was no way back from an OVER-count: run 28 read 778
+  // LIQUIDCASE against a true 754 and halted every reconciliation (2026-08-31).
+  liveSetHolding: (id: number, symbol: string, units: number) =>
+    request<{ run_id: number; symbol: string; before: number; after: number;
+              changed: number; snapshot: LiveRunSnapshot }>(
+      `/live/${id}/set-holding`,
+      { method: "POST", body: JSON.stringify({ symbol, units }) },
+    ),
   liveManualOrder: (id: number, body: ManualOrderInput) =>
     request<{ run_id: number; executed: number; snapshot: LiveRunSnapshot }>(
       `/live/${id}/manual-order`,

@@ -242,6 +242,51 @@ class LiveSession:
         self.portfolio.cash = before
         self.sync_strategy_book(ts)
 
+    def release_broker_holding(self, ts: date | datetime, symbol: str, units: float,
+                               *, reason: str = "book_correction") -> float:
+        """Drop units the platform's ledger claims but the BROKER does not hold — WITHOUT
+        sending an order, booking a trade, or moving cash. The mirror of
+        ``adopt_broker_holding``, and the repair for the one case adoption cannot fix.
+
+        Adoption only ever ADDS, deliberately: a broker reporting FEWER units is usually a
+        real divergence, and silently deleting the platform's book on a bad read would be far
+        worse than halting. But that leaves no way back from an over-count. Run 28 sold 24
+        LIQUIDCASE on 2026-08-31 and adoption re-added them (holdings lag T+1, so the sale was
+        still on the broker's record) — 778 against a true 754, a mismatch that halts every
+        reconciliation and cannot self-heal. The only repair was stop-and-redeploy, which
+        throws away the settlement ledger and the pots to fix a bookkeeping error.
+
+        NO CASH MOVES. These units were never paid for by this run — either they never
+        existed, or the sale that removed them was already booked with its own proceeds.
+        Crediting a second sale here would double-count the money. Same reasoning as
+        adopt_broker_holding restoring the balance after ``buy``.
+
+        Returns the units actually released (FIFO across lots, capped at what is held).
+        """
+        want = int(units)
+        if want <= 0:
+            return 0.0
+        held = sum(lot.units for lot in self.portfolio.lots(symbol))
+        if held <= 0:
+            raise ValueError(f"{symbol} is not open in the platform's book")
+        want = min(want, int(held))
+        before = self.portfolio.cash
+        realized_before = self.portfolio.month_realized
+        left = want
+        # FIFO, oldest lot first — matches how the funding sale walks lots, so a correction
+        # removes the same units a real sale would have.
+        for lot in list(self.portfolio.lots(symbol)):
+            if left <= 0:
+                break
+            take = min(int(lot.units), left)
+            # price is irrelevant: the cash and the realized P&L are both restored below.
+            self.portfolio.reduce_lot(symbol, lot.id, take, float(lot.price))
+            left -= take
+        self.portfolio.cash = before
+        self.portfolio.month_realized = realized_before
+        self.sync_strategy_book(ts)
+        return float(want)
+
     def manual_order(self, ts: date | datetime, *, closes=None, opens=None,
                      tag: str = "MANUAL") -> list[dict]:
         """Close selected legs/lots and/or open new legs immediately, at live prices.

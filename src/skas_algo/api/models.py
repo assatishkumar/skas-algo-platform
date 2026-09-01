@@ -814,6 +814,17 @@ class AdoptBrokerCloseInput(BaseModel):
     legs: list[AdoptedLeg] = Field(min_length=1)
 
 
+class SetHoldingInput(BaseModel):
+    """Force the platform's unit count for one symbol to match the broker. NO orders.
+
+    The escape hatch for an over-count adoption cannot undo (it only ever adds) — see
+    LiveRun.set_holding_units. ``units`` is the TARGET, not a delta, so the caller states
+    the number it wants to end up with and a repeated call is idempotent."""
+
+    symbol: str = Field(min_length=1)
+    units: float = Field(ge=0)
+
+
 class RefreshCacheInput(BaseModel):
     """Symbols to refresh on the shared session: an explicit list or a named universe.
 

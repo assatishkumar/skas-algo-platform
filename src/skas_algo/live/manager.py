@@ -1182,6 +1182,49 @@ class LiveRun:
         self._after_manual(events)
         return events
 
+    def set_holding_units(self, symbol: str, units: float) -> dict:
+        """Force the platform's unit count for ``symbol`` to ``units``. Places NO order.
+
+        The repair for an over-count, which adoption cannot fix: it only ever ADDS, because
+        silently deleting the platform's book on a bad broker read would be far worse than
+        halting. Run 28 sold 24 LIQUIDCASE and adoption re-added them (holdings lag T+1, so
+        the sale was still on the broker's record) — 778 against a true 754, halting every
+        reconciliation with no way back except a redeploy that would also throw away the
+        settlement ledger and the pots.
+
+        Like adopt_broker_close, deliberately NOT routed through ``_manual_guarded``: that
+        catches an OrderExecutionError from a real order, and nothing here can place one.
+        """
+        sym = str(symbol).upper()
+        held = sum(lot.units for lot in self.session.portfolio.lots(sym))
+        target = max(0.0, float(units))
+        delta = target - held
+        ts = datetime.now(IST)
+        if abs(delta) < 1:
+            return {"symbol": sym, "before": held, "after": held, "changed": 0.0}
+        if delta < 0:
+            self.session.release_broker_holding(ts, sym, -delta)
+        else:
+            # ADDING needs a cost basis. Use what the broker paid where we can see it, else
+            # the current mark — the same fallback adoption uses.
+            price = 0.0
+            adapter = getattr(self.quote_source, "adapter", None)
+            try:
+                if adapter is not None and hasattr(adapter, "holdings"):
+                    price = float(((adapter.holdings() or {}).get(sym) or {}).get("avg_price") or 0)
+            except Exception:  # pragma: no cover - a holdings blip must not block a repair
+                price = 0.0
+            if price <= 0:
+                price = float(self.session.market.last_close(sym) or 0.0)
+            if price <= 0:
+                raise ValueError(f"no price available for {sym} — cannot book a cost basis")
+            self.session.adopt_broker_holding(ts, sym, delta, price)
+        after = sum(lot.units for lot in self.session.portfolio.lots(sym))
+        logger.warning("run %s: holding for %s set %s -> %s by hand (no order placed)",
+                       self.run_id, sym, held, after)
+        self._after_manual([])
+        return {"symbol": sym, "before": held, "after": after, "changed": after - held}
+
     def _manual_guarded(self, fn) -> list[dict]:
         """Run a manual action; if a REAL order fails mid-way, persist the legs that DID
         fill, halt the run (order_error), and re-raise — the same book-vs-log guarantee

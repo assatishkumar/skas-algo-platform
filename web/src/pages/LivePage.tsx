@@ -1182,6 +1182,7 @@ function DeploymentTile({
   const [goLiveAcct, setGoLiveAcct] = useState<number | null>(null);
   const [showParams, setShowParams] = useState(false);
   const [showAdopt, setShowAdopt] = useState(false);
+  const [showUnits, setShowUnits] = useState(false);
 
   // Pulse a "live" dot each time a fresh WS snapshot bumps the version for this run.
   const [flash, setFlash] = useState(false);
@@ -1287,6 +1288,7 @@ function DeploymentTile({
           ...(dep.mode === "PAPER" ? [{ label: "⚡ Go LIVE", onClick: () => setShowGoLive(true) }] : []),
           { label: "Exit positions", tone: "warn", onClick: () => { if (positions > 0 && confirm("Exit ALL open positions for this strategy now, at live prices?")) act(() => api.liveFlatten(dep.run_id)); } },
           { label: "Mark closed at broker", onClick: () => setShowAdopt(true) },
+          { label: "Correct units held", onClick: () => setShowUnits(true) },
           { label: "Stop deployment", tone: "danger", onClick: () => act(() => api.liveStop(dep.run_id)) },
           { label: "Edit params", onClick: () => setShowParams(true) },
           { label: "Edit name / notes", onClick: () => setEditing(true) },
@@ -1583,6 +1585,17 @@ function DeploymentTile({
           }} />
       )}
 
+      {/* Correct units held — the repair for an OVER-count, which adoption cannot undo:
+          it only ever ADDS, by design, so a bad broker read can never delete your book. */}
+      {showUnits && dep.status === "active" && (
+        <SetHoldingPanel dep={dep} busy={busy}
+          onClose={() => setShowUnits(false)}
+          onSave={async (symbol, units) => {
+            await act(() => api.liveSetHolding(dep.run_id, symbol, units));
+            setShowUnits(false);
+          }} />
+      )}
+
       {/* Inline live detail for an expanded active deployment.
           Minimize is the chevron icon at the card's top-right. */}
       {expanded && dep.status === "active" && snapshot && (
@@ -1608,6 +1621,86 @@ const PARAM_EDIT_HIDDEN = new Set([
  *  is gone at the broker — and a platform that still believes it holds the leg fails every
  *  reconciliation and halts. Before this the only repair was to stop the backend and
  *  hand-edit the run's state (run 10, 2026-08-11). No order is sent from here. */
+function SetHoldingPanel({ dep, busy, onClose, onSave }: {
+  dep: Deployment;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (symbol: string, units: number) => Promise<void>;
+}) {
+  const { data: snap, isLoading } = useQuery({
+    queryKey: ["liveunits", dep.run_id],
+    queryFn: () => api.liveGet(dep.run_id),
+    staleTime: 0,
+  });
+  const open = (snap?.positions ?? []).filter((p) => p.units !== 0);
+  const [sym, setSym] = useState("");
+  const [units, setUnits] = useState("");
+  const chosen = open.find((p) => p.symbol === sym);
+  const target = Number(units);
+  const valid = !!chosen && Number.isFinite(target) && target >= 0
+    && Math.abs(target - Number(chosen.units)) >= 1;
+
+  return (
+    <div className="mt-3 rounded-md border border-[var(--border)] bg-[var(--field)] p-3 text-xs space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="font-medium text-[var(--strong)]">
+          Correct units held{dep.mode === "LIVE" ? " (REAL-MONEY run)" : ""}
+        </div>
+        <button onClick={onClose} className="rounded px-1.5 hover:opacity-60" aria-label="close">✕</button>
+      </div>
+      <div className="text-[var(--muted)]">
+        Makes the platform&apos;s unit count match the broker. This places{" "}
+        <span className="font-medium">no orders</span> and moves{" "}
+        <span className="font-medium">no cash</span> — it only corrects the book, so a
+        reconciliation mismatch clears without a redeploy. Enter the number the{" "}
+        <span className="font-medium">broker</span> shows.
+      </div>
+      {isLoading ? (
+        <div className="text-[var(--muted)]">Loading open positions…</div>
+      ) : open.length === 0 ? (
+        <div className="text-[var(--muted)]">This run holds nothing — nothing to correct.</div>
+      ) : (
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="block">
+            <span className="mb-1 block text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Symbol</span>
+            <select className="rounded border border-[var(--field-border)] bg-[var(--field)] px-2 py-1"
+              value={sym}
+              onChange={(e) => {
+                setSym(e.target.value);
+                const p = open.find((x) => x.symbol === e.target.value);
+                setUnits(p ? String(p.units) : "");
+              }}>
+              <option value="">select…</option>
+              {open.map((p) => (
+                <option key={p.symbol} value={p.symbol}>
+                  {formatOptionSymbol(p.symbol)} — platform holds {p.units}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Units at broker</span>
+            <input className="w-32 rounded border border-[var(--field-border)] bg-[var(--field)] px-2 py-1"
+              value={units} onChange={(e) => setUnits(e.target.value)} inputMode="numeric" />
+          </label>
+          <button disabled={!valid || busy}
+            onClick={() => valid && onSave(sym, target)}
+            className="rounded bg-[var(--accent)] px-3 py-1.5 font-medium text-white disabled:opacity-40">
+            {busy ? "Applying…" : "Correct"}
+          </button>
+        </div>
+      )}
+      {chosen && Number.isFinite(target) && (
+        <div className="text-[var(--muted)]">
+          {Math.abs(target - Number(chosen.units)) < 1
+            ? "Already matches — nothing to change."
+            : `${chosen.units} → ${target} (${target > Number(chosen.units) ? "+" : ""}${target - Number(chosen.units)} units), no order placed.`}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdoptBrokerClosePanel({ dep, busy, onClose, onSave }: {
   dep: Deployment;
   busy: boolean;

@@ -319,3 +319,54 @@ def test_adopt_broker_close_refuses_nonsense():
     # Nothing was booked by any of the three refusals.
     assert held in sess.portfolio.lot_symbols()
 
+
+
+def test_correcting_an_over_count_moves_no_cash_and_books_no_profit():
+    """Adoption only ever ADDS, so an OVER-count had no repair: run 28 sold 24 LIQUIDCASE,
+    adoption re-added them (holdings lag T+1, so the sale was still on the broker's record),
+    and 778-vs-754 halted every reconciliation. The only fix was a redeploy that would also
+    discard the settlement ledger and the pots.
+
+    Releasing must NOT look like a sale — no cash, no realized P&L. The units were either
+    never there, or the sale that removed them was already booked with its own proceeds."""
+    from datetime import datetime
+
+    from skas_algo.engine.live import LiveSession
+    from skas_algo.strategies.value_investing import ValueInvestingStrategy
+
+    st = ValueInvestingStrategy(universe=[], watchlist="INFY", fund_source="LIQUIDCASE")
+    sess = LiveSession(st, initial_capital=5_000)
+    ts = datetime(2026, 9, 1, 9, 30)
+    # the real shape: several lots, adopted with no cash movement
+    for n in (700, 54, 24):
+        sess.adopt_broker_holding(ts, "LIQUIDCASE", n, 115.64)
+    assert sum(l.units for l in sess.portfolio.lots("LIQUIDCASE")) == 778
+
+    cash_before = sess.portfolio.cash
+    realized_before = sess.portfolio.month_realized
+
+    freed = sess.release_broker_holding(ts, "LIQUIDCASE", 24)
+
+    assert freed == 24
+    assert sum(l.units for l in sess.portfolio.lots("LIQUIDCASE")) == 754
+    assert sess.portfolio.cash == cash_before, "a correction is not a sale — no cash moves"
+    assert sess.portfolio.month_realized == realized_before, "…and books no profit"
+
+
+def test_correcting_units_is_capped_and_idempotent():
+    """A typo must not invent a short position, and re-running the same repair is a no-op."""
+    from datetime import datetime
+
+    from skas_algo.engine.live import LiveSession
+    from skas_algo.strategies.value_investing import ValueInvestingStrategy
+
+    st = ValueInvestingStrategy(universe=[], watchlist="INFY", fund_source="LIQUIDCASE")
+    sess = LiveSession(st, initial_capital=5_000)
+    ts = datetime(2026, 9, 1, 9, 30)
+    sess.adopt_broker_holding(ts, "LIQUIDCASE", 100, 115.64)
+
+    assert sess.release_broker_holding(ts, "LIQUIDCASE", 10_000) == 100   # capped at held
+    assert sess.portfolio.lots("LIQUIDCASE") == []
+    assert sess.release_broker_holding(ts, "LIQUIDCASE", 0) == 0.0        # no-op, no raise
+    with pytest.raises(ValueError):
+        sess.release_broker_holding(ts, "LIQUIDCASE", 5)                  # nothing held now
