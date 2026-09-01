@@ -28,6 +28,7 @@ visible; wrong is not.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 
@@ -41,6 +42,10 @@ logger = logging.getLogger(__name__)
 
 # A units gap this small is float noise from a fractional MF allotment, not a missing trade.
 _UNITS_EPSILON = 1e-4
+
+# NSE series markers on a tradingsymbol (a REIT is PGINVIT-IV to quote, PGINVIT in the
+# holdings book). Used ONLY to compare the two, never to build a quote key.
+_SERIES_SUFFIX = re.compile(r"-(RR|IV|BE|SG|E|F)$")
 
 
 @dataclass
@@ -313,9 +318,17 @@ def _sync_broker(
         report.updated.append(h.name)
 
     # Anything the broker holds that isn't tracked here — offered, never auto-added.
-    tracked = {(h.sync_ref or "").strip().upper() for h in holdings}
+    # Compared with the series suffix stripped: a REIT quotes as PGINVIT-IV but appears in the
+    # holdings book as PGINVIT, and a false "you aren't tracking this" on a position that IS
+    # tracked teaches the owner to ignore the whole list.
+    tracked = set()
+    for h in holdings:
+        ref = (h.sync_ref or "").strip().upper()
+        if ref:
+            tracked.add(ref)
+            tracked.add(_SERIES_SUFFIX.sub("", ref))
     for sym, row in book.items():
-        if sym not in tracked:
+        if sym not in tracked and _SERIES_SUFFIX.sub("", sym) not in tracked:
             report.discovered.append({
                 "symbol": sym,
                 "units": row.get("units"),
