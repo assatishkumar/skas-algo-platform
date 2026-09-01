@@ -938,6 +938,8 @@ class PortfolioHoldingInput(BaseModel):
     # Per-source unit breakdown; a sync rewrites only the slice it just read.
     broker_units: dict[str, float] = Field(default_factory=dict)
     excluded_from_buckets: bool = False
+    # Expected annual distribution as a % of value. None = unknown, shown as unknown.
+    dividend_yield_pct: float | None = Field(default=None, ge=0, le=100)
     note: str | None = None
 
 
@@ -971,10 +973,23 @@ class PortfolioBucketInput(BaseModel):
     holding_ids: list[int] = Field(default_factory=list)
 
 
+class PortfolioScheduleRow(BaseModel):
+    """One year's cost, in TODAY's rupees — the only form a person reliably knows."""
+
+    year: int = Field(ge=2000, le=2200)
+    amount: float = Field(gt=0)
+
+
 class PortfolioGoalInput(BaseModel):
+    """A goal is a STREAM of outflows: school fees for four years, travel for twenty, a
+    wedding twice. ``target_amount``/``target_year`` remain only so an older single-point
+    goal still reads."""
+
     name: str = Field(min_length=1, max_length=80)
-    target_amount: float = Field(gt=0)
-    target_year: int = Field(ge=2000, le=2200)
+    schedule: list[PortfolioScheduleRow] = Field(default_factory=list)
+    inflation_pct: float = Field(default=6.0, ge=0, le=25)
+    target_amount: float = Field(default=0.0, ge=0)
+    target_year: int = Field(default=0, ge=0, le=2200)
     monthly_sip: float = Field(default=0.0, ge=0)
     holding_ids: list[int] = Field(default_factory=list)
     benchmark: str = "NIFTY 50 TRI"
@@ -1018,3 +1033,15 @@ class PortfolioSeedInput(BaseModel):
     broker_account_id: int | None = None
     sync: str = Field(default="manual", pattern="^(auto|manual)$")
     replace: bool = True
+
+
+class PortfolioDividendInput(BaseModel):
+    """A distribution that was actually RECEIVED. Expected income is derived from the
+    holding's yield, never stored — a typed forecast ages into fiction the moment the
+    position changes size."""
+
+    holding_id: int
+    on_date: date
+    amount: float = Field(gt=0)
+    per_unit: float | None = Field(default=None, ge=0)
+    note: str | None = None

@@ -847,6 +847,25 @@ that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` ma
   count (which would replace the total with a fraction) and must never raise a book mismatch
   (which would fire on every pass, forever). Pinned by
   `test_an_aggregate_holding_is_repriced_but_its_units_are_never_rewritten`.
+- **A holding's TAG (`kind`) is the level rebalancing happens at**: equity / debt / gold /
+  realestate / crypto. Coarser than asset class on purpose — real risk is "how much equity",
+  not "how many mid-cap funds". It drives the TAX REGIME as well as allocation
+  (`regime_for` reads `kind == "debt"`), so retagging a fund changes both and they can never
+  disagree. An unrecognised override falls back to the class default rather than creating a
+  sixth tag no target covers.
+- **A GOAL is a stream of outflows, not a number at a date** (`schedule` = `[{year, amount}]`
+  in TODAY's rupees + `inflation_pct`). Three things the projection gets right that a single
+  target cannot: amounts are inflated to the year they are NEEDED (₹42 L of school fees is
+  ₹65 L by 2036 at 6% — planning against the raw figure understates by half); a goal can be
+  fully funded in TOTAL and still fail in one year, so the walk reports
+  `first_shortfall_year`; and a shortfall is FLOORED AT ZERO rather than left to compound —
+  a negative corpus growing at the equity return turned a ₹15 L gap into ₹1.48 Cr of fiction.
+  The current year earns only the months left of it.
+- **Expected income is DERIVED (value × yield), never stored.** A typed forecast ages into
+  fiction the moment the position changes size. Only RECEIVED distributions are recorded
+  (`portfolio_dividend`), bucketed by the INDIAN financial year. A holding with no yield set
+  is EXCLUDED from the estimate and its value reported separately — "unknown" and "pays
+  nothing" lead to different decisions.
 - **`broker_units` is what makes a LIVE account safe inside an aggregate.** `units_locked`
   freezes units entirely — right for a statement-loaded total, wrong when one of its sources
   trades daily (value_investing buys at Dhan every day). The per-source breakdown

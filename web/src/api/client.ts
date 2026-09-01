@@ -103,6 +103,7 @@ function authHeaders(extra?: HeadersInit): HeadersInit {
 import type {
   Bucket,
   BucketInput,
+  DividendRow,
   Goal,
   GoalInput,
   HoldingInput,
@@ -502,6 +503,14 @@ export const portfolio = {
     sync: "auto" | "manual";
     replace: boolean;
   }) => request<SeedResult>("/portfolio/seed", { method: "POST", body: JSON.stringify(body) }),
+  dividends: () => request<{ dividends: DividendRow[] }>("/portfolio/dividends"),
+  addDividend: (body: { holding_id: number; on_date: string; amount: number;
+                        per_unit: number | null; note: string | null }) =>
+    request<{ id: number }>("/portfolio/dividends", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  deleteDividend: (id: number) =>
+    request<{ deleted: number }>(`/portfolio/dividends/${id}`, { method: "DELETE" }),
   createBucket: (body: BucketInput) =>
     request<Bucket>("/portfolio/buckets", { method: "POST", body: JSON.stringify(body) }),
   updateBucket: (id: number, body: BucketInput) =>

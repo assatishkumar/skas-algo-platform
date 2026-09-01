@@ -15,7 +15,8 @@ const blank = (): HoldingInput => ({
   native_invested: null, day_change: 0, xirr_pct: null,
   buy_month: new Date().toISOString().slice(0, 7),
   sync: "manual", sync_source: null, sync_ref: null, broker_account_id: null,
-  units_locked: false, broker_units: {}, excluded_from_buckets: false, note: null,
+  units_locked: false, broker_units: {}, excluded_from_buckets: false,
+  dividend_yield_pct: null, note: null,
 });
 
 /** AMFI scheme picker. Searches the cached NAV file, so it answers instantly and works with

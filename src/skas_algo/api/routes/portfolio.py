@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
     PortfolioBucketInput,
+    PortfolioDividendInput,
     PortfolioGoalInput,
     PortfolioHoldingInput,
     PortfolioPasteInput,
@@ -31,6 +32,7 @@ from skas_algo.api.models import (
 )
 from skas_algo.db.models import (
     PortfolioBucket,
+    PortfolioDividend,
     PortfolioGoal,
     PortfolioHolding,
     PortfolioSetting,
@@ -64,13 +66,46 @@ def _bucket_out(b: PortfolioBucket) -> dict:
     }
 
 
-def _goal_out(g: PortfolioGoal) -> dict:
-    return {
-        "id": g.id, "name": g.name, "target_amount": g.target_amount,
+def _goal_out(g: PortfolioGoal, holdings: list[dict] | None = None) -> dict:
+    out = {
+        "id": g.id, "name": g.name,
+        "schedule": list(g.schedule or []),
+        "inflation_pct": g.inflation_pct,
+        "target_amount": g.target_amount,
         "target_year": g.target_year, "monthly_sip": g.monthly_sip,
         "holding_ids": list(g.holding_ids or []), "benchmark": g.benchmark,
         "sort_order": g.sort_order,
     }
+    if holdings is None:
+        return out
+
+    # The projection needs the LINKED money and the return it actually earns, so it is built
+    # here rather than in the browser — a year-by-year walk with inflation on one side and
+    # compounding on the other is not arithmetic worth duplicating.
+    linked = [h for h in holdings if h["id"] in set(g.holding_ids or [])]
+    value = sum(h["value"] for h in linked)
+    bench = pf.BENCHMARKS.get(g.benchmark, 0.0)
+    blended = (
+        sum((h["xirr_pct"] or 0.0) * h["value"] for h in linked) / value
+        if value > 0 and any(h["xirr_pct"] is not None for h in linked) else bench
+    )
+    out["current_value"] = round(value, 2)
+    out["return_pct"] = round(blended, 2)
+    out["benchmark_pct"] = bench
+    out["projection"] = pf.goal_projection(
+        {**out, "monthly_sip": g.monthly_sip}, current_value=value, return_pct=blended,
+    )
+    return out
+
+
+def _dividends(db: Session) -> list[dict]:
+    return [
+        {"id": d.id, "holding_id": d.holding_id, "on_date": d.on_date,
+         "amount": d.amount, "per_unit": d.per_unit, "note": d.note}
+        for d in db.execute(
+            select(PortfolioDividend).order_by(PortfolioDividend.on_date.desc())
+        ).scalars().all()
+    ]
 
 
 def _next_order(db: Session, model) -> int:
@@ -88,6 +123,7 @@ def get_portfolio(db: Session = Depends(get_db)) -> dict:
     One request rather than six because every tab derives from the same two lists — splitting
     them would let the KPI strip and the Allocation tab disagree for a frame."""
     holdings = current_views(db)
+    divs = _dividends(db)
     buckets = db.execute(
         select(PortfolioBucket).order_by(PortfolioBucket.sort_order, PortfolioBucket.id)
     ).scalars().all()
@@ -99,7 +135,7 @@ def get_portfolio(db: Session = Depends(get_db)) -> dict:
     return {
         "holdings": holdings,
         "buckets": [_bucket_out(b) for b in buckets],
-        "goals": [_goal_out(g) for g in goals],
+        "goals": [_goal_out(g, holdings) for g in goals],
         "asset_classes": {
             k: {"label": v["label"], "kind": v["kind"], "color": v["color"]}
             for k, v in pf.ASSET_CLASSES.items()
@@ -114,6 +150,8 @@ def get_portfolio(db: Session = Depends(get_db)) -> dict:
             "estimate_total": pf.apply_equity_exemption(holdings),
             "equity_ltcg_exemption": pf.EQUITY_LTCG_EXEMPTION,
         },
+        "income": pf.income_view(holdings, divs),
+        "dividends": divs,
         "growth": growth_series(db),
         "server_time": datetime.now().astimezone().isoformat(),
     }
@@ -166,6 +204,7 @@ def delete_holding(holding_id: int, db: Session = Depends(get_db)) -> dict:
     if row is None:
         raise HTTPException(404, "holding not found")
     db.execute(delete(PortfolioTransaction).where(PortfolioTransaction.holding_id == holding_id))
+    db.execute(delete(PortfolioDividend).where(PortfolioDividend.holding_id == holding_id))
     # Leaving a deleted holding's id inside a bucket or goal would make its target share
     # silently wrong — the membership lists are pruned in the same transaction.
     for bucket in db.execute(select(PortfolioBucket)).scalars().all():
@@ -417,6 +456,38 @@ def import_transactions(body: PortfolioTransactionImport, db: Session = Depends(
 
 
 # ------------------------------------------------------------------ buckets & goals
+
+
+@router.get("/dividends")
+def list_dividends(db: Session = Depends(get_db)) -> dict:
+    names = {h.id: h.name for h in db.execute(select(PortfolioHolding)).scalars().all()}
+    rows = _dividends(db)
+    for r in rows:
+        r["holding"] = names.get(r["holding_id"], "(deleted)")
+    return {"dividends": rows}
+
+
+@router.post("/dividends")
+def add_dividend(body: PortfolioDividendInput, db: Session = Depends(get_db)) -> dict:
+    if db.get(PortfolioHolding, body.holding_id) is None:
+        raise HTTPException(404, "holding not found")
+    row = PortfolioDividend(
+        holding_id=body.holding_id, on_date=body.on_date.isoformat(),
+        amount=body.amount, per_unit=body.per_unit, note=body.note,
+    )
+    db.add(row)
+    db.commit()
+    return {"id": row.id}
+
+
+@router.delete("/dividends/{dividend_id}")
+def delete_dividend(dividend_id: int, db: Session = Depends(get_db)) -> dict:
+    row = db.get(PortfolioDividend, dividend_id)
+    if row is None:
+        raise HTTPException(404, "dividend not found")
+    db.delete(row)
+    db.commit()
+    return {"deleted": dividend_id}
 
 
 @router.post("/buckets")

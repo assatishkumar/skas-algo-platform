@@ -81,6 +81,8 @@ export interface Holding {
    *  aggregate without wiping the statement-loaded ones. */
   broker_units: Record<string, number>;
   excluded_from_buckets: boolean;
+  /** Expected annual distribution as a % of value. Null = unknown, never assumed zero. */
+  dividend_yield_pct: number | null;
   note: string | null;
   basis: "ledger" | "summary";
   txn_count: number;
@@ -101,15 +103,45 @@ export interface Bucket {
   sort_order: number;
 }
 
+export interface ScheduleRow {
+  year: number;
+  /** In TODAY's rupees — the only form a person reliably knows a cost in. */
+  amount: number;
+}
+
+export interface GoalProjection {
+  schedule: ScheduleRow[];
+  rows: {
+    year: number; amount_today: number; amount_needed: number;
+    corpus_after: number; short: boolean;
+  }[];
+  total_today: number;
+  /** What the same stream actually costs, once each year is inflated to when it is needed. */
+  total_nominal: number;
+  /** What you would need in hand TODAY to be done with it, at the expected return. */
+  pv_required: number;
+  funded_pct: number | null;
+  /** The year the money runs out — a goal can be "fully funded" in total and still fail here. */
+  first_shortfall_year: number | null;
+  final_corpus: number;
+  years: number;
+}
+
 export interface Goal {
   id: number;
   name: string;
+  schedule: ScheduleRow[];
+  inflation_pct: number;
   target_amount: number;
   target_year: number;
   monthly_sip: number;
   holding_ids: number[];
   benchmark: string;
   sort_order: number;
+  current_value?: number;
+  return_pct?: number;
+  benchmark_pct?: number;
+  projection?: GoalProjection;
 }
 
 export interface GrowthSeries {
@@ -133,6 +165,8 @@ export interface PortfolioPayload {
   benchmarks: Record<string, number>;
   tax: { estimate_total: number; equity_ltcg_exemption: number };
   growth: GrowthSeries;
+  income: IncomeView;
+  dividends?: DividendRow[];
   server_time: string;
 }
 
@@ -339,84 +373,20 @@ export function rebalanceMoves(
 
 // ------------------------------------------------------------------ goals
 
-export interface GoalView {
-  goal: Goal;
-  current: number;
-  progress: number;
-  /** Years until the target year — negative once the date has passed. */
-  yearsLeft: number;
-  /** Value projected at the target year from today's money + SIP, at the linked XIRR. */
-  projected: number;
-  /** The same projection at the chosen benchmark's assumed rate. */
-  projectedBenchmark: number;
-  linkedXirr: number;
-  benchmarkRate: number;
-  status: "On track" | "Slightly behind" | "Behind";
-  /** Calendar year the projection crosses the target, or null if it never does. */
-  eta: number | null;
-  names: string[];
-}
-
-/** Future value of a lump sum plus a monthly contribution, both at annual rate `r`.
- * The SIP is compounded monthly because that is when the money actually arrives — treating
- * a year's SIP as one year-end lump would understate a long goal by lakhs. */
-function futureValue(present: number, monthly: number, years: number, r: number): number {
-  if (years <= 0) return present;
-  const m = r / 12;
-  const n = years * 12;
-  const growth = (1 + m) ** n;
-  const sipFv = m === 0 ? monthly * n : monthly * ((growth - 1) / m);
-  return present * growth + sipFv;
-}
-
-export function goalView(
-  goal: Goal,
-  rows: Holding[],
-  benchmarks: Record<string, number>,
-  today = new Date(),
-): GoalView {
-  const linked = rows.filter((h) => goal.holding_ids.includes(h.id));
-  const current = linked.reduce((a, h) => a + h.value, 0);
-  const linkedXirr = valueWeighted(linked, (h) => h.xirr_pct);
-  const benchmarkRate = benchmarks[goal.benchmark] ?? 0;
-
-  const yearsLeft =
-    goal.target_year - today.getFullYear() - today.getMonth() / 12;
-  // A goal with no linked holdings has no observed return to project — fall back to the
-  // benchmark rather than projecting 0% and declaring everything "Behind".
-  const rate = (linked.length ? linkedXirr : benchmarkRate) / 100;
-  const projected = futureValue(current, goal.monthly_sip, Math.max(yearsLeft, 0), rate);
-  const projectedBenchmark = futureValue(
-    current, goal.monthly_sip, Math.max(yearsLeft, 0), benchmarkRate / 100,
-  );
-
-  // Walk forward a year at a time to find when the projection crosses the target. Capped at
-  // 60 years: past that the answer is "not on this plan", and a number would be false comfort.
-  let eta: number | null = null;
-  for (let y = 0; y <= 60; y += 1) {
-    if (futureValue(current, goal.monthly_sip, y, rate) >= goal.target_amount) {
-      eta = today.getFullYear() + y;
-      break;
-    }
+/** Expand "₹X every year from A to B" into schedule rows — how a recurring cost is actually
+ * described, rather than typed twenty-three times. Existing years are ADDED to, not replaced:
+ * two goals can legitimately land in the same year. */
+export function expandRecurring(
+  existing: ScheduleRow[], amount: number, from: number, to: number,
+): ScheduleRow[] {
+  const merged = new Map(existing.map((r) => [r.year, r.amount]));
+  for (let y = Math.min(from, to); y <= Math.max(from, to); y += 1) {
+    merged.set(y, (merged.get(y) ?? 0) + amount);
   }
-
-  const ratio = goal.target_amount > 0 ? projected / goal.target_amount : 0;
-  const status: GoalView["status"] =
-    ratio >= 1 ? "On track" : ratio >= 0.9 ? "Slightly behind" : "Behind";
-
-  return {
-    goal,
-    current,
-    progress: goal.target_amount > 0 ? (current / goal.target_amount) * 100 : 0,
-    yearsLeft,
-    projected,
-    projectedBenchmark,
-    linkedXirr,
-    benchmarkRate,
-    status,
-    eta,
-    names: linked.map((h) => h.name),
-  };
+  return [...merged.entries()]
+    .filter(([, a]) => a > 0)
+    .map(([year, amt]) => ({ year, amount: amt }))
+    .sort((a, b) => a.year - b.year);
 }
 
 // ------------------------------------------------------------------ write payloads
@@ -442,6 +412,7 @@ export interface HoldingInput {
   units_locked: boolean;
   broker_units: Record<string, number>;
   excluded_from_buckets: boolean;
+  dividend_yield_pct: number | null;
   note: string | null;
 }
 
@@ -472,6 +443,8 @@ export interface BucketInput {
 
 export interface GoalInput {
   name: string;
+  schedule: ScheduleRow[];
+  inflation_pct: number;
   target_amount: number;
   target_year: number;
   monthly_sip: number;
@@ -628,6 +601,46 @@ export function toInput(h: Holding): HoldingInput {
     units_locked: h.units_locked,
     broker_units: h.broker_units,
     excluded_from_buckets: h.excluded_from_buckets,
+    dividend_yield_pct: h.dividend_yield_pct,
     note: h.note,
   };
+}
+
+
+export interface DividendRow {
+  id: number;
+  holding_id: number;
+  holding?: string;
+  on_date: string;
+  amount: number;
+  per_unit: number | null;
+  note: string | null;
+}
+
+export interface IncomeLine {
+  holding_id: number;
+  name: string;
+  asset_class: AssetClassKey;
+  value: number;
+  invested: number;
+  yield_pct: number | null;
+  expected_annual: number | null;
+  yield_on_cost_pct: number | null;
+  received_fy: number;
+  received_total: number;
+  last_paid: string | null;
+  payments: number;
+}
+
+export interface IncomeView {
+  fy: string;
+  expected_annual: number;
+  expected_monthly: number;
+  portfolio_yield_pct: number;
+  received_fy: number;
+  received_total: number;
+  /** Value with NO yield entered — left out of the estimate rather than counted as zero. */
+  unpriced_value: number;
+  unpriced_share_pct: number;
+  lines: IncomeLine[];
 }

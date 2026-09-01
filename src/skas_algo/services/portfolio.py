@@ -425,6 +425,7 @@ def holding_view(holding: dict, transactions: list[dict], *, today: date | None 
         "units_locked": bool(holding.get("units_locked")),
         "broker_units": dict(holding.get("broker_units") or {}),
         "excluded_from_buckets": bool(holding.get("excluded_from_buckets")),
+        "dividend_yield_pct": holding.get("dividend_yield_pct"),
         "note": holding.get("note"),
         "basis": "ledger" if has_ledger else "summary",
         "txn_count": len(transactions),
@@ -469,3 +470,197 @@ def apply_equity_exemption(rows: list[dict]) -> float:
     )
     relief = min(eligible, EQUITY_LTCG_EXEMPTION) * LTCG_RATE
     return round(max(gross - relief, 0.0), 2)
+
+
+# ---------------------------------------------------------------- income
+
+
+def financial_year(iso: str) -> str:
+    """India's FY runs 1 April to 31 March. Keying income on the calendar year would be wrong
+    for nine months of every twelve."""
+    y, m = int(iso[:4]), int(iso[5:7])
+    start = y if m >= 4 else y - 1
+    return f"FY{str(start + 1)[2:]}"
+
+
+def income_view(rows: list[dict], dividends: list[dict], *, today: date | None = None) -> dict:
+    """Distributions: what has arrived, and what the current book should throw off in a year.
+
+    Expected income is DERIVED (value × yield), not stored — a forecast typed once ages into
+    fiction the moment a position changes size, and this screen is read to plan against.
+    Holdings with no yield entered are counted separately rather than as zero, because "we
+    don't know" and "it pays nothing" lead to different decisions.
+    """
+    day = today or date.today()
+    this_fy = financial_year(day.isoformat())
+
+    by_holding: dict[int, list[dict]] = {}
+    for d in dividends:
+        by_holding.setdefault(d["holding_id"], []).append(d)
+
+    lines, expected, unknown_value = [], 0.0, 0.0
+    for r in rows:
+        paid = by_holding.get(r["id"], [])
+        fy_paid = sum(p["amount"] for p in paid if financial_year(p["on_date"]) == this_fy)
+        total_paid = sum(p["amount"] for p in paid)
+        yield_pct = r.get("dividend_yield_pct")
+        annual = (r["value"] * yield_pct / 100.0) if yield_pct else None
+        if annual is not None:
+            expected += annual
+        elif r["value"] > 0:
+            unknown_value += r["value"]
+        if not paid and annual is None:
+            continue
+        last = max((p["on_date"] for p in paid), default=None)
+        lines.append({
+            "holding_id": r["id"], "name": r["name"], "asset_class": r["asset_class"],
+            "value": r["value"], "invested": r["invested"],
+            "yield_pct": yield_pct,
+            "expected_annual": round(annual, 2) if annual is not None else None,
+            # Yield on COST is the number that says what the original decision now returns;
+            # yield on value only ever says what today's price would buy.
+            "yield_on_cost_pct": (
+                round(annual / r["invested"] * 100.0, 2)
+                if annual is not None and r["invested"] > 0 else None
+            ),
+            "received_fy": round(fy_paid, 2),
+            "received_total": round(total_paid, 2),
+            "last_paid": last,
+            "payments": len(paid),
+        })
+
+    lines.sort(key=lambda x: -(x["expected_annual"] or 0))
+    received_fy = sum(line["received_fy"] for line in lines)
+    total_value = sum(r["value"] for r in rows)
+    return {
+        "fy": this_fy,
+        "expected_annual": round(expected, 2),
+        "expected_monthly": round(expected / 12.0, 2),
+        "portfolio_yield_pct": round(expected / total_value * 100.0, 2) if total_value else 0.0,
+        "received_fy": round(received_fy, 2),
+        "received_total": round(sum(line["received_total"] for line in lines), 2),
+        # How much of the book has no yield entered — the honest caveat on every figure above.
+        "unpriced_value": round(unknown_value, 2),
+        "unpriced_share_pct": (
+            round(unknown_value / total_value * 100.0, 1) if total_value else 0.0
+        ),
+        "lines": lines,
+    }
+
+
+# ---------------------------------------------------------------- goals
+
+DEFAULT_INFLATION_PCT = 6.0
+
+
+def goal_schedule(goal: dict) -> list[dict]:
+    """The goal's outflows as ``[{"year", "amount"}]`` in TODAY's rupees, year-ordered.
+
+    Falls back to the legacy single target so an older goal reads as a one-row schedule
+    rather than silently becoming unfunded."""
+    rows = [
+        {"year": int(r["year"]), "amount": float(r["amount"])}
+        for r in (goal.get("schedule") or [])
+        if r.get("year") and float(r.get("amount") or 0) > 0
+    ]
+    if not rows and goal.get("target_amount") and goal.get("target_year"):
+        rows = [{"year": int(goal["target_year"]), "amount": float(goal["target_amount"])}]
+    merged: dict[int, float] = {}
+    for r in rows:
+        merged[r["year"]] = merged.get(r["year"], 0.0) + r["amount"]
+    return [{"year": y, "amount": round(a, 2)} for y, a in sorted(merged.items())]
+
+
+def goal_projection(
+    goal: dict,
+    *,
+    current_value: float,
+    return_pct: float,
+    today: date | None = None,
+) -> dict:
+    """Walk a goal year by year: grow the corpus, take out that year's (inflated) cost, and
+    report the first year it runs dry.
+
+    Two things this deliberately does NOT do. It does not compare a single number against a
+    single target — a goal that is 'fully funded' in aggregate can still fail in 2031 because
+    the money arrives too late. And it does not treat the entered amounts as nominal: they are
+    today's prices, so each is carried forward at the goal's own inflation rate. School fees
+    entered as 7 L in today's money are 11.2 L in 2034 at 6%, and planning against 7 L would
+    understate the goal by a third.
+    """
+    day = today or date.today()
+    base_year = day.year
+    schedule = goal_schedule(goal)
+    if not schedule:
+        return {
+            "schedule": [], "rows": [], "total_today": 0.0, "total_nominal": 0.0,
+            "pv_required": 0.0, "funded_pct": None, "first_shortfall_year": None,
+            "final_corpus": round(current_value, 2), "years": 0,
+        }
+
+    infl = float(goal.get("inflation_pct", DEFAULT_INFLATION_PCT)) / 100.0
+    r = return_pct / 100.0
+    sip = float(goal.get("monthly_sip") or 0.0)
+    by_year = {row["year"]: row["amount"] for row in schedule}
+    last_year = max(by_year)
+
+    corpus = current_value
+    rows: list[dict] = []
+    first_short: int | None = None
+    total_nominal = 0.0
+    pv_required = 0.0
+    shortfall_total = 0.0
+
+    # The CURRENT year is already part-spent, so only what is left of it earns anything and
+    # only the remaining SIPs are paid. Crediting a full year on 1 September would hand the
+    # plan four months of growth and eight SIPs it never gets — flattering exactly the
+    # near-term goals where being wrong matters most.
+    months_left_now = 12 - day.month + 1
+
+    for year in range(base_year, last_year + 1):
+        n = year - base_year
+        frac = (months_left_now / 12.0) if n == 0 else 1.0
+        months = months_left_now if n == 0 else 12
+        # Contributions land through the period, so they earn roughly half of its return —
+        # crediting the full period would flatter every plan that leans on the SIP.
+        corpus = corpus * ((1 + r) ** frac) + sip * months * (1 + r * frac / 2)
+        today_amount = by_year.get(year, 0.0)
+        needed = today_amount * ((1 + infl) ** n)
+        total_nominal += needed
+        pv_required += needed / ((1 + r) ** n) if r > -1 else needed
+
+        # A shortfall is money you DON'T have, so it cannot compound at the investment return.
+        # Letting the corpus go negative and grow did exactly that — a ₹15 L gap in 2027 became
+        # ₹1.48 Cr of fictional debt by 2045, which would frighten someone out of a plan that
+        # was merely one year tight. The gap is recorded, the corpus floors at zero, and the
+        # SIP goes on rebuilding it.
+        unmet = max(needed - corpus, 0.0)
+        corpus = max(corpus - needed, 0.0)
+        shortfall_total += unmet
+        if unmet > 0 and first_short is None:
+            first_short = year
+        rows.append({
+            "year": year,
+            "amount_today": round(today_amount, 2),
+            "amount_needed": round(needed, 2),
+            "corpus_after": round(corpus, 2),
+            "shortfall": round(unmet, 2),
+            "short": unmet > 0,
+        })
+
+    total_today = sum(by_year.values())
+    return {
+        "schedule": schedule,
+        "rows": rows,
+        "total_today": round(total_today, 2),
+        "total_nominal": round(total_nominal, 2),
+        # What the whole stream is worth in today's money at the expected return — the single
+        # honest answer to "how much would I need right now to be done with this".
+        "pv_required": round(pv_required, 2),
+        "funded_pct": round(current_value / pv_required * 100.0, 1) if pv_required > 0 else None,
+        "first_shortfall_year": first_short,
+        # The real gap, in the rupees of the years it occurs — not a compounded fiction.
+        "shortfall_total": round(shortfall_total, 2),
+        "final_corpus": round(corpus, 2),
+        "years": last_year - base_year + 1,
+    }

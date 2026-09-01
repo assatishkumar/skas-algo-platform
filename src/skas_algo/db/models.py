@@ -309,6 +309,10 @@ class PortfolioHolding(Base, TimestampMixin):
     # positions, which no sync can see, being wiped to zero. Empty = the whole row is static.
     broker_units: Mapped[dict] = mapped_column(JSON, default=dict)
     excluded_from_buckets: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Expected annual distribution as a % of current value. TYPED, never guessed: no free feed
+    # publishes Indian dividend yields, and an invented one would put fictitious income on a
+    # planning screen. NULL means unknown, which the UI shows as unknown.
+    dividend_yield_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -353,6 +357,13 @@ class PortfolioGoal(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(80))
+    # A goal is a STREAM of outflows, not one number at one date: school fees run for four
+    # years, travel for twenty, a wedding lands twice. ``schedule`` is [{"year", "amount"}]
+    # with amounts in TODAY'S rupees — that is how a person actually knows what a thing costs
+    # — and ``inflation_pct`` carries each one forward to the year it is needed.
+    schedule: Mapped[list] = mapped_column(JSON, default=list)
+    inflation_pct: Mapped[float] = mapped_column(Float, default=6.0)
+    # Legacy single-point form, kept so an older goal still reads as a one-row schedule.
     target_amount: Mapped[float] = mapped_column(Float, default=0.0)
     target_year: Mapped[int] = mapped_column(Integer, default=0)
     monthly_sip: Mapped[float] = mapped_column(Float, default=0.0)
@@ -387,3 +398,23 @@ class PortfolioSetting(Base, TimestampMixin):
 
     key: Mapped[str] = mapped_column(String(48), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class PortfolioDividend(Base, TimestampMixin):
+    """One distribution actually received — a dividend, an interest credit, a REIT payout.
+
+    Only RECEIVED money is recorded. What is *expected* is derived from the holding's yield
+    and its current value, so it moves with the position instead of ageing into a stale
+    forecast that has to be re-entered every time something is bought or sold.
+    """
+
+    __tablename__ = "portfolio_dividend"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    holding_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolio_holding.id", ondelete="CASCADE"), index=True
+    )
+    on_date: Mapped[str] = mapped_column(String(10))  # the day it was credited
+    amount: Mapped[float] = mapped_column(Float, default=0.0)
+    per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)

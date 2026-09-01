@@ -62,6 +62,7 @@ def current_views(db: Session, *, today: date | None = None) -> list[dict]:
                 "last_synced_at": h.last_synced_at.isoformat() if h.last_synced_at else None,
                 "units_locked": h.units_locked, "broker_units": h.broker_units,
                 "excluded_from_buckets": h.excluded_from_buckets, "note": h.note,
+                "dividend_yield_pct": h.dividend_yield_pct,
             },
             txns.get(h.id, []),
             today=today,

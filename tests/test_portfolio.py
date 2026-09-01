@@ -305,3 +305,197 @@ def test_a_debt_tagged_fund_is_still_taxed_at_slab(client: TestClient):
     assert row["kind"] == "debt"
     assert row["tax"]["lots"][0]["regime"] == "Slab rate"
     client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
+# ------------------------------------------------------------------ distributions
+
+
+def test_expected_income_is_derived_from_the_position_not_stored():
+    """A forecast typed once ages into fiction the moment the holding changes size. Expected
+    income is value x yield, so it moves with the position."""
+    rows = [{"id": 1, "name": "REIT", "asset_class": "re", "value": 1_000_000,
+             "invested": 800_000, "dividend_yield_pct": 8.0}]
+    view = pf.income_view(rows, [], today=date(2026, 9, 1))
+    assert view["expected_annual"] == pytest.approx(80_000)
+    assert view["expected_monthly"] == pytest.approx(80_000 / 12)
+    # Yield ON COST says what the original decision returns; on value only says what today's
+    # price would buy.
+    assert view["lines"][0]["yield_on_cost_pct"] == pytest.approx(10.0)
+
+
+def test_a_holding_with_no_yield_is_excluded_not_counted_as_zero():
+    """'We don't know' and 'it pays nothing' lead to different decisions, so the unpriced
+    share is reported rather than quietly dragging the portfolio yield down."""
+    rows = [
+        {"id": 1, "name": "REIT", "asset_class": "re", "value": 100_000,
+         "invested": 100_000, "dividend_yield_pct": 10.0},
+        {"id": 2, "name": "Growth", "asset_class": "stk", "value": 300_000,
+         "invested": 300_000, "dividend_yield_pct": None},
+    ]
+    view = pf.income_view(rows, [], today=date(2026, 9, 1))
+    assert view["expected_annual"] == pytest.approx(10_000)
+    assert view["unpriced_value"] == pytest.approx(300_000)
+    assert view["unpriced_share_pct"] == pytest.approx(75.0)
+
+
+def test_income_is_bucketed_by_the_INDIAN_financial_year():
+    """1 April to 31 March. Keying on the calendar year would be wrong for nine months of
+    every twelve, and this is the figure a tax return is filled from."""
+    assert pf.financial_year("2026-03-31") == "FY26"
+    assert pf.financial_year("2026-04-01") == "FY27"
+
+    rows = [{"id": 1, "name": "REIT", "asset_class": "re", "value": 100_000,
+             "invested": 100_000, "dividend_yield_pct": 10.0}]
+    divs = [
+        {"holding_id": 1, "on_date": "2026-03-20", "amount": 5_000},   # last FY
+        {"holding_id": 1, "on_date": "2026-06-20", "amount": 7_000},   # this FY
+    ]
+    view = pf.income_view(rows, divs, today=date(2026, 9, 1))
+    assert view["fy"] == "FY27"
+    assert view["received_fy"] == pytest.approx(7_000)
+    assert view["received_total"] == pytest.approx(12_000)
+
+
+def test_recording_and_deleting_a_distribution_round_trips(client: TestClient):
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "PGINVIT test", "asset_class": "re", "invested": 100_000, "units": 1000,
+        "value": 120_000, "dividend_yield_pct": 11.0,
+    }).json()["id"]
+    did = client.post("/api/v1/portfolio/dividends", json={
+        "holding_id": hid, "on_date": "2026-06-15", "amount": 13_200, "note": "Q1",
+    }).json()["id"]
+
+    body = client.get("/api/v1/portfolio").json()
+    line = next(x for x in body["income"]["lines"] if x["holding_id"] == hid)
+    assert line["expected_annual"] == pytest.approx(13_200)
+    assert line["received_fy"] == pytest.approx(13_200)
+    assert body["income"]["received_total"] == pytest.approx(13_200)
+
+    client.delete(f"/api/v1/portfolio/dividends/{did}")
+    assert client.get("/api/v1/portfolio").json()["income"]["received_total"] == pytest.approx(0)
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
+def test_deleting_a_holding_takes_its_distributions_with_it(client: TestClient):
+    """An orphan payment would keep inflating 'received all time' with no row to explain it."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Doomed payer", "asset_class": "re", "invested": 1000, "value": 1200,
+    }).json()["id"]
+    client.post("/api/v1/portfolio/dividends", json={
+        "holding_id": hid, "on_date": "2026-06-15", "amount": 500,
+    })
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
+    assert client.get("/api/v1/portfolio").json()["income"]["received_total"] == pytest.approx(0)
+
+
+# ------------------------------------------------------------------ goals as a schedule
+
+
+def test_a_goals_entered_amount_is_todays_money_and_is_inflated_to_when_it_is_needed():
+    """School fees of 7 L a year 2031-2036 are 42 L as entered and 65 L when actually paid.
+    Planning against the raw figure understates the goal by more than half."""
+    goal = {
+        "schedule": [{"year": y, "amount": 700_000} for y in range(2031, 2037)],
+        "inflation_pct": 6.0, "monthly_sip": 0,
+    }
+    p = pf.goal_projection(goal, current_value=0, return_pct=12.0, today=date(2026, 9, 1))
+    assert p["total_today"] == pytest.approx(4_200_000)
+    assert p["total_nominal"] == pytest.approx(6_534_185, rel=1e-4)
+    assert p["total_nominal"] > p["total_today"] * 1.5
+
+
+def test_a_goal_can_be_fully_funded_in_total_and_still_run_out_early():
+    """The failure a single target number cannot express: enough money overall, needed before
+    it has finished compounding."""
+    goal = {
+        "schedule": [{"year": 2027, "amount": 5_000_000}, {"year": 2045, "amount": 1_000_000}],
+        "inflation_pct": 6.0, "monthly_sip": 0,
+    }
+    p = pf.goal_projection(goal, current_value=3_000_000, return_pct=12.0,
+                           today=date(2026, 9, 1))
+    assert p["first_shortfall_year"] == 2027
+    # The gap is stated in the rupees of the year it happens, and both years count.
+    y27 = next(r for r in p["rows"] if r["year"] == 2027)
+    y45 = next(r for r in p["rows"] if r["year"] == 2045)
+    assert y27["shortfall"] > 0 and y45["shortfall"] > 0
+    assert p["shortfall_total"] == pytest.approx(y27["shortfall"] + y45["shortfall"])
+
+
+def test_the_current_year_only_earns_the_months_that_are_left_of_it():
+    """On 1 September, four months remain. Crediting a full year of growth and twelve SIPs
+    would hand the plan money it never receives, and near-term goals are exactly where that
+    error is least affordable."""
+    goal = {"schedule": [{"year": 2027, "amount": 1_000_000}], "inflation_pct": 0.0,
+            "monthly_sip": 100_000}
+    sept = pf.goal_projection(goal, current_value=1_000_000, return_pct=12.0,
+                              today=date(2026, 9, 1))
+    january = pf.goal_projection(goal, current_value=1_000_000, return_pct=12.0,
+                                 today=date(2026, 1, 1))
+    first_sept = next(r for r in sept["rows"] if r["year"] == 2026)
+    first_jan = next(r for r in january["rows"] if r["year"] == 2026)
+    assert first_sept["corpus_after"] < first_jan["corpus_after"]
+    # Four SIPs plus a third of a year's growth, not twelve and a full year.
+    assert first_sept["corpus_after"] == pytest.approx(
+        1_000_000 * (1.12 ** (4 / 12)) + 100_000 * 4 * (1 + 0.12 * (4 / 12) / 2), rel=1e-9)
+
+
+def test_a_shortfall_does_not_compound_at_the_investment_return():
+    """Money you do not have cannot grow at 12%. Letting the corpus go negative turned a
+    ~19 L gap in 2027 into 1.48 Cr of fictional debt by 2045 — frightening enough to talk
+    someone out of a plan that was one year tight."""
+    goal = {
+        "schedule": [{"year": 2027, "amount": 5_000_000}, {"year": 2045, "amount": 1_000_000}],
+        "inflation_pct": 6.0, "monthly_sip": 0,
+    }
+    p = pf.goal_projection(goal, current_value=3_000_000, return_pct=12.0,
+                           today=date(2026, 9, 1))
+    assert all(r["corpus_after"] >= 0 for r in p["rows"])
+    assert p["final_corpus"] >= 0
+
+
+def test_a_recurring_goal_survives_when_the_sip_and_growth_cover_each_year():
+    goal = {
+        "schedule": [{"year": y, "amount": 800_000} for y in range(2027, 2049)],
+        "inflation_pct": 6.0, "monthly_sip": 200_000,
+    }
+    p = pf.goal_projection(goal, current_value=20_000_000, return_pct=12.0,
+                           today=date(2026, 9, 1))
+    assert p["first_shortfall_year"] is None
+    assert p["years"] == 2048 - 2026 + 1
+
+
+def test_the_present_value_answers_what_would_finish_this_today():
+    """Discounted at the expected return — the one number that makes two goals in different
+    decades comparable."""
+    goal = {"schedule": [{"year": 2036, "amount": 1_000_000}], "inflation_pct": 0.0}
+    p = pf.goal_projection(goal, current_value=0, return_pct=10.0, today=date(2026, 9, 1))
+    assert p["pv_required"] == pytest.approx(1_000_000 / (1.10 ** 10), rel=1e-6)
+
+
+def test_a_legacy_single_target_goal_still_reads_as_a_one_year_schedule():
+    """An older goal must not silently become unfunded because it predates the schedule."""
+    rows = pf.goal_schedule({"target_amount": 500_000, "target_year": 2030, "schedule": []})
+    assert rows == [{"year": 2030, "amount": 500_000.0}]
+
+
+def test_two_costs_in_the_same_year_are_added_not_replaced():
+    """Marriage and travel can both land in 2033."""
+    rows = pf.goal_schedule({"schedule": [
+        {"year": 2033, "amount": 3_000_000}, {"year": 2033, "amount": 800_000},
+    ]})
+    assert rows == [{"year": 2033, "amount": 3_800_000.0}]
+
+
+def test_a_goal_round_trips_through_the_api_with_its_projection(client: TestClient):
+    gid = client.post("/api/v1/portfolio/goals", json={
+        "name": "Travel", "inflation_pct": 6,
+        "schedule": [{"year": y, "amount": 800_000} for y in range(2026, 2049)],
+        "monthly_sip": 0, "holding_ids": [], "benchmark": "NIFTY 50 TRI",
+    }).json()["id"]
+    goal = next(g for g in client.get("/api/v1/portfolio").json()["goals"] if g["id"] == gid)
+    assert len(goal["schedule"]) == 23
+    assert goal["projection"]["total_today"] == pytest.approx(23 * 800_000)
+    assert goal["projection"]["total_nominal"] > goal["projection"]["total_today"]
+    # Nothing linked and no SIP: it fails in the very first year, and says so.
+    assert goal["projection"]["first_shortfall_year"] == 2026
+    client.delete(f"/api/v1/portfolio/goals/{gid}")

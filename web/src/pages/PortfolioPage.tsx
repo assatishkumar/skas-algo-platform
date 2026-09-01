@@ -5,6 +5,7 @@ import AllocationView from "../components/portfolio/AllocationView";
 import BucketsView from "../components/portfolio/BucketsView";
 import GoalsView from "../components/portfolio/GoalsView";
 import GrowthView from "../components/portfolio/GrowthView";
+import IncomeView from "../components/portfolio/IncomeView";
 import HoldingModal from "../components/portfolio/HoldingModal";
 import LedgerModal from "../components/portfolio/LedgerModal";
 import OverviewView from "../components/portfolio/OverviewView";
@@ -17,9 +18,10 @@ import {
   type BucketInput, type GoalInput, type Holding, type HoldingInput, type SyncReport,
 } from "../lib/portfolio";
 
-type Tab = "Overview" | "Allocation" | "Growth" | "Goals" | "Buckets" | "Rebalance" | "Tax";
+type Tab =
+  | "Overview" | "Allocation" | "Growth" | "Income" | "Goals" | "Buckets" | "Rebalance" | "Tax";
 const TABS: Tab[] = [
-  "Overview", "Allocation", "Growth", "Goals", "Buckets", "Rebalance", "Tax",
+  "Overview", "Allocation", "Growth", "Income", "Goals", "Buckets", "Rebalance", "Tax",
 ];
 
 /** Per-device view preferences. These are genuinely per-device (a phone wants compact rows,
@@ -345,6 +347,15 @@ export default function PortfolioPage() {
           {tab === "Allocation" && <AllocationView rows={rows} payload={data} />}
           {tab === "Growth" && (
             <GrowthView rows={rows} payload={data} buckets={data.buckets} />
+          )}
+          {tab === "Income" && (
+            <IncomeView
+              rows={rows} payload={data} onChanged={refresh}
+              onSetYield={(h, yieldPct) =>
+                saveHolding.mutate({
+                  id: h.id, body: { ...toInput(h), dividend_yield_pct: yieldPct },
+                })}
+            />
           )}
           {tab === "Goals" && (
             <GoalsView

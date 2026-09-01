@@ -1,22 +1,115 @@
 import { useMemo, useState } from "react";
 import {
-  goalView, money, pct,
-  type Goal, type GoalInput, type Holding, type PortfolioPayload,
+  expandRecurring, money, pct,
+  type Goal, type GoalInput, type Holding, type PortfolioPayload, type ScheduleRow,
 } from "../../lib/portfolio";
 import {
   Card, ConfirmAction, Field, inputClass, Modal, Notice, selectClass,
 } from "./primitives";
 
-const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
-  "On track": { bg: "var(--tint)", color: "var(--accent-deep)" },
-  "Slightly behind": { bg: "var(--warn-bg)", color: "var(--warn-text)" },
-  Behind: { bg: "rgba(217,84,74,.14)", color: "var(--danger)" },
-};
-
-const BLANK = (year: number): GoalInput => ({
-  name: "", target_amount: 1_000_000, target_year: year + 10,
+const BLANK = (): GoalInput => ({
+  name: "", schedule: [], inflation_pct: 6, target_amount: 0, target_year: 0,
   monthly_sip: 0, holding_ids: [], benchmark: "NIFTY 50 TRI",
 });
+
+const asInput = (g: Goal): GoalInput => ({
+  name: g.name, schedule: g.schedule ?? [], inflation_pct: g.inflation_pct,
+  target_amount: g.target_amount, target_year: g.target_year,
+  monthly_sip: g.monthly_sip, holding_ids: g.holding_ids, benchmark: g.benchmark,
+});
+
+/** The schedule editor. A goal like "school fees, 2.5 L a year, 2027 to 2030" is described in
+ * one line and expanded, rather than typed four times — and a one-off wedding is the same
+ * control with the years equal. Individual rows stay editable afterwards, because real plans
+ * have an odd year that differs. */
+function ScheduleEditor({
+  rows, onChange,
+}: { rows: ScheduleRow[]; onChange: (rows: ScheduleRow[]) => void }) {
+  const thisYear = new Date().getFullYear();
+  const [amount, setAmount] = useState("");
+  const [from, setFrom] = useState(String(thisYear + 1));
+  const [to, setTo] = useState(String(thisYear + 1));
+
+  const total = rows.reduce((a, r) => a + r.amount, 0);
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-end gap-2 rounded-[10px] bg-[var(--stat)] p-2.5">
+        <label className="flex-1">
+          <span className="text-[10.5px] font-extrabold tracking-[.04em] text-[var(--faint)]">
+            AMOUNT PER YEAR (₹, today's money)
+          </span>
+          <input
+            type="number" className={`${inputClass} mt-1 !py-1.5`} value={amount}
+            placeholder="700000" onChange={(e) => setAmount(e.target.value)}
+          />
+        </label>
+        <label className="w-20">
+          <span className="text-[10.5px] font-extrabold tracking-[.04em] text-[var(--faint)]">
+            FROM
+          </span>
+          <input type="number" className={`${inputClass} mt-1 !py-1.5`} value={from}
+            onChange={(e) => setFrom(e.target.value)} />
+        </label>
+        <label className="w-20">
+          <span className="text-[10.5px] font-extrabold tracking-[.04em] text-[var(--faint)]">
+            TO
+          </span>
+          <input type="number" className={`${inputClass} mt-1 !py-1.5`} value={to}
+            onChange={(e) => setTo(e.target.value)} />
+        </label>
+        <button
+          onClick={() => {
+            const a = Number(amount);
+            const f = Number(from);
+            const t = Number(to);
+            if (!(a > 0) || !(f > 1999) || !(t > 1999)) return;
+            onChange(expandRecurring(rows, a, f, t));
+            setAmount("");
+          }}
+          className="rounded-[9px] bg-[var(--accent)] px-3.5 py-2 text-[12px] font-extrabold text-white"
+        >
+          Add
+        </button>
+      </div>
+      <div className="mt-1.5 text-[11px] font-semibold text-[var(--faint)]">
+        Same years for from and to gives a one-off. Amounts are in today's money — inflation is
+        applied below.
+      </div>
+
+      {rows.length > 0 && (
+        <div className="mt-2 max-h-[180px] overflow-y-auto rounded-[10px] border border-[var(--border)]">
+          {rows.map((r) => (
+            <div
+              key={r.year}
+              className="grid grid-cols-[70px_1fr_60px] items-center gap-2 border-b border-[var(--divider)] px-2.5 py-1.5 text-[12.5px] last:border-0"
+            >
+              <span className="font-extrabold text-[var(--strong)]">{r.year}</span>
+              <input
+                type="number"
+                value={r.amount}
+                onChange={(e) => onChange(rows.map((x) =>
+                  x.year === r.year ? { ...x, amount: Number(e.target.value) } : x))}
+                className="w-full rounded-md border-[1.5px] border-transparent bg-transparent px-1 py-0.5 text-right font-semibold tabular-nums text-[var(--muted)] outline-none hover:border-[var(--field-border)] focus:border-[var(--accent)] focus:bg-[var(--field)]"
+              />
+              <button
+                onClick={() => onChange(rows.filter((x) => x.year !== r.year))}
+                className="text-right text-[11px] font-extrabold text-[var(--faint)] hover:text-[var(--danger)]"
+              >
+                remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div className="mt-1.5 text-[12px] font-bold text-[var(--muted)]">
+          {rows.length} year{rows.length === 1 ? "" : "s"} · {money(total)} in today's money
+        </div>
+      )}
+    </div>
+  );
+}
 
 function GoalForm({
   initial, rows, benchmarks, onSave, onClose, title,
@@ -29,46 +122,34 @@ function GoalForm({
   const set = (patch: Partial<GoalInput>) => setDraft((d) => ({ ...d, ...patch }));
 
   return (
-    <Modal title={title} onClose={onClose} width={520}>
+    <Modal title={title} onClose={onClose} width={620}>
       <div className="grid grid-cols-2 gap-3">
         <Field label="GOAL" span={2}>
-          <input
-            className={inputClass}
-            value={draft.name}
-            placeholder="e.g. Retirement / House down payment"
-            onChange={(e) => set({ name: e.target.value })}
-          />
+          <input className={inputClass} value={draft.name}
+            placeholder="e.g. Arya college fees / Travel"
+            onChange={(e) => set({ name: e.target.value })} />
         </Field>
-        <Field label="TARGET (₹)">
-          <input
-            type="number" className={inputClass} value={draft.target_amount || ""}
-            onChange={(e) => set({ target_amount: Number(e.target.value) })}
-          />
+        <Field label="WHEN IT'S NEEDED" span={2}>
+          <ScheduleEditor rows={draft.schedule} onChange={(schedule) => set({ schedule })} />
         </Field>
-        <Field label="BY YEAR">
-          <input
-            type="number" className={inputClass} value={draft.target_year || ""}
-            onChange={(e) => set({ target_year: Number(e.target.value) })}
-          />
+        <Field label="INFLATION (% a year)">
+          <input type="number" className={inputClass} value={draft.inflation_pct}
+            onChange={(e) => set({ inflation_pct: Number(e.target.value) })} />
         </Field>
         <Field label="MONTHLY SIP (₹)">
-          <input
-            type="number" className={inputClass} value={draft.monthly_sip || ""}
-            onChange={(e) => set({ monthly_sip: Number(e.target.value) })}
-          />
+          <input type="number" className={inputClass} value={draft.monthly_sip || ""}
+            onChange={(e) => set({ monthly_sip: Number(e.target.value) })} />
         </Field>
-        <Field label="BENCHMARK">
-          <select
-            className={selectClass} value={draft.benchmark}
-            onChange={(e) => set({ benchmark: e.target.value })}
-          >
+        <Field label="EXPECTED RETURN IF NOTHING IS LINKED" span={2}>
+          <select className={selectClass} value={draft.benchmark}
+            onChange={(e) => set({ benchmark: e.target.value })}>
             {Object.entries(benchmarks).map(([name, rate]) => (
               <option key={name} value={name}>{name} · {rate}%</option>
             ))}
           </select>
         </Field>
         <Field label="FUNDED BY" span={2}>
-          <div className="max-h-[220px] overflow-y-auto rounded-[10px] border-[1.5px] border-[var(--field-border)] bg-[var(--field)] p-2">
+          <div className="max-h-[180px] overflow-y-auto rounded-[10px] border-[1.5px] border-[var(--field-border)] bg-[var(--field)] p-2">
             {rows.length === 0 && (
               <div className="p-2 text-[12px] font-semibold text-[var(--faint)]">
                 No holdings to link yet.
@@ -77,19 +158,14 @@ function GoalForm({
             {rows.map((h) => {
               const on = draft.holding_ids.includes(h.id);
               return (
-                <label
-                  key={h.id}
-                  className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] font-semibold text-[var(--strong)] hover:bg-[var(--row-hover)]"
-                >
-                  <input
-                    type="checkbox" checked={on}
-                    onChange={() =>
-                      set({
-                        holding_ids: on
-                          ? draft.holding_ids.filter((i) => i !== h.id)
-                          : [...draft.holding_ids, h.id],
-                      })}
-                  />
+                <label key={h.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] font-semibold text-[var(--strong)] hover:bg-[var(--row-hover)]">
+                  <input type="checkbox" checked={on}
+                    onChange={() => set({
+                      holding_ids: on
+                        ? draft.holding_ids.filter((i) => i !== h.id)
+                        : [...draft.holding_ids, h.id],
+                    })} />
                   <span className="flex-1 truncate">{h.name}</span>
                   <span className="text-[var(--faint)]">{money(h.value)}</span>
                 </label>
@@ -100,18 +176,15 @@ function GoalForm({
       </div>
       {error && <div className="mt-2.5 text-[12px] font-bold text-[var(--danger)]">{error}</div>}
       <div className="mt-4 flex justify-end gap-2.5">
-        <button
-          onClick={onClose}
-          className="rounded-[11px] border-[1.5px] border-[var(--field-border)] bg-[var(--ghost)] px-[18px] py-2.5 text-[13px] font-extrabold text-[var(--muted)]"
-        >
+        <button onClick={onClose}
+          className="rounded-[11px] border-[1.5px] border-[var(--field-border)] bg-[var(--ghost)] px-[18px] py-2.5 text-[13px] font-extrabold text-[var(--muted)]">
           Cancel
         </button>
         <button
           onClick={() => {
             if (!draft.name.trim()) return setError("Give the goal a name.");
-            if (!(draft.target_amount > 0)) return setError("Target must be more than zero.");
-            if (draft.target_year < new Date().getFullYear()) {
-              return setError("The target year is in the past.");
+            if (draft.schedule.length === 0) {
+              return setError("Add at least one year — what's needed, and when.");
             }
             onSave({ ...draft, name: draft.name.trim() });
           }}
@@ -134,131 +207,155 @@ export default function GoalsView({
   onDelete: (id: number) => void;
 }) {
   const [editing, setEditing] = useState<Goal | "new" | null>(null);
-
-  const views = useMemo(
-    () => payload.goals.map((g) => goalView(g, rows, payload.benchmarks)),
-    [payload.goals, payload.benchmarks, rows],
-  );
+  const [openYears, setOpenYears] = useState<number | null>(null);
 
   const assigned = new Set(payload.goals.flatMap((g) => g.holding_ids));
   const unassigned = rows.filter((h) => !assigned.has(h.id));
   const unassignedValue = unassigned.reduce((a, h) => a + h.value, 0);
 
-  const asInput = (g: Goal): GoalInput => ({
-    name: g.name, target_amount: g.target_amount, target_year: g.target_year,
-    monthly_sip: g.monthly_sip, holding_ids: g.holding_ids, benchmark: g.benchmark,
-  });
+  const totals = useMemo(() => {
+    const t = { today: 0, nominal: 0, pv: 0, linked: 0 };
+    for (const g of payload.goals) {
+      const p = g.projection;
+      if (!p) continue;
+      t.today += p.total_today;
+      t.nominal += p.total_nominal;
+      t.pv += p.pv_required;
+      t.linked += g.current_value ?? 0;
+    }
+    return t;
+  }, [payload.goals]);
 
   return (
     <div>
+      {payload.goals.length > 0 && (
+        <div className="mb-3.5">
+          <Notice>
+            <strong>{money(totals.today)}</strong> of goals in today's money is{" "}
+            <strong>{money(totals.nominal)}</strong> by the time each one is actually needed —
+            that gap is inflation, and it is the whole reason a goal can't be a single number.
+            You'd need <strong>{money(totals.pv)}</strong> in hand today to be done with all of
+            them; {money(totals.linked)} is linked.
+          </Notice>
+        </div>
+      )}
+
       {unassigned.length > 0 && (
         <div className="mb-3.5">
           <Notice tone="warn">
             {money(unassignedValue)} isn't assigned to any goal —{" "}
             {unassigned.slice(0, 4).map((h) => h.name).join(", ")}
-            {unassigned.length > 4 ? ` and ${unassigned.length - 4} more` : ""}. Assign it so the
-            projections below describe all your money, not part of it.
+            {unassigned.length > 4 ? ` and ${unassigned.length - 4} more` : ""}.
           </Notice>
         </div>
       )}
 
       <div className="grid gap-3.5 lg:grid-cols-2">
-        {views.map((v) => {
-          const style = STATUS_STYLE[v.status];
-          const behindBenchmark = v.linkedXirr - v.benchmarkRate;
+        {payload.goals.map((g) => {
+          const p = g.projection;
+          const short = p?.first_shortfall_year ?? null;
+          const funded = p?.funded_pct ?? null;
+          const years = p?.schedule ?? [];
+          const span = years.length
+            ? `${years[0].year}${years.length > 1 ? `–${years[years.length - 1].year}` : ""}`
+            : "—";
           return (
-            <Card key={v.goal.id}>
+            <Card key={g.id}>
               <div className="mb-1 flex items-center gap-2.5">
                 <span className="text-[17px] font-bold [font-family:'Space_Grotesk',system-ui,sans-serif] text-[var(--strong)]">
-                  {v.goal.name}
+                  {g.name}
                 </span>
                 <span
-                  title={
-                    v.status === "On track"
-                      ? "Today's money plus the SIP, compounded at this goal's own return, reaches the target by the target year."
-                      : "The projection falls short of the target by the target year. Raise the SIP, extend the year, or accept a smaller target."
-                  }
                   className="rounded-full px-[11px] py-1 text-[11px] font-extrabold"
-                  style={{ background: style.bg, color: style.color }}
+                  title={short
+                    ? `The corpus runs out in ${short}. A goal can be fully funded in total and still fail here, because the money is needed before it has finished compounding.`
+                    : "Today's linked money plus the SIP covers every year of this schedule."}
+                  style={short
+                    ? { background: "rgba(217,84,74,.14)", color: "var(--danger)" }
+                    : { background: "var(--tint)", color: "var(--accent-deep)" }}
                 >
-                  {v.status}
+                  {short ? `Short from ${short}` : "On track"}
                 </span>
                 <span className="ml-auto flex items-center gap-3 text-[12px] font-bold text-[var(--faint)]">
-                  {v.goal.monthly_sip > 0 && <span>SIP {money(v.goal.monthly_sip)}/mo</span>}
-                  <button onClick={() => setEditing(v.goal)} className="text-[var(--accent-deep)]">
+                  {g.monthly_sip > 0 && <span>SIP {money(g.monthly_sip)}/mo</span>}
+                  <button onClick={() => setEditing(g)} className="text-[var(--accent-deep)]">
                     Edit
                   </button>
-                  <ConfirmAction
-                    label="✕"
-                    onConfirm={() => onDelete(v.goal.id)}
-                    className="text-[var(--faint)] hover:text-[var(--danger)]"
-                  />
+                  <ConfirmAction label="✕" onConfirm={() => onDelete(g.id)}
+                    className="text-[var(--faint)] hover:text-[var(--danger)]" />
                 </span>
               </div>
 
-              <div className="mb-2.5 text-[12.5px] font-semibold text-[var(--muted)]">
-                Target {money(v.goal.target_amount)} by {v.goal.target_year}
+              <div className="mb-3 text-[12.5px] font-semibold text-[var(--muted)]">
+                {span} · {money(p?.total_today ?? 0)} in today's money ·{" "}
+                <span className="text-[var(--note)]">
+                  {money(p?.total_nominal ?? 0)} when needed
+                </span>{" "}
+                <span className="text-[var(--faint)]">
+                  (at {g.inflation_pct}% inflation)
+                </span>
               </div>
 
               <div className="mb-1.5 flex items-baseline gap-2">
                 <span className="text-[20px] font-bold [font-family:'Space_Grotesk',system-ui,sans-serif] text-[var(--strong)]">
-                  {money(v.current)}
+                  {money(g.current_value ?? 0)}
                 </span>
                 <span className="text-[12.5px] font-bold text-[var(--faint)]">
-                  {v.progress.toFixed(0)}% of target
+                  of {money(p?.pv_required ?? 0)} needed today
+                  {funded !== null && ` · ${funded.toFixed(0)}%`}
                 </span>
               </div>
 
               <div className="mb-3 h-[9px] overflow-hidden rounded-md bg-[var(--seg)]">
                 <span
-                  className="block h-full rounded-md bg-[var(--accent)]"
-                  style={{ width: `${Math.min(v.progress, 100).toFixed(1)}%` }}
+                  className="block h-full rounded-md"
+                  style={{
+                    width: `${Math.min(funded ?? 0, 100).toFixed(1)}%`,
+                    background: short ? "var(--danger)" : "var(--accent)",
+                  }}
                 />
               </div>
 
-              <div className="mb-3 flex flex-wrap gap-1.5">
-                {v.names.length === 0 && (
-                  <span className="text-[11.5px] font-semibold text-[var(--faint)]">
-                    Nothing linked — projected at the benchmark rate.
-                  </span>
-                )}
-                {v.names.map((n) => (
-                  <span
-                    key={n}
-                    className="rounded-full bg-[var(--chip)] px-2.5 py-1 text-[11px] font-bold text-[var(--chip-text)]"
-                  >
-                    {n}
-                  </span>
-                ))}
+              <div className="flex flex-wrap items-center gap-2.5 border-t border-[var(--divider)] pt-3 text-[11.5px] font-bold text-[var(--faint)]">
+                <span title="The return this goal's linked holdings actually earn, or the benchmark when nothing is linked.">
+                  grows at {pct(g.return_pct ?? 0)}
+                </span>
+                <button
+                  onClick={() => setOpenYears(openYears === g.id ? null : g.id)}
+                  className="ml-auto text-[var(--accent-deep)]"
+                >
+                  {openYears === g.id ? "Hide" : "Year by year"}
+                </button>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2.5 border-t border-[var(--divider)] pt-3">
-                <select
-                  value={v.goal.benchmark}
-                  onChange={(e) =>
-                    onUpdate(v.goal.id, { ...asInput(v.goal), benchmark: e.target.value })}
-                  title="Compare this goal's own return against an index or a fixed path. The rates are stated assumptions, not measured returns."
-                  className="rounded-[9px] border-[1.5px] border-[var(--field-border)] bg-[var(--field)] px-2.5 py-[7px] text-[12px] font-bold text-[var(--strong)] outline-none"
-                >
-                  {Object.entries(payload.benchmarks).map(([name, rate]) => (
-                    <option key={name} value={name}>{name} · {rate}%</option>
+              {openYears === g.id && p && (
+                <div className="mt-2 max-h-[240px] overflow-y-auto">
+                  <div className="grid grid-cols-[60px_1fr_1fr_1fr] gap-2 border-b border-[var(--border)] px-1 py-1.5 text-[10.5px] font-extrabold tracking-[.05em] text-[var(--faint)]">
+                    <span>YEAR</span>
+                    <span className="text-right">TODAY'S ₹</span>
+                    <span className="text-right">NEEDED THEN</span>
+                    <span className="text-right">LEFT AFTER</span>
+                  </div>
+                  {p.rows.filter((r) => r.amount_needed > 0).map((r) => (
+                    <div key={r.year}
+                      className="grid grid-cols-[60px_1fr_1fr_1fr] gap-2 border-b border-[var(--divider)] px-1 py-1 text-[12px]">
+                      <span className="font-extrabold text-[var(--strong)]">{r.year}</span>
+                      <span className="text-right tabular-nums text-[var(--faint)]">
+                        {money(r.amount_today)}
+                      </span>
+                      <span className="text-right font-semibold tabular-nums text-[var(--note)]">
+                        {money(r.amount_needed)}
+                      </span>
+                      <span
+                        className="text-right font-bold tabular-nums"
+                        style={{ color: r.short ? "var(--danger)" : "var(--muted)" }}
+                      >
+                        {money(r.corpus_after)}
+                      </span>
+                    </div>
                   ))}
-                </select>
-                <span
-                  className="text-[12px] font-extrabold"
-                  style={{ color: behindBenchmark >= 0 ? "var(--pos)" : "var(--danger)" }}
-                  title={`This goal's holdings return ${pct(v.linkedXirr)} against the benchmark's assumed ${v.benchmarkRate}%.`}
-                >
-                  {v.names.length === 0 ? "—" : `${pct(behindBenchmark)} vs benchmark`}
-                </span>
-                <span className="ml-auto text-[11.5px] font-bold text-[var(--faint)]">
-                  {v.eta === null
-                    ? "Not reachable on this plan"
-                    : v.eta <= v.goal.target_year
-                      ? `On this plan: ${v.eta}${v.eta < v.goal.target_year ? " · early" : ""}`
-                      : `On this plan: ${v.eta} · ${v.eta - v.goal.target_year}y late`}
-                </span>
-              </div>
+                </div>
+              )}
             </Card>
           );
         })}
@@ -274,7 +371,7 @@ export default function GoalsView({
       {editing && (
         <GoalForm
           title={editing === "new" ? "New goal" : "Edit goal"}
-          initial={editing === "new" ? BLANK(new Date().getFullYear()) : asInput(editing)}
+          initial={editing === "new" ? BLANK() : asInput(editing)}
           rows={rows}
           benchmarks={payload.benchmarks}
           onClose={() => setEditing(null)}
