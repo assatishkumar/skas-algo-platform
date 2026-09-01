@@ -755,6 +755,11 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   Coverage: `test_adopt_broker_close_*` in tests/test_live_options.py.
 
 ## 8a. The /portfolio tracker is NOT part of the trading system
+**The VPS is the authoritative portfolio.** It holds the owner's real book (56 holdings)
+and is the only box with both broker sessions and an always-on maintenance loop for the
+daily snapshot — a laptop that sleeps leaves a hole in a history nothing back-fills. The
+Mac's portfolio tables are DEV-ONLY and deliberately empty; never treat local numbers as
+real, and never edit the two in parallel.
 A personal net-worth screen (`/portfolio`, 2026-09) that happens to live in this repo. It places
 no orders, reaches no order path, and its only broker calls are `holdings()` and quotes. Keep it
 that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` may import from
