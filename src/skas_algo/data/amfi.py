@@ -242,8 +242,13 @@ def load(
 ) -> tuple[dict[str, NavRow], dict[str, NavRow]]:
     """``(latest_by_isin, previous_by_isin)`` — the current NAVs and the prior publication.
 
-    ``previous`` is the newest cached file whose NAV date is strictly older than the latest's,
-    so a day change is a real day-on-day move and not zero because both files are Friday's.
+    ``previous`` is assembled PER ISIN across every older cached file, newest first, rather
+    than taken wholesale from one of them. AMFI publishes on weekends too, but only for
+    overnight and liquid schemes — the Sunday file carries ~630 of 14,137 — so treating the
+    newest older file as *the* prior leaves every equity fund with no comparison and a day
+    change of zero. Falling through per ISIN lets a fund missing from Sunday find its Friday
+    NAV, while a liquid fund still gets Sunday's.
+
     Empty when nothing older is cached; callers must treat a missing prior as unknown."""
     if fetch:
         try:
@@ -258,11 +263,15 @@ def load(
     if not latest:
         return {}, {}
     latest_date = next(iter(latest.values())).as_of
+
+    previous: dict[str, NavRow] = {}
     for older in reversed(files[:-1]):
-        prev = parse_navall(older.read_text(encoding="utf-8"))
-        if prev and next(iter(prev.values())).as_of < latest_date:
-            return latest, prev
-    return latest, {}
+        rows = parse_navall(older.read_text(encoding="utf-8"))
+        if not rows or next(iter(rows.values())).as_of >= latest_date:
+            continue
+        for isin, row in rows.items():
+            previous.setdefault(isin, row)   # the newest older file wins, per ISIN
+    return latest, previous
 
 
 def search(query: str, limit: int = 20, *, rows: dict[str, NavRow] | None = None) -> list[NavRow]:

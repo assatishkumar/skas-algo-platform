@@ -803,7 +803,10 @@ that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` ma
   the HEADER, falling back to reading from the ends (code first, date last, NAV second-to-last)
   when there is none. A positional parser reads a scheme NAME as an ISIN and indexes nothing.
   `amfi.backfill(day)` seeds a PRIOR day from the historical report so a fund day change works
-  on the first sync instead of waiting a night for a second file to exist.
+  on the first sync instead of waiting a night for a second file to exist. The prior NAV is
+  assembled PER ISIN across every older cached file, newest first — AMFI publishes on
+  weekends for overnight/liquid schemes ONLY (~630 of 14,137), so taking the newest older
+  file wholesale leaves every equity fund with no comparison and a day change of zero.
 - **Zerodha's symbol suffixes are not all its own.** `-E`/`-F` are its ETF/liquid markers and
   must be STRIPPED (the exchange has no `GOLDBEES-E`); `-RR`/`-IV` are the NSE SERIES for a
   REIT and an InvIT and are PART of the tradingsymbol (`EMBASSY-RR` prices, `EMBASSY` does

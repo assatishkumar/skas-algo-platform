@@ -634,3 +634,31 @@ def test_a_holding_priced_by_one_account_still_has_its_slice_at_another_refreshe
         for acct_id in (zid, did):
             db.delete(db.get(BrokerAccount, acct_id))
         db.commit()
+
+
+def test_a_weekend_nav_file_does_not_shadow_the_last_business_day(tmp_path, monkeypatch):
+    """AMFI publishes on weekends for overnight and liquid schemes only — ~630 of 14,137. If
+    the newest older file is taken as *the* prior wholesale, every equity fund loses its
+    comparison and reports a day change of zero. The prior is assembled per ISIN instead."""
+    monkeypatch.setenv("SKAS_DATA_HOME", str(tmp_path))
+    d = tmp_path / "amfi"
+    d.mkdir(parents=True)
+
+    friday = NAVALL.replace("91.18", "90.00").replace("28-Aug-2026", "28-Aug-2026")
+    # Sunday: only the one liquid-ish scheme publishes.
+    sunday = "\n".join([
+        NAVALL.splitlines()[0],
+        "118989;INF179K01XQ0;INF179K01XR8;HDFC Mid Cap Fund;Direct Plan;Growth Option;238.00;30-Aug-2026",
+    ])
+    (d / "NAVAll-2026-08-28.txt").write_text(friday, encoding="utf-8")
+    (d / "NAVAll-2026-08-30.txt").write_text(sunday, encoding="utf-8")
+    (d / "NAVAll-2026-08-31.txt").write_text(
+        NAVALL.replace("28-Aug-2026", "31-Aug-2026"), encoding="utf-8")
+
+    _, prev = amfi.load(fetch=False)
+    # The equity fund falls through the thin Sunday file to Friday's NAV…
+    assert prev["INF879O01027"].nav == pytest.approx(90.00)
+    assert prev["INF879O01027"].as_of == date(2026, 8, 28)
+    # …while the one Sunday DID publish uses Sunday's, being the newer of the two.
+    assert prev["INF179K01XQ0"].nav == pytest.approx(238.00)
+    assert prev["INF179K01XQ0"].as_of == date(2026, 8, 30)
