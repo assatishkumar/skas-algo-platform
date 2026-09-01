@@ -259,6 +259,8 @@ export default function GoalsView({
           const span = years.length
             ? `${years[0].year}${years.length > 1 ? `–${years[years.length - 1].year}` : ""}`
             : "—";
+          const ids = new Set(g.holding_ids);
+          const linked = rows.filter((h) => ids.has(h.id)).sort((a, b) => b.value - a.value);
           return (
             <Card key={g.id}>
               <div className="mb-1 flex items-center gap-2.5">
@@ -316,9 +318,44 @@ export default function GoalsView({
                 />
               </div>
 
+              {/* What is actually backing this goal. Without it the funded figure is a number
+                  with no provenance — and it is what explains an odd growth rate, since the
+                  rate is the value-weighted return of exactly these holdings. */}
+              <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                {linked.length === 0 ? (
+                  <span className="text-[11.5px] font-semibold text-[var(--faint)]">
+                    Nothing linked — projected at the {g.benchmark} rate ({pct(g.benchmark_pct ?? 0)}).
+                    Link holdings in Edit to use what they actually earn.
+                  </span>
+                ) : (
+                  linked.map((h) => (
+                    <span
+                      key={h.id}
+                      title={`${h.class_label} · ${money(h.value)}`
+                        + (h.xirr_pct !== null ? ` · returns ${pct(h.xirr_pct)}` : "")}
+                      className="inline-flex items-center gap-1.5 rounded-full bg-[var(--chip)] px-2.5 py-1 text-[11px] font-bold text-[var(--chip-text)]"
+                    >
+                      {h.name}
+                      <span className="text-[var(--faint)]">{money(h.value)}</span>
+                    </span>
+                  ))
+                )}
+              </div>
+
               <div className="flex flex-wrap items-center gap-2.5 border-t border-[var(--divider)] pt-3 text-[11.5px] font-bold text-[var(--faint)]">
-                <span title="The return this goal's linked holdings actually earn, or the benchmark when nothing is linked.">
+                <span
+                  title={linked.length
+                    ? `Value-weighted return of the ${linked.length} linked holding`
+                      + `${linked.length === 1 ? "" : "s"}. A low figure here usually means one`
+                      + " of them has no return yet — a PF balance, or a position with no buy date."
+                    : `No holdings linked, so the ${g.benchmark} assumption is used instead.`}
+                >
                   grows at {pct(g.return_pct ?? 0)}
+                  {linked.length > 0 && (
+                    <span className="ml-1 opacity-70">
+                      · {linked.length} holding{linked.length === 1 ? "" : "s"}
+                    </span>
+                  )}
                 </span>
                 <button
                   onClick={() => setOpenYears(openYears === g.id ? null : g.id)}
