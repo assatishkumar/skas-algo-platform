@@ -657,3 +657,37 @@ def test_cash_and_fd_are_separate_classes_and_both_tag_as_debt(client: TestClien
     assert row["value"] > 500_000          # accrued, not the zero that was posted
     assert row["gain"] > 0                 # the gain IS the interest earned
     client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
+def test_a_holding_on_a_removed_class_is_migrated_not_left_stranded(tmp_path):
+    """A class the code no longer knows makes its holding INVISIBLE to allocation and
+    rebalancing while still counting toward net worth — and any UI that indexes the class
+    table by it crashes. "bank" split into cash + fd; a bare "Bank" is more likely a balance
+    than a locked deposit, so it lands on cash and can be moved in one edit."""
+    from sqlalchemy import create_engine, text
+
+    from skas_algo.db.portfolio_schema import migrate_classes
+
+    engine = create_engine(f"sqlite:///{tmp_path}/legacy.db")
+    with engine.begin() as c:
+        c.execute(text(
+            "CREATE TABLE portfolio_holding (id INTEGER PRIMARY KEY, name VARCHAR(120),"
+            " asset_class VARCHAR(16))"
+        ))
+        c.execute(text("INSERT INTO portfolio_holding VALUES (1, 'ICICI Bank', 'bank')"))
+        c.execute(text("INSERT INTO portfolio_holding VALUES (2, 'ITC', 'stk')"))
+
+    moved = migrate_classes(engine)
+    assert moved == ["ICICI Bank (bank -> cash)"]
+    with engine.begin() as c:
+        classes = dict(c.execute(text("SELECT name, asset_class FROM portfolio_holding")).all())
+    assert classes == {"ICICI Bank": "cash", "ITC": "stk"}       # only the orphan moved
+    assert migrate_classes(engine) == []                         # and it is idempotent
+
+
+def test_the_api_refuses_a_class_the_screen_cannot_render(client: TestClient):
+    """Accepting "bank" after it was split is what stranded a holding in the first place."""
+    resp = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Legacy", "asset_class": "bank", "invested": 100, "value": 100,
+    })
+    assert resp.status_code == 422

@@ -915,7 +915,7 @@ class PortfolioHoldingInput(BaseModel):
     null to have the return derived."""
 
     name: str = Field(min_length=1, max_length=120)
-    asset_class: str = Field(pattern="^(stk|etf|mf|us|btc|cash|fd|bank|ppf|epf|gold|re)$")
+    asset_class: str = Field(pattern="^(stk|etf|mf|us|btc|cash|fd|ppf|epf|gold|re)$")
     kind_override: str | None = Field(
         default=None, pattern="^(equity|debt|gold|realestate|crypto)$"
     )

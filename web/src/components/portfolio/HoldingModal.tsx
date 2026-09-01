@@ -187,7 +187,8 @@ export default function HoldingModal({
           />
           {sources.length === 1 && (
             <div className="mt-1.5 text-[11.5px] font-semibold text-[var(--faint)]">
-              No public price feed exists for {payload.asset_classes[draft.asset_class].label} —
+              No public price feed exists for{" "}
+              {payload.asset_classes[draft.asset_class]?.label ?? draft.asset_class} —
               this one is kept up to date by hand.
             </div>
           )}

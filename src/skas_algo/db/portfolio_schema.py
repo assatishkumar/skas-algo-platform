@@ -41,6 +41,37 @@ _COLUMNS: dict[str, dict[str, str]] = {
 }
 
 
+# Asset classes that were split or renamed, and where their holdings should land. A row on
+# a class the code no longer knows is INVISIBLE to allocation and rebalancing while still
+# counting toward net worth, and any UI that indexes the class table by it crashes. "bank"
+# became cash + fd; a bare "Bank" is more likely a balance than a locked deposit, so it goes
+# to cash and can be moved in one edit.
+_CLASS_RENAMES = {"bank": "cash"}
+
+
+def migrate_classes(engine: Engine) -> list[str]:
+    """Move holdings off classes that no longer exist. Returns what moved."""
+    moved: list[str] = []
+    if "portfolio_holding" not in set(inspect(engine).get_table_names()):
+        return moved
+    for old, new in _CLASS_RENAMES.items():
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text("SELECT id, name FROM portfolio_holding WHERE asset_class = :old"),
+                {"old": old},
+            ).fetchall()
+            if not rows:
+                continue
+            conn.execute(
+                text("UPDATE portfolio_holding SET asset_class = :new WHERE asset_class = :old"),
+                {"old": old, "new": new},
+            )
+            moved.extend(f"{name} ({old} -> {new})" for _id, name in rows)
+    if moved:
+        logger.warning("portfolio classes migrated: %s", ", ".join(moved))
+    return moved
+
+
 def ensure_columns(engine: Engine) -> list[str]:
     """Add any missing portfolio columns. Returns what was added, for the log."""
     added: list[str] = []
