@@ -80,11 +80,36 @@ def recover_running_sessions() -> int:
                     continue
                 _rebuild(db, run, loader)
             recovered += 1
-        except Exception:
+        except Exception as exc:
             logger.exception("could not recover live run %s", run_id)
+            # A run that fails to rebuild is simply ABSENT afterwards — no tile, no loop, no
+            # reconciliation — while its positions are still real at the broker. On
+            # 2026-09-01 a transient duckdb cache conflict dropped run 28 that way and the
+            # only trace was one line in the journal. Never lose one quietly again.
+            _alert_recovery_failed(run_id, exc)
     if recovered:
         logger.info("recovered %d running live session(s)", recovered)
     return recovered
+
+
+def _alert_recovery_failed(run_id: int, exc: Exception) -> None:
+    """Shout when a run does not come back. Best-effort: an alerting problem must never stop
+    the remaining runs from recovering."""
+    try:
+        from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+        build_notifier().send(
+            Alert(
+                f"RUN {run_id} DID NOT RECOVER",
+                f"{type(exc).__name__}: {exc}\n\n"
+                "The run is NOT running: no decisions, no reconciliation, no exits — but any "
+                "positions it holds are still live at the broker. Restart the backend to retry, "
+                "and check the broker book in the meantime.",
+                AlertLevel.ERROR,
+            )
+        )
+    except Exception:  # pragma: no cover - alerts are best-effort
+        logger.exception("could not alert on failed recovery of run %s", run_id)
 
 
 def reactivate(run_id: int) -> None:

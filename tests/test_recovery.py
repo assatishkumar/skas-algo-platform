@@ -8,6 +8,7 @@ itself is fake-adapter matrix-tested in test_live_broker.py.
 
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 
 from skas_algo.config import get_settings
@@ -107,3 +108,55 @@ def test_lot_opened_at_round_trips_to_datetime():
     p2.buy("RELIANCE", 5, 1510.0, when=datetime(2026, 7, 10, 15, 22, tzinfo=timezone.utc))
     lots = p2.lots("RELIANCE")
     assert min(lot.opened_at for lot in lots if lot.opened_at is not None)  # no TypeError
+
+
+def test_cache_reads_are_serialised_so_two_threads_cannot_collide():
+    """skas-data opens a FRESH duckdb connection per get_prices, and duckdb refuses to attach
+    one file twice at once — two threads reading the cache raise "Unique file handle
+    conflict". It fired 9 times in the week to 2026-09-01 and killed the recovery of live run
+    28, leaving a run holding real positions absent after a restart."""
+    import threading
+    import time
+
+    from skas_algo.data import provider
+
+    depth = []
+    overlapped = []
+
+    class _SD:
+        def get_prices(self, **kw):
+            depth.append(1)
+            if len(depth) > 1:
+                overlapped.append(1)
+            time.sleep(0.02)
+            depth.pop()
+            return None
+
+    provider._skas_data.cache_clear()
+    monkey = _SD()
+    provider._skas_data = lambda _sd=monkey: _sd          # the loader closes over this
+    try:
+        loader = provider.get_price_loader()
+        threads = [threading.Thread(target=loader, args=("X", None, None)) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        importlib.reload(provider)
+    assert not overlapped, "two threads were inside a cache read at once"
+
+
+def test_a_run_that_fails_to_recover_raises_an_alert(monkeypatch):
+    """A failed rebuild leaves the run ABSENT — no tile, no loop, no reconciliation — while
+    its positions stay real at the broker. Run 28 vanished that way on 2026-09-01 and the
+    only trace was one journal line."""
+    from skas_algo.live import recovery
+
+    sent = []
+    monkeypatch.setattr("skas_algo.notify.build_notifier",
+                        lambda: SimpleNamespace(send=lambda a: sent.append(a)))
+    recovery._alert_recovery_failed(28, RuntimeError("duckdb attach conflict"))
+    assert len(sent) == 1
+    assert "28" in sent[0].title and "NOT RECOVER" in sent[0].title.upper()
+    assert "still live at the broker" in sent[0].message or "still live at the broker" in str(sent[0])

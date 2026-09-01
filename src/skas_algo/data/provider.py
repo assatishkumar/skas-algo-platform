@@ -7,6 +7,7 @@ FastAPI dependency so tests can inject synthetic data without the cache.
 from __future__ import annotations
 
 import os
+import threading
 from datetime import date
 from functools import lru_cache
 
@@ -24,12 +25,24 @@ def _skas_data():
     return skas_data.SkasData(cache_only=True, options_db_path=OPTIONS_DB_PATH)
 
 
+# skas-data opens a FRESH duckdb connection per get_prices call (storage.py: duckdb.connect),
+# and duckdb refuses to attach one file twice at once — so two threads reading the cache
+# collide with "Unique file handle conflict: Cannot attach stocks_data". That is not
+# hypothetical: it fired 9 times in the week to 2026-09-01, and on that morning it killed the
+# recovery of live run 28 — an equity run warming 15 symbols while the options runs were
+# recovering on cache quotes — leaving a run holding real positions simply absent after a
+# restart. Serialising here is the smallest fix that holds, costs nothing real (cache reads
+# are milliseconds), and stays on our side of the repo boundary.
+_CACHE_LOCK = threading.Lock()
+
+
 def get_price_loader() -> PriceLoader:
     """Return a loader backed by the skas-data cache (FastAPI dependency)."""
     sd = _skas_data()
 
     def loader(symbol: str, start: date, end: date):
-        return sd.get_prices(symbol=symbol, start_date=start, end_date=end)
+        with _CACHE_LOCK:
+            return sd.get_prices(symbol=symbol, start_date=start, end_date=end)
 
     return loader
 
