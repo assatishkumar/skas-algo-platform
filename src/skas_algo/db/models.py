@@ -12,18 +12,18 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    Column,
     DateTime,
     Enum,
     Float,
     ForeignKey,
     Integer,
     String,
+    Table,
     Text,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from sqlalchemy import Table, Column
 
 from .base import Base
 from .enums import (
@@ -315,10 +315,14 @@ class PortfolioHolding(Base, TimestampMixin):
     # publishes Indian dividend yields, and an invented one would put fictitious income on a
     # planning screen. NULL means unknown, which the UI shows as unknown.
     dividend_yield_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Fixed deposits: the rate and the maturity make the value computable, so it is
+    # accrued (quarterly, as Indian banks do) instead of being re-typed and drifting.
+    interest_rate_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    maturity_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
-    tags: Mapped[list["PortfolioTag"]] = relationship(
+    tags: Mapped[list[PortfolioTag]] = relationship(
         secondary="portfolio_holding_tag", back_populates="holdings", lazy="selectin",
     )
 
@@ -452,6 +456,6 @@ class PortfolioTag(Base, TimestampMixin):
     color: Mapped[str] = mapped_column(String(9), default="#12b3a4")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
-    holdings: Mapped[list["PortfolioHolding"]] = relationship(
+    holdings: Mapped[list[PortfolioHolding]] = relationship(
         secondary=portfolio_holding_tag, back_populates="tags", lazy="selectin",
     )

@@ -608,3 +608,52 @@ def test_deleting_a_tag_keeps_the_holdings(client: TestClient):
     survivor = next(h for h in rows if h["id"] == hid)
     assert survivor["tags"] == []
     client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
+# ------------------------------------------------------------------ cash and fixed deposits
+
+
+def test_a_fixed_deposit_accrues_instead_of_being_re_typed():
+    """The one manual holding whose value is not a matter of opinion — principal, rate and
+    dates determine it exactly. Compounded QUARTERLY, as Indian banks do: annual compounding
+    understates a five-year deposit by thousands."""
+    quarterly = pf.accrued_fd_value(500_000, 7.4, date(2021, 9, 1), today=date(2026, 9, 1))
+    annual = 500_000 * (1.074 ** 5)
+    assert quarterly == pytest.approx(721_388, rel=1e-4)
+    assert quarterly > annual
+
+
+def test_accrual_stops_at_maturity():
+    """A matured deposit sits in the account earning nothing until it is renewed. Compounding
+    past that date invents money."""
+    matured = pf.accrued_fd_value(
+        500_000, 7.4, date(2024, 9, 1), maturity=date(2025, 9, 1), today=date(2026, 9, 1))
+    one_year = pf.accrued_fd_value(500_000, 7.4, date(2024, 9, 1), today=date(2025, 9, 1))
+    assert matured == pytest.approx(one_year)
+
+
+def test_an_fd_with_no_rate_keeps_the_value_you_typed():
+    """Nothing is invented from a blank field."""
+    view = pf.holding_view(
+        {"id": 1, "name": "FD", "asset_class": "fd", "invested": 100_000, "value": 111_111,
+         "buy_month": "2024-01"}, [], today=date(2026, 9, 1))
+    assert view["value"] == pytest.approx(111_111)
+
+
+def test_cash_and_fd_are_separate_classes_and_both_tag_as_debt(client: TestClient):
+    """A savings balance and a locked deposit behave differently enough to want apart, but
+    both are debt for allocation and both are taxed as interest at slab."""
+    assert pf.ASSET_CLASSES["cash"]["kind"] == "debt"
+    assert pf.ASSET_CLASSES["fd"]["kind"] == "debt"
+    assert pf.regime_for("cash", "debt", 60).label.startswith("Interest")
+    assert pf.regime_for("fd", "debt", 60).label.startswith("Interest")
+
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "SBI FD @ 7.4%", "asset_class": "fd", "invested": 500_000,
+        "buy_month": "2024-09", "interest_rate_pct": 7.4, "maturity_date": "2029-09-01",
+    }).json()["id"]
+    row = next(h for h in client.get("/api/v1/portfolio").json()["holdings"] if h["id"] == hid)
+    assert row["kind"] == "debt"
+    assert row["value"] > 500_000          # accrued, not the zero that was posted
+    assert row["gain"] > 0                 # the gain IS the interest earned
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")

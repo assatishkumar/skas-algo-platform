@@ -12,7 +12,8 @@
  */
 
 export type AssetClassKey =
-  | "stk" | "etf" | "mf" | "us" | "btc" | "bank" | "ppf" | "epf" | "gold" | "re";
+  | "stk" | "etf" | "mf" | "us" | "btc" | "cash" | "fd" | "ppf" | "epf"
+  | "gold" | "re";
 
 /** The tag a holding carries, and the level rebalancing happens at — coarser than asset
  *  class on purpose: real risk is "how much equity, how much debt", not "how many mid-cap
@@ -83,6 +84,9 @@ export interface Holding {
   excluded_from_buckets: boolean;
   /** Expected annual distribution as a % of value. Null = unknown, never assumed zero. */
   dividend_yield_pct: number | null;
+  /** Fixed deposits: the value is ACCRUED from these, not typed. */
+  interest_rate_pct: number | null;
+  maturity_date: string | null;
   /** User-defined labels. Many-to-many, and separate from the single-valued asset
    *  class so rebalancing counts each rupee exactly once. */
   tags: TagRow[];
@@ -417,6 +421,8 @@ export interface HoldingInput {
   broker_units: Record<string, number>;
   excluded_from_buckets: boolean;
   dividend_yield_pct: number | null;
+  interest_rate_pct: number | null;
+  maturity_date: string | null;
   note: string | null;
 }
 
@@ -606,6 +612,8 @@ export function toInput(h: Holding): HoldingInput {
     broker_units: h.broker_units,
     excluded_from_buckets: h.excluded_from_buckets,
     dividend_yield_pct: h.dividend_yield_pct,
+    interest_rate_pct: h.interest_rate_pct,
+    maturity_date: h.maturity_date,
     note: h.note,
   };
 }

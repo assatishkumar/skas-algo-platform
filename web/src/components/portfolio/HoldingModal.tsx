@@ -16,7 +16,8 @@ const blank = (): HoldingInput => ({
   buy_month: new Date().toISOString().slice(0, 7),
   sync: "manual", sync_source: null, sync_ref: null, broker_account_id: null,
   units_locked: false, broker_units: {}, excluded_from_buckets: false,
-  dividend_yield_pct: null, note: null,
+  dividend_yield_pct: null, interest_rate_pct: null, maturity_date: null,
+  note: null,
 });
 
 /** AMFI scheme picker. Searches the cached NAV file, so it answers instantly and works with
@@ -243,6 +244,34 @@ export default function HoldingModal({
                 onChange={(e) => set({ sync_ref: e.target.value.toUpperCase() })}
               />
             </Field>
+          </>
+        )}
+
+        {draft.asset_class === "fd" && (
+          <>
+            <Field label="INTEREST RATE (% a year)">
+              <input
+                type="number" className={inputClass} value={draft.interest_rate_pct ?? ""}
+                placeholder="7.4"
+                onChange={(e) => set({
+                  interest_rate_pct: e.target.value ? Number(e.target.value) : null,
+                })}
+              />
+            </Field>
+            <Field label="MATURES ON">
+              <input
+                type="date" className={inputClass} value={draft.maturity_date ?? ""}
+                onChange={(e) => set({ maturity_date: e.target.value || null })}
+              />
+            </Field>
+            <div className="col-span-2">
+              <Notice>
+                With a rate and a start month, the value is ACCRUED — compounded quarterly, as
+                Indian banks do — so you never re-type it. Accrual stops at maturity, because a
+                matured deposit earns nothing until it's renewed. Enter the PRINCIPAL as
+                invested.
+              </Notice>
+            </div>
           </>
         )}
 

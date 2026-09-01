@@ -34,7 +34,8 @@ ASSET_CLASSES: dict[str, dict] = {
     "mf": {"label": "Mutual funds", "kind": "equity", "target": 20.0, "color": "#0f9d63"},
     "us": {"label": "US stocks", "kind": "equity", "target": 10.0, "color": "#5b62e8"},
     "btc": {"label": "Crypto", "kind": "crypto", "target": 3.0, "color": "#8b90f2"},
-    "bank": {"label": "Bank · FD", "kind": "debt", "target": 6.0, "color": "#66c29a"},
+    "cash": {"label": "Cash · savings", "kind": "debt", "target": 2.0, "color": "#66c29a"},
+    "fd": {"label": "Fixed deposit", "kind": "debt", "target": 4.0, "color": "#4e9e7a"},
     "ppf": {"label": "PPF", "kind": "debt", "target": 8.0, "color": "#b07d10"},
     "epf": {"label": "EPF", "kind": "debt", "target": 10.0, "color": "#e8a13c"},
     "gold": {"label": "Gold", "kind": "gold", "target": 4.0, "color": "#c2661d"},
@@ -262,7 +263,7 @@ def regime_for(cls: str, kind: str, months_held: float) -> Regime:
         return Regime("Exempt at maturity", 0.0, "SGB held to maturity → gain tax-free")
     if cls == "btc":
         return Regime("Flat 30%", SLAB_RATE, "No loss set-off allowed on VDAs", loss_offset=False)
-    if cls == "bank":
+    if cls in ("cash", "fd", "bank"):  # "bank" is the pre-split class, kept readable
         return Regime("Interest · slab", SLAB_RATE, "Interest taxed yearly at slab rate")
     if cls == "re":
         return Regime("LTCG 12.5%", LTCG_RATE, "Or 20% with indexation — pick lower")
@@ -294,6 +295,34 @@ def _annualised(cost: float, value: float, months: float) -> float | None:
     return ((value / cost) ** (12.0 / months) - 1.0) * 100.0
 
 
+# Indian bank FDs compound QUARTERLY. Using annual compounding understates a 5-year deposit
+# by a few thousand rupees on a lakh — small, but wrong in a way that is trivially avoidable.
+_FD_COMPOUNDS_PER_YEAR = 4
+
+
+def accrued_fd_value(
+    principal: float,
+    rate_pct: float,
+    start: date,
+    *,
+    maturity: date | None = None,
+    today: date | None = None,
+) -> float:
+    """What a fixed deposit is worth right now.
+
+    The one manual holding whose value is not a matter of opinion: principal, rate and dates
+    determine it exactly, so it is computed rather than left to be re-typed and drift. Accrual
+    STOPS at maturity — a matured deposit sits in the account earning nothing until it is
+    renewed, and compounding past that date would invent money."""
+    day = today or date.today()
+    end = min(day, maturity) if maturity else day
+    years = (end - start).days / 365.25
+    if years <= 0 or rate_pct <= 0:
+        return principal
+    n = _FD_COMPOUNDS_PER_YEAR
+    return principal * (1 + rate_pct / 100.0 / n) ** (n * years)
+
+
 def holding_view(holding: dict, transactions: list[dict], *, today: date | None = None) -> dict:
     """One holding's derived facts. ``transactions`` may be empty — see the module docstring.
 
@@ -318,6 +347,16 @@ def holding_view(holding: dict, transactions: list[dict], *, today: date | None 
         invested = float(holding.get("invested") or 0.0)
         value = float(holding.get("value") or 0.0)
         buy_month = holding.get("buy_month") or ""
+        # A fixed deposit's value is computable, so compute it rather than let a typed number
+        # go stale. The typed value stands when no rate is set.
+        rate = holding.get("interest_rate_pct")
+        if cls == "fd" and rate and invested > 0 and buy_month:
+            y, m = (int(x) for x in buy_month.split("-")[:2])
+            mat = holding.get("maturity_date")
+            value = round(accrued_fd_value(
+                invested, float(rate), date(y, m, 1),
+                maturity=date.fromisoformat(mat) if mat else None, today=day,
+            ), 2)
 
     # Age from the OLDEST open lot (ledger) or the stated buy month (summary).
     if has_ledger and led.lots:
@@ -426,6 +465,8 @@ def holding_view(holding: dict, transactions: list[dict], *, today: date | None 
         "broker_units": dict(holding.get("broker_units") or {}),
         "excluded_from_buckets": bool(holding.get("excluded_from_buckets")),
         "dividend_yield_pct": holding.get("dividend_yield_pct"),
+        "interest_rate_pct": holding.get("interest_rate_pct"),
+        "maturity_date": holding.get("maturity_date"),
         "tags": list(holding.get("tags") or []),
         "note": holding.get("note"),
         "basis": "ledger" if has_ledger else "summary",
