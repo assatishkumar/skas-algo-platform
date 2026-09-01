@@ -539,9 +539,13 @@ class DhanAdapter:
         ]
 
     # ---------------------------------------------------------------- quotes
-    def get_quote(self, symbols: list[str]) -> dict[str, float]:
-        """LTP per engine symbol via ONE batched marketfeed call. Options resolve to
-        NSE_FNO security ids; known indices to IDX_I; other plain symbols to NSE_EQ."""
+    def _quote_buckets(
+        self, symbols: list[str]
+    ) -> tuple[dict[str, list[int]], dict[tuple[str, str], str]]:
+        """Group engine symbols into Dhan's per-segment security-id buckets, plus the reverse
+        map. Options resolve to NSE_FNO security ids; known indices to IDX_I; other plain
+        symbols to NSE_EQ. Shared by every marketfeed call so one symbol-resolution bug
+        cannot exist in two places."""
         from skas_algo.engine.options.instrument import parse
 
         buckets: dict[str, list[int]] = {}
@@ -562,6 +566,32 @@ class DhanAdapter:
                 continue
             buckets.setdefault(seg, []).append(int(sid))
             back[(seg, str(sid))] = s
+        return buckets, back
+
+    def day_quotes(self, symbols: list[str]) -> dict[str, dict]:
+        """``{symbol: {"last", "prev_close"}}`` via ONE ``/marketfeed/quote`` call — the
+        richer sibling of ``get_quote``, carrying the previous close that a day change needs.
+        Same subscription and throttle rules as every other Dhan market-data call."""
+        buckets, back = self._quote_buckets(symbols)
+        if not buckets:
+            return {}
+        data = (self._http.post("/marketfeed/quote", buckets) or {}).get("data") or {}
+        out: dict[str, dict] = {}
+        for seg, per_id in data.items():
+            for sid, q in (per_id or {}).items():
+                sym = back.get((seg, str(sid)))
+                if not sym or not q:
+                    continue
+                prev = q.get("prev_close_price") or (q.get("ohlc") or {}).get("close")
+                out[sym] = {
+                    "last": float(q.get("last_price") or 0.0),
+                    "prev_close": float(prev) if prev else None,
+                }
+        return out
+
+    def get_quote(self, symbols: list[str]) -> dict[str, float]:
+        """LTP per engine symbol via ONE batched marketfeed call."""
+        buckets, back = self._quote_buckets(symbols)
         if not buckets:
             return {}
         # Let failures PROPAGATE (mirrors ZerodhaAdapter.get_quote): the live loop turns a

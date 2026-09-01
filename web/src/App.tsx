@@ -14,6 +14,7 @@ import DonchianLivePage from "./pages/DonchianLivePage";
 import HomePage from "./pages/HomePage";
 import LivePage from "./pages/LivePage";
 import LoginPage from "./pages/LoginPage";
+import PortfolioPage from "./pages/PortfolioPage";
 import ResearchPage from "./pages/ResearchPage";
 import RunDetailPage from "./pages/RunDetailPage";
 import CycleDetailPage from "./pages/CycleDetailPage";
@@ -57,7 +58,7 @@ function ThemeToggle() {
 /** Mobile-only bottom tab bar (md:hidden) — the installed-PWA navigation. Home indicator
  * safe-area padded; "More" opens a small sheet with the secondary destinations. Desktop
  * keeps the top nav untouched. */
-const MORE_PATHS = ["/trade", "/data", "/brokers", "/docs"];
+const MORE_PATHS = ["/trade", "/portfolio", "/data", "/brokers", "/docs"];
 
 function TabIcon({ d }: { d: string }) {
   return (
@@ -84,7 +85,8 @@ function MobileTabBar() {
         <div className="md:hidden fixed inset-0 z-20" onClick={() => setMoreOpen(false)}>
           <div className="absolute inset-0 bg-black/40" />
           <div className="absolute bottom-[calc(3.75rem+env(safe-area-inset-bottom))] inset-x-3 rounded-2xl border border-slate-700 bg-slate-900 p-2 grid grid-cols-2 gap-1">
-            {[["/trade", "Trade"], ["/data", "Data"], ["/brokers", "Brokers"], ["/docs", "Docs"]].map(([to, label]) => (
+            {[["/trade", "Trade"], ["/portfolio", "Portfolio"], ["/data", "Data"],
+              ["/brokers", "Brokers"], ["/docs", "Docs"]].map(([to, label]) => (
               <NavLink key={to} to={to} onClick={() => setMoreOpen(false)}
                 className={({ isActive }) =>
                   `rounded-xl px-4 py-3 text-sm font-medium text-center ${
@@ -119,7 +121,7 @@ function MobileTabBar() {
   );
 }
 
-const FULL_BLEED = new Set(["/", "/backtest", "/live", "/trade", "/brokers"]);
+const FULL_BLEED = new Set(["/", "/backtest", "/live", "/trade", "/brokers", "/portfolio"]);
 
 function LogoutButton() {
   // Only meaningful when a token exists (auth-enabled host). Hard redirect so all state resets.
@@ -182,6 +184,7 @@ export default function App() {
             <NavItem to="/trade" label="Trade" />
             <NavItem to="/live" label="Live" />
             <NavItem to="/analyze" label="Analyze" />
+            <NavItem to="/portfolio" label="Portfolio" />
             <NavItem to="/docs" label="Docs" />
             <NavItem to="/research" label="Research" />
             <NavItem to="/data" label="Data" />
@@ -202,6 +205,7 @@ export default function App() {
           <Route path="/live/:id" element={<DonchianLivePage />} />
           <Route path="/docs" element={<StrategiesPage />} />
           <Route path="/analyze" element={<AnalysisPage />} />
+          <Route path="/portfolio" element={<PortfolioPage />} />
           <Route path="/research" element={<ResearchPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />

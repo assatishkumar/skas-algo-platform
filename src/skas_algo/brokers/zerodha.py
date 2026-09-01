@@ -242,6 +242,30 @@ class ZerodhaAdapter:
         data = self._kite_client().ltp(list(key_of.values()))
         return {s: data[k]["last_price"] for s, k in key_of.items() if k in data}
 
+    def day_quotes(self, symbols: list[str]) -> dict[str, dict]:
+        """``{symbol: {"last", "prev_close"}}`` in one ``kite.quote()`` call.
+
+        ``get_quote`` returns the LTP alone, which cannot express a DAY CHANGE — the
+        /portfolio screen's TODAY column needs the previous close, and ``ohlc.close`` on a
+        full quote is exactly that (Kite's OHLC block is the prior session's, with
+        ``last_price`` today's). Optional on the adapter protocol: callers probe it with
+        getattr and fall back to LTP-only, day change unknown."""
+        key_of = self._ltp_keys(symbols)
+        if not key_of:
+            return {}
+        data = self._kite_client().quote(list(key_of.values()))
+        out: dict[str, dict] = {}
+        for sym, key in key_of.items():
+            q = data.get(key)
+            if not q:
+                continue
+            prev = (q.get("ohlc") or {}).get("close")
+            out[sym] = {
+                "last": float(q.get("last_price") or 0.0),
+                "prev_close": float(prev) if prev else None,
+            }
+        return out
+
     def instrument_tokens(self, symbols: list[str]) -> dict[str, int]:
         """Resolve OUR symbols to Kite ``instrument_token``s for a WebSocket subscription.
         One ``kite.ltp()`` call — its response carries the token per key. Used by the

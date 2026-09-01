@@ -100,6 +100,20 @@ function authHeaders(extra?: HeadersInit): HeadersInit {
   };
 }
 
+import type {
+  Bucket,
+  BucketInput,
+  Goal,
+  GoalInput,
+  HoldingInput,
+  LedgerPreview,
+  PortfolioPayload,
+  SeedResult,
+  SyncReport,
+  TransactionInput,
+  TransactionRow,
+} from "../lib/portfolio";
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(`${apiOrigin}${BASE}${path}`, {
     ...init,
@@ -434,6 +448,88 @@ export const api = {
   liveDelete: (id: number) => request(`/live/${id}`, { method: "DELETE" }),
   liveUpdate: (id: number, body: { name?: string; notes?: string }) =>
     request(`/live/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+};
+
+/** The personal net-worth tracker (/portfolio). One GET feeds every tab — splitting it
+ * would let the KPI strip and the Allocation tab disagree for a frame. */
+export const portfolio = {
+  get: () => request<PortfolioPayload>("/portfolio"),
+  createHolding: (body: HoldingInput) =>
+    request<{ id: number }>("/portfolio/holdings", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  updateHolding: (id: number, body: HoldingInput) =>
+    request<{ id: number }>(`/portfolio/holdings/${id}`, {
+      method: "PUT", body: JSON.stringify(body),
+    }),
+  deleteHolding: (id: number) =>
+    request<{ deleted: number }>(`/portfolio/holdings/${id}`, { method: "DELETE" }),
+  transactions: (holdingId: number) =>
+    request<{ holding_id: number; transactions: TransactionRow[] }>(
+      `/portfolio/transactions/${holdingId}`),
+  addTransaction: (holdingId: number, body: TransactionInput) =>
+    request<{ id: number }>(`/portfolio/holdings/${holdingId}/transactions`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  deleteTransaction: (txnId: number) =>
+    request<{ deleted: number }>(`/portfolio/transactions/${txnId}`, { method: "DELETE" }),
+  // replace:true is the safe re-import — appending would double every buy and the cost
+  // basis would look merely "a bit high" rather than obviously wrong.
+  importTransactions: (holdingId: number, rows: TransactionInput[], replace: boolean) =>
+    request<{ imported: number; replaced: boolean; units: number | null;
+              invested: number | null; oversold_units: number }>(
+      "/portfolio/transactions/import",
+      { method: "POST", body: JSON.stringify({ holding_id: holdingId, replace, rows }) }),
+  // Parsed server-side so the preview the owner approves is produced by the same code
+  // that performs the import — a browser parser would drift and land a partial history.
+  parsePaste: (text: string) =>
+    request<{
+      rows: TransactionInput[];
+      errors: string[];
+      summary: { rows: number; buys: number; sells: number;
+                 earliest: string | null; latest: string | null };
+    }>("/portfolio/transactions/parse", { method: "POST", body: JSON.stringify({ text }) }),
+  // The WIDE multi-symbol tracking sheet: buys and sells in different columns of one row.
+  // Preview first — it reports the net FIFO position per symbol BEFORE anything is written.
+  parseLedger: (text: string) =>
+    request<LedgerPreview>("/portfolio/parse-ledger", {
+      method: "POST", body: JSON.stringify({ text }),
+    }),
+  seed: (body: {
+    text: string;
+    symbols: { symbol: string; name: string; asset_class: string }[];
+    broker_account_id: number | null;
+    sync: "auto" | "manual";
+    replace: boolean;
+  }) => request<SeedResult>("/portfolio/seed", { method: "POST", body: JSON.stringify(body) }),
+  createBucket: (body: BucketInput) =>
+    request<Bucket>("/portfolio/buckets", { method: "POST", body: JSON.stringify(body) }),
+  updateBucket: (id: number, body: BucketInput) =>
+    request<Bucket>(`/portfolio/buckets/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteBucket: (id: number) =>
+    request<{ deleted: number }>(`/portfolio/buckets/${id}`, { method: "DELETE" }),
+  createGoal: (body: GoalInput) =>
+    request<Goal>("/portfolio/goals", { method: "POST", body: JSON.stringify(body) }),
+  updateGoal: (id: number, body: GoalInput) =>
+    request<Goal>(`/portfolio/goals/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteGoal: (id: number) =>
+    request<{ deleted: number }>(`/portfolio/goals/${id}`, { method: "DELETE" }),
+  saveTargets: (body: { class_targets?: Record<string, number>;
+                        kind_targets?: Record<string, number> }) =>
+    request<{ class_targets: Record<string, number>; kind_targets: Record<string, number> }>(
+      "/portfolio/settings", { method: "PUT", body: JSON.stringify(body) }),
+  sync: (holdingIds?: number[]) =>
+    request<SyncReport>("/portfolio/sync", {
+      method: "POST", body: JSON.stringify({ holding_ids: holdingIds ?? null }),
+    }),
+  // Cached-file lookup, no network — this runs on every keystroke in the fund picker.
+  searchFunds: (q: string) =>
+    request<{ results: { isin: string; scheme_code: string; name: string;
+                         nav: number; as_of: string }[] }>(
+      `/portfolio/funds/search?q=${encodeURIComponent(q)}`),
+  refreshFunds: () =>
+    request<{ schemes: number; as_of: string | null; stale_days: number | null;
+              has_previous: boolean }>("/portfolio/funds/refresh", { method: "POST" }),
 };
 
 export const brokers = {

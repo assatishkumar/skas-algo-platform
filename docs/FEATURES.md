@@ -705,6 +705,102 @@ blanked in the test bootstrap).
 
 ---
 
+## 12b. Personal portfolio tracker (`/portfolio`, 2026-09)
+
+A net-worth tracker for the owner's *own* money, deliberately separate from everything above:
+nothing here is traded by the platform, no order path is reachable, and the only broker calls
+are `holdings()` and quotes — both read-only. Seven tabbed views over one payload.
+
+**The transaction ledger is the point.** A holding may carry a full buy/sell history
+(`portfolio_transaction`), and when it does, everything derives from it:
+
+- **FIFO lots** — a sale consumes the oldest units, which is what Indian capital-gains rules
+  assume. Cost basis is the cost of the units still open, not the money ever spent.
+- **Real XIRR** — money-weighted over the actual cashflows plus today's value. Without a ledger
+  the return falls back to cost→value over the period held, which is correct only for a lump
+  sum; the row states which of the three (`xirr` / `annualised` / `stated`) produced it, because
+  they are not comparable.
+- **Per-LOT tax** — the holding period that decides LTCG vs STCG belongs to the lot, not the
+  holding, so a position built over years sits in **both** regimes at once. The Tax tab's "By
+  lot" view is what shows it; the per-holding row says "2 regimes" rather than picking one.
+  The ₹1.25 L equity-LTCG exemption is applied ONCE across the portfolio (per-holding
+  subtraction would understate a bill by lakhs).
+- **Realized gains** — disposals are kept and reported per Indian FY (1 Apr–31 Mar).
+- **Oversold is surfaced, never clamped**: sells exceeding buys means a missing row, and a
+  clamped basis would look merely "a bit high" forever.
+
+Holdings with no ledger (PPF, EPF, real estate) are first-class — cost and value are typed, and
+`basis` says which path produced the record.
+
+**Prices.** `sync_source` is `broker` (Zerodha/Dhan `holdings()` + the new `day_quotes()`, which
+carries the previous close a day-change needs), `global` (`data/global_quotes.py` — US equities
+and crypto, which no Indian broker quotes; a USD price is converted at today's rate and its
+previous close at the RATE'S own previous close, so the day change carries the currency move
+too, while an INR-quoted pair like `BTC-INR` is never converted), or `amfi` — mutual funds matched by **ISIN**
+against AMFI's free daily `NAVAll.txt` (`data/amfi.py`; both ISIN columns indexed, `N.A.`
+skipped, each day's file cached so the prior NAV gives a real day change). A fund's NAV is a day
+behind during market hours by design, so every price carries its own as-of date. **A sync never
+invents**: a missing quote, an unlisted ISIN or a broker book that disagrees with the ledger
+leaves the holding untouched and lands in `issues` — a units mismatch is REPORTED, because only
+the owner knows which side is missing a row. Untracked broker positions are offered, never
+auto-added.
+
+**Cross-broker aggregates.** One stock can sit in several accounts, so a holding's units are a
+TOTAL that no single broker's book equals — `units_locked` stops a sync adopting one account's
+count as the whole thing. Where one of those sources trades daily (value_investing buys at Dhan
+each session), `broker_units` holds the per-source breakdown and a sync rewrites only the slice
+for the account it just read before re-totalling; the statement-loaded slices, which no sync can
+see, are left alone.
+
+**Growth history is recorded forward and never back-filled.** `portfolio_snapshot` gets one row
+per trading day from the manager's maintenance pass (≥16:00 IST, after a best-effort sync); the
+chart starts at the first one and says how thin it is until there are eight. A holding tracked
+later reads **null**, not zero, before it existed — zero would draw a line rising off the floor.
+Reconstructing the past from today's units would be fabrication, so it isn't done.
+
+**The other tabs** are plain arithmetic in the browser over the server's per-holding records, so
+typing in a target box updates every tile with no round trip: allocation (stacked bars + conic
+donut), asset-class **Rebalance** with editable targets and a ±0.8% dead band, user-defined
+**Buckets** with their own targets, exclusions and greedy overweight→underweight transfer
+suggestions (one `rebalanceMoves` shared with Rebalance, so the two can never contradict each
+other), and **Goals** — editable, with progress, ETA and benchmark delta all COMPUTED from
+today's value plus the SIP compounded monthly at the linked holdings' own return (benchmark
+rates are stated assumptions, shown next to every figure).
+
+**Importing history** comes in two shapes. Per holding: paste `date, buy/sell, units,
+price[, fees]` — tab, comma or wide-space separated. Or **seed the whole book at once** from the
+owner's WIDE tracking sheet (`POST /portfolio/parse-ledger` → `/seed`), where buys and sells
+occupy different COLUMNS of one row and a paste spans a dozen symbols. That format's rules:
+**tabs are required** (they are the only thing preserving the empty cells that distinguish a buy
+row from a sell row — collapse them and a position imports inverted while looking plausible); a
+**sell with no price is refused** (the real sheet has one — 15,161 NIFTYBEES units with the price
+typed into the notes — which would book a ~₹38.7 L phantom loss); and the sheet's
+`Invested Amount` / `Booked Profit` columns are DERIVED (price × units — the latter is gross
+*proceeds* despite its header), so they are typo cross-checks that warn rather than block.
+
+**A zero-price BUY is a CORPORATE ACTION, and it re-bases the open lots rather than adding one.**
+This is the subtlest thing on the screen. A sheet records a bonus or split as free units
+appearing; take that literally and FIFO leaves the older lots at their PRE-split per-unit cost
+while every later sale is of POST-split units — so a ₹972 sale matches against a ₹7,192 cost.
+On Bajaj Finance's June-2025 1:10 (a 4:1 bonus then a 1:2 split) that invented **₹10.3 L of
+losses**; re-basing turns the same 62 trades into a **+₹2.19 L** realized gain. The ratio is
+derived from units held at the time (212 → 2,120) and shown in the preview, because a 1:10 that
+reads 1:9.6 means a trade is missing before it and everything after is quietly wrong.
+
+Errors are SYMBOL-SCOPED: an unreadable NIFTYBEES row skips NIFTYBEES and lets the other eleven
+symbols seed. Only a global failure (no tabs, a row with no code) blocks everything — and a
+symbol with a bad row cannot be seeded even by asking, because a partial history *within* one
+holding produces a cost basis that is wrong forever and looks perfectly reasonable. The preview
+shows each symbol's resulting FIFO position before anything is written. Parsing lives on the SERVER (`services/portfolio_import.py`) so the preview the owner
+approves is produced by the same code that imports; an unreadable line blocks the whole import
+rather than landing a partial history that looks complete, and an ambiguous `d/m/y` is read
+**day-first** (a month-first date like `12/25/2024` is refused, not swapped — guessing would move
+a trade across the 12-month LTCG line). `replace` is the safe re-import.
+
+Coverage: `tests/test_portfolio.py`, `test_portfolio_sync.py`, `test_portfolio_import.py`.
+
+---
+
 ## 13. Web application (`web/`)
 
 - **Analyze workbench (`/analyze`, 2026-07)**: per-run backtest analytics for options runs —
@@ -786,6 +882,15 @@ set-from-run / delete).
 /{id}/login-url`, **M** `POST /{id}/login` (exchange request_token; then background-promote
 degraded runs); **M** `POST /{id}/refresh-cache`, `POST /{id}/refresh-gold`; **M** `POST
 /{id}/arm|disarm`.
+
+**Portfolio** (`/portfolio`) — `GET ""` (holdings with derived lots/XIRR/tax, buckets, goals,
+targets, growth series — one call feeds every tab); **M** `POST|PUT|DELETE /holdings[/{id}]`;
+`GET /transactions/{holding_id}`, **M** `POST /holdings/{id}/transactions`, **M** `DELETE
+/transactions/{txn_id}`, **M** `POST /transactions/parse` (preview a paste; saves nothing),
+**M** `POST /transactions/import`; **M** `POST|PUT|DELETE /buckets[/{id}]` and `/goals[/{id}]`;
+**M** `PUT /settings` (class / equity-debt-alt targets); **M** `POST /sync` (refresh auto
+holdings + stamp today's snapshot), **M** `POST /snapshot`; `GET /funds/search?q=` (cached AMFI
+lookup, no network), **M** `POST /funds/refresh`.
 
 **Data** (`/data`, mostly read-only) — `GET /summary`, `/coverage`, `/symbols` + `/{symbol}`,
 `/stocks/{symbol}/series`; cached options `GET /options/underlyings|/{u}/coverage|/{u}/expiries|

@@ -754,6 +754,121 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   NOT clear an `order_error` halt; that stays a separate, explicit ack.
   Coverage: `test_adopt_broker_close_*` in tests/test_live_options.py.
 
+## 8a. The /portfolio tracker is NOT part of the trading system
+A personal net-worth screen (`/portfolio`, 2026-09) that happens to live in this repo. It places
+no orders, reaches no order path, and its only broker calls are `holdings()` and quotes. Keep it
+that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` may import from
+`live/` beyond read-only adapter use.
+- **The transaction ledger is the source of truth when it exists.** `PortfolioTransaction` rows
+  drive FIFO lots → cost basis, real money-weighted XIRR, per-LOT tax and realized gains. A
+  holding with no rows falls back to typed `invested`/`units`/`value` (PPF, EPF and property will
+  never have a trade history) and `basis` says which path produced the record. **Once a ledger
+  exists, `value` is units × `last_price`** — units are then a FACT and a stale typed value must
+  never contradict them.
+- **Tax is PER LOT, not per holding.** A position built over years straddles the 12-month LTCG
+  line, so one holding legitimately sits in two regimes at once. Never collapse it to a single
+  rate; the per-holding row says "2 regimes" and links to the By-lot view. The ₹1.25 L equity
+  exemption is applied ONCE across the portfolio (`apply_equity_exemption`) — subtracting it per
+  holding understates a bill by lakhs.
+- **A sync NEVER invents and never overwrites the ledger.** A missing quote, an unlisted ISIN, or
+  a broker book that disagrees with the ledger → the holding is left untouched and an `issues`
+  entry is raised. A units mismatch is REPORTED, because only the owner knows which side is
+  missing a row; silently taking the broker's number destroys the only evidence. Untracked broker
+  positions are `discovered`, never auto-added.
+- **Mutual funds price off AMFI by ISIN** (`data/amfi.py`, free daily `NAVAll.txt`). Both ISIN
+  columns are indexed (the owner may hold either plan); a NAV is a DAY BEHIND during market hours
+  by design, so every price carries its own `as_of` and day change needs yesterday's cached file
+  (no prior file ⇒ change is unknown, not zero). `day_quotes()` is the NEW optional adapter seam
+  carrying `prev_close` — `get_quote` returns LTP alone, which cannot express a day change.
+- **US equities and crypto price off `data/global_quotes.py`** (`sync_source="global"`,
+  `sync_ref` = a Yahoo symbol) — no Indian broker quotes them, so they sat frozen otherwise.
+  The multi-symbol endpoint 401s, so it is one request per symbol, throttled; fine once a day
+  and NEVER on an order path. **A USD quote is converted at BOTH ends of the day change** —
+  today's price at today's rate, the previous close at the RATE'S own previous close — because
+  an INR investor's position moved by the currency as well as the instrument, and on a 1% rupee
+  day that is the larger half. An INR-quoted pair (Yahoo carries `BTC-INR`) must NOT be
+  converted at all: doing so reports a bitcoin at a hundred times its price. Pinned by
+  `test_an_inr_quoted_pair_is_not_converted_twice`.
+- **The previous close comes from the CANDLE SERIES, never `chartPreviousClose`.** That field
+  is the close before the requested WINDOW, so on a 5-day range it is a week old. Trusting it
+  reported MSFT at **+5.65% on a day it fell 1.22%** — the wrong SIGN, not just the wrong size —
+  and the USD/INR rate was a week stale on top of it, compounding every US figure. Pinned by
+  `test_the_previous_close_is_the_prior_SESSION_not_the_prior_window`.
+- **A non-INR holding stores its OWN currency, price and cost** (`native_currency` /
+  `native_price` / `native_invested`). The dollar cost basis CANNOT be recovered by dividing the
+  rupee one by today's rate — those rupees were spent at the rates of the day. The screen shows
+  both, INR as the primary figure.
+- **AMFI ships THREE column layouts and they disagree on where the ISIN is** — index 1-2 in the
+  daily NAVAll, index 4-5 in the dated historical report. `parse_navall` locates columns from
+  the HEADER, falling back to reading from the ends (code first, date last, NAV second-to-last)
+  when there is none. A positional parser reads a scheme NAME as an ISIN and indexes nothing.
+  `amfi.backfill(day)` seeds a PRIOR day from the historical report so a fund day change works
+  on the first sync instead of waiting a night for a second file to exist.
+- **Zerodha's symbol suffixes are not all its own.** `-E`/`-F` are its ETF/liquid markers and
+  must be STRIPPED (the exchange has no `GOLDBEES-E`); `-RR`/`-IV` are the NSE SERIES for a
+  REIT and an InvIT and are PART of the tradingsymbol (`EMBASSY-RR` prices, `EMBASSY` does
+  not). Strip the wrong set and those holdings silently never get a price.
+- **Growth history is recorded FORWARD and never back-filled.** `PortfolioSnapshot`, one row per
+  trading day from `manager._maybe_daily_portfolio_snapshot` (≥16:00 IST). A holding reads
+  **null**, not zero, before it was tracked — zero draws a line rising off the floor. Do not add
+  a "reconstruct from today's units at old prices" path: that is a chart of a portfolio that
+  never existed.
+- **The WIDE sheet seeder** (`parse_ledger_paste` → `POST /portfolio/seed`) loads the owner's
+  multi-symbol tracking spreadsheet, where buys and sells are different COLUMNS of one row.
+  **Tabs are required** — they alone preserve the empty cells that tell the two apart, so a
+  tab-less paste is refused, never guessed at (a wrong guess imports the position inverted and
+  looks fine). A **sell with no price is an error** (the real sheet has one: 15,161 NIFTYBEES
+  units with the price left in the notes → a ~₹38.7 L phantom loss). `Invested Amount` and
+  `Booked Profit` are DERIVED columns (the latter is gross proceeds, not profit), so they
+  cross-check for typos and warn without blocking.
+- **A zero-price BUY is a CORPORATE ACTION (`kind="bonus"`), and it RE-BASES the open lots.**
+  Never append it as an ordinary lot: the older lots then keep their PRE-split per-unit cost
+  while every later sale is of POST-split units, so FIFO matches a ₹972 sale against ₹7,192.
+  Bajaj Finance's June-2025 1:10 (4:1 bonus + 1:2 split) invented **₹10.3 L of losses** that
+  way; re-basing gives **+₹2.19 L** over the same 62 trades. `build_ledger` derives the ratio
+  from units held at the time ((held+added)/held), multiplies every open lot's units and
+  divides its cost/unit — total cost, FIFO order and lot dates all preserved — and records it
+  in `Ledger.actions`. A bonus against NOTHING held is recorded with `ratio: None` and NOT
+  applied (a buy row is missing; inventing a lot would fabricate a cost basis). Simplification
+  worth knowing: bonus shares strictly carry nil cost and their own allotment date for Indian
+  CGT, so this can differ only on the holding period of the bonus portion, only within 12
+  months of the action.
+- **`units_locked` = the row is a CROSS-BROKER AGGREGATE.** The same stock legitimately sits
+  in several accounts (GOLDBEES spans four), so the holding's units are a total no single
+  broker's book equals. A sync then refreshes PRICE only: it must never adopt one account's
+  count (which would replace the total with a fraction) and must never raise a book mismatch
+  (which would fire on every pass, forever). Pinned by
+  `test_an_aggregate_holding_is_repriced_but_its_units_are_never_rewritten`.
+- **`broker_units` is what makes a LIVE account safe inside an aggregate.** `units_locked`
+  freezes units entirely — right for a statement-loaded total, wrong when one of its sources
+  trades daily (value_investing buys at Dhan every day). The per-source breakdown
+  (`{"static": 7769, "account:3": 12}`) lets a sync rewrite ONLY the slice for the account it
+  just read and re-total; a successful book read that omits the symbol sets that slice to ZERO
+  (a real sell-out), while the statement-loaded slices — which no sync can see — hold. Empty
+  dict = the whole row is static. Coverage:
+  `test_a_live_account_slice_updates_while_the_other_brokers_hold`.
+- **Broker statements: `Quantity Available` is NOT the holding.** Zerodha reports pledged
+  stock in its own columns, and `Quantity Long Term` is a TAX SUBSET, never another parcel to
+  add — but since it IS a subset, the total can never be less than it. One real row broke that
+  invariant (AN8911 GOLDBEES: long-term 7,361 against available+pledged 1,525) and taking the
+  smaller figure left the account out by 1.9%; `max(available+pledged, long_term)` closes it to
+  0.15% and is a no-op on every other row. ISIN is the merge key across brokers — symbols
+  don't travel (`GOLDBEES-E` vs `GOLDBEES`), and cost is summed as RUPEES, never as an average
+  of averages.
+- **Seed errors are SYMBOL-SCOPED.** One unreadable row skips ITS symbol and lets the rest
+  seed — a global block made the button permanently dead on a 396-trade paste with one bad
+  line. A symbol with a bad row cannot be seeded even if requested: a partial history inside
+  one holding is the dangerous case, since its cost basis looks reasonable and is wrong
+  forever.
+- **The paste importer parses on the SERVER** (`services/portfolio_import.py`) so the preview the
+  owner approves is the code that imports. An unreadable line BLOCKS the import rather than
+  landing a partial history that looks complete; an ambiguous `d/m/y` is DAY-first and a
+  month-first date is refused, not swapped (guessing moves a trade across the LTCG line).
+- Aggregates (allocation, drift, buckets, goals) are derived in the BROWSER from the server's
+  per-holding records, so a keystroke in a target box updates every tile with no round trip.
+  `rebalanceMoves` is shared by the class and bucket rebalancers — one algorithm, so the two
+  screens cannot suggest contradictory transfers.
+
 ## 8b. Mobile app (`web-mobile/` + its `ios/` Capacitor shell)
 A dedicated 7-screen iPhone companion (see `docs/MOBILE.md`) that monitors + acts on the
 VPS's runs over Tailscale HTTPS. Key invariants: it imports `web/src/{api,lib,types}` via

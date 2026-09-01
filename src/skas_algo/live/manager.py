@@ -1424,6 +1424,7 @@ class LiveRunManager:
         self._maint_task: asyncio.Task | None = None
         self._last_backup_day: date | None = None
         self._last_cache_refresh_day: date | None = None
+        self._last_portfolio_snapshot_day: date | None = None
         # Last successful daily cache refresh, surfaced to the UI (quiet "Data ✓ HH:MM" chip).
         self.last_cache_refresh: dict | None = None
         self._last_option_capture_day: date | None = None
@@ -2038,6 +2039,7 @@ class LiveRunManager:
                 self._rebind_order_sweep()
                 await self._maybe_daily_cache_refresh()
                 await self._maybe_daily_option_capture()
+                await self._maybe_daily_portfolio_snapshot()
                 await self._maybe_daily_backup()
             except asyncio.CancelledError:  # pragma: no cover
                 return
@@ -2074,6 +2076,53 @@ class LiveRunManager:
             )
         except Exception:  # pragma: no cover - alert is best-effort
             logger.exception("watchdog notification failed")
+
+    async def _maybe_daily_portfolio_snapshot(self) -> None:
+        """Refresh the /portfolio auto holdings and stamp one history point per day.
+
+        This is the ONLY writer of the Growth tab's history — nothing is ever back-filled, so
+        a day the box was off is a day the chart simply does not have (see
+        services/portfolio_history). Runs after the close so the point is an end-of-day value
+        rather than whatever the market was doing at 11am.
+
+        Read-only against every broker: ``holdings()`` and quotes, never an order path. A
+        failure is logged and dropped — a missing history point must never take down the
+        maintenance loop that also runs the watchdog and the backup.
+        """
+        from skas_algo.live.holidays import is_nse_holiday
+
+        now = datetime.now(IST)
+        if self._last_portfolio_snapshot_day == now.date():
+            return
+        # Weekends and holidays get no snapshot: nothing repriced, so an extra point would be
+        # a flat segment implying the market was open. Funds still publish a NAV on a Saturday
+        # for Friday, which the next trading day's sync picks up.
+        if now.weekday() >= 5 or is_nse_holiday(now.date()):
+            return
+        if now.time() < time(16, 0):
+            return
+        self._last_portfolio_snapshot_day = now.date()
+        try:
+            await asyncio.to_thread(self._run_portfolio_snapshot)
+        except Exception:  # pragma: no cover - never break maintenance
+            logger.exception("daily portfolio snapshot failed")
+
+    def _run_portfolio_snapshot(self) -> None:
+        """Worker-thread body: sync prices, then record. Sync failures are non-fatal — a
+        snapshot of slightly stale prices still beats a hole in the series."""
+        from skas_algo.services.portfolio_history import record_snapshot
+        from skas_algo.services.portfolio_sync import sync_portfolio
+
+        with session_scope() as db:
+            try:
+                report = sync_portfolio(db)
+                if report.issues:
+                    logger.info("portfolio sync: %s issue(s)", len(report.issues))
+            except Exception:
+                logger.warning("portfolio sync failed; snapshotting anyway", exc_info=True)
+            row = record_snapshot(db)
+            if row is not None:
+                logger.info("portfolio snapshot %s: %.2f", row.on_date, row.value)
 
     async def _maybe_daily_backup(self) -> None:
         """One DB snapshot per day, after the session + settlement (~16:30 IST)."""

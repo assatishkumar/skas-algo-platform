@@ -901,3 +901,118 @@ class BrokerAccountOut(BaseModel):
     # Dhan do. The Brokers page keys the smoke-test picker off this rather than hard-coding
     # broker names, so the UI and the server can never disagree about what can trade.
     can_place_orders: bool = True
+
+
+# ------------------------------------------------------------------ portfolio (/portfolio)
+
+
+class PortfolioHoldingInput(BaseModel):
+    """Create/update payload for a tracked asset.
+
+    ``invested``/``units``/``value`` are the SUMMARY-entry fields and are ignored once the
+    holding has transactions — the ledger wins, because it is the only record that knows when
+    the money went in. ``xirr_pct`` is the owner's own figure off a broker statement; leave it
+    null to have the return derived."""
+
+    name: str = Field(min_length=1, max_length=120)
+    asset_class: str = Field(pattern="^(stk|etf|mf|us|btc|bank|ppf|epf|gold|re)$")
+    kind_override: str | None = Field(default=None, pattern="^(equity|debt|alt)$")
+    invested: float = Field(default=0.0, ge=0)
+    units: float | None = Field(default=None, ge=0)
+    value: float = Field(default=0.0, ge=0)
+    last_price: float | None = Field(default=None, ge=0)
+    native_currency: str | None = Field(default=None, max_length=8)
+    native_price: float | None = Field(default=None, ge=0)
+    native_invested: float | None = Field(default=None, ge=0)
+    day_change: float = 0.0
+    xirr_pct: float | None = None
+    buy_month: str = Field(default="", pattern=r"^(\d{4}-\d{2})?$")
+    sync: str = Field(default="manual", pattern="^(auto|manual)$")
+    sync_source: str | None = Field(default=None, pattern="^(broker|amfi|global)$")
+    sync_ref: str | None = Field(default=None, max_length=64)
+    broker_account_id: int | None = None
+    # True when units are an aggregate across brokers — a sync then refreshes price only.
+    units_locked: bool = False
+    # Per-source unit breakdown; a sync rewrites only the slice it just read.
+    broker_units: dict[str, float] = Field(default_factory=dict)
+    excluded_from_buckets: bool = False
+    note: str | None = None
+
+
+class PortfolioTransactionInput(BaseModel):
+    """One buy or sell. ``units`` is always positive — ``kind`` carries the direction, so a
+    sign error can't quietly turn a sale into a purchase."""
+
+    on_date: date
+    # "bonus" is a corporate action, not a trade: units appear, no money moves, and the
+    # ledger RE-BASES the open lots rather than adding one (see services/portfolio).
+    kind: str = Field(pattern="^(buy|sell|bonus)$")
+    units: float = Field(gt=0)
+    price: float = Field(ge=0)
+    fees: float = Field(default=0.0, ge=0)
+    note: str | None = None
+
+
+class PortfolioTransactionImport(BaseModel):
+    """Bulk import for one holding — the paste-a-tradebook path. REPLACES the holding's
+    ledger when ``replace`` is set, so re-importing a corrected export doesn't double every
+    buy; appends otherwise."""
+
+    holding_id: int
+    replace: bool = False
+    rows: list[PortfolioTransactionInput]
+
+
+class PortfolioBucketInput(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    target_pct: float = Field(default=0.0, ge=0, le=100)
+    holding_ids: list[int] = Field(default_factory=list)
+
+
+class PortfolioGoalInput(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    target_amount: float = Field(gt=0)
+    target_year: int = Field(ge=2000, le=2200)
+    monthly_sip: float = Field(default=0.0, ge=0)
+    holding_ids: list[int] = Field(default_factory=list)
+    benchmark: str = "NIFTY 50 TRI"
+
+
+class PortfolioSettingsInput(BaseModel):
+    """Target allocations. Percentages are NOT forced to sum to 100 — the page shows the
+    shortfall instead, because forcing it would silently rewrite a number the owner typed."""
+
+    class_targets: dict[str, float] | None = None
+    kind_targets: dict[str, float] | None = None
+
+
+class PortfolioSyncInput(BaseModel):
+    holding_ids: list[int] | None = None
+
+
+class PortfolioPasteInput(BaseModel):
+    """Raw pasted text for the ledger importer. Parsed server-side so the preview the owner
+    approves is produced by the same code that performs the import."""
+
+    text: str = Field(max_length=500_000)
+
+
+class PortfolioSeedSymbol(BaseModel):
+    """One symbol's landing spot in a bulk seed."""
+
+    symbol: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=120)
+    asset_class: str = Field(pattern="^(stk|etf|mf|us|btc|bank|ppf|epf|gold|re)$")
+
+
+class PortfolioSeedInput(BaseModel):
+    """Create holdings from a pasted multi-symbol sheet and load each one's ledger.
+
+    ``replace`` wipes a matched holding's existing transactions before loading — the safe
+    re-import. Without it a second paste doubles every buy."""
+
+    text: str = Field(max_length=2_000_000)
+    symbols: list[PortfolioSeedSymbol]
+    broker_account_id: int | None = None
+    sync: str = Field(default="manual", pattern="^(auto|manual)$")
+    replace: bool = True

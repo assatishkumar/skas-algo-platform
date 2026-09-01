@@ -12,7 +12,18 @@ from skas_algo import __version__
 from skas_algo.config import get_settings
 
 from .deps import require_auth
-from .routes import alerts, auth, backtest, brokers, data, health, live, research, trade
+from .routes import (
+    alerts,
+    auth,
+    backtest,
+    brokers,
+    data,
+    health,
+    live,
+    portfolio,
+    research,
+    trade,
+)
 
 logger = logging.getLogger("skas_algo")
 
@@ -92,6 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(brokers.router, prefix="/api/v1", dependencies=protected)
     app.include_router(data.router, prefix="/api/v1", dependencies=protected)
     app.include_router(live.router, prefix="/api/v1", dependencies=protected)
+    app.include_router(portfolio.router, prefix="/api/v1", dependencies=protected)
     app.include_router(research.router, prefix="/api/v1", dependencies=protected)
     app.include_router(trade.router, prefix="/api/v1", dependencies=protected)
 
