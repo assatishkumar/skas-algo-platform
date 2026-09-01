@@ -499,3 +499,41 @@ def test_a_goal_round_trips_through_the_api_with_its_projection(client: TestClie
     # Nothing linked and no SIP: it fails in the very first year, and says so.
     assert goal["projection"]["first_shortfall_year"] == 2026
     client.delete(f"/api/v1/portfolio/goals/{gid}")
+
+
+def test_missing_portfolio_columns_are_added_on_startup(tmp_path):
+    """A box whose portfolio tables predate a new field boots healthy and then fails on the
+    first query — the backend up, the engine running, and one screen broken in a way nothing
+    surfaces until someone opens it. It happened twice on the VPS before this existed."""
+    from sqlalchemy import create_engine, inspect, text
+
+    from skas_algo.db.portfolio_schema import ensure_columns
+
+    engine = create_engine(f"sqlite:///{tmp_path}/old.db")
+    with engine.begin() as c:
+        # The table as it looked before native currency, unit slices and yields existed.
+        c.execute(text(
+            "CREATE TABLE portfolio_holding (id INTEGER PRIMARY KEY, name VARCHAR(120),"
+            " invested FLOAT, value FLOAT)"
+        ))
+        c.execute(text("INSERT INTO portfolio_holding VALUES (1, 'ITC', 100.0, 120.0)"))
+
+    added = ensure_columns(engine)
+    assert "portfolio_holding.dividend_yield_pct" in added
+    assert "portfolio_holding.broker_units" in added
+    cols = {c["name"] for c in inspect(engine).get_columns("portfolio_holding")}
+    assert {"native_currency", "native_price", "native_invested",
+            "units_locked", "broker_units", "dividend_yield_pct"} <= cols
+
+    # The existing row survives, and a second pass is a no-op.
+    with engine.begin() as c:
+        assert c.execute(text("SELECT name FROM portfolio_holding")).scalar_one() == "ITC"
+    assert ensure_columns(engine) == []
+
+
+def test_a_table_that_does_not_exist_yet_is_left_to_create_all(tmp_path):
+    from sqlalchemy import create_engine
+
+    from skas_algo.db.portfolio_schema import ensure_columns
+
+    assert ensure_columns(create_engine(f"sqlite:///{tmp_path}/empty.db")) == []

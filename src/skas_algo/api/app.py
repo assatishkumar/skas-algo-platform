@@ -37,6 +37,12 @@ async def lifespan(app: FastAPI):
         from skas_algo.db.base import Base, get_engine
 
         Base.metadata.create_all(get_engine())
+        # create_all adds missing TABLES but never missing COLUMNS — a box whose
+        # portfolio tables predate a new field boots healthy and then fails on the
+        # first query. Narrow, idempotent, portfolio-only (see db/portfolio_schema).
+        from skas_algo.db.portfolio_schema import ensure_columns
+
+        ensure_columns(get_engine())
     except Exception:  # pragma: no cover - never block startup
         logger.exception("schema create_all failed")
     # Rebuild any paper/live runs that were still running before a restart — in a
