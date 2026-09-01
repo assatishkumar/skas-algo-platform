@@ -104,6 +104,7 @@ import type {
   Bucket,
   BucketInput,
   DividendRow,
+  TagRow,
   Goal,
   GoalInput,
   HoldingInput,
@@ -503,6 +504,19 @@ export const portfolio = {
     sync: "auto" | "manual";
     replace: boolean;
   }) => request<SeedResult>("/portfolio/seed", { method: "POST", body: JSON.stringify(body) }),
+  tags: () => request<{ tags: TagRow[] }>("/portfolio/tags"),
+  createTag: (name: string, color: string) =>
+    request<{ id: number; name: string; color: string; created: boolean }>("/portfolio/tags", {
+      method: "POST", body: JSON.stringify({ name, color }),
+    }),
+  deleteTag: (id: number) =>
+    request<{ deleted: number }>(`/portfolio/tags/${id}`, { method: "DELETE" }),
+  // The whole set is sent, so removing is the same call as adding and no partial-update
+  // path can leave a stale link behind.
+  setHoldingTags: (holdingId: number, tagIds: number[]) =>
+    request<{ holding_id: number; tags: TagRow[] }>(`/portfolio/holdings/${holdingId}/tags`, {
+      method: "PUT", body: JSON.stringify({ tag_ids: tagIds }),
+    }),
   dividends: () => request<{ dividends: DividendRow[] }>("/portfolio/dividends"),
   addDividend: (body: { holding_id: number; on_date: string; amount: number;
                         per_unit: number | null; note: string | null }) =>

@@ -853,6 +853,12 @@ that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` ma
   (`regime_for` reads `kind == "debt"`), so retagging a fund changes both and they can never
   disagree. An unrecognised override falls back to the class default rather than creating a
   sixth tag no target covers.
+- **Two different things label a holding, and they must not be merged.** `kind_override` is
+  the ASSET CLASS: one per holding, drives rebalancing and the tax regime, so each rupee is
+  counted exactly once. `PortfolioTag` (many-to-many, `portfolio_holding_tag`) is a free
+  user-defined LABEL — "child's education", "long term" — and a holding may carry any number.
+  Folding tags into the class would double-count a holding in two of them, or drop it; folding
+  the class into tags would leave rebalancing with no denominator.
 - **A GOAL is a stream of outflows, not a number at a date** (`schedule` = `[{year, amount}]`
   in TODAY's rupees + `inflation_pct`). Three things the projection gets right that a single
   target cannot: amounts are inflated to the year they are NEEDED (₹42 L of school fees is

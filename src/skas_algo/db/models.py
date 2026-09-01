@@ -23,6 +23,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from sqlalchemy import Table, Column
+
 from .base import Base
 from .enums import (
     AlertChannel,
@@ -316,6 +318,10 @@ class PortfolioHolding(Base, TimestampMixin):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
+    tags: Mapped[list["PortfolioTag"]] = relationship(
+        secondary="portfolio_holding_tag", back_populates="holdings", lazy="selectin",
+    )
+
 
 class PortfolioTransaction(Base, TimestampMixin):
     """A buy or sell against a holding — the source of truth for cost basis, realized gains
@@ -418,3 +424,34 @@ class PortfolioDividend(Base, TimestampMixin):
     amount: Mapped[float] = mapped_column(Float, default=0.0)
     per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# A holding can carry many tags and a tag many holdings. Deliberately separate from the
+# single-valued ``kind_override``: rebalancing needs each rupee counted ONCE, so the asset
+# class stays one-per-holding, while tags are free labels for grouping and filtering
+# ("child's fund", "long term", "review 2027") that can overlap as much as they like.
+portfolio_holding_tag = Table(
+    "portfolio_holding_tag",
+    Base.metadata,
+    Column(
+        "holding_id",
+        ForeignKey("portfolio_holding.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("tag_id", ForeignKey("portfolio_tag.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
+class PortfolioTag(Base, TimestampMixin):
+    """A user-defined label. Created freely, applied to any number of holdings."""
+
+    __tablename__ = "portfolio_tag"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(40), unique=True)
+    color: Mapped[str] = mapped_column(String(9), default="#12b3a4")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    holdings: Mapped[list["PortfolioHolding"]] = relationship(
+        secondary=portfolio_holding_tag, back_populates="tags", lazy="selectin",
+    )

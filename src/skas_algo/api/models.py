@@ -1045,3 +1045,18 @@ class PortfolioDividendInput(BaseModel):
     amount: float = Field(gt=0)
     per_unit: float | None = Field(default=None, ge=0)
     note: str | None = None
+
+
+class PortfolioTagInput(BaseModel):
+    """A user-defined label. Free-form on purpose — the asset class stays separate and
+    single-valued so rebalancing counts each rupee once."""
+
+    name: str = Field(min_length=1, max_length=40)
+    color: str = Field(default="#12b3a4", pattern="^#[0-9a-fA-F]{6}$")
+
+
+class PortfolioHoldingTagsInput(BaseModel):
+    """The complete tag set for a holding — sent whole, so removing is the same operation
+    as adding and no partial-update path can leave a stale link behind."""
+
+    tag_ids: list[int] = Field(default_factory=list)

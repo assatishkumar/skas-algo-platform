@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { portfolio as papi } from "../../api/client";
 import {
   dayLabel, exactMoney, money, signedMoney,
-  type Holding, type TransactionInput, type TransactionRow,
+  type Holding, type TagRow, type TransactionInput, type TransactionRow,
 } from "../../lib/portfolio";
+import TagPicker from "./TagPicker";
 import { ConfirmAction, inputClass, Modal, Notice, Segments } from "./primitives";
 
 interface ParsePreview {
@@ -16,8 +17,13 @@ interface ParsePreview {
 }
 
 export default function LedgerModal({
-  holding, onClose, onChanged,
-}: { holding: Holding; onClose: () => void; onChanged: () => void }) {
+  holding, tags, onClose, onChanged,
+}: {
+  holding: Holding;
+  tags: TagRow[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
   const [tab, setTab] = useState<"list" | "add" | "import">("list");
   const [rows, setRows] = useState<TransactionRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,7 +83,13 @@ export default function LedgerModal({
   };
 
   return (
-    <Modal title={`${holding.name} · transactions`} onClose={onClose} width={680}>
+    <Modal title={holding.name} onClose={onClose} width={680}>
+      {/* Tags first: this modal is what a click on a holding opens, and labelling is the
+          thing most often wanted there. The ledger is below it. */}
+      <div className="mb-3.5">
+        <TagPicker holding={holding} tags={tags} onChanged={onChanged} />
+      </div>
+
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <Segments
           size="sm" value={tab} onChange={setTab}

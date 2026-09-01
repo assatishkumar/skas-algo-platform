@@ -416,6 +416,7 @@ export default function PortfolioPage() {
       {ledger && (
         <LedgerModal
           holding={rows.find((h) => h.id === ledger.id) ?? ledger}
+          tags={data?.tags ?? []}
           onClose={() => setLedger(null)}
           onChanged={refresh}
         />

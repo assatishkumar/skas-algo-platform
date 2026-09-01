@@ -23,10 +23,12 @@ from skas_algo.api.models import (
     PortfolioDividendInput,
     PortfolioGoalInput,
     PortfolioHoldingInput,
+    PortfolioHoldingTagsInput,
     PortfolioPasteInput,
     PortfolioSeedInput,
     PortfolioSettingsInput,
     PortfolioSyncInput,
+    PortfolioTagInput,
     PortfolioTransactionImport,
     PortfolioTransactionInput,
 )
@@ -36,6 +38,7 @@ from skas_algo.db.models import (
     PortfolioGoal,
     PortfolioHolding,
     PortfolioSetting,
+    PortfolioTag,
     PortfolioTransaction,
 )
 from skas_algo.services import portfolio as pf
@@ -140,6 +143,13 @@ def get_portfolio(db: Session = Depends(get_db)) -> dict:
             k: {"label": v["label"], "kind": v["kind"], "color": v["color"]}
             for k, v in pf.ASSET_CLASSES.items()
         },
+        "tags": [
+            {"id": t.id, "name": t.name, "color": t.color,
+             "count": len(t.holdings)}
+            for t in db.execute(
+                select(PortfolioTag).order_by(PortfolioTag.sort_order, PortfolioTag.name)
+            ).scalars().all()
+        ],
         "kinds": [
             {"key": k, "label": pf.KIND_LABELS[k], "color": pf.KIND_COLORS[k]} for k in pf.KINDS
         ],
@@ -488,6 +498,71 @@ def delete_dividend(dividend_id: int, db: Session = Depends(get_db)) -> dict:
     db.delete(row)
     db.commit()
     return {"deleted": dividend_id}
+
+
+@router.get("/tags")
+def list_tags(db: Session = Depends(get_db)) -> dict:
+    rows = db.execute(
+        select(PortfolioTag).order_by(PortfolioTag.sort_order, PortfolioTag.name)
+    ).scalars().all()
+    return {"tags": [
+        {"id": t.id, "name": t.name, "color": t.color, "count": len(t.holdings)} for t in rows
+    ]}
+
+
+@router.post("/tags")
+def create_tag(body: PortfolioTagInput, db: Session = Depends(get_db)) -> dict:
+    name = body.name.strip()
+    existing = db.execute(
+        select(PortfolioTag).where(PortfolioTag.name == name)
+    ).scalars().first()
+    # Creating a tag that already exists returns THAT one rather than erroring: the caller is
+    # typing a name to apply it, and a duplicate-name failure mid-flow helps nobody.
+    if existing:
+        return {"id": existing.id, "name": existing.name, "color": existing.color,
+                "created": False}
+    row = PortfolioTag(name=name, color=body.color, sort_order=_next_order(db, PortfolioTag))
+    db.add(row)
+    db.commit()
+    return {"id": row.id, "name": row.name, "color": row.color, "created": True}
+
+
+@router.put("/tags/{tag_id}")
+def update_tag(tag_id: int, body: PortfolioTagInput, db: Session = Depends(get_db)) -> dict:
+    row = db.get(PortfolioTag, tag_id)
+    if row is None:
+        raise HTTPException(404, "tag not found")
+    row.name = body.name.strip()
+    row.color = body.color
+    db.commit()
+    return {"id": row.id, "name": row.name, "color": row.color}
+
+
+@router.delete("/tags/{tag_id}")
+def delete_tag(tag_id: int, db: Session = Depends(get_db)) -> dict:
+    row = db.get(PortfolioTag, tag_id)
+    if row is None:
+        raise HTTPException(404, "tag not found")
+    # The association rows go with it; the HOLDINGS do not.
+    db.delete(row)
+    db.commit()
+    return {"deleted": tag_id}
+
+
+@router.put("/holdings/{holding_id}/tags")
+def set_holding_tags(
+    holding_id: int, body: PortfolioHoldingTagsInput, db: Session = Depends(get_db)
+) -> dict:
+    holding = db.get(PortfolioHolding, holding_id)
+    if holding is None:
+        raise HTTPException(404, "holding not found")
+    tags = db.execute(
+        select(PortfolioTag).where(PortfolioTag.id.in_(body.tag_ids or [-1]))
+    ).scalars().all()
+    holding.tags = list(tags)
+    db.commit()
+    return {"holding_id": holding_id,
+            "tags": [{"id": t.id, "name": t.name, "color": t.color} for t in holding.tags]}
 
 
 @router.post("/buckets")

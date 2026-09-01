@@ -426,6 +426,7 @@ def holding_view(holding: dict, transactions: list[dict], *, today: date | None 
         "broker_units": dict(holding.get("broker_units") or {}),
         "excluded_from_buckets": bool(holding.get("excluded_from_buckets")),
         "dividend_yield_pct": holding.get("dividend_yield_pct"),
+        "tags": list(holding.get("tags") or []),
         "note": holding.get("note"),
         "basis": "ledger" if has_ledger else "summary",
         "txn_count": len(transactions),

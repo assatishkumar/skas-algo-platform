@@ -121,6 +121,7 @@ export default function OverviewView({
 }) {
   const [filter, setFilter] = useState<AssetClassKey | null>(null);
   const [tagFilter, setTagFilter] = useState<Kind | null>(null);
+  const [labelFilter, setLabelFilter] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("value");
   const [sortDesc, setSortDesc] = useState(true);
@@ -142,6 +143,7 @@ export default function OverviewView({
       (h) =>
         (!filter || h.asset_class === filter) &&
         (!tagFilter || h.kind === tagFilter) &&
+        (!labelFilter || h.tags.some((t) => t.id === labelFilter)) &&
         (!q || h.name.toLowerCase().includes(q) || h.class_label.toLowerCase().includes(q)),
     );
     const pick = SORTERS[sortKey].pick;
@@ -158,7 +160,7 @@ export default function OverviewView({
       if (y === null || y === undefined) return -1;
       return sortDesc ? y - x : x - y;
     });
-  }, [rows, filter, tagFilter, search, sortKey, sortDesc]);
+  }, [rows, filter, tagFilter, labelFilter, search, sortKey, sortDesc]);
 
   /** Totals over exactly what is on screen — the filter and the search both bite, because a
    * summary that ignored them would contradict the rows directly above it. */
@@ -220,10 +222,49 @@ export default function OverviewView({
         })}
       </div>
 
+      {payload.tags.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-extrabold tracking-[.05em] text-[var(--faint)]">
+            LABELS
+          </span>
+          {payload.tags.filter((t) => (t.count ?? 0) > 0).map((t) => {
+            const on = labelFilter === t.id;
+            const slice = rows.filter((h) => h.tags.some((x) => x.id === t.id));
+            return (
+              <button
+                key={t.id}
+                onClick={() => setLabelFilter(on ? null : t.id)}
+                className="inline-flex items-center gap-1.5 rounded-full border-[1.5px] px-3 py-1.5 text-[11.5px] font-extrabold"
+                style={{
+                  background: on ? `${t.color}22` : "var(--card)",
+                  borderColor: on ? t.color : "var(--border)",
+                  color: on ? "var(--strong)" : "var(--muted)",
+                }}
+              >
+                <span className="inline-block h-2 w-2 rounded-full"
+                  style={{ background: t.color }} />
+                {t.name}
+                <span className="text-[var(--faint)]">
+                  {money(slice.reduce((a, h) => a + h.value, 0))}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <Card>
         <div className="mb-3 flex flex-wrap items-center gap-2.5">
           <span className="text-[15px] font-extrabold text-[var(--strong)]">Holdings</span>
           <Pill>{list.length}</Pill>
+          {labelFilter && (
+            <button
+              onClick={() => setLabelFilter(null)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--tint-border)] bg-[var(--tint)] px-3 py-[5px] text-[11.5px] font-extrabold text-[var(--accent-deep)]"
+            >
+              {payload.tags.find((t) => t.id === labelFilter)?.name} ✕
+            </button>
+          )}
           {tagFilter && (
             <button
               onClick={() => setTagFilter(null)}
@@ -290,7 +331,7 @@ export default function OverviewView({
                 style={{ gridTemplateColumns: COLS }}
               >
                 <span className="text-[var(--strong)]">
-                  {filter || tagFilter || search ? "Filtered total" : "Total"}
+                  {filter || tagFilter || labelFilter || search ? "Filtered total" : "Total"}
                   <span className="ml-1.5 text-[11px] font-bold text-[var(--faint)]">
                     {list.length} of {rows.length}
                   </span>
@@ -345,6 +386,15 @@ export default function OverviewView({
                       {h.buy_month ? ` · since ${h.buy_month}` : ""}
                       {h.basis === "ledger" ? ` · ${h.txn_count} txn` : ""}
                       {h.oversold_units > 0 ? " · ⚠ sells exceed buys" : ""}
+                      {h.tags.map((t) => (
+                        <span
+                          key={t.id}
+                          className="ml-1 rounded px-1 py-px text-[10px] font-extrabold"
+                          style={{ background: `${t.color}22`, color: t.color }}
+                        >
+                          {t.name}
+                        </span>
+                      ))}
                       <span
                         className="ml-1"
                         style={{ color: auto ? "var(--accent-deep)" : "var(--faint)" }}

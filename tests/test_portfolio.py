@@ -537,3 +537,74 @@ def test_a_table_that_does_not_exist_yet_is_left_to_create_all(tmp_path):
     from skas_algo.db.portfolio_schema import ensure_columns
 
     assert ensure_columns(create_engine(f"sqlite:///{tmp_path}/empty.db")) == []
+
+
+# ------------------------------------------------------------------ user-defined tags
+
+
+def test_a_holding_carries_many_tags_and_a_tag_many_holdings(client: TestClient):
+    """Many-to-many on purpose: a fund is legitimately 'child's education' AND 'long term'."""
+    a = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Fund A", "asset_class": "mf", "invested": 100, "value": 120}).json()["id"]
+    b = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Fund B", "asset_class": "mf", "invested": 100, "value": 120}).json()["id"]
+    t1 = client.post("/api/v1/portfolio/tags", json={"name": "Child education"}).json()
+    t2 = client.post("/api/v1/portfolio/tags", json={"name": "Long term"}).json()
+
+    client.put(f"/api/v1/portfolio/holdings/{a}/tags", json={"tag_ids": [t1["id"], t2["id"]]})
+    client.put(f"/api/v1/portfolio/holdings/{b}/tags", json={"tag_ids": [t1["id"]]})
+
+    body = client.get("/api/v1/portfolio").json()
+    rows = {h["id"]: h for h in body["holdings"]}
+    assert {t["name"] for t in rows[a]["tags"]} == {"Child education", "Long term"}
+    assert {t["name"] for t in rows[b]["tags"]} == {"Child education"}
+    assert next(t for t in body["tags"] if t["name"] == "Child education")["count"] == 2
+
+    for hid in (a, b):
+        client.delete(f"/api/v1/portfolio/holdings/{hid}")
+    for t in (t1, t2):
+        client.delete(f"/api/v1/portfolio/tags/{t['id']}")
+
+
+def test_creating_a_tag_that_exists_returns_it_rather_than_failing(client: TestClient):
+    """The caller is typing a name in order to APPLY it — a duplicate-name error mid-flow
+    helps nobody and loses what they typed."""
+    first = client.post("/api/v1/portfolio/tags", json={"name": "Retirement"}).json()
+    again = client.post("/api/v1/portfolio/tags", json={"name": "Retirement"}).json()
+    assert first["created"] is True and again["created"] is False
+    assert again["id"] == first["id"]
+    client.delete(f"/api/v1/portfolio/tags/{first['id']}")
+
+
+def test_setting_tags_replaces_the_whole_set(client: TestClient):
+    """Sent whole, so removing is the same call as adding and no partial path leaves a stale
+    link behind."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Tagged", "asset_class": "stk", "invested": 100, "value": 120}).json()["id"]
+    t1 = client.post("/api/v1/portfolio/tags", json={"name": "One"}).json()
+    t2 = client.post("/api/v1/portfolio/tags", json={"name": "Two"}).json()
+
+    client.put(f"/api/v1/portfolio/holdings/{hid}/tags", json={"tag_ids": [t1["id"], t2["id"]]})
+    out = client.put(f"/api/v1/portfolio/holdings/{hid}/tags", json={"tag_ids": [t2["id"]]})
+    assert [t["name"] for t in out.json()["tags"]] == ["Two"]
+
+    cleared = client.put(f"/api/v1/portfolio/holdings/{hid}/tags", json={"tag_ids": []})
+    assert cleared.json()["tags"] == []
+
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
+    for t in (t1, t2):
+        client.delete(f"/api/v1/portfolio/tags/{t['id']}")
+
+
+def test_deleting_a_tag_keeps_the_holdings(client: TestClient):
+    """A label is not the thing it labels."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Survivor", "asset_class": "stk", "invested": 100, "value": 120}).json()["id"]
+    tid = client.post("/api/v1/portfolio/tags", json={"name": "Doomed"}).json()["id"]
+    client.put(f"/api/v1/portfolio/holdings/{hid}/tags", json={"tag_ids": [tid]})
+
+    client.delete(f"/api/v1/portfolio/tags/{tid}")
+    rows = client.get("/api/v1/portfolio").json()["holdings"]
+    survivor = next(h for h in rows if h["id"] == hid)
+    assert survivor["tags"] == []
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")

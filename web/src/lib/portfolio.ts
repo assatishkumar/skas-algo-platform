@@ -83,6 +83,9 @@ export interface Holding {
   excluded_from_buckets: boolean;
   /** Expected annual distribution as a % of value. Null = unknown, never assumed zero. */
   dividend_yield_pct: number | null;
+  /** User-defined labels. Many-to-many, and separate from the single-valued asset
+   *  class so rebalancing counts each rupee exactly once. */
+  tags: TagRow[];
   note: string | null;
   basis: "ledger" | "summary";
   txn_count: number;
@@ -166,6 +169,7 @@ export interface PortfolioPayload {
   tax: { estimate_total: number; equity_ltcg_exemption: number };
   growth: GrowthSeries;
   income: IncomeView;
+  tags: TagRow[];
   dividends?: DividendRow[];
   server_time: string;
 }
@@ -643,4 +647,12 @@ export interface IncomeView {
   unpriced_value: number;
   unpriced_share_pct: number;
   lines: IncomeLine[];
+}
+
+
+export interface TagRow {
+  id: number;
+  name: string;
+  color: string;
+  count?: number;
 }

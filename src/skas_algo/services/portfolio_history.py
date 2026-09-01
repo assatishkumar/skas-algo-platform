@@ -63,6 +63,10 @@ def current_views(db: Session, *, today: date | None = None) -> list[dict]:
                 "units_locked": h.units_locked, "broker_units": h.broker_units,
                 "excluded_from_buckets": h.excluded_from_buckets, "note": h.note,
                 "dividend_yield_pct": h.dividend_yield_pct,
+                "tags": [
+                    {"id": t.id, "name": t.name, "color": t.color}
+                    for t in sorted(h.tags, key=lambda x: (x.sort_order, x.name))
+                ],
             },
             txns.get(h.id, []),
             today=today,
