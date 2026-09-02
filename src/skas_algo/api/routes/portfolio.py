@@ -118,6 +118,7 @@ def _goal_out(g: PortfolioGoal, holdings: list[dict] | None = None) -> dict:
             continue
         mat = h.get("maturity_date")
         contributions.append({
+            "name": h.get("name"),
             "monthly": mc * shares[h["id"]] / 100.0,
             "until_year": int(str(mat)[:4]) if mat else None,
         })
@@ -127,6 +128,11 @@ def _goal_out(g: PortfolioGoal, holdings: list[dict] | None = None) -> dict:
                             else "holdings" if has_record else "benchmark")
     out["benchmark_pct"] = bench
     out["linked_monthly"] = round(sum(c["monthly"] for c in contributions), 2)
+    # Named per stream so the card can say "PPF ₹12,500/mo" — a rounded total alone reads
+    # as a number the owner never typed anywhere (owner, 2026-09-02: ₹13k vs ₹12,500).
+    out["linked_streams"] = [
+        {"name": c["name"], "monthly": round(c["monthly"], 2)} for c in contributions
+    ]
     out["projection"] = pf.goal_projection(
         {**out, "monthly_sip": g.monthly_sip}, current_value=value, return_pct=rate,
         contributions=contributions,

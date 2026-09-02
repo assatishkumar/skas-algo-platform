@@ -537,6 +537,7 @@ def test_the_api_share_weights_a_linked_holdings_contribution(client: TestClient
     }).json()["id"]
     goal = next(g for g in client.get("/api/v1/portfolio").json()["goals"] if g["id"] == gid)
     assert goal["linked_monthly"] == pytest.approx(5_000)      # 40% of ₹12,500
+    assert goal["linked_streams"] == [{"name": "PPF", "monthly": 5_000.0}]
     client.delete(f"/api/v1/portfolio/goals/{gid}")
     client.delete(f"/api/v1/portfolio/holdings/{hid}")
 

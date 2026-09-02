@@ -436,9 +436,14 @@ export default function GoalsView({
                   {(g.linked_monthly ?? 0) > 0 && (
                     <span
                       className="ml-1 opacity-70"
-                      title="Ongoing contributions into the linked holdings (their own monthly contribution, share-weighted) — the projection counts every future instalment."
+                      title={`The projection counts every future instalment of: ${(g.linked_streams ?? [])
+                        .map((c) => `${c.name} ₹${c.monthly.toLocaleString("en-IN", { maximumFractionDigits: 0 })}/mo`)
+                        .join(", ") || "the linked holdings' own monthly contributions"}${""
+                        } (share-weighted by this goal's allocation).`}
                     >
-                      · +{money(g.linked_monthly ?? 0)}/mo flowing in
+                      {/* EXACT rupees, never the compact form: ₹12,500 shown as "₹13k" reads
+                          as a number the owner never entered anywhere. */}
+                      · +₹{(g.linked_monthly ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}/mo flowing in
                     </span>
                   )}
                 </span>
