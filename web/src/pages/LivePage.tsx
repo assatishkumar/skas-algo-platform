@@ -228,31 +228,56 @@ function useLiveFeed() {
   }, []);
 
   useEffect(() => {
-    seed();
-    const ws = new WebSocket(liveWsUrl());
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onmessage = (e) => {
-      const msg: LiveWsMessage = JSON.parse(e.data);
-      if (msg.type === "snapshot") {
-        setSnapshots((prev) => ({
-          ...prev,
-          [msg.run_id]: { ...prev[msg.run_id], ...msg } as LiveRunSnapshot,
-        }));
-        setVersions((prev) => ({ ...prev, [msg.run_id]: (prev[msg.run_id] ?? 0) + 1 }));
-      } else if (msg.type === "trades" && msg.events) {
-        setTrades((prev) =>
-          [...msg.events!.map((ev) => ({ ...ev, run_id: msg.run_id })), ...prev].slice(0, 50),
-        );
-      } else if (msg.type === "stopped") {
-        setSnapshots((prev) =>
-          prev[msg.run_id]
-            ? { ...prev, [msg.run_id]: { ...prev[msg.run_id], status: "stopped" } }
-            : prev,
-        );
-      }
+    // RECONNECT, and RE-SEED on every (re)connect. The socket used to be opened once: a
+    // backend restart closed it and the page then sat on its last snapshots for as long
+    // as the tab stayed open — stale exit rules, no new target, the tile "not updating"
+    // (owner, 2026-09-02, after a dev restart). Backoff 1s → 15s; the re-seed replaces
+    // every snapshot from the fresh /live list so nothing pre-restart survives.
+    let ws: WebSocket | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let delay = 1000;
+    let closed = false;
+    const connect = () => {
+      if (closed) return;
+      seed();
+      ws = new WebSocket(liveWsUrl());
+      ws.onopen = () => {
+        setConnected(true);
+        delay = 1000;
+      };
+      ws.onclose = () => {
+        setConnected(false);
+        if (closed) return;
+        timer = setTimeout(connect, delay);
+        delay = Math.min(delay * 2, 15000);
+      };
+      ws.onmessage = (e) => {
+        const msg: LiveWsMessage = JSON.parse(e.data);
+        if (msg.type === "snapshot") {
+          setSnapshots((prev) => ({
+            ...prev,
+            [msg.run_id]: { ...prev[msg.run_id], ...msg } as LiveRunSnapshot,
+          }));
+          setVersions((prev) => ({ ...prev, [msg.run_id]: (prev[msg.run_id] ?? 0) + 1 }));
+        } else if (msg.type === "trades" && msg.events) {
+          setTrades((prev) =>
+            [...msg.events!.map((ev) => ({ ...ev, run_id: msg.run_id })), ...prev].slice(0, 50),
+          );
+        } else if (msg.type === "stopped") {
+          setSnapshots((prev) =>
+            prev[msg.run_id]
+              ? { ...prev, [msg.run_id]: { ...prev[msg.run_id], status: "stopped" } }
+              : prev,
+          );
+        }
+      };
     };
-    return () => ws.close();
+    connect();
+    return () => {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      ws?.close();
+    };
   }, [seed]);
 
   return { snapshots, trades, versions, connected, seed };
