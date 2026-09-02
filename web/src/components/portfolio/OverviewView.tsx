@@ -5,11 +5,11 @@ import {
   type Kind,
   type AssetClassKey, type ClassAgg, type Holding, type PortfolioPayload,
 } from "../../lib/portfolio";
-import { Card, ConfirmAction, Dot, Pill } from "./primitives";
+import { Card, Dot, Pill } from "./primitives";
 
 type SortKey =
-  | "name" | "tag" | "units" | "avg" | "ltp" | "invested" | "value" | "gain"
-  | "xirr" | "today";
+  | "name" | "tag" | "units" | "avg" | "ltp" | "invested" | "value" | "gain" | "gain_pct"
+  | "xirr" | "today" | "today_pct";
 
 /** What each column sorts on. Money columns default to DESCENDING because the question is
  * almost always "what's biggest" — landing on the smallest holding first would make every
@@ -22,9 +22,15 @@ const SORTERS: Record<SortKey, { pick: (h: Holding) => number | string | null; d
   ltp: { pick: (h) => h.last_price, desc: true },
   invested: { pick: (h) => h.invested, desc: true },
   value: { pick: (h) => h.value, desc: true },
-  gain: { pick: (h) => h.gain_pct, desc: true },
+  // Gain and Today each hold TWO facts — rupees and percent — and they rank differently
+  // (₹328 on MANAPPURAM is +31.6%; ₹1.2 L on a big fund is +8%), so each gets its own key.
+  gain: { pick: (h) => h.gain, desc: true },
+  gain_pct: { pick: (h) => h.gain_pct, desc: true },
   xirr: { pick: (h) => h.xirr_pct, desc: true },
-  today: { pick: (h) => dayPct(h), desc: true },
+  // A zero day-change is "no market print" (a PF balance, a day-behind NAV) — it sorts
+  // last either way, like the null-column rule below.
+  today: { pick: (h) => (h.day_change === 0 ? null : h.day_change), desc: true },
+  today_pct: { pick: (h) => dayPct(h), desc: true },
 };
 
 /** Column widths, applied as an INLINE STYLE rather than a Tailwind `grid-cols-[…]` class.
@@ -46,8 +52,7 @@ const COLS = [
   "minmax(0,.9fr)",   // current
   "minmax(0,1.15fr)", // gain
   "minmax(0,.7fr)",   // return
-  "minmax(0,1fr)",    // today
-  "minmax(0,.9fr)",   // actions
+  "minmax(0,1.05fr)", // today
 ].join(" ");
 
 const BASIS_HELP: Record<Holding["return_basis"], string> = {
@@ -109,12 +114,10 @@ function ClassCard({
 }
 
 export default function OverviewView({
-  rows, payload, onEdit, onDelete, onLedger, onSetTag, density,
+  rows, payload, onLedger, onSetTag, density,
 }: {
   rows: Holding[];
   payload: PortfolioPayload;
-  onEdit: (h: Holding) => void;
-  onDelete: (h: Holding) => void;
   onLedger: (h: Holding) => void;
   onSetTag: (h: Holding, kind: Kind) => void;
   density: "comfortable" | "compact";
@@ -289,8 +292,12 @@ export default function OverviewView({
           />
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="max-h-[78vh] overflow-auto">
           <div className="min-w-[1180px]">
+            {/* Header + Total pinned as ONE sticky block: the total is a reading OF the
+                table, not a row of it — it must neither sort into the body nor scroll away
+                with it. Solid card background so body rows slide underneath. */}
+            <div className="sticky top-0 z-[2] bg-[var(--card)]">
             <div
               className="grid items-center gap-2 border-b border-[var(--border)] px-2.5 py-2 text-[11px] font-extrabold tracking-[.05em]"
               style={{ gridTemplateColumns: COLS }}
@@ -309,21 +316,21 @@ export default function OverviewView({
               <SortHead k="invested" label="INVESTED" sortKey={sortKey} desc={sortDesc}
                 onSort={sortBy} />
               <SortHead k="value" label="CURRENT" sortKey={sortKey} desc={sortDesc} onSort={sortBy} />
-              <SortHead k="gain" label="GAIN" sortKey={sortKey} desc={sortDesc} onSort={sortBy} />
+              <span className="flex items-baseline justify-end gap-1.5">
+                <SortHead k="gain" label="GAIN" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
+                  title="Sort by rupees gained since buying." />
+                <SortHead k="gain_pct" label="%" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
+                  title="Sort by percent gained since buying." />
+              </span>
               <SortHead k="xirr" label="RETURN" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
                 title="Annualised return. Above ~12% comfortably beats inflation plus an FD; negative needs a look." />
-              <SortHead k="today" label="TODAY" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
-                title="Today's change — market-linked holdings only. A fund's NAV is a day behind by design." />
-              <span className="text-right text-[var(--faint)]">ACTIONS</span>
+              <span className="flex items-baseline justify-end gap-1.5">
+                <SortHead k="today" label="TODAY" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
+                  title="Sort by today's rupee move — market-linked holdings only. A fund's NAV is a day behind by design." />
+                <SortHead k="today_pct" label="%" sortKey={sortKey} desc={sortDesc} onSort={sortBy}
+                  title="Sort by today's percent move." />
+              </span>
             </div>
-
-            {list.length === 0 && (
-              <div className="px-2.5 py-8 text-center text-[13px] font-semibold text-[var(--faint)]">
-                {rows.length === 0
-                  ? "Nothing tracked yet — add your first holding to start."
-                  : "No holding matches that filter."}
-              </div>
-            )}
 
             {list.length > 0 && (
               <div
@@ -361,7 +368,15 @@ export default function OverviewView({
                     <span className="ml-1 opacity-80">· {pct(summary.dayPct)}</span>
                   )}
                 </span>
-                <span />
+              </div>
+            )}
+            </div>
+
+            {list.length === 0 && (
+              <div className="px-2.5 py-8 text-center text-[13px] font-semibold text-[var(--faint)]">
+                {rows.length === 0
+                  ? "Nothing tracked yet — add your first holding to start."
+                  : "No holding matches that filter."}
               </div>
             )}
 
@@ -499,16 +514,6 @@ export default function OverviewView({
                     )}
                   </span>
 
-                  <span className="flex justify-end gap-3 text-[12px] font-extrabold">
-                    <button onClick={() => onEdit(h)} className="text-[var(--accent-deep)]">
-                      Edit
-                    </button>
-                    <ConfirmAction
-                      label="Delete"
-                      onConfirm={() => onDelete(h)}
-                      className="text-[var(--faint)] hover:text-[var(--danger)]"
-                    />
-                  </span>
                 </div>
               );
             })}

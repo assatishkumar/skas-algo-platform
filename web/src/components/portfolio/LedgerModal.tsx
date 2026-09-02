@@ -17,12 +17,16 @@ interface ParsePreview {
 }
 
 export default function LedgerModal({
-  holding, tags, onClose, onChanged,
+  holding, tags, onClose, onChanged, onEdit, onDelete,
 }: {
   holding: Holding;
   tags: TagRow[];
   onClose: () => void;
   onChanged: () => void;
+  /** Edit/Delete moved here from the table's Actions column (owner, 2026-09-02) — this
+   * modal is what a click on a holding opens, so it is where the holding is managed. */
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
   const [tab, setTab] = useState<"list" | "add" | "import">("list");
   const [rows, setRows] = useState<TransactionRow[]>([]);
@@ -302,6 +306,23 @@ export default function LedgerModal({
               {preview?.summary.rows === 1 ? "" : "s"}
             </button>
           </div>
+        </div>
+      )}
+
+      {(onEdit || onDelete) && (
+        <div className="mt-4 flex items-center justify-end gap-4 border-t border-[var(--divider)] pt-3 text-[12.5px] font-extrabold">
+          {onEdit && (
+            <button onClick={onEdit} className="text-[var(--accent-deep)]">
+              Edit holding
+            </button>
+          )}
+          {onDelete && (
+            <ConfirmAction
+              label="Delete holding"
+              onConfirm={onDelete}
+              className="text-[var(--faint)] hover:text-[var(--danger)]"
+            />
+          )}
         </div>
       )}
     </Modal>

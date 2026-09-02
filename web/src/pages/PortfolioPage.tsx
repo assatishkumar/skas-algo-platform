@@ -343,8 +343,7 @@ export default function PortfolioPage() {
           {tab === "Overview" && (
             <OverviewView
               rows={rows} payload={data} density={density}
-              onEdit={setEditing} onLedger={setLedger}
-              onDelete={(h) => removeHolding.mutate(h.id)}
+              onLedger={setLedger}
               onSetTag={(h, kind) =>
                 saveHolding.mutate({ id: h.id, body: { ...toInput(h), kind_override: kind } })}
             />
@@ -419,6 +418,14 @@ export default function PortfolioPage() {
           tags={data?.tags ?? []}
           onClose={() => setLedger(null)}
           onChanged={refresh}
+          onEdit={() => {
+            setEditing(rows.find((h) => h.id === ledger.id) ?? ledger);
+            setLedger(null);
+          }}
+          onDelete={() => {
+            removeHolding.mutate(ledger.id);
+            setLedger(null);
+          }}
         />
       )}
     </div>

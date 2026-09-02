@@ -190,7 +190,10 @@ export default function BucketsView({
                 </span>
               </div>
 
-              <div className="mb-3 flex flex-wrap gap-1.5">
+              {/* A crowded bucket (Growth holds ~30 names) must not set the row height
+                  for its neighbours — the grid already items-starts, but the tallest card
+                  still stretches the row. Cap the chips and scroll them instead. */}
+              <div className="mb-3 flex max-h-[176px] flex-wrap gap-1.5 overflow-y-auto">
                 {b.holding_ids.length === 0 && (
                   <span className="text-[11.5px] font-semibold text-[var(--faint)]">
                     Empty — add a holding below.
