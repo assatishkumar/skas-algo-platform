@@ -943,6 +943,7 @@ class PortfolioHoldingInput(BaseModel):
     # Fixed deposits only: the value is accrued from these rather than typed.
     interest_rate_pct: float | None = Field(default=None, ge=0, le=100)
     maturity_date: date | None = None
+    monthly_contribution: float | None = Field(default=None, ge=0)
     note: str | None = None
 
 
@@ -983,6 +984,14 @@ class PortfolioScheduleRow(BaseModel):
     amount: float = Field(gt=0)
 
 
+class PortfolioAllocation(BaseModel):
+    """A slice of one holding assigned to a goal. A ₹40 L fund can back school fees at 60%
+    and a wedding at 40%; what it cannot do is back both at 100%."""
+
+    holding_id: int
+    pct: float = Field(default=100.0, gt=0, le=100)
+
+
 class PortfolioGoalInput(BaseModel):
     """A goal is a STREAM of outflows: school fees for four years, travel for twenty, a
     wedding twice. ``target_amount``/``target_year`` remain only so an older single-point
@@ -994,6 +1003,7 @@ class PortfolioGoalInput(BaseModel):
     target_amount: float = Field(default=0.0, ge=0)
     target_year: int = Field(default=0, ge=0, le=2200)
     monthly_sip: float = Field(default=0.0, ge=0)
+    allocations: list[PortfolioAllocation] = Field(default_factory=list)
     holding_ids: list[int] = Field(default_factory=list)
     benchmark: str = "NIFTY 50 TRI"
 

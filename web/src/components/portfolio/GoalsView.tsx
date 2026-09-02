@@ -8,12 +8,13 @@ import {
 } from "./primitives";
 
 const BLANK = (): GoalInput => ({
-  name: "", schedule: [], inflation_pct: 6, target_amount: 0, target_year: 0,
-  monthly_sip: 0, holding_ids: [], benchmark: "NIFTY 50 TRI",
+  name: "", allocations: [], schedule: [], inflation_pct: 6, target_amount: 0,
+  target_year: 0, monthly_sip: 0, holding_ids: [], benchmark: "NIFTY 50 TRI",
 });
 
 const asInput = (g: Goal): GoalInput => ({
-  name: g.name, schedule: g.schedule ?? [], inflation_pct: g.inflation_pct,
+  name: g.name, allocations: g.allocations ?? [], schedule: g.schedule ?? [],
+  inflation_pct: g.inflation_pct,
   target_amount: g.target_amount, target_year: g.target_year,
   monthly_sip: g.monthly_sip, holding_ids: g.holding_ids, benchmark: g.benchmark,
 });
@@ -112,12 +113,17 @@ function ScheduleEditor({
 }
 
 function GoalForm({
-  initial, rows, benchmarks, onSave, onClose, title,
+  initial, rows, benchmarks, allocatedPct, onSave, onClose, title,
 }: {
   initial: GoalInput; rows: Holding[]; benchmarks: Record<string, number>;
+  allocatedPct: Record<string, number>;
   onSave: (g: GoalInput) => void; onClose: () => void; title: string;
 }) {
   const [draft, setDraft] = useState<GoalInput>(initial);
+  // Frozen at open: this goal's OWN existing share, so editing it doesn't read as a clash
+  // with itself.
+  const [initialPct] = useState<Record<number, number>>(() =>
+    Object.fromEntries(initial.allocations.map((a) => [a.holding_id, a.pct])));
   const [error, setError] = useState("");
   const set = (patch: Partial<GoalInput>) => setDraft((d) => ({ ...d, ...patch }));
 
@@ -149,26 +155,70 @@ function GoalForm({
           </select>
         </Field>
         <Field label="FUNDED BY" span={2}>
-          <div className="max-h-[180px] overflow-y-auto rounded-[10px] border-[1.5px] border-[var(--field-border)] bg-[var(--field)] p-2">
+          <div className="mb-1.5 text-[11.5px] font-semibold text-[var(--faint)]">
+            Give each holding a percentage. A fund can back several goals — what it cannot do
+            is back two of them with the same rupee, so the share left over from other goals
+            is the most you can take.
+          </div>
+          <div className="max-h-[220px] overflow-y-auto rounded-[10px] border-[1.5px] border-[var(--field-border)] bg-[var(--field)] p-2">
             {rows.length === 0 && (
               <div className="p-2 text-[12px] font-semibold text-[var(--faint)]">
                 No holdings to link yet.
               </div>
             )}
             {rows.map((h) => {
-              const on = draft.holding_ids.includes(h.id);
+              const mine = draft.allocations.find((a) => a.holding_id === h.id);
+              // What OTHER goals have taken — this goal's own share must not count against it.
+              const elsewhere = Math.max(
+                0, (allocatedPct[String(h.id)] ?? 0) - (initialPct[h.id] ?? 0),
+              );
+              const available = Math.max(0, 100 - elsewhere);
+              const on = !!mine;
               return (
-                <label key={h.id}
-                  className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] font-semibold text-[var(--strong)] hover:bg-[var(--row-hover)]">
-                  <input type="checkbox" checked={on}
+                <div
+                  key={h.id}
+                  className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] hover:bg-[var(--row-hover)]"
+                  style={{ opacity: available === 0 && !on ? 0.45 : 1 }}
+                >
+                  <input
+                    type="checkbox" checked={on} disabled={available === 0 && !on}
                     onChange={() => set({
-                      holding_ids: on
-                        ? draft.holding_ids.filter((i) => i !== h.id)
-                        : [...draft.holding_ids, h.id],
-                    })} />
-                  <span className="flex-1 truncate">{h.name}</span>
-                  <span className="text-[var(--faint)]">{money(h.value)}</span>
-                </label>
+                      allocations: on
+                        ? draft.allocations.filter((a) => a.holding_id !== h.id)
+                        : [...draft.allocations, { holding_id: h.id, pct: available }],
+                    })}
+                  />
+                  <span className="flex-1 truncate font-semibold text-[var(--strong)]">
+                    {h.name}
+                    <span className="ml-1.5 text-[11px] font-semibold text-[var(--faint)]">
+                      {money(h.value)}
+                      {elsewhere > 0 && (
+                        <span className="ml-1 text-[var(--note)]">
+                          · {elsewhere.toFixed(0)}% taken
+                        </span>
+                      )}
+                    </span>
+                  </span>
+                  {on && (
+                    <>
+                      <input
+                        type="number" min={1} max={available}
+                        value={mine.pct}
+                        onChange={(e) => {
+                          const pct = Math.max(1, Math.min(available, Number(e.target.value)));
+                          set({
+                            allocations: draft.allocations.map((a) =>
+                              a.holding_id === h.id ? { ...a, pct } : a),
+                          });
+                        }}
+                        className="w-14 rounded-md border-[1.5px] border-[var(--field-border)] bg-[var(--card)] px-1.5 py-0.5 text-right font-bold tabular-nums text-[var(--strong)] outline-none focus:border-[var(--accent)]"
+                      />
+                      <span className="text-[11px] font-bold text-[var(--faint)]">
+                        % · {money(h.value * mine.pct / 100)}
+                      </span>
+                    </>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -209,9 +259,12 @@ export default function GoalsView({
   const [editing, setEditing] = useState<Goal | "new" | null>(null);
   const [openYears, setOpenYears] = useState<number | null>(null);
 
-  const assigned = new Set(payload.goals.flatMap((g) => g.holding_ids));
-  const unassigned = rows.filter((h) => !assigned.has(h.id));
-  const unassignedValue = unassigned.reduce((a, h) => a + h.value, 0);
+  // Unassigned money is what is left AFTER partial allocations — a fund 60% committed to
+  // school fees still has 40% funding nothing, and calling it "assigned" would hide it.
+  const claimed = payload.goal_allocated_pct ?? {};
+  const unassigned = rows.filter((h) => (claimed[String(h.id)] ?? 0) < 99.99);
+  const unassignedValue = unassigned.reduce(
+    (a, h) => a + h.value * (100 - Math.min(100, claimed[String(h.id)] ?? 0)) / 100, 0);
 
   const totals = useMemo(() => {
     const t = { today: 0, nominal: 0, pv: 0, linked: 0 };
@@ -259,8 +312,9 @@ export default function GoalsView({
           const span = years.length
             ? `${years[0].year}${years.length > 1 ? `–${years[years.length - 1].year}` : ""}`
             : "—";
-          const ids = new Set(g.holding_ids);
-          const linked = rows.filter((h) => ids.has(h.id)).sort((a, b) => b.value - a.value);
+          const shares = new Map((g.allocations ?? []).map((a) => [a.holding_id, a.pct]));
+          const linked = rows.filter((h) => shares.has(h.id))
+            .sort((a, b) => b.value * (shares.get(b.id) ?? 0) - a.value * (shares.get(a.id) ?? 0));
           return (
             <Card key={g.id}>
               <div className="mb-1 flex items-center gap-2.5">
@@ -331,12 +385,17 @@ export default function GoalsView({
                   linked.map((h) => (
                     <span
                       key={h.id}
-                      title={`${h.class_label} · ${money(h.value)}`
+                      title={`${h.class_label} · ${money(h.value)} total`
                         + (h.xirr_pct !== null ? ` · returns ${pct(h.xirr_pct)}` : "")}
                       className="inline-flex items-center gap-1.5 rounded-full bg-[var(--chip)] px-2.5 py-1 text-[11px] font-bold text-[var(--chip-text)]"
                     >
                       {h.name}
-                      <span className="text-[var(--faint)]">{money(h.value)}</span>
+                      {(shares.get(h.id) ?? 100) < 100 && (
+                        <span className="text-[var(--note)]">{shares.get(h.id)}%</span>
+                      )}
+                      <span className="text-[var(--faint)]">
+                        {money(h.value * (shares.get(h.id) ?? 100) / 100)}
+                      </span>
                     </span>
                   ))
                 )}
@@ -411,6 +470,7 @@ export default function GoalsView({
           initial={editing === "new" ? BLANK() : asInput(editing)}
           rows={rows}
           benchmarks={payload.benchmarks}
+          allocatedPct={payload.goal_allocated_pct ?? {}}
           onClose={() => setEditing(null)}
           onSave={(g) => {
             if (editing === "new") onCreate(g);

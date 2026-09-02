@@ -691,3 +691,108 @@ def test_the_api_refuses_a_class_the_screen_cannot_render(client: TestClient):
         "name": "Legacy", "asset_class": "bank", "invested": 100, "value": 100,
     })
     assert resp.status_code == 422
+
+
+# ------------------------------------------------------------------ accrual & goal shares
+
+
+def test_epf_compounds_annually_and_ppf_takes_a_monthly_contribution():
+    """EPF and PPF are credited once a year, not quarterly like a bank FD — and a PPF is
+    still being paid into, so the contribution has to be part of the growth."""
+    epf = pf.accrued_value(14_545_698, 8.0, date(2025, 9, 2),
+                           compounds_per_year=1, today=date(2026, 9, 2))
+    assert epf == pytest.approx(14_545_698 * 1.08, rel=1e-3)
+
+    ppf = pf.accrued_value(1_300_000, 8.0, date(2025, 9, 2), monthly_contribution=12_500,
+                           compounds_per_year=1, today=date(2026, 9, 2))
+    # The year's 1.5 L of contributions, credited through the year so earning about half a
+    # year's return — not a full one, which would flatter every such account.
+    assert ppf > 1_300_000 * 1.08 + 150_000
+    assert ppf < 1_300_000 * 1.08 + 150_000 * 1.08
+
+
+def test_an_accruing_holding_with_no_rate_keeps_its_typed_value():
+    view = pf.holding_view(
+        {"id": 1, "name": "EPF", "asset_class": "epf", "invested": 100, "value": 14_545_698,
+         "buy_month": "2020-01"}, [], today=date(2026, 9, 2))
+    assert view["value"] == pytest.approx(14_545_698)
+
+
+def test_a_holding_can_fund_several_goals_by_percentage():
+    """All-or-nothing forced a false choice: a 40 L fund backs some of the fees AND some of
+    the wedding, and saying it backs only one of them is simply untrue."""
+    school = {"allocations": [{"holding_id": 1, "pct": 60}]}
+    wedding = {"allocations": [{"holding_id": 1, "pct": 40}]}
+    assert pf.allocation_conflicts([school, wedding]) == {1: 100.0}
+
+
+def test_the_older_whole_holding_form_reads_as_a_hundred_percent():
+    assert pf.goal_allocations({"holding_ids": [7]}) == [{"holding_id": 7, "pct": 100.0}]
+
+
+def test_the_api_refuses_to_fund_two_goals_with_the_same_rupee(client: TestClient):
+    """Both goals would look funded and only one could be — invisible from either card."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Shared fund", "asset_class": "mf", "invested": 100, "value": 4_000_000,
+    }).json()["id"]
+    g1 = client.post("/api/v1/portfolio/goals", json={
+        "name": "School", "schedule": [{"year": 2030, "amount": 100000}],
+        "allocations": [{"holding_id": hid, "pct": 70}],
+    }).json()["id"]
+
+    clash = client.post("/api/v1/portfolio/goals", json={
+        "name": "Wedding", "schedule": [{"year": 2035, "amount": 100000}],
+        "allocations": [{"holding_id": hid, "pct": 50}],
+    })
+    assert clash.status_code == 422
+    assert "already claimed" in clash.json()["detail"]
+
+    # …but the remaining 30% is fine.
+    g2 = client.post("/api/v1/portfolio/goals", json={
+        "name": "Wedding", "schedule": [{"year": 2035, "amount": 100000}],
+        "allocations": [{"holding_id": hid, "pct": 30}],
+    })
+    assert g2.status_code == 200
+
+    body = client.get("/api/v1/portfolio").json()
+    assert body["goal_allocated_pct"][str(hid)] == pytest.approx(100.0)
+    school = next(g for g in body["goals"] if g["id"] == g1)
+    assert school["current_value"] == pytest.approx(4_000_000 * 0.70)
+
+    for gid in (g1, g2.json()["id"]):
+        client.delete(f"/api/v1/portfolio/goals/{gid}")
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
+def test_editing_a_goal_does_not_collide_with_its_own_allocation(client: TestClient):
+    """Re-saving a goal at the same percentage must not count its existing claim twice."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Solo fund", "asset_class": "mf", "invested": 100, "value": 500_000,
+    }).json()["id"]
+    gid = client.post("/api/v1/portfolio/goals", json={
+        "name": "Only goal", "schedule": [{"year": 2030, "amount": 100000}],
+        "allocations": [{"holding_id": hid, "pct": 100}],
+    }).json()["id"]
+
+    again = client.put(f"/api/v1/portfolio/goals/{gid}", json={
+        "name": "Only goal", "schedule": [{"year": 2030, "amount": 100000}],
+        "allocations": [{"holding_id": hid, "pct": 100}],
+    })
+    assert again.status_code == 200
+
+    client.delete(f"/api/v1/portfolio/goals/{gid}")
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
+def test_a_deposit_grows_from_its_principal_and_a_pf_from_its_balance():
+    """Getting this backwards silently zeroes a holding. An FD is entered as a principal with
+    no value yet; a PF is entered as a balance with no contribution history."""
+    fd = pf.holding_view(
+        {"id": 1, "name": "FD", "asset_class": "fd", "invested": 500_000, "value": 0,
+         "buy_month": "2024-09", "interest_rate_pct": 7.4}, [], today=date(2026, 9, 2))
+    assert fd["value"] > 500_000
+
+    epf = pf.holding_view(
+        {"id": 2, "name": "EPF", "asset_class": "epf", "invested": 0, "value": 14_545_698,
+         "buy_month": "2025-09", "interest_rate_pct": 8.0}, [], today=date(2026, 9, 2))
+    assert epf["value"] == pytest.approx(14_545_698 * 1.08, rel=1e-3)

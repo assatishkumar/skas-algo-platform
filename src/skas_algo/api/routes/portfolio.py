@@ -72,6 +72,9 @@ def _bucket_out(b: PortfolioBucket) -> dict:
 def _goal_out(g: PortfolioGoal, holdings: list[dict] | None = None) -> dict:
     out = {
         "id": g.id, "name": g.name,
+        "allocations": pf.goal_allocations(
+            {"allocations": g.allocations, "holding_ids": g.holding_ids}
+        ),
         "schedule": list(g.schedule or []),
         "inflation_pct": g.inflation_pct,
         "target_amount": g.target_amount,
@@ -85,12 +88,16 @@ def _goal_out(g: PortfolioGoal, holdings: list[dict] | None = None) -> dict:
     # The projection needs the LINKED money and the return it actually earns, so it is built
     # here rather than in the browser — a year-by-year walk with inflation on one side and
     # compounding on the other is not arithmetic worth duplicating.
-    linked = [h for h in holdings if h["id"] in set(g.holding_ids or [])]
-    value = sum(h["value"] for h in linked)
+    shares = {a["holding_id"]: a["pct"] for a in out["allocations"]}
+    linked = [h for h in holdings if h["id"] in shares]
+    # Only the ALLOCATED share of each holding funds this goal.
+    value = sum(h["value"] * shares[h["id"]] / 100.0 for h in linked)
     bench = pf.BENCHMARKS.get(g.benchmark, 0.0)
+    weights = sum(h["value"] * shares[h["id"]] / 100.0 for h in linked)
     blended = (
-        sum((h["xirr_pct"] or 0.0) * h["value"] for h in linked) / value
-        if value > 0 and any(h["xirr_pct"] is not None for h in linked) else bench
+        sum((h["xirr_pct"] or 0.0) * h["value"] * shares[h["id"]] / 100.0 for h in linked)
+        / weights
+        if weights > 0 and any(h["xirr_pct"] is not None for h in linked) else bench
     )
     out["current_value"] = round(value, 2)
     out["return_pct"] = round(blended, 2)
@@ -162,6 +169,11 @@ def get_portfolio(db: Session = Depends(get_db)) -> dict:
         },
         "income": pf.income_view(holdings, divs),
         "dividends": divs,
+        # {holding_id: total % already claimed by goals} — the UI caps new
+        # allocations against it so the same rupee cannot fund two goals.
+        "goal_allocated_pct": pf.allocation_conflicts(
+            [{"allocations": g.allocations, "holding_ids": g.holding_ids} for g in goals]
+        ),
         "growth": growth_series(db),
         "server_time": datetime.now().astimezone().isoformat(),
     }
@@ -596,9 +608,42 @@ def delete_bucket(bucket_id: int, db: Session = Depends(get_db)) -> dict:
     return {"deleted": bucket_id}
 
 
+def _reject_over_allocation(
+    db: Session, body: PortfolioGoalInput, *, exclude_goal_id: int | None = None
+) -> None:
+    """Refuse a save that would fund two goals with the same rupee.
+
+    Both goals would then look funded and only one of them could be — the quietest way a plan
+    lies to you, and impossible to spot from either goal's own card. Splitting a holding across
+    goals by percentage is the supported way to share it."""
+    wanted = {a.holding_id: a.pct for a in body.allocations} or {
+        h: 100.0 for h in body.holding_ids
+    }
+    if not wanted:
+        return
+    others = [
+        {"allocations": g.allocations, "holding_ids": g.holding_ids}
+        for g in db.execute(select(PortfolioGoal)).scalars().all()
+        if g.id != exclude_goal_id
+    ]
+    claimed = pf.allocation_conflicts(others)
+    names = {h.id: h.name for h in db.execute(select(PortfolioHolding)).scalars().all()}
+    over = [
+        f"{names.get(hid, hid)} would be {claimed.get(hid, 0.0) + pct:.0f}% allocated "
+        f"({claimed.get(hid, 0.0):.0f}% is already claimed by other goals)"
+        for hid, pct in wanted.items()
+        if claimed.get(hid, 0.0) + pct > 100.0001
+    ]
+    if over:
+        raise HTTPException(422, "; ".join(over))
+
+
 @router.post("/goals")
 def create_goal(body: PortfolioGoalInput, db: Session = Depends(get_db)) -> dict:
-    row = PortfolioGoal(**body.model_dump(), sort_order=_next_order(db, PortfolioGoal))
+    _reject_over_allocation(db, body)
+    payload = body.model_dump()
+    payload["allocations"] = [a.model_dump() for a in body.allocations]
+    row = PortfolioGoal(**payload, sort_order=_next_order(db, PortfolioGoal))
     db.add(row)
     db.commit()
     return _goal_out(row)
@@ -609,7 +654,10 @@ def update_goal(goal_id: int, body: PortfolioGoalInput, db: Session = Depends(ge
     row = db.get(PortfolioGoal, goal_id)
     if row is None:
         raise HTTPException(404, "goal not found")
-    for key, value in body.model_dump().items():
+    _reject_over_allocation(db, body, exclude_goal_id=goal_id)
+    payload = body.model_dump()
+    payload["allocations"] = [a.model_dump() for a in body.allocations]
+    for key, value in payload.items():
         setattr(row, key, value)
     db.commit()
     return _goal_out(row)

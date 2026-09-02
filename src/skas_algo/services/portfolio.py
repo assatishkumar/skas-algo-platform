@@ -295,9 +295,48 @@ def _annualised(cost: float, value: float, months: float) -> float | None:
     return ((value / cost) ** (12.0 / months) - 1.0) * 100.0
 
 
-# Indian bank FDs compound QUARTERLY. Using annual compounding understates a 5-year deposit
-# by a few thousand rupees on a lakh — small, but wrong in a way that is trivially avoidable.
-_FD_COMPOUNDS_PER_YEAR = 4
+# How often each class actually compounds. An FD is quarterly (every Indian bank), EPF and
+# PPF are credited once a year. Using one rate for all three would be wrong in both directions.
+_COMPOUNDS_PER_YEAR = {"fd": 4, "epf": 1, "ppf": 1}
+
+# Classes whose value is COMPUTABLE rather than a matter of opinion. Everything else keeps
+# whatever was typed.
+ACCRUING_CLASSES = frozenset(_COMPOUNDS_PER_YEAR)
+
+
+def accrued_value(
+    principal: float,
+    rate_pct: float,
+    start: date,
+    *,
+    monthly_contribution: float = 0.0,
+    compounds_per_year: int = 4,
+    maturity: date | None = None,
+    today: date | None = None,
+) -> float:
+    """What a compounding balance is worth now: an FD, an EPF corpus, a PPF account.
+
+    These are the holdings whose value is not an opinion — a balance, a rate and a date
+    determine it exactly — so it is computed rather than left to be re-typed and drift by a
+    year's interest. ``monthly_contribution`` covers the accounts still being paid into (a PPF
+    at ₹12,500 a month); it is credited through the year and so earns roughly half a year's
+    return, since crediting a full year would overstate every one of them.
+
+    Accrual STOPS at maturity: a matured deposit earns nothing until it is renewed, and
+    compounding past that date invents money.
+    """
+    day = today or date.today()
+    end = min(day, maturity) if maturity else day
+    years = (end - start).days / 365.25
+    if years <= 0:
+        return principal
+    r = rate_pct / 100.0
+    n = max(1, compounds_per_year)
+    grown = principal * (1 + r / n) ** (n * years) if r > 0 else principal
+    if monthly_contribution > 0:
+        months = years * 12
+        grown += monthly_contribution * months * (1 + r * years / 2)
+    return grown
 
 
 def accrued_fd_value(
@@ -308,19 +347,10 @@ def accrued_fd_value(
     maturity: date | None = None,
     today: date | None = None,
 ) -> float:
-    """What a fixed deposit is worth right now.
-
-    The one manual holding whose value is not a matter of opinion: principal, rate and dates
-    determine it exactly, so it is computed rather than left to be re-typed and drift. Accrual
-    STOPS at maturity — a matured deposit sits in the account earning nothing until it is
-    renewed, and compounding past that date would invent money."""
-    day = today or date.today()
-    end = min(day, maturity) if maturity else day
-    years = (end - start).days / 365.25
-    if years <= 0 or rate_pct <= 0:
-        return principal
-    n = _FD_COMPOUNDS_PER_YEAR
-    return principal * (1 + rate_pct / 100.0 / n) ** (n * years)
+    """Quarterly-compounding deposit — the FD case of :func:`accrued_value`."""
+    return accrued_value(
+        principal, rate_pct, start, compounds_per_year=4, maturity=maturity, today=today,
+    )
 
 
 def holding_view(holding: dict, transactions: list[dict], *, today: date | None = None) -> dict:
@@ -347,14 +377,23 @@ def holding_view(holding: dict, transactions: list[dict], *, today: date | None 
         invested = float(holding.get("invested") or 0.0)
         value = float(holding.get("value") or 0.0)
         buy_month = holding.get("buy_month") or ""
-        # A fixed deposit's value is computable, so compute it rather than let a typed number
-        # go stale. The typed value stands when no rate is set.
+        # A deposit, an EPF corpus and a PPF account all have computable values, so compute
+        # them rather than let a typed number drift by a year's interest. The stated balance is
+        # taken as true on ``price_asof`` when set — that is what "as of" means — falling back
+        # to the start month. Without a rate, the typed value stands.
         rate = holding.get("interest_rate_pct")
-        if cls == "fd" and rate and invested > 0 and buy_month:
-            y, m = (int(x) for x in buy_month.split("-")[:2])
+        asof = holding.get("price_asof") or (f"{buy_month}-01" if buy_month else None)
+        # What compounds differs by class, and getting it backwards silently zeroes a holding.
+        # A DEPOSIT's principal is what was put in, so it grows out of `invested` into `value`.
+        # A PF's stated figure IS the balance already earned, so it grows out of `value` —
+        # `invested` there is a contribution history nobody has.
+        base = invested if cls == "fd" else value
+        if cls in ACCRUING_CLASSES and rate and base > 0 and asof:
             mat = holding.get("maturity_date")
-            value = round(accrued_fd_value(
-                invested, float(rate), date(y, m, 1),
+            value = round(accrued_value(
+                base, float(rate), date.fromisoformat(asof),
+                monthly_contribution=float(holding.get("monthly_contribution") or 0.0),
+                compounds_per_year=_COMPOUNDS_PER_YEAR[cls],
                 maturity=date.fromisoformat(mat) if mat else None, today=day,
             ), 2)
 
@@ -467,6 +506,7 @@ def holding_view(holding: dict, transactions: list[dict], *, today: date | None 
         "dividend_yield_pct": holding.get("dividend_yield_pct"),
         "interest_rate_pct": holding.get("interest_rate_pct"),
         "maturity_date": holding.get("maturity_date"),
+        "monthly_contribution": holding.get("monthly_contribution"),
         "tags": list(holding.get("tags") or []),
         "note": holding.get("note"),
         "basis": "ledger" if has_ledger else "summary",
@@ -706,3 +746,31 @@ def goal_projection(
         "final_corpus": round(corpus, 2),
         "years": last_year - base_year + 1,
     }
+
+
+def goal_allocations(goal: dict) -> list[dict]:
+    """``[{"holding_id", "pct"}]`` for a goal, in a single shape.
+
+    A goal used to claim whole holdings, which forced an all-or-nothing choice: a ₹40 L fund
+    could back the school fees or the wedding but not both, when in truth it backs some of
+    each. The older ``holding_ids`` form reads as 100% of each."""
+    rows = [
+        {"holding_id": int(a["holding_id"]), "pct": max(0.0, min(100.0, float(a.get("pct", 100))))}
+        for a in (goal.get("allocations") or [])
+        if a.get("holding_id") is not None
+    ]
+    if rows:
+        return rows
+    return [{"holding_id": int(h), "pct": 100.0} for h in (goal.get("holding_ids") or [])]
+
+
+def allocation_conflicts(goals: list[dict]) -> dict[int, float]:
+    """``{holding_id: total % claimed}`` across every goal.
+
+    The same rupee funding two goals is the quiet way a plan lies to you: both look funded,
+    and only one of them can be. Anything over 100 is over-committed."""
+    claimed: dict[int, float] = {}
+    for g in goals:
+        for a in goal_allocations(g):
+            claimed[a["holding_id"]] = claimed.get(a["holding_id"], 0.0) + a["pct"]
+    return claimed

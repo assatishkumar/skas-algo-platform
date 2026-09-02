@@ -319,6 +319,9 @@ class PortfolioHolding(Base, TimestampMixin):
     # accrued (quarterly, as Indian banks do) instead of being re-typed and drifting.
     interest_rate_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     maturity_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Accounts still being paid into — a PPF at Rs 12,500 a month. Credited through the
+    # year, so it earns about half a year's return rather than a full one.
+    monthly_contribution: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -377,6 +380,10 @@ class PortfolioGoal(Base, TimestampMixin):
     target_amount: Mapped[float] = mapped_column(Float, default=0.0)
     target_year: Mapped[int] = mapped_column(Integer, default=0)
     monthly_sip: Mapped[float] = mapped_column(Float, default=0.0)
+    # [{holding_id, pct}] — a holding can fund SEVERAL goals, split by percentage, and the
+    # same rupee must never back two of them. ``holding_ids`` is the older whole-holding
+    # form and reads as 100% each.
+    allocations: Mapped[list] = mapped_column(JSON, default=list)
     holding_ids: Mapped[list] = mapped_column(JSON, default=list)
     benchmark: Mapped[str] = mapped_column(String(32), default="NIFTY 50 TRI")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)

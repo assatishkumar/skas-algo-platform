@@ -87,6 +87,8 @@ export interface Holding {
   /** Fixed deposits: the value is ACCRUED from these, not typed. */
   interest_rate_pct: number | null;
   maturity_date: string | null;
+  /** Accounts still being paid into — a PPF at ₹12,500 a month. */
+  monthly_contribution: number | null;
   /** User-defined labels. Many-to-many, and separate from the single-valued asset
    *  class so rebalancing counts each rupee exactly once. */
   tags: TagRow[];
@@ -134,9 +136,16 @@ export interface GoalProjection {
   years: number;
 }
 
+export interface Allocation {
+  holding_id: number;
+  /** Share of that holding funding this goal. Several goals may split one. */
+  pct: number;
+}
+
 export interface Goal {
   id: number;
   name: string;
+  allocations: Allocation[];
   schedule: ScheduleRow[];
   inflation_pct: number;
   target_amount: number;
@@ -165,6 +174,8 @@ export interface PortfolioPayload {
   holdings: Holding[];
   buckets: Bucket[];
   goals: Goal[];
+  /** {holding_id: % already claimed by goals} — caps what a new goal may take. */
+  goal_allocated_pct: Record<string, number>;
   asset_classes: Record<AssetClassKey, { label: string; kind: Kind; color: string }>;
   class_targets: Record<string, number>;
   kind_targets: Record<Kind, number>;
@@ -423,6 +434,7 @@ export interface HoldingInput {
   dividend_yield_pct: number | null;
   interest_rate_pct: number | null;
   maturity_date: string | null;
+  monthly_contribution: number | null;
   note: string | null;
 }
 
@@ -453,6 +465,7 @@ export interface BucketInput {
 
 export interface GoalInput {
   name: string;
+  allocations: Allocation[];
   schedule: ScheduleRow[];
   inflation_pct: number;
   target_amount: number;
@@ -614,6 +627,7 @@ export function toInput(h: Holding): HoldingInput {
     dividend_yield_pct: h.dividend_yield_pct,
     interest_rate_pct: h.interest_rate_pct,
     maturity_date: h.maturity_date,
+    monthly_contribution: h.monthly_contribution,
     note: h.note,
   };
 }

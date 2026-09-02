@@ -17,7 +17,7 @@ const blank = (): HoldingInput => ({
   sync: "manual", sync_source: null, sync_ref: null, broker_account_id: null,
   units_locked: false, broker_units: {}, excluded_from_buckets: false,
   dividend_yield_pct: null, interest_rate_pct: null, maturity_date: null,
-  note: null,
+  monthly_contribution: null, note: null,
 });
 
 /** AMFI scheme picker. Searches the cached NAV file, so it answers instantly and works with
@@ -245,6 +245,37 @@ export default function HoldingModal({
                 onChange={(e) => set({ sync_ref: e.target.value.toUpperCase() })}
               />
             </Field>
+          </>
+        )}
+
+        {["epf", "ppf"].includes(draft.asset_class) && (
+          <>
+            <Field label="GROWS AT (% a year)">
+              <input
+                type="number" className={inputClass}
+                value={draft.interest_rate_pct ?? ""} placeholder="8"
+                onChange={(e) => set({
+                  interest_rate_pct: e.target.value ? Number(e.target.value) : null,
+                })}
+              />
+            </Field>
+            <Field label="PAID IN EACH MONTH (₹)">
+              <input
+                type="number" className={inputClass}
+                value={draft.monthly_contribution ?? ""} placeholder="12500"
+                onChange={(e) => set({
+                  monthly_contribution: e.target.value ? Number(e.target.value) : null,
+                })}
+              />
+            </Field>
+            <div className="col-span-2">
+              <Notice>
+                With a rate, the BALANCE compounds from the date below (annually, as
+                PF interest is credited) and any monthly contribution is added — so
+                the figure moves on its own instead of being a number you last typed
+                a year ago. Leave the rate blank to keep it fixed.
+              </Notice>
+            </div>
           </>
         )}
 
