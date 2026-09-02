@@ -248,7 +248,14 @@ class _DhanHttp:
             # A gateway 5xx says nothing about the account — it is Dhan's edge having a
             # moment. Retry ONCE. A 429 is deliberately NOT retried: the account is over
             # budget and asking again immediately is the opposite of the right response.
-            if r.status_code in self._RETRY_STATUSES and attempt == 0:
+            # THE ORDER PATH IS NEVER RETRIED (ultrareview, 2026-09-02): a 502 on
+            # POST /orders does not mean the OMS rejected it — the gateway may have failed
+            # AFTER the order was booked, and correlationId is a tag, not an idempotency
+            # key, so a resend books a SECOND real order while LiveBroker polls only the
+            # second id. Ambiguity on an order is a halt + reconciliation problem (the
+            # owner's intervention), never a resend. Mirrors _rate_kind's /orders carve-out.
+            if (r.status_code in self._RETRY_STATUSES and attempt == 0
+                    and not path.startswith("/orders")):
                 logger.warning(
                     "Dhan %s %s -> HTTP %s, retrying once", verb, path, r.status_code
                 )

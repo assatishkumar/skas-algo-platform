@@ -730,8 +730,14 @@ class LiveRun:
             )
             return
         except Exception:  # pragma: no cover - reconciliation must never kill the loop
+            # Counts toward the SAME backoff as ReconcileUnavailable (ultrareview,
+            # 2026-09-02): reconcile_account_book can raise a bare exception BEFORE the
+            # wrapped broker read (e.g. the scrip-master/NFO refresh on a token rollover),
+            # and a pending run bypasses the hourly throttle — without the counter this
+            # branch retries every tick, the exact storm the backoff exists to stop.
+            self._reconcile_fails = getattr(self, "_reconcile_fails", 0) + 1
             logger.exception("reconciliation failed for run %s", self.run_id)
-            return  # transient → stay pending, retry (throttle NOT armed)
+            return  # transient → stay pending, retry after backoff (throttle NOT armed)
         # A comparison completed: arm the hourly throttle and lift the pending gate. On a
         # mismatch, order_error becomes the (owner-acked) block instead.
         self._last_reconcile_at = now

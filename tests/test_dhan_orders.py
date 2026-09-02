@@ -569,3 +569,37 @@ def test_the_live_broker_ladder_runs_end_to_end_on_the_dhan_adapter():
     assert all(b["orderType"] == "LIMIT" for b in puts)
     assert all(b["quantity"] == 65 for b in puts), "restated from remaining+filled (R1)"
     assert [v for v, _p, _b in gw.calls if v == "DELETE"] == ["DELETE"]
+
+
+def test_the_order_path_is_never_retried_on_a_gateway_5xx(monkeypatch):
+    """A 502 on POST /orders does not mean the OMS rejected the order — the gateway may
+    have failed AFTER booking it, and correlationId is a tag, not an idempotency key: a
+    resend books a SECOND real order while LiveBroker polls only the second id. Exactly
+    ONE attempt may leave; the ambiguity is a halt + reconciliation problem, never a
+    resend. (Data-path 5xx keeps its single retry — pinned above.)"""
+    from skas_algo.brokers import dhan
+    from skas_algo.brokers.dhan import DhanApiError
+
+    monkeypatch.setattr(dhan, "_RATE_LAST", {})
+    monkeypatch.setattr(dhan._time, "sleep", lambda s: None)
+
+    class _Resp:
+        status_code = 502
+        text = "<html>bad gateway</html>"
+
+        def json(self):
+            return {}
+
+    for verb, path in (("POST", "/orders"), ("PUT", "/orders/9"), ("DELETE", "/orders/9"),
+                       ("GET", "/orders/9")):
+        seen: list[str] = []
+
+        def fake(v, url, _seen=seen, **kw):  # bound explicitly (the e73d7ab lesson)
+            _seen.append(url)
+            return _Resp()
+
+        monkeypatch.setattr("requests.request", fake)
+        http = dhan._DhanHttp("C1")
+        with pytest.raises(DhanApiError):
+            http._call(verb, path)
+        assert len(seen) == 1, f"{verb} {path} must be attempted exactly once"
