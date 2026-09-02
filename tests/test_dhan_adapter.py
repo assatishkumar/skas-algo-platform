@@ -106,7 +106,7 @@ def test_token_adopts_jwt_expiry_and_validates():
 
 
 def test_get_quote_buckets_and_maps_back():
-    responses = {"/marketfeed/ltp": {"data": {
+    responses = {"/marketfeed/quote": {"data": {
         "IDX_I": {"13": {"last_price": 24512.5}},
         "NSE_EQ": {"2885": {"last_price": 1402.2}},
         "NSE_FNO": {"49081": {"last_price": 182.4}},
@@ -115,7 +115,9 @@ def test_get_quote_buckets_and_maps_back():
     out = a.get_quote(["NIFTY", "RELIANCE", "NIFTY|2026-07-28|24500|CE", "UNKNOWN123"])
     assert out == {"NIFTY": 24512.5, "RELIANCE": 1402.2, "NIFTY|2026-07-28|24500|CE": 182.4}
     path, body = http.posts[-1]
-    assert path == "/marketfeed/ltp"
+    # ONE endpoint for both callers since the shared cache (2026-09-02): /quote and /ltp
+    # share the same per-second budget, and /quote's row answers get_quote AND day_quotes.
+    assert path == "/marketfeed/quote"
     assert body == {"IDX_I": [13], "NSE_EQ": [2885], "NSE_FNO": [49081]}  # one batched call
 
 
@@ -218,3 +220,160 @@ def test_api_dhan_account_guards():
         assert ei.value.status_code == 400 and "zerodha account" in ei.value.detail
     finally:
         db.close()
+
+
+# ------------------------------------------------ shared per-account quote cache (2026-09-02)
+#
+# The redesign after the third round of 429s: N runs on one Dhan account are N adapters,
+# each polling on its own clock — traffic-shaping gates only choose who waits, so demand
+# still scaled with run count. The cache DEDUPLICATES demand instead: one fetcher per
+# account refreshes the union of every wanted symbol, everyone else reads.
+
+_Q = {"/marketfeed/quote": {"data": {
+    "IDX_I": {"13": {"last_price": 24512.5, "prev_close_price": 24400.0}},
+    "NSE_EQ": {"2885": {"last_price": 1402.2, "prev_close_price": 1390.0}},
+}}}
+
+
+def test_a_second_consumer_rides_the_first_ones_refresh():
+    """Adapter B asking inside the TTL is served from adapter A's refresh — zero extra
+    HTTP. This is the property that makes the tenth run on the account cost nothing."""
+    a, ha = _adapter(responses=_Q)
+    b, hb = _adapter(responses=_Q)
+    assert a.get_quote(["NIFTY"]) == {"NIFTY": 24512.5}
+    assert b.get_quote(["NIFTY"]) == {"NIFTY": 24512.5}
+    # …and the SAME cached row answers day_quotes, prev_close included.
+    assert b.day_quotes(["NIFTY"]) == {"NIFTY": {"last": 24512.5, "prev_close": 24400.0}}
+    assert len(ha.posts) == 1 and len(hb.posts) == 0, "B must ride A's refresh"
+
+
+def test_a_new_symbol_refreshes_the_union_so_every_consumer_stays_covered():
+    """The fetcher asks for the UNION of everything wanted recently — run 27's tick pays
+    for run 28's marks, so the two stop being competitors for the 1/s budget."""
+    a, ha = _adapter(responses=_Q)
+    b, hb = _adapter(responses=_Q)
+    a.get_quote(["NIFTY"])                        # fetch #1: NIFTY alone
+    b.get_quote(["RELIANCE"])                     # RELIANCE is stale → fetch #2, the UNION
+    assert hb.posts[-1][1] == {"IDX_I": [13], "NSE_EQ": [2885]}
+    a.get_quote(["NIFTY", "RELIANCE"])            # both fresh now — nobody fetches again
+    b.day_quotes(["NIFTY"])
+    assert len(ha.posts) + len(hb.posts) == 2
+
+
+def test_the_ttl_expires_and_a_fresh_fetch_happens(monkeypatch):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(dhan_mod._time, "monotonic", lambda: clock["t"])
+    a, http = _adapter(responses=_Q)
+    a.get_quote(["NIFTY"])
+    a.get_quote(["NIFTY"])
+    assert len(http.posts) == 1, "inside the TTL the cache answers"
+    clock["t"] += 6.0                             # past the 5s default TTL
+    a.get_quote(["NIFTY"])
+    assert len(http.posts) == 2
+
+
+def test_ttl_zero_disables_the_cache(monkeypatch):
+    monkeypatch.setenv("SKAS_DHAN_QUOTE_TTL", "0")
+    a, http = _adapter(responses=_Q)
+    a.get_quote(["NIFTY"])
+    a.get_quote(["NIFTY"])
+    assert len(http.posts) == 2, "TTL 0 is the escape hatch — every call fetches"
+
+
+def test_an_unresolvable_symbol_does_not_defeat_the_cache():
+    """A symbol with no scrip-master row returns no data — but is STAMPED as covered, so
+    it cannot force a fresh HTTP call on every tick (a stealth cache bypass)."""
+    a, http = _adapter(responses=_Q)
+    assert a.get_quote(["NIFTY", "UNKNOWN123"]) == {"NIFTY": 24512.5}
+    assert a.get_quote(["NIFTY", "UNKNOWN123"]) == {"NIFTY": 24512.5}
+    assert len(http.posts) == 1
+
+
+def test_accounts_do_not_share_a_quote_cache():
+    """The store is per client id — one account's marks must never answer for another's."""
+    a, ha = _adapter(responses=_Q)
+    other = FakeHttp(responses=_Q)
+    b = DhanAdapter(DhanCredentials(client_id="2000999999"), client=other)
+    a.get_quote(["NIFTY"])
+    b.get_quote(["NIFTY"])
+    assert len(ha.posts) == 1 and len(other.posts) == 1, "separate accounts, separate fetches"
+
+
+def test_single_flight_one_fetch_for_n_concurrent_askers():
+    """Ticks run on real threads (manager._tick_pool), so N runs genuinely race. Exactly
+    ONE becomes the fetcher; the rest wait on its event and read the result."""
+    import threading
+
+    class SlowHttp(FakeHttp):
+        def __init__(self, responses):
+            super().__init__(responses=responses)
+            self.gate = threading.Event()
+            self._l = threading.Lock()
+            self.count = 0
+
+        def post(self, path, body):
+            with self._l:
+                self.count += 1
+            self.gate.wait(5.0)               # hold the fetch open so the others pile up
+            return super().post(path, body)
+
+    http = SlowHttp(_Q)
+    a = DhanAdapter(DhanCredentials(client_id="1000123456"), client=http)
+    results: list[dict] = []
+    threads = [threading.Thread(target=lambda: results.append(a.get_quote(["NIFTY"])))
+               for _ in range(5)]
+    for t in threads:
+        t.start()
+    import time as _t
+    _t.sleep(0.25)                            # let every thread reach the cache
+    http.gate.set()
+    for t in threads:
+        t.join(timeout=10.0)
+    assert http.count == 1, "five concurrent askers, ONE fetch"
+    assert results == [{"NIFTY": 24512.5}] * 5
+
+
+def test_budget_proof_three_pollers_collapse_to_one_paced_stream(monkeypatch):
+    """The 2026-09-02 verification harness in miniature: a fast tick (run 27), a slow tick
+    (run 28) and a portfolio sync hammering one account must cost ≤ one fetch per TTL
+    window, spaced ~TTL apart — never the same-instant pairs that tripped Dhan's 1/s
+    budget. (Time compressed 100×: TTL 0.25s, ticks 30–200ms.)"""
+    import threading
+    import time as _t
+
+    monkeypatch.setenv("SKAS_DHAN_QUOTE_TTL", "0.25")
+
+    class CountingHttp(FakeHttp):
+        def __init__(self, responses):
+            super().__init__(responses=responses)
+            self.times: list[float] = []
+            self._l = threading.Lock()
+
+        def post(self, path, body):
+            with self._l:
+                self.times.append(_t.monotonic())
+            return super().post(path, body)
+
+    http = CountingHttp(_Q)
+    creds = DhanCredentials(client_id="1000123456")
+    adapters = [DhanAdapter(creds, client=http) for _ in range(3)]
+    adapters[0].get_quote(["NIFTY", "RELIANCE"])  # prime: union registered + fresh
+
+    def poll(adapter, symbols, every, n):
+        for _ in range(n):
+            adapter.get_quote(symbols)
+            _t.sleep(every)
+
+    threads = [
+        threading.Thread(target=poll, args=(adapters[0], ["NIFTY"], 0.03, 20)),
+        threading.Thread(target=poll, args=(adapters[1], ["NIFTY", "RELIANCE"], 0.05, 12)),
+        threading.Thread(target=poll, args=(adapters[2], ["RELIANCE"], 0.20, 3)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # ~0.6s of polling on a 0.25s TTL → the prime + at most ~3 refreshes (35 calls asked).
+    assert 2 <= len(http.times) <= 5, http.times
+    gaps = [b - a for a, b in zip(http.times, http.times[1:], strict=False)]
+    assert all(g >= 0.2 for g in gaps), f"refreshes must be TTL-spaced, got gaps {gaps}"

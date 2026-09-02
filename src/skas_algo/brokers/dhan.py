@@ -1,4 +1,4 @@
-"""BrokerAdapter for Dhan (DhanHQ v2 REST API) — Phase A: quotes / chains / margin only.
+"""BrokerAdapter for Dhan (DhanHQ v2 REST API): session / quotes / chains / margin / orders.
 
 Auth model differs from Kite: there is NO request-token exchange. The user generates an
 access token (a JWT, ~24h validity) on web.dhan.co and pastes it — so this adapter's
@@ -102,8 +102,12 @@ class DhanThrottled(Exception):
 # rejected quote. Never gate the order path to protect a data poll.
 _RATE_LOCK = threading.Lock()
 _RATE_LAST: dict[tuple[str, str], float] = {}
-# Per-ENDPOINT-CLASS floors. The option chain is the tightest.
-_MIN_GAP = {"chain": 3.0, "quote": 1.0, "data": 1.0}
+# Per-ENDPOINT-CLASS floors. The option chain is the tightest. The quote floor sits ABOVE
+# Dhan's documented 1/s Quote-API budget on purpose: spacing calls at exactly 1.0s IS the
+# boundary, and jitter turns a boundary into same-second arrivals (the 2026-09-02 429s).
+# 1.2s buys slack — and the shared quote cache below is what makes the slack affordable,
+# by collapsing demand to ~one refresh per TTL window however many runs are polling.
+_MIN_GAP = {"chain": 3.0, "quote": 1.2, "data": 1.0}
 # …and an ACCOUNT-WIDE floor on top, because Dhan meters the whole Data API family per
 # client, not per endpoint. Keyed only by kind, a quote and a /holdings call are two
 # independent 1/s streams and fire in the SAME SECOND — which is exactly what the logs show
@@ -155,6 +159,51 @@ def _rate_gate(client_id: str, path: str) -> None:
         _RATE_LAST[acct_key] = max(now, earliest)
     if wait > 0:
         _time.sleep(wait)
+
+
+# ----------------------------------------- shared quote cache: one fetcher per account
+#
+# The rate gate above SHAPES traffic; this cache REMOVES it. N runs on one Dhan account are
+# N adapters (make_adapter never memoizes, and adapters churn on every quote-source rebuild),
+# each polling much the same symbols on its own clock — so demand scales with run count while
+# the Quote-API budget stays a flat ~1/s per account. Shaping N independent streams can only
+# choose who waits; DEDUPLICATING them caps demand at one refresh per TTL window no matter
+# how many consumers exist, which is what lets the next run cost ~nothing. Module level,
+# keyed by client id, for the same reason the scrip master is: shared state must survive
+# adapter churn.
+#
+# Single-flight: the first stale reader refreshes the UNION of every symbol any consumer
+# asked for recently (``wanted``), so run A's tick pays for run B's marks and the portfolio
+# sync rides both. Everyone else waits on the in-flight event and reads the result. A ≤5s-old
+# mark is indistinguishable from fresh for ticks firing every 15–30s — and the ORDER path
+# never reads this cache: LiveBroker re-reads its touch from the live book at every rung.
+_QUOTE_TTL = 5.0        # SKAS_DHAN_QUOTE_TTL — 0 disables the cache (every call fetches)
+_WANTED_TTL = 120.0     # forget symbols nobody has asked about for this long
+_QUOTE_WAIT_S = 20.0    # cap on waiting for another thread's refresh (≈ one HTTP round trip)
+
+
+class _AccountQuotes:
+    """Per-account store: last marks + the rolling union of recently-wanted symbols."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        # symbol -> {"last": float | None, "prev_close": float | None}
+        self.prices: dict[str, dict] = {}
+        self.asof: dict[str, float] = {}    # symbol -> monotonic ts of the fetch covering it
+        self.wanted: dict[str, float] = {}  # symbol -> monotonic ts it was last asked for
+        self.inflight: threading.Event | None = None
+
+
+_QUOTES: dict[str, _AccountQuotes] = {}
+_QUOTES_LOCK = threading.Lock()
+
+
+def _quotes_for(client_id: str) -> _AccountQuotes:
+    with _QUOTES_LOCK:
+        store = _QUOTES.get(client_id)
+        if store is None:
+            store = _QUOTES[client_id] = _AccountQuotes()
+        return store
 
 
 class _DhanHttp:
@@ -472,14 +521,32 @@ class DhanAdapter:
         cur = self._http.get(f"/orders/{broker_order_id}") or {}
         if isinstance(cur, list):          # order-by-id can come back as a 1-element list
             cur = cur[0] if cur else {}
+        new_type = (self._ORDER_TYPE_MAP.get(order_type, "MARKET")
+                    if order_type is not None else str(cur.get("orderType") or "LIMIT"))
+        # Restating means COPYING quantity — and a copy of a field the gateway omitted is 0,
+        # which turns an escalation rung into "modify this order to zero shares". On a
+        # PART_TRADED body the fill lives in filledQty/remainingQuantity and ``quantity``
+        # is not guaranteed, so rebuild the total from the pieces; if nothing yields a
+        # positive number, RAISE — LiveBroker logs a modifyerr and keeps polling, which
+        # beats sending a nonsense restatement to a live book.
+        qty = int(cur.get("quantity") or 0)
+        if qty <= 0:
+            qty = int(cur.get("remainingQuantity") or 0) + int(cur.get("filledQty") or 0)
+        if qty <= 0:
+            raise ValueError(
+                f"Dhan order {broker_order_id}: cannot restate quantity from {cur!r:.200}")
         body = {
             "dhanClientId": self.creds.client_id,
             "orderId": str(broker_order_id),
-            "orderType": (self._ORDER_TYPE_MAP.get(order_type, "MARKET")
-                          if order_type is not None else cur.get("orderType", "LIMIT")),
-            "quantity": int(cur.get("quantity") or 0),
+            "orderType": new_type,
+            "quantity": qty,
             "validity": cur.get("validity") or "DAY",
-            "price": float(price if price is not None else (cur.get("price") or 0.0)),
+            # A MARKET restatement must carry price 0 — place_order is careful about this
+            # (Dhan wants the field present and zero), but the copy-forward here used to
+            # keep the stale LIMIT price on the one path (book vanished, no price basis)
+            # where the escalation has nothing else left.
+            "price": (0.0 if new_type == "MARKET"
+                      else float(price if price is not None else (cur.get("price") or 0.0))),
         }
         if cur.get("disclosedQuantity"):
             body["disclosedQuantity"] = int(cur["disclosedQuantity"])
@@ -607,10 +674,16 @@ class DhanAdapter:
             back[(seg, str(sid))] = s
         return buckets, back
 
-    def day_quotes(self, symbols: list[str]) -> dict[str, dict]:
-        """``{symbol: {"last", "prev_close"}}`` via ONE ``/marketfeed/quote`` call — the
-        richer sibling of ``get_quote``, carrying the previous close that a day change needs.
-        Same subscription and throttle rules as every other Dhan market-data call."""
+    def _fetch_marketfeed(self, symbols: list[str]) -> dict[str, dict]:
+        """{symbol: {"last", "prev_close"}} straight from ONE ``/marketfeed/quote`` call —
+        the raw fetch behind the shared cache. One endpoint serves BOTH get_quote and
+        day_quotes: /quote and /ltp share the same per-second budget, and /quote's extra
+        fields let a single cached row answer either caller.
+
+        Failures PROPAGATE (mirrors ZerodhaAdapter.get_quote): the live loop turns a raising
+        quote source into quote_error → degraded badge → self-heal on re-login. Notably Dhan
+        401s with "806: Data APIs not Subscribed" when the account lacks the paid Data plan —
+        swallowing that would look like a silent dead feed."""
         buckets, back = self._quote_buckets(symbols)
         if not buckets:
             return {}
@@ -621,31 +694,84 @@ class DhanAdapter:
                 sym = back.get((seg, str(sid)))
                 if not sym or not q:
                     continue
+                last = q.get("last_price")
                 prev = q.get("prev_close_price") or (q.get("ohlc") or {}).get("close")
                 out[sym] = {
-                    "last": float(q.get("last_price") or 0.0),
+                    "last": float(last) if last is not None else None,
                     "prev_close": float(prev) if prev else None,
                 }
         return out
 
+    def _cached_quotes(self, symbols: list[str]) -> dict[str, dict]:
+        """Serve ``symbols`` from the per-account store, refreshing at most once per TTL.
+
+        Single-flight: exactly one thread fetches (the pruned UNION of everything wanted
+        recently); the rest wait on its event and read the result. A thread whose waiting
+        never covered its symbols (pathological contention, or the fetcher failed) falls
+        through to its own direct fetch — still paced by the rate gate — so upstream error
+        handling is exactly what it was when every caller fetched for itself."""
+        ttl = float(os.environ.get("SKAS_DHAN_QUOTE_TTL", _QUOTE_TTL))
+        if ttl <= 0:
+            return self._fetch_marketfeed(symbols)
+        store = _quotes_for(self.creds.client_id)
+        deadline = _time.monotonic() + _QUOTE_WAIT_S
+        for _attempt in range(3):
+            union: list[str] | None = None
+            with store.lock:
+                now = _time.monotonic()
+                for s in symbols:
+                    store.wanted[s] = now
+                if all(store.asof.get(s, 0.0) > now - ttl for s in symbols):
+                    return {s: store.prices[s] for s in symbols if s in store.prices}
+                ev = store.inflight
+                if ev is None:
+                    ev = store.inflight = threading.Event()
+                    cutoff = now - _WANTED_TTL
+                    for k in [k for k, t in store.wanted.items() if t < cutoff]:
+                        del store.wanted[k]
+                    union = list(store.wanted)
+            if union is None:
+                # Someone else is already fetching — ride their call, then re-check.
+                ev.wait(timeout=max(0.1, deadline - _time.monotonic()))
+                continue
+            try:
+                fetched = self._fetch_marketfeed(union)
+                ts = _time.monotonic()
+                with store.lock:
+                    # Stamp EVERY asked symbol, including ones with no row back — an
+                    # unresolvable symbol must not force a fresh fetch on every call.
+                    for s in union:
+                        store.asof[s] = ts
+                    store.prices.update(fetched)
+            finally:
+                with store.lock:
+                    store.inflight = None
+                ev.set()
+            with store.lock:
+                return {s: store.prices[s] for s in symbols if s in store.prices}
+        # Three rounds of riding other threads' refreshes never covered these symbols —
+        # fetch them directly rather than spin; the rate gate still paces the account.
+        fetched = self._fetch_marketfeed(symbols)
+        ts = _time.monotonic()
+        with store.lock:
+            for s in symbols:
+                store.asof[s] = ts
+            store.prices.update(fetched)
+        return dict(fetched)
+
+    def day_quotes(self, symbols: list[str]) -> dict[str, dict]:
+        """``{symbol: {"last", "prev_close"}}`` — the richer quote row a day change needs,
+        served from the shared per-account cache (one batched refresh per TTL window
+        covers every consumer on the account)."""
+        return {
+            s: {"last": float(r.get("last") or 0.0), "prev_close": r.get("prev_close")}
+            for s, r in self._cached_quotes(symbols).items()
+        }
+
     def get_quote(self, symbols: list[str]) -> dict[str, float]:
-        """LTP per engine symbol via ONE batched marketfeed call."""
-        buckets, back = self._quote_buckets(symbols)
-        if not buckets:
-            return {}
-        # Let failures PROPAGATE (mirrors ZerodhaAdapter.get_quote): the live loop turns a
-        # raising quote source into quote_error → degraded badge → self-heal on re-login.
-        # Notably Dhan 401s with "806: Data APIs not Subscribed" when the account lacks the
-        # paid Data plan — swallowing that would look like a silent dead feed.
-        data = (self._http.post("/marketfeed/ltp", buckets) or {}).get("data") or {}
-        out: dict[str, float] = {}
-        for seg, per_id in data.items():
-            for sid, q in (per_id or {}).items():
-                sym = back.get((seg, str(sid)))
-                ltp = (q or {}).get("last_price")
-                if sym and ltp is not None:
-                    out[sym] = float(ltp)
-        return out
+        """LTP per engine symbol, served from the shared per-account cache."""
+        return {s: float(r["last"]) for s, r in self._cached_quotes(symbols).items()
+                if r.get("last") is not None}
 
     def underlying_ltp(self, underlying: str) -> float | None:
         q = self.get_quote([underlying.upper()])

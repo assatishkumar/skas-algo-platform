@@ -50,6 +50,19 @@ def _create_schema():
         os.remove(_DB_PATH)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_dhan_account_state():
+    """dhan.py keeps per-ACCOUNT state at module level (the rate gate, the shared quote
+    cache) precisely so it survives adapter churn — which also makes it survive from one
+    test to the next: client ids repeat across tests, so a price cached by one test would
+    be served as another test's answer. Clear both stores before every test."""
+    from skas_algo.brokers import dhan
+
+    dhan._RATE_LAST.clear()
+    dhan._QUOTES.clear()
+    yield
+
+
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(create_app())

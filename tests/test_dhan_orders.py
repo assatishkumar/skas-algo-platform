@@ -454,3 +454,118 @@ def test_a_gateway_5xx_is_retried_once_but_a_429_is_not(monkeypatch):
         except Exception:
             pass                      # a 429 raises; the call COUNT is what matters here
         assert len(seen) == expected_calls, codes
+
+
+# --------------------------------------------- modify restatement (R1/R2, 2026-09-02 audit)
+def test_a_market_escalation_modify_sends_price_zero_not_the_stale_limit():
+    """R2: LiveBroker escalates to MARKET when the book has vanished — modify_order(
+    order_type=MARKET) with NO price. The restatement used to copy the live order's LIMIT
+    price forward while switching orderType to MARKET; place_order is careful to send 0
+    there, and the modify must be too. Reachable exactly when the escalation is needed
+    most (no price basis left)."""
+    http = FakeHttp({
+        ("GET", "/orders/9"): {"orderType": "LIMIT", "quantity": 65, "validity": "DAY",
+                               "price": 123.45},
+        ("PUT", "/orders/9"): {"orderId": "9"}})
+    _adapter(http).modify_order("9", order_type=OrderType.MARKET)
+    body = http.calls[1][2]
+    assert body["orderType"] == "MARKET" and body["price"] == 0.0
+    assert body["quantity"] == 65
+
+
+def test_a_part_traded_restatement_rebuilds_quantity_and_never_sends_zero():
+    """R1: on a PART_TRADED body the fill lives in filledQty/remainingQuantity and
+    ``quantity`` is not guaranteed — int(missing or 0) restated the order to ZERO shares.
+    Rebuild the total from the pieces; with nothing to rebuild from, RAISE (LiveBroker
+    logs a modifyerr and keeps polling) rather than modify a live order to nonsense."""
+    http = FakeHttp({
+        ("GET", "/orders/9"): {"orderStatus": "PART_TRADED", "orderType": "LIMIT",
+                               "filledQty": 30, "remainingQuantity": 35, "price": 100.0},
+        ("PUT", "/orders/9"): {"orderId": "9"}})
+    _adapter(http).modify_order("9", order_type=OrderType.LIMIT, price=108.10)
+    body = http.calls[1][2]
+    assert body["quantity"] == 65 and body["price"] == 108.10
+
+    empty = FakeHttp({("GET", "/orders/9"): {"orderStatus": "PART_TRADED"}})
+    with pytest.raises(ValueError, match="cannot restate quantity"):
+        _adapter(empty).modify_order("9", order_type=OrderType.LIMIT, price=110.0)
+    assert not any(v == "PUT" for v, _, _ in empty.calls), "no zero-quantity PUT may leave"
+
+
+# ------------------------------------------- LiveBroker × DhanAdapter, end to end
+def test_the_live_broker_ladder_runs_end_to_end_on_the_dhan_adapter():
+    """The Kite-parity claim in one test: LiveBroker's LIMIT-at-touch → 3-rung escalation
+    → cancel → partial-fill booking, executed against the DHAN adapter with a scripted
+    gateway. Pins that the generic surface really is generic — statuses arrive in Dhan
+    vocabulary (PART_TRADED / CANCELLED), every modify is a full restatement (rebuilt from
+    remaining+filled once fills start — the R1 shape), and the partial books from
+    filledQty at the broker's average."""
+    import types
+    from datetime import datetime
+
+    from skas_algo.brokers.live_broker import LiveBroker
+
+    class Gateway(FakeHttp):
+        """State-machine gateway: PENDING until the first modify, PART_TRADED through the
+        ladder, CANCELLED (keeping the partial) after the cancel."""
+
+        def __init__(self):
+            super().__init__()
+            self.puts = 0
+            self.deleted = False
+
+        def post(self, path, body):
+            self.calls.append(("POST", path, body))
+            return {"orderId": "42", "orderStatus": "TRANSIT"}
+
+        def _last_put_price(self):
+            for verb, _p, body in reversed(self.calls):
+                if verb == "PUT":
+                    return body["price"]
+            return None
+
+        def get(self, path):
+            self.calls.append(("GET", path, None))
+            if self.deleted:
+                return {"orderStatus": "CANCELLED", "filledQty": 30,
+                        "averageTradedPrice": 101.0, "omsErrorCode": "0"}
+            if self.puts:
+                # Deliberately NO "quantity" key — the R1 body shape.
+                return {"orderStatus": "PART_TRADED", "orderType": "LIMIT",
+                        "filledQty": 30, "remainingQuantity": 35,
+                        "price": self._last_put_price() or 100.0}
+            return {"orderStatus": "PENDING", "orderType": "LIMIT", "quantity": 65,
+                    "validity": "DAY", "price": 100.0}
+
+        def put(self, path, body):
+            self.calls.append(("PUT", path, body))
+            self.puts += 1
+            return {"orderId": "42"}
+
+        def delete(self, path):
+            self.calls.append(("DELETE", path, None))
+            self.deleted = True
+            return {}
+
+    gw = Gateway()
+    lb = LiveBroker(
+        _adapter(gw), run_name="e2e",
+        touch_fn=lambda sym, side: 100.0,
+        order_timeout_s=0.05, poll_interval_s=0.01,
+        notifier=types.SimpleNamespace(send=lambda alert: None),
+        clock=types.SimpleNamespace(now=lambda: datetime(2026, 7, 7, 11, 0)),
+    )
+    lb._governor = types.SimpleNamespace(wait=lambda: None)   # no real pacing in a test
+
+    fill = lb.execute(BrokerOrder(OPT, OrderSide.SELL, 65, OrderType.LIMIT,
+                                  reduce_only=True))
+
+    # The partial books at the broker's average: 30 of 65 filled, remainder cancelled.
+    assert (fill.quantity, fill.price) == (30, 101.0)
+    puts = [b for v, _p, b in gw.calls if v == "PUT"]
+    assert len(puts) == 3, "an EXIT walks all three rungs"
+    # SELL rungs give way THROUGH the touch: 3% → 8.1% → 20.1% below 100, tick-snapped.
+    assert [b["price"] for b in puts] == [97.0, 91.9, 79.85]
+    assert all(b["orderType"] == "LIMIT" for b in puts)
+    assert all(b["quantity"] == 65 for b in puts), "restated from remaining+filled (R1)"
+    assert [v for v, _p, _b in gw.calls if v == "DELETE"] == ["DELETE"]

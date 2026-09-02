@@ -970,10 +970,11 @@ async def smoke_test_deploy(
     # A LIVE smoke test on a broker with NO order surface is a false negative, not a test:
     # LiveBroker is never injected, the run paper-fills, wears the "orders PAPER" chip and
     # "passes" while nothing real happened — for a probe whose ONLY job is proving the real
-    # order path, that is worse than refusing. DhanAdapter is quotes/chain/margin only.
-    # Note this is deliberately NOT an ``armed`` check: a LIVE run on a DISARMED Zerodha
-    # account is a documented, useful negative test — that account can be armed; Dhan cannot
-    # place an order at all. PAPER on any broker stays allowed (it proves session + quotes).
+    # order path, that is worse than refusing. No broker fails this today (Dhan grew the
+    # full order surface on 2026-08-21); the guard stands for the next order-less broker.
+    # Note this is deliberately NOT an ``armed`` check: a LIVE run on a DISARMED account is
+    # a documented, useful negative test. PAPER on any broker stays allowed (it proves
+    # session + quotes).
     if body.mode.upper() == "LIVE" and body.broker_account_id is not None:
         from skas_algo.brokers.live_broker import adapter_can_execute
         from skas_algo.db.models import BrokerAccount

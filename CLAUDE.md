@@ -236,9 +236,36 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   still 422s a LIVE deploy on an order-less broker (no broker fails it today — it stands for the
   next one). That guard keys off the ORDER SURFACE, never off `armed`: a LIVE run on a DISARMED
   account is a documented, useful negative test. Coverage: `tests/test_dhan_orders.py` (fake
-  http — §1: never a real order). **No broker places real orders yet** — even LIVE mode fills via
-  PaperBroker; the real order path (LiveBroker, LIMIT-at-touch→protected-limit, double-gated) is the
-  planned Phase B and the only place order code may ever be added.
+  http — §1: never a real order).
+  **Dhan rate limits: DEDUPLICATE demand, don't shape traffic (2026-09-02).** Three rounds of
+  429 symptoms taught the shape of the problem: N runs on one account are N adapters
+  (`make_adapter` never memoizes; adapters churn on every quote-source rebuild), each polling
+  on its own clock — a gate at the HTTP layer only chooses who waits, and every new consumer
+  adds demand against a Quote-API budget that is a flat ~1/s per ACCOUNT. So quotes are a
+  shared per-account cache at MODULE level (`dhan._QUOTES`, the scrip-master precedent):
+  single-flight — ONE fetcher per account refreshes the UNION of every recently-wanted symbol
+  via `/marketfeed/quote` (one endpoint answers `get_quote` AND `day_quotes`), everyone else
+  reads; TTL 5s (`SKAS_DHAN_QUOTE_TTL`, 0 = off). A tenth run costs ~nothing, and the order
+  path never touches the cache (LiveBroker re-reads its touch each rung). `_rate_gate` stays
+  as the safety net BEHIND it (quote floor 1.2s — 1.0s sits ON the 1/s boundary and jitter
+  makes same-second pairs — plus the 1.1s account-wide floor across kinds), `_DhanHttp._call`
+  retries a gateway 5xx once but NEVER a 429, and reconcile failures back off 60s→15m
+  (`manager._maybe_reconcile`) so one bad read cannot feed itself into a storm. The data
+  family (holdings/positions/funds) is deliberately UNCACHED — ~3/min vs a 5/s budget, and
+  reconciliation must read fresh or a stale positions row becomes a false BOOK-MISMATCH halt.
+  **F&O order parity with Kite is structural** — the ladder lives in LiveBroker ABOVE the
+  adapters with zero broker branching, and Dhan's chain carries top_bid/top_ask so a DERIV
+  run gets a genuine limit-at-touch. Two restatement rules in `modify_order` ARE the parity
+  fixes (2026-09-02 audit): a MARKET restatement carries price 0 (the copy-forward used to
+  keep the stale LIMIT price on the book-vanished path), and quantity is rebuilt from
+  remainingQuantity+filledQty when the gateway omits it — 0 is NEVER sent, raise instead
+  (LiveBroker logs a modifyerr and keeps polling). End-to-end pin:
+  `test_the_live_broker_ladder_runs_end_to_end_on_the_dhan_adapter`. Known limitations, by
+  design: SENSEX/BANKEX F&O unreachable (the master filters to NSE — those strategies run on
+  Zerodha); no broker history (`daily_bars`) so weekly_intraday_straddle fails closed on a
+  Dhan account; `basket_margin` overstates (no hedge benefit). A Dhan DERIV order has never
+  been exercised for real (only the ITC stock leg, runs 20/21) — the DERIV smoke test is
+  runnable on Dhan today and is the owner's hand, never Claude's (§1).
 - **gap_reversal** (`strategies/gap_reversal.py`, Nifty 500 equity, 2026-07-28): daily LONG-only
   mean-reversion — gap-up open (≥`min_gap_pct`) + close above EMA(21) + RSI(10) **of the EMA
   series** < 10 (`rsi_source="ema"` default — the owner's TradingView "RSI 10 EMA:EMA": the
