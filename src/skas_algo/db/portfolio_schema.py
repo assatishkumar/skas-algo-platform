@@ -34,6 +34,7 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "interest_rate_pct": "FLOAT",
         "maturity_date": "VARCHAR(10)",
         "monthly_contribution": "FLOAT",
+        "monthly_income": "FLOAT",
     },
     "portfolio_goal": {
         "schedule": "JSON DEFAULT '[]'",

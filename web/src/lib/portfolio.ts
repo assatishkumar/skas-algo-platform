@@ -13,7 +13,7 @@
 
 export type AssetClassKey =
   | "stk" | "etf" | "mf" | "us" | "btc" | "cash" | "fd" | "ppf" | "epf"
-  | "gold" | "re";
+  | "gold" | "re" | "property";
 
 /** The tag a holding carries, and the level rebalancing happens at — coarser than asset
  *  class on purpose: real risk is "how much equity, how much debt", not "how many mid-cap
@@ -89,6 +89,8 @@ export interface Holding {
   maturity_date: string | null;
   /** Accounts still being paid into — a PPF at ₹12,500 a month. */
   monthly_contribution: number | null;
+  /** Rent, or any payout stated in rupees rather than as a yield. */
+  monthly_income: number | null;
   /** User-defined labels. Many-to-many, and separate from the single-valued asset
    *  class so rebalancing counts each rupee exactly once. */
   tags: TagRow[];
@@ -435,6 +437,7 @@ export interface HoldingInput {
   interest_rate_pct: number | null;
   maturity_date: string | null;
   monthly_contribution: number | null;
+  monthly_income: number | null;
   note: string | null;
 }
 
@@ -628,6 +631,7 @@ export function toInput(h: Holding): HoldingInput {
     interest_rate_pct: h.interest_rate_pct,
     maturity_date: h.maturity_date,
     monthly_contribution: h.monthly_contribution,
+    monthly_income: h.monthly_income,
     note: h.note,
   };
 }
@@ -650,6 +654,7 @@ export interface IncomeLine {
   value: number;
   invested: number;
   yield_pct: number | null;
+  monthly_income: number | null;
   expected_annual: number | null;
   yield_on_cost_pct: number | null;
   received_fy: number;

@@ -112,6 +112,12 @@ export default function IncomeView({
     [payload.dividends],
   );
   const byId = useMemo(() => new Map(rows.map((h) => [h.id, h])), [rows]);
+  // Only what can actually distribute. An index ETF on a growth plan and a bar of gold pay
+  // nothing, and listing them with an empty yield box invites filling one in.
+  const earners = useMemo(
+    () => rows.filter((h) => income.lines.some((l) => l.holding_id === h.id)),
+    [rows, income.lines],
+  );
 
   return (
     <div>
@@ -184,13 +190,14 @@ export default function IncomeView({
               <span className="text-right">LAST PAID</span>
             </div>
 
-            {rows.length === 0 && (
+            {earners.length === 0 && (
               <div className="px-1 py-8 text-center text-[13px] font-semibold text-[var(--faint)]">
-                Nothing tracked yet.
+                Nothing here distributes. Stocks, REITs, InvITs and let property show up
+                on this tab; funds on a growth plan and gold do not.
               </div>
             )}
 
-            {[...rows]
+            {[...earners]
               .sort((a, b) => {
                 const la = income.lines.find((l) => l.holding_id === a.id);
                 const lb = income.lines.find((l) => l.holding_id === b.id);
@@ -211,26 +218,37 @@ export default function IncomeView({
                       </span>
                     </span>
                     <span className="text-right">
-                      <input
-                        type="number"
-                        value={shown}
-                        placeholder="—"
-                        onChange={(e) => setDraft((d) => ({ ...d, [h.id]: e.target.value }))}
-                        onBlur={() => {
-                          const raw = draft[h.id];
-                          if (raw === undefined) return;
-                          const next = raw.trim() === "" ? null : Number(raw);
-                          if (next === null || Number.isFinite(next)) {
-                            if (next !== h.dividend_yield_pct) onSetYield(h, next);
-                          }
-                          setDraft((d) => {
-                            const { [h.id]: _drop, ...rest } = d;
-                            return rest;
-                          });
-                        }}
-                        className="w-14 rounded-md border-[1.5px] border-transparent bg-transparent px-1 py-0.5 text-right font-semibold tabular-nums text-[var(--muted)] outline-none hover:border-[var(--field-border)] focus:border-[var(--accent)] focus:bg-[var(--field)]"
-                      />
-                      <span className="text-[var(--faint)]">%</span>
+                      {h.asset_class === "property" ? (
+                        <span
+                          className="text-[11.5px] font-bold text-[var(--muted)]"
+                          title="Rent is a rupee figure, entered in Edit — a flat's rent has nothing to do with what the flat is worth this month."
+                        >
+                          rent
+                        </span>
+                      ) : (
+                        <>
+                          <input
+                            type="number"
+                            value={shown}
+                            placeholder="—"
+                            onChange={(e) => setDraft((d) => ({ ...d, [h.id]: e.target.value }))}
+                            onBlur={() => {
+                              const raw = draft[h.id];
+                              if (raw === undefined) return;
+                              const next = raw.trim() === "" ? null : Number(raw);
+                              if (next === null || Number.isFinite(next)) {
+                                if (next !== h.dividend_yield_pct) onSetYield(h, next);
+                              }
+                              setDraft((d) => {
+                                const { [h.id]: _drop, ...rest } = d;
+                                return rest;
+                              });
+                            }}
+                            className="w-14 rounded-md border-[1.5px] border-transparent bg-transparent px-1 py-0.5 text-right font-semibold tabular-nums text-[var(--muted)] outline-none hover:border-[var(--field-border)] focus:border-[var(--accent)] focus:bg-[var(--field)]"
+                          />
+                          <span className="text-[var(--faint)]">%</span>
+                        </>
+                      )}
                     </span>
                     <span className="text-right font-bold tabular-nums text-[var(--strong)]">
                       {line?.expected_annual != null ? money(line.expected_annual) : "—"}

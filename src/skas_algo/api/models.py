@@ -915,7 +915,9 @@ class PortfolioHoldingInput(BaseModel):
     null to have the return derived."""
 
     name: str = Field(min_length=1, max_length=120)
-    asset_class: str = Field(pattern="^(stk|etf|mf|us|btc|cash|fd|ppf|epf|gold|re)$")
+    asset_class: str = Field(
+        pattern="^(stk|etf|mf|us|btc|cash|fd|ppf|epf|gold|re|property)$"
+    )
     kind_override: str | None = Field(
         default=None, pattern="^(equity|debt|gold|realestate|crypto)$"
     )
@@ -944,6 +946,8 @@ class PortfolioHoldingInput(BaseModel):
     interest_rate_pct: float | None = Field(default=None, ge=0, le=100)
     maturity_date: date | None = None
     monthly_contribution: float | None = Field(default=None, ge=0)
+    # Rent or a stated payout, in rupees a month.
+    monthly_income: float | None = Field(default=None, ge=0)
     note: str | None = None
 
 

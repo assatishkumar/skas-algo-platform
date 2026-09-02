@@ -66,6 +66,7 @@ def current_views(db: Session, *, today: date | None = None) -> list[dict]:
                 "interest_rate_pct": h.interest_rate_pct,
                 "maturity_date": h.maturity_date,
                 "monthly_contribution": h.monthly_contribution,
+                "monthly_income": h.monthly_income,
                 "tags": [
                     {"id": t.id, "name": t.name, "color": t.color}
                     for t in sorted(h.tags, key=lambda x: (x.sort_order, x.name))

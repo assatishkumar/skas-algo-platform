@@ -17,7 +17,7 @@ const blank = (): HoldingInput => ({
   sync: "manual", sync_source: null, sync_ref: null, broker_account_id: null,
   units_locked: false, broker_units: {}, excluded_from_buckets: false,
   dividend_yield_pct: null, interest_rate_pct: null, maturity_date: null,
-  monthly_contribution: null, note: null,
+  monthly_contribution: null, monthly_income: null, note: null,
 });
 
 /** AMFI scheme picker. Searches the cached NAV file, so it answers instantly and works with
@@ -246,6 +246,23 @@ export default function HoldingModal({
               />
             </Field>
           </>
+        )}
+
+        {draft.asset_class === "property" && (
+          <Field label="RENT RECEIVED (₹ a month)" span={2}>
+            <input
+              type="number" className={inputClass}
+              value={draft.monthly_income ?? ""} placeholder="45000"
+              onChange={(e) => set({
+                monthly_income: e.target.value ? Number(e.target.value) : null,
+              })}
+            />
+            <div className="mt-1.5 text-[11.5px] font-semibold text-[var(--faint)]">
+              A rupee figure, not a yield — rent has nothing to do with what the
+              property is worth this month, and deriving one from the other would move
+              your income every time the valuation was touched.
+            </div>
+          </Field>
         )}
 
         {["epf", "ppf"].includes(draft.asset_class) && (

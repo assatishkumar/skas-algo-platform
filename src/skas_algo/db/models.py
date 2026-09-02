@@ -322,6 +322,9 @@ class PortfolioHolding(Base, TimestampMixin):
     # Accounts still being paid into — a PPF at Rs 12,500 a month. Credited through the
     # year, so it earns about half a year's return rather than a full one.
     monthly_contribution: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Rent, or any payout stated in rupees rather than as a yield. A flat's rent has
+    # nothing to do with what the flat is worth this month.
+    monthly_income: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 

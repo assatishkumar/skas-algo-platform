@@ -796,3 +796,44 @@ def test_a_deposit_grows_from_its_principal_and_a_pf_from_its_balance():
         {"id": 2, "name": "EPF", "asset_class": "epf", "invested": 0, "value": 14_545_698,
          "buy_month": "2025-09", "interest_rate_pct": 8.0}, [], today=date(2026, 9, 2))
     assert epf["value"] == pytest.approx(14_545_698 * 1.08, rel=1e-3)
+
+
+def test_only_things_that_can_distribute_appear_on_the_income_screen():
+    """An index ETF on a growth plan and a bar of gold pay nothing. Listing them with an empty
+    yield box invites filling one in, and every fabricated yield lands in a planning figure."""
+    rows = [
+        {"id": 1, "name": "ITC", "asset_class": "stk", "value": 100, "invested": 100,
+         "dividend_yield_pct": None},
+        {"id": 2, "name": "PGINVIT", "asset_class": "re", "value": 100, "invested": 100,
+         "dividend_yield_pct": None},
+        {"id": 3, "name": "GOLDBEES", "asset_class": "gold", "value": 100, "invested": 100,
+         "dividend_yield_pct": None},
+        {"id": 4, "name": "NIFTYBEES", "asset_class": "etf", "value": 100, "invested": 100,
+         "dividend_yield_pct": None},
+    ]
+    view = pf.income_view(rows, [], today=date(2026, 9, 2))
+    assert {line["name"] for line in view["lines"]} == {"ITC", "PGINVIT"}
+    # …and only THEIR value counts as "yield not set", not the whole book.
+    assert view["unpriced_value"] == pytest.approx(200)
+
+
+def test_a_fund_that_has_actually_paid_stays_on_the_screen():
+    """A payment is proof it distributes, whatever its class says."""
+    rows = [{"id": 1, "name": "IDCW fund", "asset_class": "mf", "value": 100, "invested": 100,
+             "dividend_yield_pct": None}]
+    divs = [{"holding_id": 1, "on_date": "2026-06-01", "amount": 500}]
+    view = pf.income_view(rows, divs, today=date(2026, 9, 2))
+    assert [line["name"] for line in view["lines"]] == ["IDCW fund"]
+
+
+def test_rent_is_rupees_a_month_not_a_yield():
+    """A flat's rent has nothing to do with what the flat is worth this month, so deriving one
+    from the other would move the income every time the valuation was touched."""
+    rows = [{"id": 1, "name": "Pune flat", "asset_class": "property", "value": 9_000_000,
+             "invested": 6_000_000, "dividend_yield_pct": None, "monthly_income": 45_000}]
+    view = pf.income_view(rows, [], today=date(2026, 9, 2))
+    assert view["expected_annual"] == pytest.approx(540_000)
+    assert view["expected_monthly"] == pytest.approx(45_000)
+    # Yield on COST still works — 9% on what was paid for it.
+    assert view["lines"][0]["yield_on_cost_pct"] == pytest.approx(9.0)
+    assert view["unpriced_value"] == pytest.approx(0)

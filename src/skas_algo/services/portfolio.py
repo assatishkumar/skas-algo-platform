@@ -39,7 +39,8 @@ ASSET_CLASSES: dict[str, dict] = {
     "ppf": {"label": "PPF", "kind": "debt", "target": 8.0, "color": "#b07d10"},
     "epf": {"label": "EPF", "kind": "debt", "target": 10.0, "color": "#e8a13c"},
     "gold": {"label": "Gold", "kind": "gold", "target": 4.0, "color": "#c2661d"},
-    "re": {"label": "Real estate", "kind": "realestate", "target": 9.0, "color": "#7a8a86"},
+    "re": {"label": "REITs · InvITs", "kind": "realestate", "target": 5.0, "color": "#7a8a86"},
+    "property": {"label": "Property", "kind": "realestate", "target": 4.0, "color": "#8d7f6e"},
 }
 
 # The tag every holding carries, and the level rebalancing happens at. Deliberately coarser
@@ -47,6 +48,11 @@ ASSET_CLASSES: dict[str, dict] = {
 # mid-cap funds". Crypto is its own tag rather than folded into equity or an "alternatives"
 # catch-all — nothing else on the screen behaves like it, and averaging it into either hides
 # exactly the position an investor most wants stated.
+# Which classes can produce an income at all. An index ETF on a growth plan and a bar of
+# gold distribute nothing, so listing them on the income screen with a blank yield invites
+# filling one in — and every fabricated yield lands straight in a figure meant for planning.
+INCOME_CLASSES = frozenset({"stk", "us", "re", "property"})
+
 KINDS: tuple[str, ...] = ("equity", "debt", "gold", "realestate", "crypto")
 
 KIND_LABELS = {
@@ -265,7 +271,7 @@ def regime_for(cls: str, kind: str, months_held: float) -> Regime:
         return Regime("Flat 30%", SLAB_RATE, "No loss set-off allowed on VDAs", loss_offset=False)
     if cls in ("cash", "fd", "bank"):  # "bank" is the pre-split class, kept readable
         return Regime("Interest · slab", SLAB_RATE, "Interest taxed yearly at slab rate")
-    if cls == "re":
+    if cls in ("re", "property"):
         return Regime("LTCG 12.5%", LTCG_RATE, "Or 20% with indexation — pick lower")
     if cls == "us":
         if months_held >= 24:
@@ -504,6 +510,7 @@ def holding_view(holding: dict, transactions: list[dict], *, today: date | None 
         "broker_units": dict(holding.get("broker_units") or {}),
         "excluded_from_buckets": bool(holding.get("excluded_from_buckets")),
         "dividend_yield_pct": holding.get("dividend_yield_pct"),
+        "monthly_income": holding.get("monthly_income"),
         "interest_rate_pct": holding.get("interest_rate_pct"),
         "maturity_date": holding.get("maturity_date"),
         "monthly_contribution": holding.get("monthly_contribution"),
@@ -585,19 +592,31 @@ def income_view(rows: list[dict], dividends: list[dict], *, today: date | None =
         paid = by_holding.get(r["id"], [])
         fy_paid = sum(p["amount"] for p in paid if financial_year(p["on_date"]) == this_fy)
         total_paid = sum(p["amount"] for p in paid)
+        # Rent is a rupee amount, not a yield: a flat's rent has nothing to do with what the
+        # flat is worth this month, and deriving one from the other would move the income
+        # every time the valuation was touched.
+        monthly = float(r.get("monthly_income") or 0.0)
         yield_pct = r.get("dividend_yield_pct")
-        annual = (r["value"] * yield_pct / 100.0) if yield_pct else None
+        from_yield = (r["value"] * yield_pct / 100.0) if yield_pct else None
+        annual = None
+        if from_yield is not None or monthly > 0:
+            annual = (from_yield or 0.0) + monthly * 12
+
+        income_capable = r["asset_class"] in INCOME_CLASSES
         if annual is not None:
             expected += annual
-        elif r["value"] > 0:
+        elif income_capable and r["value"] > 0:
             unknown_value += r["value"]
-        if not paid and annual is None:
+        # Only things that CAN distribute belong on this screen. Anything already paying is
+        # kept regardless, because a payment is proof it distributes whatever its class says.
+        if not paid and annual is None and not income_capable:
             continue
         last = max((p["on_date"] for p in paid), default=None)
         lines.append({
             "holding_id": r["id"], "name": r["name"], "asset_class": r["asset_class"],
             "value": r["value"], "invested": r["invested"],
             "yield_pct": yield_pct,
+            "monthly_income": monthly or None,
             "expected_annual": round(annual, 2) if annual is not None else None,
             # Yield on COST is the number that says what the original decision now returns;
             # yield on value only ever says what today's price would buy.
