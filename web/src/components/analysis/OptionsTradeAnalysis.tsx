@@ -234,11 +234,26 @@ type SumKey = "entered" | "exited" | "held" | "espot" | "xspot" | "move" | "net"
 /** Compact, sortable P&L table across all cycles (one row per weekly/monthly position) + aggregates.
  * Exported so the Live page can show the same per-cycle breakdown on a running deployment (pass
  * points=[] there — the table falls back to each cycle's entry/exit spot captured at trade time). */
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** The weekday a cycle was entered. Written as "2026-09-01 09:18", which Safari refuses to
+ * parse — the space has to become a T. */
+function weekdayOf(stamp: string | null | undefined): number | null {
+  if (!stamp) return null;
+  const d = new Date(String(stamp).replace(" ", "T"));
+  return Number.isNaN(d.getTime()) ? null : d.getDay();
+}
+
+/** How many cycles fit on screen before the table stops being readable and starts being a
+ * scroll. Intraday books reach hundreds of rows within months. */
+const PAGE_SIZE = 10;
+
 export function CycleSummary({ cycles, points, runId }: {
   cycles: ReconCycle[]; points: StockSeriesPoint[]; runId?: number;
 }) {
   const [sortKey, setSortKey] = useState<SumKey>("entered");
   const [dir, setDir] = useState<1 | -1>(-1);
+  const [page, setPage] = useState(0);
   const rows = cycles.map((c) => {
     const eSpot = c.entry_spot ?? spotOn(points, c.entry_date);
     const xSpot = c.exit_spot ?? spotOn(points, c.exit_date);
@@ -264,7 +279,15 @@ export function CycleSummary({ cycles, points, runId }: {
     if (typeof va === "string" || typeof vb === "string") return String(va).localeCompare(String(vb)) * dir;
     return (va - vb) * dir;
   });
-  const onSort = (k: SumKey) => { if (k === sortKey) setDir((d) => (d === 1 ? -1 : 1)); else { setSortKey(k); setDir(-1); } };
+  // Re-sorting reorders everything, so staying on page 4 would land you somewhere arbitrary.
+  const onSort = (k: SumKey) => {
+    setPage(0);
+    if (k === sortKey) setDir((d) => (d === 1 ? -1 : 1));
+    else { setSortKey(k); setDir(-1); }
+  };
+  const pages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const clamped = Math.min(page, pages - 1);
+  const shown = sorted.slice(clamped * PAGE_SIZE, clamped * PAGE_SIZE + PAGE_SIZE);
 
   const closed = cycles.filter((c) => !c.open);
   const wins = closed.filter((c) => c.realized_pnl > 0).length;
@@ -272,6 +295,21 @@ export function CycleSummary({ cycles, points, runId }: {
   const pnls = closed.map((c) => c.realized_pnl);
   const avg = closed.length ? total / closed.length : 0;
   const winRate = closed.length ? (wins / closed.length) * 100 : 0;
+
+  // Per-weekday performance. A strategy that enters every session either has a weekday it
+  // is bad at or it does not, and a flat list of a hundred rows will never tell you which.
+  const byDay = WEEKDAYS.map((name, idx) => {
+    const day = closed.filter((c) => weekdayOf(c.entry_date) === idx);
+    const dayWins = day.filter((c) => c.realized_pnl > 0).length;
+    const dayTotal = day.reduce((s2, c) => s2 + c.realized_pnl, 0);
+    return {
+      name, idx, n: day.length, wins: dayWins, total: dayTotal,
+      avg: day.length ? dayTotal / day.length : 0,
+      winRate: day.length ? (dayWins / day.length) * 100 : 0,
+    };
+  }).filter((d) => d.n > 0);
+  const worstDay = byDay.length
+    ? byDay.reduce((a, b) => (b.total < a.total ? b : a)) : null;
 
   const Th = ({ k, label, right }: { k: SumKey; label: string; right?: boolean }) => (
     <th onClick={() => onSort(k)}
@@ -297,6 +335,35 @@ export function CycleSummary({ cycles, points, runId }: {
           </span>
         )}
       </div>
+      {byDay.length > 1 && (
+        <div>
+          <div className="mb-1.5 text-xs text-slate-400">
+            By weekday entered
+            {worstDay && worstDay.total < 0 && (
+              <span className="ml-2 text-rose-400">
+                · {worstDay.name} is the only losing day ({formatInr(worstDay.total)} over{" "}
+                {worstDay.n})
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+            {byDay.map((d) => (
+              <div key={d.idx} className="rounded-lg border border-slate-800 px-3 py-2">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-xs font-semibold text-slate-300">{d.name}</span>
+                  <span className="text-[11px] text-slate-500">{d.n}</span>
+                </div>
+                <div className={`text-sm font-medium ${pos(d.total)}`}>{formatInr(d.total)}</div>
+                <div className="text-[11px] text-slate-500">
+                  {d.winRate.toFixed(0)}% win · avg{" "}
+                  <span className={pos(d.avg)}>{formatInr(d.avg)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         <table className="w-full text-sm tabular-nums">
           <thead className="text-slate-400 text-xs border-b border-slate-800">
@@ -314,7 +381,7 @@ export function CycleSummary({ cycles, points, runId }: {
             </tr>
           </thead>
           <tbody>
-            {sorted.map((r) => (
+            {shown.map((r) => (
               <tr key={`${r.c.underlying}-${r.c.expiry}-${r.c.entry_date}`} className="border-b border-slate-800/40">
                 <td className="py-1.5 pr-3">
                   {runId != null ? (
@@ -323,6 +390,11 @@ export function CycleSummary({ cycles, points, runId }: {
                       {r.c.entry_date} ↗
                     </Link>
                   ) : r.c.entry_date}
+                  {weekdayOf(r.c.entry_date) != null && (
+                    <span className="ml-1.5 text-[11px] text-slate-500">
+                      {WEEKDAYS[weekdayOf(r.c.entry_date) as number]}
+                    </span>
+                  )}
                 </td>
                 <td className="py-1.5 pr-3">{r.c.exit_date ?? <span className="text-slate-500">open</span>}</td>
                 <td className="py-1.5 pr-3 text-right">{r.held != null ? `${r.held}d` : "—"}</td>
@@ -346,6 +418,43 @@ export function CycleSummary({ cycles, points, runId }: {
           </tbody>
         </table>
       </div>
+
+      {pages > 1 && (
+        <div className="flex items-center justify-between text-xs text-slate-400">
+          <span>
+            {clamped * PAGE_SIZE + 1}–{Math.min((clamped + 1) * PAGE_SIZE, sorted.length)} of{" "}
+            {sorted.length}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(0)} disabled={clamped === 0}
+              className="rounded px-2 py-1 hover:bg-slate-800 disabled:opacity-30"
+            >
+              « First
+            </button>
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={clamped === 0}
+              className="rounded px-2 py-1 hover:bg-slate-800 disabled:opacity-30"
+            >
+              ‹ Prev
+            </button>
+            <span className="px-2 text-slate-300">{clamped + 1} / {pages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(pages - 1, p + 1))}
+              disabled={clamped >= pages - 1}
+              className="rounded px-2 py-1 hover:bg-slate-800 disabled:opacity-30"
+            >
+              Next ›
+            </button>
+            <button
+              onClick={() => setPage(pages - 1)} disabled={clamped >= pages - 1}
+              className="rounded px-2 py-1 hover:bg-slate-800 disabled:opacity-30"
+            >
+              Last »
+            </button>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

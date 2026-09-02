@@ -1123,21 +1123,29 @@ function BrokerChip({ dep }: { dep: Deployment }) {
   // A live-quote error (e.g. a token Zerodha rejected) means "connected" per the stored session
   // timestamp is misleading — flag it red as expired regardless of the timestamp check.
   const err = !!dep.quote_error;
-  // "expired" is a DIAGNOSIS, and it was wrong: a Dhan HTTP 429 ("Too many requests") is
-  // rate-limiting, not a dead login, and the red "expired" chip sent the owner hunting a
-  // token that was perfectly valid (2026-08-31). Name what actually happened.
+  // "expired" is an ACCOUNT-level claim and must come from the account, not from the presence
+  // of any error on this run. `quote_error` is per-run and holds whatever failed last, so two
+  // runs on ONE account showed "expired" and "rate limited" side by side (2026-09-01) — a
+  // contradiction, since a login is either dead or it isn't. Only a session the broker
+  // service says is invalid is expired; everything else is a transient on a live connection.
+  const sessionDead = dep.broker_connected === false;
   const rateLimited = err && /\b429\b|too many requests/i.test(String(dep.quote_error));
   const ok = dep.broker_connected === true && !fallback && !err;
-  const suffix = rateLimited
-    ? "rate limited"
-    : err ? "expired" : ok ? "live" : fallback ? "cache" : "offline";
+  const suffix = sessionDead
+    ? "expired"
+    : rateLimited ? "rate limited"
+      : err ? "degraded" : ok ? "live" : fallback ? "cache" : "offline";
+  // Red means ACT — log in again. Amber means a live connection having a bad moment, which
+  // clears itself; colouring the two the same is what made a 429 look like a dead token.
+  const tone = sessionDead
+    ? "bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-900/40 dark:text-rose-300 dark:border-rose-700/50"
+    : ok
+      ? "bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700/50"
+      : "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-700/50";
+
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-        ok
-          ? "bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700/50"
-          : "bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-900/40 dark:text-rose-300 dark:border-rose-700/50"
-      }`}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${tone}`}
       title={
         err
           ? `${label}: ${dep.quote_error}`
@@ -1288,7 +1296,11 @@ function DeploymentTile({
           ...(dep.mode === "PAPER" ? [{ label: "⚡ Go LIVE", onClick: () => setShowGoLive(true) }] : []),
           { label: "Exit positions", tone: "warn", onClick: () => { if (positions > 0 && confirm("Exit ALL open positions for this strategy now, at live prices?")) act(() => api.liveFlatten(dep.run_id)); } },
           { label: "Mark closed at broker", onClick: () => setShowAdopt(true) },
-          { label: "Correct units held", onClick: () => setShowUnits(true) },
+          // Equity only. It forces the platform's unit count for a SYMBOL to match the
+          // broker, and was built for an over-counted ETF; an options book is keyed by
+          // contract, where the equivalent repair is "Mark closed at broker". Offering it
+          // on an options run invites setting a leg to a quantity nothing reconciles.
+          ...(isOptions ? [] : [{ label: "Correct units held", onClick: () => setShowUnits(true) }]),
           { label: "Stop deployment", tone: "danger", onClick: () => act(() => api.liveStop(dep.run_id)) },
           { label: "Edit params", onClick: () => setShowParams(true) },
           { label: "Edit name / notes", onClick: () => setEditing(true) },
