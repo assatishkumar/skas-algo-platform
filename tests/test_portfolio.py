@@ -837,3 +837,19 @@ def test_rent_is_rupees_a_month_not_a_yield():
     # Yield on COST still works — 9% on what was paid for it.
     assert view["lines"][0]["yield_on_cost_pct"] == pytest.approx(9.0)
     assert view["unpriced_value"] == pytest.approx(0)
+
+
+def test_a_verified_zero_yield_is_not_reported_as_unknown():
+    """Amazon and DMart have never paid a dividend. 0.0 is an ANSWER, and treating it as
+    "not set" — which truthiness does — hides the very distinction this screen exists for."""
+    rows = [
+        {"id": 1, "name": "AMZN", "asset_class": "us", "value": 600_000, "invested": 500_000,
+         "dividend_yield_pct": 0.0},
+        {"id": 2, "name": "Unknown Co", "asset_class": "stk", "value": 400_000,
+         "invested": 400_000, "dividend_yield_pct": None},
+    ]
+    view = pf.income_view(rows, [], today=date(2026, 9, 2))
+    amzn = next(line for line in view["lines"] if line["name"] == "AMZN")
+    assert amzn["expected_annual"] == 0.0            # answered, not absent
+    # Only the genuinely unknown one counts toward the caveat.
+    assert view["unpriced_value"] == pytest.approx(400_000)

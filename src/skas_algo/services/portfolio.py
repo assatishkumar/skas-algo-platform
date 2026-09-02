@@ -596,8 +596,11 @@ def income_view(rows: list[dict], dividends: list[dict], *, today: date | None =
         # flat is worth this month, and deriving one from the other would move the income
         # every time the valuation was touched.
         monthly = float(r.get("monthly_income") or 0.0)
+        # `is not None`, never truthiness: 0.0 is a VERIFIED zero (Amazon and DMart have
+        # never paid a dividend) and must not be reported as "we don't know" — that is the one
+        # distinction this screen exists to make.
         yield_pct = r.get("dividend_yield_pct")
-        from_yield = (r["value"] * yield_pct / 100.0) if yield_pct else None
+        from_yield = (r["value"] * yield_pct / 100.0) if yield_pct is not None else None
         annual = None
         if from_yield is not None or monthly > 0:
             annual = (from_yield or 0.0) + monthly * 12
