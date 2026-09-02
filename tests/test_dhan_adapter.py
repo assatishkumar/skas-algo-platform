@@ -377,3 +377,21 @@ def test_budget_proof_three_pollers_collapse_to_one_paced_stream(monkeypatch):
     assert 2 <= len(http.times) <= 5, http.times
     gaps = [b - a for a, b in zip(http.times, http.times[1:], strict=False)]
     assert all(g >= 0.2 for g in gaps), f"refreshes must be TTL-spaced, got gaps {gaps}"
+
+
+def test_a_symbol_that_stops_pricing_is_dropped_not_served_stale(monkeypatch):
+    """Ultrareview (2026-09-02): the fetcher stamps every UNION symbol as covered so an
+    unresolvable one cannot thrash — but a symbol that HAD a price and got no row back
+    (the ~20h master refresh lost the contract; a sparse batched response) must be
+    DROPPED. A fresh stamp over the old price would serve a stale mark as fresh for as
+    long as the feed omits it, on the path every run's P&L and stops read."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(dhan_mod._time, "monotonic", lambda: clock["t"])
+    a, http = _adapter(responses=_Q)
+    assert a.get_quote(["NIFTY"]) == {"NIFTY": 24512.5}
+    http.responses = {"/marketfeed/quote": {"data": {}}}  # NIFTY vanishes from the feed
+    clock["t"] += 6.0                                     # past the TTL → refetch
+    assert a.get_quote(["NIFTY"]) == {}, "no row back is a MISS, never the old mark"
+    # …and the miss is still CACHED: no refetch storm inside the TTL.
+    assert a.get_quote(["NIFTY"]) == {}
+    assert len(http.posts) == 2

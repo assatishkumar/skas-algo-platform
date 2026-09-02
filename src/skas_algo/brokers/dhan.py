@@ -746,9 +746,16 @@ class DhanAdapter:
                 ts = _time.monotonic()
                 with store.lock:
                     # Stamp EVERY asked symbol, including ones with no row back — an
-                    # unresolvable symbol must not force a fresh fetch on every call.
+                    # unresolvable symbol must not force a fresh fetch on every call. But a
+                    # symbol that HAD a price and got no row this time is DROPPED, not kept
+                    # (ultrareview, 2026-09-02): a fresh stamp over an old price would serve
+                    # a stale mark as fresh for as long as the feed omits it — on the path
+                    # every run's P&L and stops read. A miss is what a direct fetch would
+                    # have shown the caller; the layers above already handle it.
                     for s in union:
                         store.asof[s] = ts
+                        if s not in fetched:
+                            store.prices.pop(s, None)
                     store.prices.update(fetched)
             finally:
                 with store.lock:
@@ -763,6 +770,8 @@ class DhanAdapter:
         with store.lock:
             for s in symbols:
                 store.asof[s] = ts
+                if s not in fetched:
+                    store.prices.pop(s, None)   # same rule as the union fetch above
             store.prices.update(fetched)
         return dict(fetched)
 
