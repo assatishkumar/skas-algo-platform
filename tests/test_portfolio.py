@@ -498,6 +498,31 @@ def test_a_contribution_stream_stops_at_its_maturity_year():
     assert matured["final_corpus"] == pytest.approx(3 * 12_000 - 1)
 
 
+def test_the_owners_growth_assumption_outranks_the_derived_return(client: TestClient):
+    """The derived rate is honest but brittle — one linked holding with a short history
+    drags a 15-year plan to +0.4%/yr (owner, 2026-09-02). A typed assumption wins; blank
+    keeps the derivation, and the response says which one it used."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "NIFTYBEES", "asset_class": "stk", "invested": 3_000_000, "value": 3_680_000,
+    }).json()["id"]
+    gid = client.post("/api/v1/portfolio/goals", json={
+        "name": "Marriage", "schedule": [{"year": 2040, "amount": 3_000_000}],
+        "allocations": [{"holding_id": hid, "pct": 100}],
+        "expected_return_pct": 11.0,
+    }).json()["id"]
+    goal = next(g for g in client.get("/api/v1/portfolio").json()["goals"] if g["id"] == gid)
+    assert goal["return_pct"] == 11.0 and goal["return_source"] == "assumed"
+
+    # Clearing it falls back to the derived record (or the benchmark when none exists).
+    body = {k: goal[k] for k in ("name", "schedule", "allocations", "inflation_pct",
+                                 "monthly_sip", "holding_ids", "benchmark")}
+    client.put(f"/api/v1/portfolio/goals/{gid}", json={**body, "expected_return_pct": None})
+    goal = next(g for g in client.get("/api/v1/portfolio").json()["goals"] if g["id"] == gid)
+    assert goal["return_source"] in ("holdings", "benchmark")
+    client.delete(f"/api/v1/portfolio/goals/{gid}")
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
 def test_the_api_share_weights_a_linked_holdings_contribution(client: TestClient):
     """The goal never types the SIP again — the holding's ``monthly_contribution`` is the
     source of truth, and only the ALLOCATED share of it funds this goal."""

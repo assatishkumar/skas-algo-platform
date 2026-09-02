@@ -10,6 +10,7 @@ import {
 const BLANK = (): GoalInput => ({
   name: "", allocations: [], schedule: [], inflation_pct: 6, target_amount: 0,
   target_year: 0, monthly_sip: 0, holding_ids: [], benchmark: "NIFTY 50 TRI",
+  expected_return_pct: null,
 });
 
 const asInput = (g: Goal): GoalInput => ({
@@ -17,6 +18,7 @@ const asInput = (g: Goal): GoalInput => ({
   inflation_pct: g.inflation_pct,
   target_amount: g.target_amount, target_year: g.target_year,
   monthly_sip: g.monthly_sip, holding_ids: g.holding_ids, benchmark: g.benchmark,
+  expected_return_pct: g.expected_return_pct ?? null,
 });
 
 /** The schedule editor. A goal like "school fees, 2.5 L a year, 2027 to 2030" is described in
@@ -146,7 +148,17 @@ function GoalForm({
           <input type="number" className={inputClass} value={draft.monthly_sip || ""}
             onChange={(e) => set({ monthly_sip: Number(e.target.value) })} />
         </Field>
-        <Field label="EXPECTED RETURN IF NOTHING IS LINKED" span={2}>
+        <Field label="GROWS AT (% a year)">
+          <input type="number" className={inputClass} placeholder="auto"
+            value={draft.expected_return_pct ?? ""}
+            onChange={(e) => set({
+              expected_return_pct: e.target.value === "" ? null : Number(e.target.value),
+            })} />
+          <div className="mt-1 text-[11px] font-semibold text-[var(--faint)]">
+            Your estimate. Blank = use the linked holdings&apos; own record.
+          </div>
+        </Field>
+        <Field label="FALLBACK IF NOTHING IS LINKED">
           <select className={selectClass} value={draft.benchmark}
             onChange={(e) => set({ benchmark: e.target.value })}>
             {Object.entries(benchmarks).map(([name, rate]) => (
@@ -356,9 +368,11 @@ export default function GoalsView({
                 <span className="text-[20px] font-bold [font-family:'Space_Grotesk',system-ui,sans-serif] text-[var(--strong)]">
                   {money(g.current_value ?? 0)}
                 </span>
-                <span className="text-[12.5px] font-bold text-[var(--faint)]">
-                  of {money(p?.pv_required ?? 0)} needed today
-                  {funded !== null && ` · ${funded.toFixed(0)}%`}
+                <span
+                  className="text-[12.5px] font-bold text-[var(--faint)]"
+                  title={`Put ${money(p?.pv_required ?? 0)} in today, growing at ${pct(g.return_pct ?? 0)} a year, and every year of this goal is covered. The bar compares what you have linked against that figure.`}
+                >
+                  linked{funded !== null && ` · ${funded.toFixed(0)}% funded`}
                 </span>
               </div>
 
@@ -403,13 +417,17 @@ export default function GoalsView({
 
               <div className="flex flex-wrap items-center gap-2.5 border-t border-[var(--divider)] pt-3 text-[11.5px] font-bold text-[var(--faint)]">
                 <span
-                  title={linked.length
-                    ? `Value-weighted return of the ${linked.length} linked holding`
-                      + `${linked.length === 1 ? "" : "s"}. A low figure here usually means one`
-                      + " of them has no return yet — a PF balance, or a position with no buy date."
-                    : `No holdings linked, so the ${g.benchmark} assumption is used instead.`}
+                  title={g.return_source === "assumed"
+                    ? "The rate you set on this goal (Edit → Grows at). Clear it to fall back to the linked holdings' own record."
+                    : linked.length
+                      ? "Value-weighted return of the linked holdings' own record. A short or missing history drags this down — set your own rate in Edit → Grows at if you believe otherwise."
+                      : `No holdings linked, so the ${g.benchmark} assumption is used. Or set your own rate in Edit → Grows at.`}
                 >
                   grows at {pct(g.return_pct ?? 0)}
+                  <span className="ml-1 opacity-70">
+                    {g.return_source === "assumed" ? "· your estimate"
+                      : g.return_source === "benchmark" ? "· benchmark" : "· holdings\u2019 record"}
+                  </span>
                   {linked.length > 0 && (
                     <span className="ml-1 opacity-70">
                       · {linked.length} holding{linked.length === 1 ? "" : "s"}

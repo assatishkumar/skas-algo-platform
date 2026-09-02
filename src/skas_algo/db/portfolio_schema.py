@@ -40,6 +40,7 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "schedule": "JSON DEFAULT '[]'",
         "inflation_pct": "FLOAT DEFAULT 6.0",
         "allocations": "JSON DEFAULT '[]'",
+        "expected_return_pct": "FLOAT",
     },
 }
 

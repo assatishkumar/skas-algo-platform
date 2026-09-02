@@ -158,6 +158,9 @@ export interface Goal {
   sort_order: number;
   current_value?: number;
   return_pct?: number;
+  /** Where return_pct came from: the owner's estimate, the holdings' record, or the benchmark. */
+  return_source?: "assumed" | "holdings" | "benchmark";
+  expected_return_pct?: number | null;
   benchmark_pct?: number;
   /** ₹/month still flowing into the linked holdings (share-weighted) — e.g. a PPF SIP. */
   linked_monthly?: number;
@@ -478,6 +481,7 @@ export interface GoalInput {
   monthly_sip: number;
   holding_ids: number[];
   benchmark: string;
+  expected_return_pct?: number | null;
 }
 
 // ------------------------------------------------------------------ sheet seeding

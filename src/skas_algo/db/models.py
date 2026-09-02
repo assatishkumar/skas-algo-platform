@@ -389,6 +389,10 @@ class PortfolioGoal(Base, TimestampMixin):
     allocations: Mapped[list] = mapped_column(JSON, default=list)
     holding_ids: Mapped[list] = mapped_column(JSON, default=list)
     benchmark: Mapped[str] = mapped_column(String(32), default="NIFTY 50 TRI")
+    # The owner's OWN growth assumption (%/yr) for the projection. NULL = derive it from the
+    # linked holdings' record — which is honest but brittle: one holding with a short or
+    # broken history drags a 15-year plan to +0.4%/yr (owner, 2026-09-02).
+    expected_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
 

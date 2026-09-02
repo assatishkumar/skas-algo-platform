@@ -80,6 +80,7 @@ def _goal_out(g: PortfolioGoal, holdings: list[dict] | None = None) -> dict:
         "target_amount": g.target_amount,
         "target_year": g.target_year, "monthly_sip": g.monthly_sip,
         "holding_ids": list(g.holding_ids or []), "benchmark": g.benchmark,
+        "expected_return_pct": g.expected_return_pct,
         "sort_order": g.sort_order,
     }
     if holdings is None:
@@ -94,11 +95,17 @@ def _goal_out(g: PortfolioGoal, holdings: list[dict] | None = None) -> dict:
     value = sum(h["value"] * shares[h["id"]] / 100.0 for h in linked)
     bench = pf.BENCHMARKS.get(g.benchmark, 0.0)
     weights = sum(h["value"] * shares[h["id"]] / 100.0 for h in linked)
+    has_record = weights > 0 and any(h["xirr_pct"] is not None for h in linked)
     blended = (
         sum((h["xirr_pct"] or 0.0) * h["value"] * shares[h["id"]] / 100.0 for h in linked)
         / weights
-        if weights > 0 and any(h["xirr_pct"] is not None for h in linked) else bench
+        if has_record else bench
     )
+    # The owner's own assumption OUTRANKS the derived record: the record is honest but
+    # brittle — one linked holding with a short or broken history drags a 15-year plan to
+    # +0.4%/yr, and no one plans a wedding on that. None = derived, as before.
+    assumed = g.expected_return_pct
+    rate = float(assumed) if assumed is not None else blended
     # Money still FLOWING INTO the linked holdings funds the goal too: a PPF being paid
     # ₹12,500/month is not a static pot, and projecting it as one understates every year
     # (Arya College read "short from 2036" that way). The holding's own monthly_contribution
@@ -115,11 +122,13 @@ def _goal_out(g: PortfolioGoal, holdings: list[dict] | None = None) -> dict:
             "until_year": int(str(mat)[:4]) if mat else None,
         })
     out["current_value"] = round(value, 2)
-    out["return_pct"] = round(blended, 2)
+    out["return_pct"] = round(rate, 2)
+    out["return_source"] = ("assumed" if assumed is not None
+                            else "holdings" if has_record else "benchmark")
     out["benchmark_pct"] = bench
     out["linked_monthly"] = round(sum(c["monthly"] for c in contributions), 2)
     out["projection"] = pf.goal_projection(
-        {**out, "monthly_sip": g.monthly_sip}, current_value=value, return_pct=blended,
+        {**out, "monthly_sip": g.monthly_sip}, current_value=value, return_pct=rate,
         contributions=contributions,
     )
     return out

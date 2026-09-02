@@ -1010,6 +1010,8 @@ class PortfolioGoalInput(BaseModel):
     allocations: list[PortfolioAllocation] = Field(default_factory=list)
     holding_ids: list[int] = Field(default_factory=list)
     benchmark: str = "NIFTY 50 TRI"
+    # The owner's own growth assumption; None = derive from the linked holdings' record.
+    expected_return_pct: float | None = Field(default=None, ge=-20, le=40)
 
 
 class PortfolioSettingsInput(BaseModel):
