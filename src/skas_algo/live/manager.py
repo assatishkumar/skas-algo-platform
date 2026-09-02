@@ -44,6 +44,12 @@ from .quotes import (
 logger = logging.getLogger("skas_algo.live")
 
 
+# Longest gap between reconcile RETRIES after consecutive failures. Fifteen minutes still
+# catches a manual trade well inside the hour the successful path uses, while a broker having
+# a bad morning costs ~4 calls an hour instead of 120.
+_RECONCILE_BACKOFF_CAP_S = 900
+
+
 class ReconcileUnavailable(Exception):
     """Raised when the broker book can't be READ (expired token / API blip) — distinct from a
     genuine book mismatch. The caller treats it as transient (retry next tick), NEVER a halt."""
@@ -696,6 +702,18 @@ class LiveRun:
         throttled = last is not None and (now - last).total_seconds() < 3600
         if throttled and not self.reconcile_pending:
             return
+        # A pending run bypasses the hourly throttle so a fresh injection reconciles before its
+        # first decision. That must not become "retry every tick forever when the broker is
+        # down": on 2026-09-02 a single Dhan 502 put run 28 into a /holdings call every 30s for
+        # hours, and the extra load caused more 502s and 429s — the failure feeding itself.
+        # Consecutive FAILURES back off; a success resets it.
+        fails = getattr(self, "_reconcile_fails", 0)
+        if fails:
+            tried = getattr(self, "_last_reconcile_try_at", None)
+            backoff = min(_RECONCILE_BACKOFF_CAP_S, 30 * (2 ** min(fails, 5)))
+            if tried is not None and (now - tried).total_seconds() < backoff:
+                return
+        self._last_reconcile_try_at = now
         adapter = getattr(self.quote_source, "adapter", None)
         if adapter is None or self.config.broker_account_id is None:
             return  # can't reconcile → stay pending, retry next tick (throttle NOT armed)
@@ -705,7 +723,11 @@ class LiveRun:
         except ReconcileUnavailable as exc:
             # Broker book temporarily UNREADABLE (expired token / API blip) — NOT a mismatch. Stay
             # pending (throttle NOT armed) and retry next tick; never halt on a failed read.
-            logger.warning("run %s: broker book unreadable, skip reconcile: %s", self.run_id, exc)
+            self._reconcile_fails = getattr(self, "_reconcile_fails", 0) + 1
+            logger.warning(
+                "run %s: broker book unreadable, skip reconcile (attempt %s): %s",
+                self.run_id, self._reconcile_fails, exc,
+            )
             return
         except Exception:  # pragma: no cover - reconciliation must never kill the loop
             logger.exception("reconciliation failed for run %s", self.run_id)
@@ -713,6 +735,7 @@ class LiveRun:
         # A comparison completed: arm the hourly throttle and lift the pending gate. On a
         # mismatch, order_error becomes the (owner-acked) block instead.
         self._last_reconcile_at = now
+        self._reconcile_fails = 0
         self.reconcile_pending = False
         if problem and not self.order_error:
             self.order_error = f"book mismatch: {problem}"

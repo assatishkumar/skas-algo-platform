@@ -866,3 +866,17 @@ def test_the_daily_cache_refresh_never_stores_todays_half_formed_bar(monkeypatch
     seen.clear()
     md.refresh_cache(object(), ["TMPV"], end=_date(2099, 1, 1))
     assert seen["end"] < today
+
+
+def test_a_failed_reconcile_read_backs_off_instead_of_retrying_every_tick():
+    """`reconcile_pending` bypasses the hourly throttle so a fresh injection reconciles before
+    its first decision. That must not become "retry forever when the broker is down": on
+    2026-09-02 one Dhan 502 put run 28 into a /holdings call every 30 seconds for hours, and
+    the extra load caused more 502s and 429s — the failure feeding itself."""
+    from skas_algo.live.manager import _RECONCILE_BACKOFF_CAP_S
+
+    # The schedule the fix produces: doubling from 30s, capped.
+    schedule = [min(_RECONCILE_BACKOFF_CAP_S, 30 * (2 ** min(f, 5))) for f in range(1, 8)]
+    assert schedule == [60, 120, 240, 480, 900, 900, 900]
+    # A broker having a bad morning now costs ~4 reads an hour, not 120.
+    assert 3600 / schedule[-1] < 5

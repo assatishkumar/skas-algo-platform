@@ -369,3 +369,85 @@ def test_the_http_client_keeps_every_method():
 
     for name in ("_headers", "_check", "_call", "post", "get", "put", "delete", "fetch_master"):
         assert callable(getattr(_DhanHttp, name, None)), f"_DhanHttp lost {name}()"
+
+
+# ------------------------------------------------------------------ rate gate & retries
+
+
+def test_the_account_gate_serialises_calls_of_DIFFERENT_kinds(monkeypatch):
+    """The per-kind gate alone gave quotes and /holdings their own 1/s budget each, so both
+    left in the SAME SECOND — which is precisely what the 2026-09-02 logs show (run 28,
+    11:10:57: a marketfeed call and a holdings call, both rejected). Dhan meters the Data API
+    family per client, so the account floor has to bind across kinds."""
+    from skas_algo.brokers import dhan
+
+    monkeypatch.setattr(dhan, "_RATE_LAST", {})
+    slept: list[float] = []
+    monkeypatch.setattr(dhan._time, "sleep", lambda s: slept.append(s))
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(dhan._time, "monotonic", lambda: clock["t"])
+
+    dhan._rate_gate("C1", "/marketfeed/ltp")     # first call: free
+    assert slept == []
+    dhan._rate_gate("C1", "/holdings")           # a DIFFERENT kind, same instant
+    assert slept and slept[0] >= 1.0, "the second call must wait on the account floor"
+
+
+def test_a_different_account_is_not_held_up_by_another(monkeypatch):
+    """The budget is per client id; one account's traffic must not throttle another's."""
+    from skas_algo.brokers import dhan
+
+    monkeypatch.setattr(dhan, "_RATE_LAST", {})
+    slept: list[float] = []
+    monkeypatch.setattr(dhan._time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(dhan._time, "monotonic", lambda: 1000.0)
+
+    dhan._rate_gate("C1", "/marketfeed/ltp")
+    dhan._rate_gate("C2", "/marketfeed/ltp")
+    assert slept == []
+
+
+def test_the_order_path_is_never_gated(monkeypatch):
+    """An exit that waits on a quote budget is a position left open."""
+    from skas_algo.brokers import dhan
+
+    monkeypatch.setattr(dhan, "_RATE_LAST", {})
+    slept: list[float] = []
+    monkeypatch.setattr(dhan._time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(dhan._time, "monotonic", lambda: 1000.0)
+
+    for _ in range(5):
+        dhan._rate_gate("C1", "/orders")
+    assert slept == []
+
+
+def test_a_gateway_5xx_is_retried_once_but_a_429_is_not(monkeypatch):
+    """A 502 is Dhan's edge having a moment and says nothing about the account. A 429 says
+    the account is over budget — asking again immediately is the opposite of the right move."""
+    from skas_algo.brokers import dhan
+
+    monkeypatch.setattr(dhan, "_RATE_LAST", {})
+    monkeypatch.setattr(dhan._time, "sleep", lambda s: None)
+    monkeypatch.setattr(dhan._time, "monotonic", lambda: 1000.0)
+
+    class _Resp:
+        def __init__(self, code):
+            self.status_code = code
+            self.text = "{}"
+        def json(self):
+            return {"ok": True}
+
+    for codes, expected_calls in (([502, 200], 2), ([429, 200], 1), ([200], 1)):
+        seen = []
+
+        def fake(verb, url, **kw):
+            seen.append(url)
+            return _Resp(codes[len(seen) - 1] if len(seen) <= len(codes) else 200)
+
+        monkeypatch.setattr("requests.request", fake)
+        http = dhan._DhanHttp("C1")
+        try:
+            http.get("/holdings")
+        except Exception:
+            pass                      # a 429 raises; the call COUNT is what matters here
+        assert len(seen) == expected_calls, codes

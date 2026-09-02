@@ -33,6 +33,7 @@ import base64
 import csv
 import io
 import json
+import logging
 import os
 import threading
 import time as _time
@@ -43,6 +44,8 @@ from skas_algo.db.enums import OrderSide, OrderType
 
 from .base import BrokerOrder, Funds, Session
 from .zerodha import BrokerLoginError, NotArmedError
+
+logger = logging.getLogger(__name__)
 
 DHAN_BASE = "https://api.dhan.co/v2"
 SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
@@ -99,7 +102,14 @@ class DhanThrottled(Exception):
 # rejected quote. Never gate the order path to protect a data poll.
 _RATE_LOCK = threading.Lock()
 _RATE_LAST: dict[tuple[str, str], float] = {}
+# Per-ENDPOINT-CLASS floors. The option chain is the tightest.
 _MIN_GAP = {"chain": 3.0, "quote": 1.0, "data": 1.0}
+# …and an ACCOUNT-WIDE floor on top, because Dhan meters the whole Data API family per
+# client, not per endpoint. Keyed only by kind, a quote and a /holdings call are two
+# independent 1/s streams and fire in the SAME SECOND — which is exactly what the logs show
+# (run 28, 2026-09-02 11:10:57: a marketfeed call and a holdings call, same second, both
+# rejected). Whichever floor is later wins.
+_ACCOUNT_GAP = 1.1
 _MAX_WAIT = 4.0          # queue this long at most, then shed
 
 
@@ -116,21 +126,33 @@ def _rate_kind(path: str) -> str | None:
 
 
 def _rate_gate(client_id: str, path: str) -> None:
+    """Hold a caller until this account may make another Data API request.
+
+    TWO floors, and the account-wide one is the point: the per-kind gate alone let a quote and
+    a holdings call leave in the same second, since each had its own budget. Dhan meters the
+    family per client, so both reservations are taken and the later one governs."""
     kind = _rate_kind(path)
     if kind is None:
         return
     gap = float(os.environ.get(f"SKAS_DHAN_GAP_{kind.upper()}", _MIN_GAP[kind]))
-    key = (client_id, kind)
+    account_gap = float(os.environ.get("SKAS_DHAN_GAP_ACCOUNT", _ACCOUNT_GAP))
+    kind_key = (client_id, kind)
+    acct_key = (client_id, "*")
     with _RATE_LOCK:
         now = _time.monotonic()
-        earliest = _RATE_LAST.get(key, 0.0) + gap
+        earliest = max(
+            _RATE_LAST.get(kind_key, 0.0) + gap,
+            _RATE_LAST.get(acct_key, 0.0) + account_gap,
+        )
         wait = max(0.0, earliest - now)
         if wait > _MAX_WAIT:
-            # Too many callers want this endpoint. Shedding keeps the ACCOUNT under its
-            # budget, which is what protects the live run; queueing would just move the
-            # 429 later and stall the loop meanwhile.
+            # Too many callers want this account. Shedding keeps it under budget, which is
+            # what protects the live run; queueing would just move the 429 later and stall
+            # the loop meanwhile.
             raise DhanThrottled(f"{path}: account gate busy, {wait:.1f}s behind")
-        _RATE_LAST[key] = max(now, earliest)   # reserve the slot before releasing the lock
+        # Reserve BOTH slots before releasing the lock.
+        _RATE_LAST[kind_key] = max(now, earliest)
+        _RATE_LAST[acct_key] = max(now, earliest)
     if wait > 0:
         _time.sleep(wait)
 
@@ -161,13 +183,30 @@ class _DhanHttp:
         return out
 
 
+    # Dhan's gateway returns a bare HTML 502 now and then (40 of them on 2026-09-02). It is
+    # not an answer about the account, so one retry after a pause absorbs most of them —
+    # rather than surfacing a "degraded" chip and, worse, feeding the reconcile retry loop.
+    _RETRY_STATUSES = (500, 502, 503, 504)
+    _RETRY_PAUSE_S = 1.5
+
     def _call(self, verb: str, path: str, body: dict | None = None) -> dict:
         import requests
 
-        _rate_gate(self.client_id, path)
-        r = requests.request(verb, f"{DHAN_BASE}{path}", json=body,
-                             headers=self._headers(), timeout=15)
-        return self._check(r, verb, path)
+        for attempt in (0, 1):
+            _rate_gate(self.client_id, path)
+            r = requests.request(verb, f"{DHAN_BASE}{path}", json=body,
+                                 headers=self._headers(), timeout=15)
+            # A gateway 5xx says nothing about the account — it is Dhan's edge having a
+            # moment. Retry ONCE. A 429 is deliberately NOT retried: the account is over
+            # budget and asking again immediately is the opposite of the right response.
+            if r.status_code in self._RETRY_STATUSES and attempt == 0:
+                logger.warning(
+                    "Dhan %s %s -> HTTP %s, retrying once", verb, path, r.status_code
+                )
+                _time.sleep(self._RETRY_PAUSE_S)
+                continue
+            return self._check(r, verb, path)
+        raise AssertionError("unreachable")   # the loop always returns or raises
 
     def post(self, path: str, body: dict) -> dict:
         return self._call("POST", path, body)
