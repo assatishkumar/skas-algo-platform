@@ -437,14 +437,17 @@ def test_a_gateway_5xx_is_retried_once_but_a_429_is_not(monkeypatch):
         def json(self):
             return {"ok": True}
 
-    for codes, expected_calls in (([502, 200], 2), ([429, 200], 1), ([200], 1)):
-        seen = []
-
+    def responder(codes: list[int], seen: list[str]):
+        """Bound explicitly — a closure over the loop variables would read whatever the LAST
+        iteration left behind, which is how a test like this quietly stops testing."""
         def fake(verb, url, **kw):
             seen.append(url)
             return _Resp(codes[len(seen) - 1] if len(seen) <= len(codes) else 200)
+        return fake
 
-        monkeypatch.setattr("requests.request", fake)
+    for codes, expected_calls in (([502, 200], 2), ([429, 200], 1), ([200], 1)):
+        seen: list[str] = []
+        monkeypatch.setattr("requests.request", responder(codes, seen))
         http = dhan._DhanHttp("C1")
         try:
             http.get("/holdings")
