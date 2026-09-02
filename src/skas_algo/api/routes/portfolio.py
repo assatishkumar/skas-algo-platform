@@ -99,11 +99,28 @@ def _goal_out(g: PortfolioGoal, holdings: list[dict] | None = None) -> dict:
         / weights
         if weights > 0 and any(h["xirr_pct"] is not None for h in linked) else bench
     )
+    # Money still FLOWING INTO the linked holdings funds the goal too: a PPF being paid
+    # ₹12,500/month is not a static pot, and projecting it as one understates every year
+    # (Arya College read "short from 2036" that way). The holding's own monthly_contribution
+    # is the source of truth — share-weighted like the value, stopped at the holding's
+    # maturity, and never typed again on the goal.
+    contributions = []
+    for h in linked:
+        mc = float(h.get("monthly_contribution") or 0.0)
+        if mc <= 0:
+            continue
+        mat = h.get("maturity_date")
+        contributions.append({
+            "monthly": mc * shares[h["id"]] / 100.0,
+            "until_year": int(str(mat)[:4]) if mat else None,
+        })
     out["current_value"] = round(value, 2)
     out["return_pct"] = round(blended, 2)
     out["benchmark_pct"] = bench
+    out["linked_monthly"] = round(sum(c["monthly"] for c in contributions), 2)
     out["projection"] = pf.goal_projection(
         {**out, "monthly_sip": g.monthly_sip}, current_value=value, return_pct=blended,
+        contributions=contributions,
     )
     return out
 

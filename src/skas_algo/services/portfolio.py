@@ -681,6 +681,7 @@ def goal_projection(
     current_value: float,
     return_pct: float,
     today: date | None = None,
+    contributions: list[dict] | None = None,
 ) -> dict:
     """Walk a goal year by year: grow the corpus, take out that year's (inflated) cost, and
     report the first year it runs dry.
@@ -691,6 +692,13 @@ def goal_projection(
     today's prices, so each is carried forward at the goal's own inflation rate. School fees
     entered as 7 L in today's money are 11.2 L in 2034 at 6%, and planning against 7 L would
     understate the goal by a third.
+
+    ``contributions`` is the money still FLOWING INTO the linked holdings — each
+    ``{"monthly": ₹ (already share-weighted), "until_year": int | None}``. A PPF being paid
+    ₹12,500/month is not a static ₹13 L pot, and projecting it as one reported Arya College
+    short from 2036 when the contributions alone add ~₹1.5 L a year (owner, 2026-09-02).
+    A stream with a maturity (``until_year``) stops paying after that year, mirroring the
+    holding's own accrual.
     """
     day = today or date.today()
     base_year = day.year
@@ -726,8 +734,14 @@ def goal_projection(
         frac = (months_left_now / 12.0) if n == 0 else 1.0
         months = months_left_now if n == 0 else 12
         # Contributions land through the period, so they earn roughly half of its return —
-        # crediting the full period would flatter every plan that leans on the SIP.
-        corpus = corpus * ((1 + r) ** frac) + sip * months * (1 + r * frac / 2)
+        # crediting the full period would flatter every plan that leans on the SIP. The
+        # goal's own SIP and the linked holdings' inflows ride the same convention.
+        inflow = sip
+        for c in contributions or []:
+            until = c.get("until_year")
+            if until is None or year <= int(until):
+                inflow += float(c.get("monthly") or 0.0)
+        corpus = corpus * ((1 + r) ** frac) + inflow * months * (1 + r * frac / 2)
         today_amount = by_year.get(year, 0.0)
         needed = today_amount * ((1 + infl) ** n)
         total_nominal += needed

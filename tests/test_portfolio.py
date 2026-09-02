@@ -464,6 +464,58 @@ def test_a_recurring_goal_survives_when_the_sip_and_growth_cover_each_year():
     assert p["years"] == 2048 - 2026 + 1
 
 
+def test_money_still_flowing_into_a_linked_holding_funds_the_goal():
+    """A PPF being paid ₹12,500/month is not a static pot (owner, 2026-09-02 — Arya College
+    read "short from 2036" because the projection grew the balance but ignored every future
+    instalment). The linked holding's own contribution stream must ride the walk."""
+    goal = {"schedule": [{"year": 2036, "amount": 4_200_000}], "inflation_pct": 0.0}
+    without = pf.goal_projection(goal, current_value=1_300_000, return_pct=8.0,
+                                 today=date(2026, 9, 1))
+    with_ppf = pf.goal_projection(
+        goal, current_value=1_300_000, return_pct=8.0, today=date(2026, 9, 1),
+        contributions=[{"monthly": 12_500, "until_year": None}],
+    )
+    # Ten years of ₹12.5k/month at 8% is ~₹22 L — the difference between short and funded.
+    assert without["first_shortfall_year"] == 2036 and without["shortfall_total"] > 0
+    assert with_ppf["first_shortfall_year"] is None and with_ppf["shortfall_total"] == 0
+    assert with_ppf["final_corpus"] > 1_000_000    # pays the ₹42 L and still has money left
+
+
+def test_a_contribution_stream_stops_at_its_maturity_year():
+    """The mirror of the holding's own accrual: a stream with ``until_year`` pays through
+    that year and not a rupee after — a matured deposit must not keep funding the plan."""
+    goal = {"schedule": [{"year": 2040, "amount": 1}], "inflation_pct": 0.0}
+    forever = pf.goal_projection(
+        goal, current_value=0, return_pct=0.0, today=date(2026, 1, 1),
+        contributions=[{"monthly": 1_000, "until_year": None}],
+    )
+    matured = pf.goal_projection(
+        goal, current_value=0, return_pct=0.0, today=date(2026, 1, 1),
+        contributions=[{"monthly": 1_000, "until_year": 2028}],
+    )
+    # At 0% the arithmetic is exact: 15 years vs 3 years of ₹12k/yr (minus the ₹1 outflow).
+    assert forever["final_corpus"] == pytest.approx(15 * 12_000 - 1)
+    assert matured["final_corpus"] == pytest.approx(3 * 12_000 - 1)
+
+
+def test_the_api_share_weights_a_linked_holdings_contribution(client: TestClient):
+    """The goal never types the SIP again — the holding's ``monthly_contribution`` is the
+    source of truth, and only the ALLOCATED share of it funds this goal."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "PPF", "asset_class": "ppf", "invested": 1_000_000, "value": 1_300_000,
+        "interest_rate_pct": 8.0, "monthly_contribution": 12_500,
+    }).json()["id"]
+    gid = client.post("/api/v1/portfolio/goals", json={
+        "name": "College", "inflation_pct": 7,
+        "schedule": [{"year": 2036, "amount": 700_000}],
+        "allocations": [{"holding_id": hid, "pct": 40}],
+    }).json()["id"]
+    goal = next(g for g in client.get("/api/v1/portfolio").json()["goals"] if g["id"] == gid)
+    assert goal["linked_monthly"] == pytest.approx(5_000)      # 40% of ₹12,500
+    client.delete(f"/api/v1/portfolio/goals/{gid}")
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
 def test_the_present_value_answers_what_would_finish_this_today():
     """Discounted at the expected return — the one number that makes two goals in different
     decades comparable."""

@@ -159,6 +159,8 @@ export interface Goal {
   current_value?: number;
   return_pct?: number;
   benchmark_pct?: number;
+  /** ₹/month still flowing into the linked holdings (share-weighted) — e.g. a PPF SIP. */
+  linked_monthly?: number;
   projection?: GoalProjection;
 }
 

@@ -415,6 +415,14 @@ export default function GoalsView({
                       · {linked.length} holding{linked.length === 1 ? "" : "s"}
                     </span>
                   )}
+                  {(g.linked_monthly ?? 0) > 0 && (
+                    <span
+                      className="ml-1 opacity-70"
+                      title="Ongoing contributions into the linked holdings (their own monthly contribution, share-weighted) — the projection counts every future instalment."
+                    >
+                      · +{money(g.linked_monthly ?? 0)}/mo flowing in
+                    </span>
+                  )}
                 </span>
                 <button
                   onClick={() => setOpenYears(openYears === g.id ? null : g.id)}
