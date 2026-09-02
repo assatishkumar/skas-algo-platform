@@ -418,3 +418,39 @@ def test_a_saved_run_still_uses_its_daily_series():
                            strategy_id="delta_neutral_monthly", name="dnm")
     ev = m["events"][0]
     assert ev["unrealized_eod"] == -12000.0 and ev["unrealized_basis"] == "eod"
+
+
+def test_every_event_gives_the_payoff_panel_a_priceable_book():
+    """The point-in-time payoff (owner ask 2026-09-02) redraws the standing book at each
+    event card. It needs, per event: the refs of the legs standing AFTER it (`open_refs`),
+    a price for each of them — the fill for a leg opened there, the store mark for one held
+    through it — and, when the store has no print, the leg's own entry IV (`open_iv`) so the
+    value curve is a labelled model, never a flat default. The exit event has no after-book;
+    the panel then draws the book it CLOSED, at the exit fills."""
+    import skas_algo.services.cycle_detail as cd
+
+    legs = [_live_leg(24200, "CE", "2026-08-20 09:30"),
+            _live_leg(24300, "CE", "2026-08-21 10:00", premium=80.0)]
+    legs[0].update(exit_date="2026-08-22 15:00", exit_price=40.0, pnl=4500.0)
+    legs[1].update(exit_date="2026-08-22 15:00", exit_price=50.0, pnl=2250.0)
+    cycle = {**_live_cycle(legs), "exit_date": "2026-08-22 15:00", "net_pnl": 6750.0,
+             "underlying_exit": 24100.0, "live": False}
+    marks = {"NIFTY|2026-08-25|24200|CE": 60.0}          # only the held leg has a store print
+    orig, cd._marks_at = cd._marks_at, lambda syms, ts: {s: marks[s] for s in syms if s in marks}
+    try:
+        m = cd.build_cycle_detail(cycle, [], lambda d: 24000.0, [], index=0, run_id=7,
+                                  strategy_id="delta_neutral_monthly", name="dnm")
+    finally:
+        cd._marks_at = orig
+    entry, adj, exit_ev = m["events"]
+    # after the entry: one leg, priced at its own fill
+    assert entry["open_refs"] == [0] and entry["opened"][0]["price"] == 100.0
+    # after the adjustment: both legs stand; the new one at its fill, the held one at its mark
+    assert adj["open_refs"] == [0, 1]
+    assert adj["opened"][0]["ref"] == 1 and adj["opened"][0]["price"] == 80.0
+    assert adj["held"][0]["ref"] == 0 and adj["held"][0]["price"] == 60.0
+    # the exit closes everything: nothing stands after it, the closed rows carry the fills
+    assert exit_ev["kind"] == "exit" and exit_ev["open_refs"] == []
+    assert sorted(lg["price"] for lg in exit_ev["closed"]) == [40.0, 50.0]
+    # every leg row carries the IV solved at its open — the model fallback for an unmarked leg
+    assert all(0.05 < lg["open_iv"] < 1.0 for lg in m["legs"])

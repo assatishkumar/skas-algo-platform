@@ -2,7 +2,7 @@
 // so it works on any persisted run (no API/storage changes). Mirrors
 // engine/options/black_scholes.py; q=r turns BS into Black-76 (synthetic GOLD chains).
 
-import type { OptionCycle, OptionPosition } from "../types";
+import type { LivePosition, OptionCycle, OptionPosition } from "../types";
 
 const RISK_FREE = 0.065;
 
@@ -144,6 +144,10 @@ export interface LiveLeg {
   entry: number; // avg fill premium
   ltp: number | null;
   expiry?: string; // per-leg ISO expiry (calendars); absent → the position's single expiry
+  // A known IV for the leg, used ONLY when no LTP is available to back one out of (a
+  // point-in-time snapshot whose leg has no store mark → its entry IV). Never overrides an
+  // LTP-derived IV, so a live position with a mark values exactly as before.
+  iv?: number | null;
 }
 
 export interface LivePayoffData {
@@ -172,7 +176,8 @@ function legTerminalMeta(legs: LiveLeg[], spot: number, asOf: string, term: stri
   return legs.map((l) => {
     const exp = l.expiry ?? term;
     const tLeg = Math.max(daysBetween(asOf, exp) / 365, 1 / 365); // ≥ ~1 day keeps BS sane
-    const iv = (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, tLeg, RISK_FREE, l.right) : null) ?? 0.15;
+    const iv =
+      (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, tLeg, RISK_FREE, l.right) : null) ?? l.iv ?? 0.15;
     const tRemain = Math.max(daysBetween(term, exp) / 365, 0);
     return { iv, tLeg, tRemain };
   });
@@ -195,11 +200,21 @@ function legValueAtTerminal(l: LiveLeg, S: number, m: LegMeta): number {
 export function buildLivePayoff(
   legs: LiveLeg[], spot: number, expiryDate: string, today?: string,
   rangePct?: number | null, breakevens?: number[],
+  opts?: {
+    // A constant added to every point — the cycle's REALIZED P&L so far, so the curves read
+    // as cycle P&L rather than the standing book's own (a roll that banked a loss otherwise
+    // vanishes from the chart, and two events cannot be compared).
+    offset?: number;
+    // An explicit x-window (data units) — used to draw a second book on the SAME grid as a
+    // first one (the point-in-time "before this event" ghost).
+    range?: [number, number];
+  },
 ): LivePayoffData | null {
   if (!legs.length || !spot) return null;
   const asOf = today ?? new Date().toISOString().slice(0, 10);
   const term = terminalExpiry(legs, expiryDate);
   const meta = legTerminalMeta(legs, spot, asOf, term);
+  const offset = opts?.offset ?? 0;
   // Auto range spans spot, EVERY strike, and the breakevens (so the tent kinks + zero-crossings
   // are always on-screen), padded by a fraction of that structure width with a modest floor.
   // A fixed ±10% of the absolute level blew a NIFTY straddle (strikes ≈ spot) out to a ~5000-pt
@@ -210,14 +225,14 @@ export function buildLivePayoff(
   const lo0 = Math.min(...refs);
   const hi0 = Math.max(...refs);
   const pad = Math.max((hi0 - lo0) * 0.4, spot * 0.015);
-  const lo = rangePct ? spot * (1 - rangePct) : lo0 - pad;
-  const hi = rangePct ? spot * (1 + rangePct) : hi0 + pad;
+  const lo = opts?.range ? opts.range[0] : rangePct ? spot * (1 - rangePct) : lo0 - pad;
+  const hi = opts?.range ? opts.range[1] : rangePct ? spot * (1 + rangePct) : hi0 + pad;
   const n = 81;
   const data = [];
   for (let i = 0; i < n; i++) {
     const S = lo + ((hi - lo) * i) / (n - 1);
-    let expiry = 0;
-    let now = 0;
+    let expiry = offset;
+    let now = offset;
     legs.forEach((l, j) => {
       expiry += l.direction * (legValueAtTerminal(l, S, meta[j]) - l.entry) * l.units;
       now += l.direction * (bsPrice(S, l.strike, meta[j].tLeg, RISK_FREE, meta[j].iv, l.right) - l.entry) * l.units;
@@ -225,6 +240,37 @@ export function buildLivePayoff(
     data.push({ spot: S, expiry, now });
   }
   return { data, spot, expiryDate: term };
+}
+
+/** Group option positions by UNDERLYING and return the dominant book as chart legs — one
+ *  spot axis can't hold NIFTY and SENSEX strikes at once (a mixed cp_ratio run rendered a
+ *  21k→85k mess). `expiry` = the EARLIEST leg expiry (a calendar holds two; the payoff is
+ *  drawn at the nearer one). Symbols are `UNDERLYING|EXPIRY|STRIKE|RIGHT`; anything else
+ *  (an equity leg) is skipped. */
+export function bookFromPositions(positions: LivePosition[]): {
+  legs: LiveLeg[]; expiry: string; underlying: string; skipped: number;
+} {
+  const groups = new Map<string, { legs: LiveLeg[]; expiry: string }>();
+  for (const p of positions) {
+    const parts = p.symbol.split("|");
+    if (parts.length !== 4) continue;
+    const g = groups.get(parts[0]) ?? { legs: [], expiry: "" };
+    g.expiry = !g.expiry || Date.parse(parts[1]) < Date.parse(g.expiry) ? parts[1] : g.expiry;
+    g.legs.push({
+      strike: Number(parts[2]),
+      right: parts[3],
+      direction: p.direction ?? 1,
+      units: p.units,
+      entry: p.avg_price,
+      ltp: p.ltp,
+      expiry: parts[1], // per-leg expiry so calendars value the far leg at the near expiry
+      iv: p.iv, // fallback only — an LTP-derived IV still wins (see LiveLeg.iv)
+    });
+    groups.set(parts[0], g);
+  }
+  const [top] = [...groups.entries()].sort((a, b) => b[1].legs.length - a[1].legs.length);
+  if (!top) return { legs: [], expiry: "", underlying: "", skipped: 0 };
+  return { legs: top[1].legs, expiry: top[1].expiry, underlying: top[0], skipped: positions.length - top[1].legs.length };
 }
 
 /** A spot that is SANE for this leg set. A multi-underlying run's `underlying_spot` is the
@@ -266,6 +312,9 @@ export interface PositionMetrics {
  *  (puts are bounded at S=0). POP uses a risk-neutral lognormal at expiry with ``aggIv``. */
 export function computeMetrics(
   legs: LiveLeg[], spot: number, expiryDate: string, today?: string, aggIv?: number | null,
+  // realized P&L already banked — shifts the curve so breakevens / max P&L / current P&L
+  // are the CYCLE's, not the standing book's (0 = the book alone, every existing caller)
+  offset = 0,
 ): PositionMetrics | null {
   if (!legs.length || !spot) return null;
   const asOf = today ?? new Date().toISOString().slice(0, 10);
@@ -277,7 +326,7 @@ export function computeMetrics(
   const term = terminalExpiry(legs, expiryDate);
   const meta = legTerminalMeta(legs, spot, asOf, term);
   const expiryPnl = (S: number) =>
-    legs.reduce((p, l, j) => p + l.direction * (legValueAtTerminal(l, S, meta[j]) - l.entry) * l.units, 0);
+    legs.reduce((p, l, j) => p + l.direction * (legValueAtTerminal(l, S, meta[j]) - l.entry) * l.units, offset);
 
   // Unbounded tails: only net calls run away (puts are capped at S=0).
   const ceNet = legs
@@ -321,7 +370,7 @@ export function computeMetrics(
     ? aggIv
     : (() => {
         const xv = legs
-          .map((l) => (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, t, RISK_FREE, l.right) : null))
+          .map((l) => (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, t, RISK_FREE, l.right) : null) ?? l.iv ?? null)
           .filter((v): v is number => v != null);
         return xv.length ? xv.reduce((a, b) => a + b, 0) / xv.length : 0;
       })();
@@ -341,7 +390,7 @@ export function computeMetrics(
   }
 
   const currentPnl = legs.reduce(
-    (p, l) => p + l.direction * ((l.ltp ?? l.entry) - l.entry) * l.units, 0,
+    (p, l) => p + l.direction * ((l.ltp ?? l.entry) - l.entry) * l.units, offset,
   );
   const intrinsicValue = legs.reduce(
     (p, l) => p + l.direction * intrinsic(l.right, spot, l.strike) * l.units, 0,

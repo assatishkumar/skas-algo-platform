@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import LivePayoffChart from "../components/LivePayoffChart";
 import { formatInr, pct } from "../lib/format";
+import { bookFromPositions, computeMetrics, effectiveSpot } from "../lib/payoff";
 import { prettyExpiry } from "../lib/symbol";
-import type { CycleDetail, CycleDetailEvent, CycleDetailLeg } from "../types";
+import type { CycleDetail, CycleDetailEvent, CycleDetailLeg, LivePosition } from "../types";
 
 /** Cycle Detail — the position lifecycle of one options cycle (entry → rolls/hedges → exit),
  *  design_handoff_cycle_detail. Geometry (x = time, y = strike) is computed from the event log
@@ -152,6 +154,11 @@ export function CycleDetail({ m, active, toggle, setActive, onClose }: {
           <span>◆ hedge added · ⇣ roll</span>
         </div>
       </div>
+
+      {/* The payoff of the book as it stood at each event (owner ask 2026-09-02): the event
+          cards below are snapshots in words and numbers; this is the same snapshot as a
+          shape. It follows the traced event, so clicking a card/flag moves it. */}
+      <PointInTimePayoff m={m} active={active} setActive={setActive} />
 
       {/* Timeline first at full width, legs table BELOW it (2026-08-21). Side by side, the
           460px column forced every event line to wrap ("SELL CE 59,300 · 25 Aug '26 · 5 lots"
@@ -341,13 +348,210 @@ function MtmStrip({ m, geo }: { m: CycleDetail; geo: ReturnType<typeof computeGe
   );
 }
 
+// ---------------------------------------------------------------- point-in-time payoff
+/** The book the payoff panel draws for one event: the legs STANDING right after it — each
+ *  priced at its fill if it was opened there, else at the store mark it was held through
+ *  (null when the store has no print → the chart models it at the leg's entry IV) — or, for
+ *  an event that leaves nothing standing (the exit), the book it CLOSED, at the exit fills. */
+function bookAt(m: CycleDetail, e: CycleDetailEvent): {
+  positions: LivePosition[]; mode: "after" | "closed"; marked: number; modelled: number;
+} {
+  const byRef = new Map(m.legs.map((l) => [l.ref, l]));
+  const priceAt = new Map<number, number | null>();
+  for (const l of e.opened) priceAt.set(l.ref, l.price);
+  for (const l of e.held ?? []) priceAt.set(l.ref, l.price);
+  let refs = e.open_refs ?? [];
+  let mode: "after" | "closed" = "after";
+  if (!refs.length && e.closed.length) {
+    refs = e.closed.map((l) => l.ref);
+    for (const l of e.closed) priceAt.set(l.ref, l.price);
+    mode = "closed";
+  }
+  let marked = 0, modelled = 0;
+  const positions: LivePosition[] = [];
+  for (const ref of refs) {
+    const leg = byRef.get(ref);
+    if (!leg) continue;
+    const price = priceAt.get(ref) ?? null;
+    const dir = leg.side === "long" ? 1 : -1;
+    if (price != null) marked++; else modelled++;
+    positions.push({
+      // rebuilt from parts, not copied: a leg's own expiry (a calendar holds two) is what
+      // LivePayoffChart values each leg at, and the symbol is where it reads it from
+      symbol: `${m.underlying}|${leg.expiry ?? m.expiry}|${leg.strike}|${leg.right}`,
+      units: leg.units, lots: 1, lot_size: m.lot_size, direction: dir,
+      avg_price: leg.open_price, ltp: price,
+      unrealized_pnl: price != null ? dir * (price - leg.open_price) * leg.units : 0,
+      iv: leg.open_iv ?? null,
+    });
+  }
+  return { positions, mode, marked, modelled };
+}
+
+/** Realized P&L already banked when this event's chart is drawn. For a standing book it is
+ *  the event's own realized-so-far; for the exit (which charts the book it CLOSED) it is the
+ *  realized BEFORE the exit, so the value curve at the exit spot lands on the cycle's final
+ *  P&L rather than double-counting the closing fills. */
+function realizedBefore(m: CycleDetail, i: number, mode: "after" | "closed"): number {
+  const e = m.events[i];
+  if (mode === "after") return e.realized_so_far;
+  const prev = m.events[i - 1];
+  if (prev) return prev.realized_so_far;
+  return e.realized_so_far - e.closed.reduce((s, l) => s + (l.realized ?? 0), 0);
+}
+
+/** Cycle-basis metrics of a snapshot (offset = realized so far): what the chart's curves say. */
+function snapshotMetrics(positions: LivePosition[], spot: number | null, asOf: string, offset: number) {
+  const b = bookFromPositions(positions);
+  const s = effectiveSpot(b.legs, spot);
+  if (!b.legs.length || !s) return null;
+  const met = computeMetrics(b.legs, s, b.expiry, asOf, undefined, offset);
+  return met ? { spot: s, expiry: b.expiry, met } : null;
+}
+const inr = (v: number) => (v === Infinity ? "unlimited" : v === -Infinity ? "unlimited" : formatInr(v));
+const beList = (bes: number[]) => (bes.length ? bes.map((b) => Math.round(b).toLocaleString("en-IN")).join(" · ") : "none");
+
+function PointInTimePayoff({ m, active, setActive }: {
+  m: CycleDetail; active: string | null; setActive: (v: string | null) => void;
+}) {
+  // Nothing traced → the latest event that leaves a book standing: an open cycle's current
+  // book, a closed cycle's last shape before the exit. The exit itself is one click away.
+  const fallback = useMemo(() => {
+    const standing = m.events.filter((e) => (e.open_refs ?? []).length > 0);
+    return (standing[standing.length - 1] ?? m.events[m.events.length - 1])?.id ?? null;
+  }, [m]);
+  const selId = active && m.events.some((e) => e.id === active) ? active : fallback;
+  const idx = m.events.findIndex((e) => e.id === selId);
+  const ev = idx >= 0 ? m.events[idx] : undefined;
+  const prev = idx > 0 ? m.events[idx - 1] : undefined;
+  const book = useMemo(() => (ev ? bookAt(m, ev) : null), [m, ev]);
+  // The book as it stood BEFORE this event (= right after the previous one), drawn as a ghost
+  // tent and compared in the strip — this is what makes "what changed at R1?" answerable.
+  const before = useMemo(() => (prev ? bookAt(m, prev) : null), [m, prev]);
+  if (!ev || !book || !book.positions.length) return null;
+
+  const n = book.positions.length;
+  const term = book.positions.map((p) => p.symbol.split("|")[1]).sort()[0];
+  const closed = book.mode === "closed";
+  // CYCLE basis: every curve carries the realized P&L banked so far, so the dashed curve at
+  // spot IS the card's "overall" figure and two events sit on one comparable scale. Without
+  // it R1 of a rolled calendar drew a tent that was positive everywhere while the cycle stood
+  // at −₹62k — the roll's buyback loss had simply vanished (owner, 2026-09-02).
+  const offset = realizedBefore(m, idx, book.mode);
+  const offsetBefore = prev && before ? realizedBefore(m, idx - 1, before.mode) : 0;
+  const ghost = prev && before && before.mode === "after" && before.positions.length
+    ? { positions: before.positions, spot: prev.spot, asOf: prev.at.slice(0, 10), offset: offsetBefore,
+        label: `Before ${ev.id} (as of ${prev.id})` }
+    : null;
+  const basis =
+    closed ? "at the exit fills"
+    : book.modelled === 0 ? "fills for legs opened here, 1-min-store marks for legs held through"
+    : book.marked === 0 ? "modelled at each leg's entry IV — no store print for this minute"
+    : `${book.marked} of ${n} legs at fill/store mark, the rest modelled at entry IV`;
+
+  // Before → after strip (every event but the first).
+  const after = snapshotMetrics(book.positions, ev.spot, ev.at.slice(0, 10), offset);
+  const priorM = ghost && prev ? snapshotMetrics(ghost.positions, prev.spot, ghost.asOf, offsetBefore) : null;
+  const closedRealized = ev.closed.reduce((s, l) => s + (l.realized ?? 0), 0);
+  const heldN = (ev.held ?? []).length;
+
+  return (
+    <div className="bg-[var(--card)] border border-[var(--border)] rounded-[18px] px-6 py-5 mb-[18px]">
+      <div className="flex items-baseline gap-3 mb-2.5 flex-wrap">
+        <div className="font-[700] text-[16px] font-['Space_Grotesk'] text-[var(--strong)]">Payoff · point in time</div>
+        <div className="text-[13px] text-[var(--faint)] font-semibold">
+          cycle P&L as it stood right after each event — pick one here, or click a card below
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {m.events.map((e) => {
+          const c = kindColor(e.kind), on = e.id === selId;
+          return (
+            <button key={e.id} onClick={() => setActive(e.id)}
+              title={`${eventTitle(e)} · ${shortDate(e.at)} ${hhmm(e.at)}`}
+              className="rounded-lg px-2.5 py-1 text-[11.5px] font-extrabold tracking-wide tabular-nums"
+              style={{ backgroundColor: on ? "var(--accent-deep)" : c.bg, color: on ? "#fff" : c.fg }}>
+              {e.id} <span className="font-semibold opacity-80">{shortDate(e.at)}{hhmm(e.at) ? ` ${hhmm(e.at)}` : ""}</span>
+            </button>
+          );
+        })}
+      </div>
+      <LivePayoffChart
+        positions={book.positions}
+        spot={ev.spot}
+        asOf={ev.at.slice(0, 10)}
+        spotLabel={closed ? "exit spot" : "spot"}
+        nowLabel="At this point"
+        pnlOffset={offset}
+        ghost={ghost}
+        caption={
+          <>
+            <span className="font-bold text-[var(--strong)]">
+              {ev.id} · {closed ? "the book this event closed" : eventTitle(ev)}
+            </span>
+            {" "}· {shortDate(ev.at)} {hhmm(ev.at)} · {n} leg{n === 1 ? "" : "s"}
+            {term ? <> · expiry {prettyExpiry(term)}</> : null}
+            <span className="text-slate-500">
+              {" "}— cycle P&L: {offset !== 0 ? <><span className={signCls(offset)}>{formatInr(offset)}</span> realized so far + </> : null}
+              the standing book ({basis}). Green/red = if held to expiry · dashed blue = at that moment
+              {ghost ? <> · dotted grey = before this event (as of {prev?.id})</> : null} ·{" "}
+            </span>
+            <span className="font-bold" style={{ color: "var(--strong)" }}>▍{closed ? "exit spot" : "spot"}</span>
+            <span className="text-slate-500"> · rail pills: </span>
+            <span style={{ color: "#8b5cf6" }}>CE</span>
+            <span className="text-slate-500"> · </span>
+            <span style={{ color: "#f59e0b" }}>PE</span>
+            <span className="text-slate-500"> (filled = sell · outlined = buy)</span>
+          </>
+        }
+      />
+      {prev && after && (
+        <div className="mt-3 border-t border-[var(--divider)] pt-3">
+          <div className="text-[11px] text-[var(--faint)] font-extrabold tracking-wider mb-1.5">
+            WHAT CHANGED AT {ev.id}
+            <span className="ml-2 font-semibold tracking-normal text-[12px] text-[var(--muted)]">
+              closed {ev.closed.length} leg{ev.closed.length === 1 ? "" : "s"}
+              {ev.closed.length ? <> (<span className={signCls(closedRealized)}>{formatInr(closedRealized)}</span> realized)</> : null}
+              {" "}· opened {ev.opened.length} · held {heldN} through
+              <span className="text-[var(--faint)]"> · chart figures are gross of charges</span>
+            </span>
+          </div>
+          <div className="grid gap-x-4 gap-y-1 text-[12.5px] tabular-nums" style={{ gridTemplateColumns: "180px 1fr 1fr" }}>
+            <span />
+            <span className="text-[10.5px] font-extrabold tracking-wider text-[var(--faint)]">BEFORE · AFTER {prev.id}</span>
+            <span className="text-[10.5px] font-extrabold tracking-wider text-[var(--faint)]">AFTER {ev.id}</span>
+            {([
+              ["Spot", priorM ? priorM.spot.toLocaleString("en-IN") : "—", after.spot.toLocaleString("en-IN"), null, null],
+              ["Near expiry", priorM ? prettyExpiry(priorM.expiry) : "—", prettyExpiry(after.expiry), null, null],
+              ["Cycle P&L at that moment", priorM ? formatInr(priorM.met.currentPnl) : "—", formatInr(after.met.currentPnl),
+                priorM?.met.currentPnl ?? null, after.met.currentPnl],
+              ["Max profit · to expiry", priorM ? inr(priorM.met.maxProfit) : "—", inr(after.met.maxProfit), null, null],
+              ["Max loss · to expiry", priorM ? inr(priorM.met.maxLoss) : "—", inr(after.met.maxLoss), null, null],
+              ["Breakevens", priorM ? beList(priorM.met.breakevens) : "—", beList(after.met.breakevens), null, null],
+            ] as [string, string, string, number | null, number | null][]).map(([label, b, a, bv, av]) => (
+              <Fragment key={label}>
+                <span className="font-semibold text-[var(--muted)]">{label}</span>
+                <span className={`font-semibold ${bv != null ? signCls(bv) : "text-[var(--muted)]"}`}>{b}</span>
+                <span className={`font-[700] font-['Space_Grotesk'] ${av != null ? signCls(av) : "text-[var(--strong)]"}`}>{a}</span>
+              </Fragment>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- event timeline
 function EventTimeline({ m, active, toggle }: {
   m: CycleDetail; active: string | null; toggle: (id: string | null) => () => void;
 }) {
   return (
     <div>
-      <div className="font-[700] text-sm font-['Space_Grotesk'] text-[var(--muted)] tracking-wide mb-3">WHAT HAPPENED, IN ORDER</div>
+      <div className="flex items-baseline gap-3 mb-3 flex-wrap">
+        <div className="font-[700] text-sm font-['Space_Grotesk'] text-[var(--muted)] tracking-wide">WHAT HAPPENED, IN ORDER</div>
+        <div className="text-[12px] text-[var(--faint)] font-semibold">click a card — the payoff above follows it</div>
+      </div>
       <div className="relative">
         <div className="absolute left-[18px] top-2.5 bottom-2.5 w-0.5 bg-[var(--divider)]" />
         <div className="flex flex-col gap-3">

@@ -985,6 +985,7 @@ export interface CycleDetailLeg {
   expiry?: string | null;   // per leg, not per cycle (the calendar family holds two)
   open_event: string | null; close_event: string | null; open_ts: string; close_ts: string | null;
   open_price: number; close_price: number | null; open_delta: number | null;
+  open_iv?: number | null;  // IV solved at the open — the payoff panel's model fallback when a leg has no store mark
   days: number | null; pnl: number;
 }
 export interface CycleDetail {

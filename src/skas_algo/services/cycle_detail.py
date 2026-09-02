@@ -701,6 +701,11 @@ def _leg_row(lg, open_ev, close_ev) -> dict:
         "open_price": lg["open_price"],
         "close_price": lg["close_price"],
         "open_delta": round(lg["open_delta"], 3) if lg.get("open_delta") is not None else None,
+        # The IV backed out of the OPEN premium. The point-in-time payoff panel values a leg
+        # at an event off its store mark when there is one; when there is not (an EOD
+        # backtest stamps events at 00:00, before any minute-bar), this is the honest
+        # fallback — a constant-IV model curve, labelled as such — instead of a flat 15%.
+        "open_iv": round(lg["iv"], 4) if lg.get("iv") is not None else None,
         "days": lg["days"],
         "pnl": round(lg["pnl"]),
     }

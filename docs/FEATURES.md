@@ -855,6 +855,21 @@ theme. All data goes through `api/client.ts` (`/api/v1`) plus a live WebSocket f
   cycles with per-leg detail, equity runs show per-stock candlesticks + round-trip markers.
 - **Run detail** (`/runs/:id`) — the full backtest report + lifecycle (Analyze, Set-template,
   Clone, Forward-test, Delete).
+- **Cycle detail** (`/runs/:id/cycle/:index`, also the report's "↗" popup and the Live page's
+  cycle link — backtest and live share it) — one options cycle's lifecycle: the strike ladder
+  over time, the EOD-MTM strip, the event cards (entry → rolls/hedges → exit, each a snapshot
+  of the book with held-through legs marked from the 1-min store), the legs table, and
+  **Payoff · point in time** — the expiry tent + value curve of the book as it stood right
+  after whichever event is selected (chips or a card click), on a CYCLE basis: realized P&L
+  banked so far is added to every point, so the dashed curve at spot is the card's "overall"
+  and two events sit on one comparable scale (a rolled calendar's R1 otherwise drew a tent
+  positive everywhere while the cycle stood at −₹62k). The previous event's tent is overlaid
+  as a dotted "before" line and a before → after strip states what changed (spot, near
+  expiry, cycle P&L at that moment, max profit / loss to expiry, breakevens, legs closed /
+  opened / held). The exit event shows the book it closed at the exit fills. Strikes are
+  labelled on a rail of horizontal pills above the axis (filled = sell, outlined = buy; violet
+  CE, amber PE), stacked into rows when they would overlap. A leg with no store mark is
+  modelled at its entry IV and the caption says so.
 - **Compare** (`/compare?ids=`) — 2–5 runs: a rebased growth chart + benchmark, options cycle
   comparison, a metrics table, and a parameter diff.
 - **Research** (`/research`) — the three research tools (§10).
