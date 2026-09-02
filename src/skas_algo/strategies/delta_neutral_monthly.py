@@ -52,6 +52,24 @@ _STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": selection_step("NIFTY", 50), "SENSEX"
 _EXPIRY_CUTOFF = time(15, 30)
 
 
+def _inr(x: float) -> str:
+    """₹ with Indian grouping (₹4,03,836) for the exit-rule text — the callout is read next
+    to tiles that print the same figures the same way."""
+    n = int(round(abs(x)))
+    head, tail = str(n)[:-3], str(n)[-3:]
+    if head:
+        parts = []
+        while len(head) > 2:
+            parts.insert(0, head[-2:])
+            head = head[:-2]
+        if head:
+            parts.insert(0, head)
+        s = ",".join(parts) + "," + tail
+    else:
+        s = tail
+    return f"{'-' if x < 0 else ''}₹{s}"
+
+
 def _hhmm(s: str, fallback: time) -> time:
     try:
         hh, mm = str(s).split(":")
@@ -1016,18 +1034,36 @@ class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
 
     # ------------------------------------------------------------ snapshot hooks
     def exit_amounts(self) -> tuple[float | None, float | None]:
-        """Rupee target/stop for the tile — from the FROZEN broker margin only."""
-        if self.margin_source != "broker" or self.margin_base <= 0:
+        """Rupee target/stop for the tile — off the SAME anchor the exit check uses
+        (`_manage`: a frozen broker margin OR the manual ``margin_per_set`` anchor). This
+        used to answer for "broker" only, which predates the manual anchor: every deploy
+        with ``margin_per_set`` set (the form default since 2026-08-25) showed a margin tile
+        with no target on it while the strategy was quietly working towards one."""
+        if self.margin_source not in ("broker", "manual") or self.margin_base <= 0:
             return None, None
         target = self.margin_base * self.target_pct / 100.0
         stop = self.margin_base * self.stop_pct / 100.0 if self.stop_pct > 0 else None
         return target, stop
 
-    def exit_rules(self) -> list[str]:
-        basis = "realized+unrealized P&L" if self.pnl_basis == "total" else "open-leg MTM"
+    def _margin_label(self) -> str:
+        """What the %-thresholds are a percent OF, in words the exit callout can print. The
+        manual anchor is named with its rupees and its arithmetic, because it is neither the
+        margin tile's live broker figure nor the deploy capital — the two numbers a reader
+        would otherwise assume (owner question, 2026-09-02)."""
+        manual = self._manual_margin()
+        if manual > 0:
+            n = self._size_multiple()
+            return (
+                f"the {_inr(manual)} manual margin anchor"
+                + (f" ({_inr(self.margin_per_set)} × {n} lot-sets)" if n != 1 else "")
+            )
         # "entry margin" = frozen once at cycle entry (absolute ₹ thresholds);
         # "broker margin" = re-frozen after every structural change (historical).
-        mlabel = "entry margin" if self.exit_margin_basis == "entry" else "broker margin"
+        return "entry margin" if self.exit_margin_basis == "entry" else "broker margin"
+
+    def exit_rules(self) -> list[str]:
+        basis = "realized+unrealized P&L" if self.pnl_basis == "total" else "open-leg MTM"
+        mlabel = self._margin_label()
         rules = [
             f"Book profit at +{self.target_pct:g}% of {mlabel}, on {basis} "
             f"({self._cadence_phrase('profit')})"

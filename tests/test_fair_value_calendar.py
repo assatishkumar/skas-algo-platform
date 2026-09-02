@@ -530,3 +530,28 @@ def test_buy_lots_per_set_reaches_the_strategy_from_a_deploy():
     assert "buy_lots_per_set" in inspect.signature(FairValueCalendarStrategy.__init__).parameters
     s = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY", buy_lots_per_set=4)
     assert s.buy_lots_per_set == 4        # not swallowed by **_ignored
+
+
+def test_the_tile_target_and_the_exit_rule_name_the_manual_anchor():
+    """Run 281 (paper, 2026-09-02) showed 'Margin used ₹3,38,918 · Zerodha basket' with NO
+    target on the tile, and the callout said '+5% of entry margin' — while the strategy was
+    working towards 5% of the MANUAL anchor (₹1,34,612 × 3 sets = ₹4,03,836 → ₹20,192).
+    `exit_amounts` answered for a broker-frozen base only; the rule text never named the
+    anchor. Both must speak the same number the exit check uses."""
+    from skas_algo.strategies.fair_value_calendar import FairValueCalendarStrategy
+
+    s = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY", sets=3,
+                                  margin_per_set=134_612)
+    # before the first slice nothing is frozen → the tile stays honest and blank
+    assert s.exit_amounts() == (None, None)
+    s.margin_base, s.margin_source = s._manual_margin(), "manual"      # what _manage() does
+    target, stop = s.exit_amounts()
+    assert round(target) == 20_192 and stop is None                   # 5% of ₹4,03,836
+    rule = s.exit_rules()[0]
+    assert "₹4,03,836 manual margin anchor (₹1,34,612 × 3 lot-sets)" in rule
+    assert "entry margin" not in rule
+    # the broker-frozen path is unchanged: plain "entry margin", target off that base
+    b = FairValueCalendarStrategy(universe=["NIFTY"], underlying="NIFTY", sets=3)
+    b.margin_base, b.margin_source = 338_918.0, "broker"
+    assert round(b.exit_amounts()[0]) == 16_946
+    assert "of entry margin" in b.exit_rules()[0]

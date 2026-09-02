@@ -109,11 +109,22 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
   const overall = prior + thisRealized + thisUnrealized;
 
   const margin = run.margin_used ?? null;
-  const marginSrc = run.margin_source === "zerodha" ? "Zerodha basket" : run.margin_source === "model" ? "model estimate" : null;
+  const marginSrc = run.margin_source === "zerodha" ? "Zerodha basket" : run.margin_source === "dhan" ? "Dhan basket" : run.margin_source === "model" ? "model estimate" : null;
   const target = run.profit_target_amt ?? null;
-  const targetPct = target != null && margin ? (target / margin) * 100 : null;
   const stop = run.stop_loss_amt ?? null;
-  const stopPct = stop != null && margin ? (Math.abs(stop) / margin) * 100 : null;
+  // The %-thresholds are a percent of the strategy's FROZEN anchor when it has one — a
+  // broker margin frozen at entry, or the manual margin_per_set × sets — never of the live
+  // basket figure above, which keeps moving. Dividing by margin_used read "+5.96%" for a
+  // 5% rule (owner, 2026-09-02). Fall back to margin_used only when there is no anchor.
+  const anchor = run.threshold_base ?? margin;
+  const anchorSrc = run.threshold_base != null
+    ? run.threshold_source === "manual" ? "manual (margin per set × sets)" : "broker margin frozen at entry"
+    : null;
+  // Say so when the anchor is a different number from the tile's margin (>1% apart).
+  const anchorDiffers = run.threshold_base != null && margin != null && Math.abs(run.threshold_base - margin) > 0.01 * margin;
+  const targetPct = target != null && anchor ? (target / anchor) * 100 : null;
+  const stopPct = stop != null && anchor ? (Math.abs(stop) / anchor) * 100 : null;
+  const ofWhat = anchorSrc ? `of the ${formatInr(anchor ?? 0)} anchor` : "of margin";
   const netCredit = run.net_credit ?? null;
   const creditNeg = netCredit != null && netCredit < 0;
 
@@ -148,7 +159,7 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
         {target != null && (
           <div className="mt-2 pt-2 border-t border-[var(--divider)] text-[11.5px] text-[var(--muted)]">
             profit target <span className="font-semibold text-[var(--pos)]">+{formatInr(target)}</span>
-            {targetPct != null ? ` · books at +${targetPct.toFixed(1)}% of margin` : ""}
+            {targetPct != null ? ` · books at +${targetPct.toFixed(1)}% ${ofWhat}` : ""}
           </div>
         )}
       </Card>
@@ -192,8 +203,13 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
       <Card title="Margin used">
         <div className="mt-1 font-['Space_Grotesk'] font-bold tabular-nums text-[22px] text-[var(--strong)]">{margin != null ? formatInr(margin) : "—"}</div>
         {marginSrc && <div className="text-[11.5px] text-[var(--muted)]">{marginSrc}</div>}
-        {(target != null || stop != null) && (
+        {(target != null || stop != null || anchorDiffers) && (
           <div className="mt-2 pt-2 border-t border-[var(--divider)]">
+            {anchorDiffers && (
+              /* the number the % rules are measured against — shown only when it is NOT
+                 the figure above, so the reader is never left dividing the two */
+              <KV label={`Threshold anchor · ${anchorSrc}`} value={formatInr(anchor ?? 0)} />
+            )}
             {target != null && (
               <KV label="Profit target" value={`+${formatInr(target)}${targetPct != null ? ` · +${targetPct.toFixed(1)}%` : ""}`} tone={1} />
             )}

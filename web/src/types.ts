@@ -589,6 +589,10 @@ export interface LiveRunSnapshot {
   realized_pnl?: number | null; // booked P&L so far (incl. a backtest seed's trades)
   profit_target_amt?: number | null; // ₹ profit target the strategy will act on
   stop_loss_amt?: number | null; // ₹ stop-loss the strategy will act on
+  // what those rupees are a % OF when the strategy freezes its own anchor — a frozen broker
+  // margin ("broker") or margin_per_set × sets ("manual"); absent → margin_used is the base
+  threshold_base?: number | null;
+  threshold_source?: string | null;
   strategy_pnl?: number | null; // the P&L measure the strategy's exit checks compare (decision-entry basis)
   exit_rules?: string[] | null; // human-readable exit triggers (spot levels, %-targets, …)
   // live controls + exclusion editing

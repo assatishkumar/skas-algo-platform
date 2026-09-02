@@ -510,7 +510,7 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
 
     # ------------------------------------------------------------ snapshot hooks
     def exit_rules(self) -> list[str]:
-        mlabel = "entry margin" if self.exit_margin_basis == "entry" else "broker margin"
+        mlabel = self._margin_label()  # names the manual anchor + its arithmetic when set
         rules = [
             f"Book profit at +{self.target_pct:g}% of {mlabel} on the whole cycle "
             f"(banked rolls + open MTM, {self._cadence_phrase('profit')})"

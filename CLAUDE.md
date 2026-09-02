@@ -687,6 +687,17 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   `margin_source` reads `"manual"`. Ctor default **0** = derive from the broker exactly as
   before (§1); FORM + deploy default **134612** (the owner's measured Kite figure), allowlisted
   in `test_backtest_v2_registry._INTENTIONAL`. Hot-editable on a running tile.
+  **The Live tile reads the SAME anchor (2026-09-02).** `exit_amounts` (the snapshot's
+  `profit_target_amt`/`stop_loss_amt`) used to answer for a broker-frozen base only, so every
+  manual-anchor deploy showed "Margin used ₹3,38,918 · Zerodha basket" with NO target while
+  the strategy worked towards 5% of ₹4,03,836 — and the callout said "of entry margin".
+  Now the snapshot also carries `threshold_base`/`threshold_source` (`LiveSession.
+  _threshold_anchor`, generic `margin_base`+`margin_source` probe), the KPI band prints the
+  anchor row when it differs from the live basket figure and computes the % off it (÷
+  margin_used read 5.96% for a 5% rule), and `_margin_label()` names the anchor with its
+  arithmetic in `exit_rules` for the whole delta family. The three margin numbers on that
+  card are DIFFERENT things: margin_used = the broker's live basket (moves every tick),
+  threshold anchor = what the %-rules are measured against (frozen), deploy capital = neither.
   **The two margin numbers differ by CONVENTION**: Kite's basket API returns `final.total` NET
   of premium receivable (cash actually blocked) while the web calculator's headline "Total
   margin" is span+exposure BEFORE that credit — ₹1,15,288 vs ₹1,34,612 on the same 2026-08-25

@@ -600,6 +600,7 @@ class LiveSession:
         # seed already booked during the replay (so a seeded-then-flat run isn't blank).
         realized_pnl = sum((t.get("profit") or 0.0) for t in self.transactions)
         target_amt, stop_amt = self._exit_amounts()
+        thr_base, thr_src = self._threshold_anchor()
         return {
             "cash": self.portfolio.cash,
             "holdings_value": holdings,
@@ -622,6 +623,12 @@ class LiveSession:
             # show "Target +₹X / Stop −₹Y"). None for strategies without %-based exits.
             "profit_target_amt": target_amt,
             "stop_loss_amt": stop_amt,
+            # What those rupees are a percent OF, when the strategy freezes its own anchor
+            # (a frozen broker margin or the manual margin_per_set × sets). It is NOT
+            # margin_used — the live basket figure keeps moving while the anchor stays put,
+            # so "target ÷ margin_used" read 5.96% for a 5% rule (owner, 2026-09-02).
+            "threshold_base": thr_base,
+            "threshold_source": thr_src,
             # The strategy's OWN P&L measure — what its exit checks actually compare.
             # Decision-entry basis, so live it can sit ₹100s away from the book P&L above
             # (fill slippage); showing both is what makes "target achieved but no exit"
@@ -705,6 +712,18 @@ class LiveSession:
         if not base:
             return None, None
         return (pt * base if pt is not None else None), (sl * base if sl is not None else None)
+
+    def _threshold_anchor(self) -> tuple[float | None, str | None]:
+        """(base, source) of a strategy's frozen %-threshold anchor — ``margin_base`` +
+        ``margin_source`` when it carries a positive numeric base from a broker freeze or the
+        manual knob. Strategies keyed per underlying (cp_ratio's dict) or without an anchor
+        yield (None, None); the UI then falls back to margin_used."""
+        strat = self.strategy
+        base = getattr(strat, "margin_base", None)
+        src = getattr(strat, "margin_source", None)
+        if isinstance(base, (int, float)) and base > 0 and src in ("broker", "manual"):
+            return float(base), str(src)
+        return None, None
 
     def set_margin_override(self, margin: float | None) -> None:
         """Record the real broker basket margin so %-of-margin targets use actual capital at risk."""
