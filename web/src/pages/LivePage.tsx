@@ -658,7 +658,7 @@ function RunCard({
   // basket, which keeps its dedicated basket monitor. Equity keeps the plain positions table.
   const useNewOptionDetail = isOptions && !isDonchian;
   // Sortable positions table — click a header to sort by that column.
-  type PosKey = "symbol" | "entry_date" | "units" | "avg_price" | "ltp" | "pos_delta" | "iv" | "unrealized_pnl";
+  type PosKey = "symbol" | "entry_date" | "units" | "avg_price" | "ltp" | "invested" | "current" | "pos_delta" | "iv" | "unrealized_pnl";
   // Options runs default to strike order (Symbol asc); equity to biggest P&L first.
   const [sortKey, setSortKey] = useState<PosKey>(isOptions ? "symbol" : "unrealized_pnl");
   const [sortDir, setSortDir] = useState<"asc" | "desc">(isOptions ? "asc" : "desc");
@@ -670,6 +670,11 @@ function RunCard({
     let c: number;
     if (sortKey === "symbol") {
       c = compareOptionSymbol(a.symbol, b.symbol); // underlying → expiry → strike → right
+    } else if (sortKey === "invested" || sortKey === "current") {
+      // Derived columns: rupees in (units × avg) and rupees now (units × LTP, avg till a mark exists).
+      const val = (p: typeof a) =>
+        p.units * (sortKey === "invested" ? p.avg_price : (p.ltp ?? p.avg_price));
+      c = val(a) - val(b);
     } else {
       const av = a[sortKey];
       const bv = b[sortKey];
@@ -822,6 +827,8 @@ function RunCard({
                       <Th k="units" label="Units" right />
                       <Th k="avg_price" label="Avg" right />
                       <Th k="ltp" label="LTP" right />
+                      {!isOptions && <Th k="invested" label="Invested" right />}
+                      {!isOptions && <Th k="current" label="Current" right />}
                       {isOptions && <Th k="pos_delta" label="Δ" right />}
                       {isOptions && <Th k="iv" label="IV" right />}
                       <Th k="unrealized_pnl" label="Unrealized" right />
@@ -842,6 +849,19 @@ function RunCard({
                   <td className="py-1 pr-4 text-right">{p.units}</td>
                   <td className="py-1 pr-4 text-right">{formatInr(p.avg_price, 2)}</td>
                   <td className="py-1 pr-4 text-right">{p.ltp != null ? formatInr(p.ltp, 2) : "—"}</td>
+                  {/* Rupee columns (equity runs): what went in vs what it is worth now — the
+                      per-name view of the tile's Deployed number (owner ask, 2026-09-02). A
+                      short option leg's "invested" is a credit, so options keep Δ/IV instead. */}
+                  {!isOptions && (
+                    <td className="py-1 pr-4 text-right tabular-nums">
+                      {formatInr(p.units * p.avg_price)}
+                    </td>
+                  )}
+                  {!isOptions && (
+                    <td className="py-1 pr-4 text-right tabular-nums">
+                      {p.ltp != null ? formatInr(p.units * p.ltp) : "—"}
+                    </td>
+                  )}
                   {isOptions && (
                     <td className="py-1 pr-4 text-right tabular-nums text-slate-300">
                       {p.pos_delta != null ? p.pos_delta.toFixed(1) : "—"}
