@@ -228,6 +228,34 @@ def _sync_broker(
             report.issues.append({"holding": h.name, "reason": f"{account.broker}: {exc}"})
         return
 
+    # A share bought TODAY is not in Dhan's /holdings until T+1 — it lives only in the day
+    # book — and one sold today has not left holdings yet. Without this overlay the daily
+    # value_investing buy is invisible to Refresh until tomorrow (owner, 2026-09-02:
+    # MANAPPURAM read 4 while the run held 5). Same holdings+positions merge reconciliation
+    # uses; best-effort, because yesterday's book is still better than an error.
+    if getattr(adapter, "holdings_exclude_today", False):
+        deltas_fn = getattr(adapter, "equity_day_deltas", None)
+        if deltas_fn is not None:
+            try:
+                for sym, d in deltas_fn().items():
+                    dq = float(d.get("units") or 0.0)
+                    have = book.get(sym)
+                    if have is None:
+                        if dq > 0:
+                            book[sym] = {"units": dq, "avg_price": float(d.get("avg_price") or 0.0)}
+                        continue
+                    u0 = float(have.get("units") or 0.0)
+                    a0 = float(have.get("avg_price") or 0.0)
+                    ab = float(d.get("avg_price") or 0.0)
+                    units = max(u0 + dq, 0.0)
+                    if dq > 0 and units > 0 and ab > 0:
+                        # A buy blends the averages; a sell keeps the cost basis — realised
+                        # P&L is the ledger's job, not the price sync's.
+                        have["avg_price"] = round((u0 * a0 + dq * ab) / units, 4)
+                    have["units"] = units
+            except Exception:
+                logger.warning("day-book overlay failed for account %s", account.id, exc_info=True)
+
     # --- units first: only the slice this account owns, then re-total.
     key = f"account:{account.id}"
     for h in holds_here:

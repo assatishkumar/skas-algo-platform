@@ -662,3 +662,67 @@ def test_a_weekend_nav_file_does_not_shadow_the_last_business_day(tmp_path, monk
     # …while the one Sunday DID publish uses Sunday's, being the newer of the two.
     assert prev["INF179K01XQ0"].nav == pytest.approx(238.00)
     assert prev["INF179K01XQ0"].as_of == date(2026, 8, 30)
+
+
+def test_todays_buy_reaches_the_slice_before_it_reaches_holdings(fake_broker):
+    """Dhan reports a share bought TODAY in the day book only — /holdings shows it
+    tomorrow. Refresh must still see it (owner, 2026-09-02: value_investing bought a 5th
+    MANAPPURAM and the portfolio kept saying 4), and a same-day funding SALE must net
+    DOWN even though the units have not left holdings yet."""
+    holder, account_id = fake_broker
+
+    class DayBookAdapter(_FakeAdapter):
+        holdings_exclude_today = True
+
+        def equity_day_deltas(self):
+            return {
+                "ITC": {"units": 1.0, "avg_price": 500.0},        # bought today
+                "GOLDBEES": {"units": -3.0, "avg_price": 0.0},    # sold today, still listed
+            }
+
+    holder["adapter"] = DayBookAdapter()
+    with session_scope() as db:
+        row = PortfolioHolding(
+            name="ITC", asset_class="stk", sync="auto", sync_source="broker",
+            sync_ref="ITC", broker_account_id=account_id, units=12.0,
+            broker_units={f"account:{account_id}": 12.0},
+        )
+        db.add(row)
+        db.commit()
+        rid = row.id
+    try:
+        with session_scope() as db:
+            sync_portfolio(db, holding_ids=[rid])
+        with session_scope() as db:
+            h = db.get(PortfolioHolding, rid)
+            assert h.units == 13.0, "the day-book buy must land the same day"
+            assert h.broker_units[f"account:{account_id}"] == 13.0
+    finally:
+        with session_scope() as db:
+            db.delete(db.get(PortfolioHolding, rid))
+            db.commit()
+
+
+def test_a_broker_without_the_day_book_seam_is_untouched(fake_broker):
+    """Zerodha's holdings already carry the T1 tranche; only an adapter that DECLARES the
+    gap (holdings_exclude_today) gets the overlay."""
+    holder, account_id = fake_broker
+    holder["adapter"] = _FakeAdapter(units=12.0)   # no flag, no seam
+    with session_scope() as db:
+        row = PortfolioHolding(
+            name="ITC", asset_class="stk", sync="auto", sync_source="broker",
+            sync_ref="ITC", broker_account_id=account_id, units=12.0,
+            broker_units={f"account:{account_id}": 12.0},
+        )
+        db.add(row)
+        db.commit()
+        rid = row.id
+    try:
+        with session_scope() as db:
+            sync_portfolio(db, holding_ids=[rid])
+        with session_scope() as db:
+            assert db.get(PortfolioHolding, rid).units == 12.0
+    finally:
+        with session_scope() as db:
+            db.delete(db.get(PortfolioHolding, rid))
+            db.commit()

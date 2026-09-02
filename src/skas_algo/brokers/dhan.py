@@ -640,6 +640,32 @@ class DhanAdapter:
             used=float(raw.get("utilizedAmount") or 0.0),
         )
 
+    def equity_day_deltas(self) -> dict[str, dict]:
+        """TODAY's delivery-equity net quantities: {symbol: {"units", "avg_price"}}.
+
+        Dhan reports the day's trades in positions() ONLY (see holdings_exclude_today) — a
+        share bought today is not yet in /holdings, and one sold today has not left it. The
+        portfolio sync overlays these deltas on holdings() so a daily value_investing buy is
+        visible the same day, exactly the merge reconciliation already does via
+        manager._broker_delivery_book. Filtered HARD to NSE_EQ + CNC: an F&O leg or an
+        intraday punt must never leak into a delivery book."""
+        raw = self._http.get("/positions") or []
+        rows = raw if isinstance(raw, list) else (raw.get("data") or [])
+        out: dict[str, dict] = {}
+        for r in rows:
+            sym = str(r.get("tradingSymbol") or "").upper()
+            if not sym:
+                continue
+            if str(r.get("exchangeSegment") or "") != "NSE_EQ":
+                continue
+            if str(r.get("productType") or "").upper() != "CNC":
+                continue
+            qty = float(r.get("netQty") or 0)
+            if qty == 0:
+                continue
+            out[sym] = {"units": qty, "avg_price": float(r.get("buyAvg") or 0.0)}
+        return out
+
     def positions(self) -> list[dict]:
         """Net book in the shape reconciliation expects: ``tradingsymbol`` + ``quantity``
         per contract (Dhan calls them tradingSymbol / netQty)."""

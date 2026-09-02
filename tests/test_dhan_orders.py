@@ -603,3 +603,25 @@ def test_the_order_path_is_never_retried_on_a_gateway_5xx(monkeypatch):
         with pytest.raises(DhanApiError):
             http._call(verb, path)
         assert len(seen) == 1, f"{verb} {path} must be attempted exactly once"
+
+
+def test_equity_day_deltas_reports_only_todays_delivery_equity():
+    """Dhan's day book mixes everything the account did today. Only NSE_EQ + CNC rows may
+    reach the portfolio's delivery overlay — an F&O leg or an intraday punt leaking in
+    would rewrite a holding's units off a book it was never part of."""
+    http = FakeHttp({("GET", "/positions"): [
+        {"tradingSymbol": "MANAPPURAM", "netQty": 1, "buyAvg": 346.5,
+         "exchangeSegment": "NSE_EQ", "productType": "CNC"},
+        {"tradingSymbol": "LIQUIDCASE", "netQty": -45, "buyAvg": 0.0,
+         "exchangeSegment": "NSE_EQ", "productType": "CNC"},        # today's funding sale
+        {"tradingSymbol": "NIFTY-Aug2026-24000-CE", "netQty": -65, "buyAvg": 120.0,
+         "exchangeSegment": "NSE_FNO", "productType": "MARGIN"},    # F&O — never
+        {"tradingSymbol": "WIPRO", "netQty": 5, "buyAvg": 178.0,
+         "exchangeSegment": "NSE_EQ", "productType": "INTRADAY"},   # punt — never
+        {"tradingSymbol": "TCS", "netQty": 0, "buyAvg": 3000.0,
+         "exchangeSegment": "NSE_EQ", "productType": "CNC"},        # round trip — no delta
+    ]})
+    assert _adapter(http).equity_day_deltas() == {
+        "MANAPPURAM": {"units": 1.0, "avg_price": 346.5},
+        "LIQUIDCASE": {"units": -45.0, "avg_price": 0.0},
+    }
