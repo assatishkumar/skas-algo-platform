@@ -63,6 +63,11 @@ REPLAYABLE = {"intraday_straddle", "straddle_btst", "weekly_intraday_straddle", 
 # Strategies whose strike rule counts the exchange's LISTING grid (NIFTY 50s), so the
 # harness must NOT apply the platform's NIFTY-100 coarsening. See allow_fifty_strikes.
 _NEEDS_LISTING_GRID = {"intraday_strangle_combo"}
+
+# Strategies sized in lot-SETS: their ctor knob is ``sets`` and a ``lots`` kwarg would fall
+# into **_ignored, so the form's Sizing LOTS must be translated. Add every new set-sized
+# strategy here — the alternative is a run that silently trades one set (see below).
+_SIZES_BY_SETS = {"fair_value_calendar", "monthly_butterfly"}
 # Strategies that take ``underlyings=[...]`` instead of ``universe``.
 _TAKES_UNDERLYINGS = {"call_put_ratio_expiry", "intraday_strangle_combo"}
 
@@ -432,10 +437,13 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
         # replay covers also scopes intraday_strangle_combo's weekday schedule: a NIFTY run
         # trades only its scheduled days (Mon/Tue/Fri) and never reaches for SENSEX.
         p.setdefault("underlyings", [u])
-    if strategy_id == "fair_value_calendar" and "lots" in p:
-        # Harness sizing is THE sizing: the form's LOTS is this strategy's lot-set count.
-        # Its ctor reads ``sets`` (``lots`` would fall into **_ignored), which silently
-        # traded 1 set under a 5-lot capital plan until 2026-08-19.
+    if strategy_id in _SIZES_BY_SETS and "lots" in p:
+        # Harness sizing is THE sizing: the form's LOTS is these strategies' lot-SET count.
+        # Their ctors read ``sets`` (``lots`` would fall into **_ignored), which silently
+        # traded 1 set under a 5-lot capital plan until 2026-08-19 — and did it again to
+        # monthly_butterfly on run 287 (2026-09-03), a tenth of the intended size at a
+        # tenth of the P&L, which reads as "the strategy doesn't work" rather than as a
+        # sizing bug. Keep this a SET, not a chain of `==` checks.
         p["sets"] = int(p.pop("lots") or 1)
     strategy = factory(universe=[u], initial_capital=capital, **p)
     market = _Market(u, lot_overrides=lot_overrides, allow_fifty_strikes=allow_fifty)
@@ -667,8 +675,8 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
                         sizing_skipped_days += 1
                     elif strategy_id == "call_put_ratio_expiry":
                         strategy.sets = {k: n for k in strategy.sets}
-                    elif strategy_id == "fair_value_calendar":
-                        # sizes by ``sets`` (its entry ignores ``lots``); keep both in
+                    elif strategy_id in _SIZES_BY_SETS:
+                        # size by ``sets`` (their entries ignore ``lots``); keep both in
                         # step so base per-lot math stays consistent
                         strategy.sets = n
                         strategy.lots = n

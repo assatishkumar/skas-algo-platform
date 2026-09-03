@@ -217,3 +217,17 @@ def test_the_call_side_builds_the_same_shape_on_calls():
     tick(st, ctx, datetime(2026, 7, 29, 9, 20))
     assert {lg["right"] for lg in st.legs} == {"CE"}
     assert parts(st)[25_000.0][0] == -1 and parts(st)[25_100.0][0] == 1
+
+
+def test_the_forms_lots_reach_the_strategy_as_lot_sets():
+    """The harness footgun that cost run 287 (2026-09-03): the form's Sizing LOTS is the
+    lot-SET count, but the ctor knob is `sets` and a stray `lots` kwarg falls into
+    **_ignored. Without the translation the run trades ONE set at a tenth of the size and
+    the result reads as "the strategy doesn't work" rather than as a sizing bug."""
+    from skas_algo.services.intraday_replay import _SIZES_BY_SETS
+
+    assert "monthly_butterfly" in _SIZES_BY_SETS
+    # and the ctor really does ignore `lots`, which is WHY the translation must exist
+    st = MonthlyButterflyStrategy(universe=["NIFTY"], lots=10)
+    assert st.sets == 1
+    assert MonthlyButterflyStrategy(universe=["NIFTY"], sets=10).sets == 10
