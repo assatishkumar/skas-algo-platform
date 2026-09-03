@@ -7,6 +7,8 @@ a logged-in account.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -903,11 +905,47 @@ async def live_ws(ws: WebSocket) -> None:
             return
     await ws.accept()
     queue = manager.broadcaster.subscribe()
+    # A reader, purely to learn when the client hangs up. This handler only ever SENDS, and
+    # a send is not what raises WebSocketDisconnect — only receive() is. Without the reader
+    # the disconnect surfaces only when the NEXT broadcast fails, so between broadcasts a
+    # dead client keeps its subscription and its slot in the fan-out.
+    watcher = asyncio.create_task(_watch_disconnect(ws, queue))
     try:
         while True:
             message = await queue.get()
+            if message is _CLOSED:
+                break
             await ws.send_json(message)
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError, ConnectionError):
+        # The client vanished mid-send. Starlette reports THAT as a bare RuntimeError off the
+        # closed transport ("unable to perform operation on <TCPTransport closed=True …>; the
+        # handler is closed"), never as WebSocketDisconnect — so the old `except
+        # WebSocketDisconnect` never caught it and every page reload logged an
+        # unhandled-exception traceback (owner spotted the noise, 2026-09-03). Losing the
+        # client is the ordinary end of this handler, not an error.
         pass
     finally:
+        watcher.cancel()
         manager.broadcaster.unsubscribe(queue)
+
+
+_CLOSED = object()
+"""Sentinel pushed by the disconnect watcher to wake the send loop and end the handler."""
+
+
+async def _watch_disconnect(ws: WebSocket, queue: asyncio.Queue) -> None:
+    """Drain the client's frames until it disconnects, then wake the sender.
+
+    Nothing the browser sends is acted on — reading exists ONLY so the close frame is
+    processed. A full queue means the sender is already behind and will hit the dead
+    transport on its next send anyway, so dropping the sentinel there is safe."""
+    try:
+        while True:
+            message = await ws.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+    except Exception:  # pragma: no cover - any read failure means the client is gone
+        pass
+    finally:
+        with contextlib.suppress(asyncio.QueueFull):
+            queue.put_nowait(_CLOSED)

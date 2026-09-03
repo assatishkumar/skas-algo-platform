@@ -880,3 +880,77 @@ def test_a_failed_reconcile_read_backs_off_instead_of_retrying_every_tick():
     assert schedule == [60, 120, 240, 480, 900, 900, 900]
     # A broker having a bad morning now costs ~4 reads an hour, not 120.
     assert 3600 / schedule[-1] < 5
+
+
+class _FakeWS:
+    """The bits of starlette's WebSocket that live_ws touches."""
+
+    query_params: dict = {}
+
+    def __init__(self, on_send=None, on_receive=None):
+        self.sent: list = []
+        self.accepted = False
+        self._on_send = on_send
+        self._on_receive = on_receive
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    async def send_json(self, message) -> None:
+        self.sent.append(message)
+        if self._on_send is not None:
+            self._on_send()
+
+    async def receive(self):
+        if self._on_receive is not None:
+            return self._on_receive()
+        import asyncio as _a
+
+        await _a.sleep(3600)  # a live client that never speaks
+
+
+def test_a_vanished_client_ends_the_socket_quietly_instead_of_a_traceback():
+    """A send to a client that has gone away raises a BARE RuntimeError off the closed
+    transport ("unable to perform operation on <TCPTransport closed=True …>"), never
+    WebSocketDisconnect — only receive() raises that, and this handler never called it. So
+    the error escaped as an unhandled exception and every page reload logged a traceback;
+    the auto-reconnect shipped 2026-09-02 made it routine. It must end quietly AND release
+    the subscription."""
+    import asyncio
+
+    from skas_algo.api.routes.live import live_ws
+
+    def boom():
+        raise RuntimeError(
+            "unable to perform operation on <TCPTransport closed=True reading=False>; "
+            "the handler is closed"
+        )
+
+    ws = _FakeWS(on_send=boom)
+    before = len(manager.broadcaster._subs)
+
+    async def drive():
+        task = asyncio.create_task(live_ws(ws))
+        await asyncio.sleep(0)  # let it accept + subscribe
+        manager.broadcaster.publish({"type": "snapshot", "run_id": 1})
+        await asyncio.wait_for(task, timeout=2)  # returns, does not raise
+
+    asyncio.run(drive())
+    assert ws.accepted and len(ws.sent) == 1
+    assert len(manager.broadcaster._subs) == before  # no leaked slot in the fan-out
+
+
+def test_a_client_that_hangs_up_in_a_quiet_window_releases_its_subscription():
+    """Nothing is broadcast for long stretches off-hours. Without a reader task the handler
+    sat blocked on the queue with a dead client still subscribed, because a close frame is
+    only seen by receive() — which nothing called. The watcher ends the handler on the
+    disconnect, with no send needed."""
+    import asyncio
+
+    from skas_algo.api.routes.live import live_ws
+
+    ws = _FakeWS(on_receive=lambda: {"type": "websocket.disconnect", "code": 1001})
+    before = len(manager.broadcaster._subs)
+    asyncio.run(asyncio.wait_for(live_ws(ws), timeout=2))
+    assert ws.sent == []  # never broadcast anything; it left on the close frame alone
+    assert len(manager.broadcaster._subs) == before
