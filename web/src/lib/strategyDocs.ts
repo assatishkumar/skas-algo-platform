@@ -471,6 +471,33 @@ export const STRATEGIES: Rule[] = [
     risk: "Equity long-only; averaged target manages the pooled position.",
   },
   {
+    id: "monthly_butterfly",
+    name: "Monthly Butterfly",
+    kind: "Options",
+    bias: "Neutral · defined risk, pinned at the money",
+    summary:
+      "The simplest option book here. Once a month, sell 2 lots ATM and buy one lot 100 points either side, all on the same expiry and the same side. A long butterfly: you pay a small debit, that debit is your entire downside, and the payoff peaks if the index pins the body at expiry. No adjustments, no rolls, no stop — there is nothing to manage because there is nothing that can run away.",
+    structure: [
+      "SELL 2 lots ATM (the body), on the CURRENT month's monthly expiry.",
+      "BUY 1 lot ATM + 100 points and 1 lot ATM − 100 points (the wings), same expiry.",
+      "One side only — all puts or all calls; the spec does not mix them.",
+      "Net DEBIT, and that debit is the maximum loss. Maximum payoff ≈ the wing width if spot finishes on the body.",
+    ],
+    entry: [
+      "The first session AFTER the previous month's expiry, at 09:20 — one fresh butterfly per monthly cycle.",
+      "Retried every tick inside the entry window and every following day, so an unpriced wing or a data hole costs a day and never the month.",
+      "The body is the listed strike nearest spot; both wings must price, or nothing is opened (never a partial butterfly).",
+    ],
+    exit: [
+      "Target: + the configured % of the margin anchor on the whole position → close and stand down for the month.",
+      "Otherwise hold to expiry and close at 15:15 on expiry day. That time exit is checked first and never waits on a cadence or on the margin push.",
+      "No stop. The debit paid is already the floor, so a stop mostly turns a recoverable dip into a booked loss.",
+      "Either way the month is done — the next cycle waits for the next monthly expiry.",
+    ],
+    risk:
+      "Defined risk by construction: the worst month is the debit, which is why this sits at the opposite end of the shelf from the ratio and calendar books. Over the 1-min store (2021-2026, 62 monthly cycles, 10 sets at ₹70,000) the best variant was BANKNIFTY calls at a 3% target — ₹1,310,276 with an 80.6% win rate, a 2.4% maximum drawdown and a worst month of −₹3,131. NIFTY calls at 3% made ₹592,528. The weekly cadence was worse everywhere, and holding to expiry with no target actually loses money, so the target is doing the work. The cost of the safety is a thin edge across six near-the-money fills a cycle, which makes slippage the real adversary — measure yours before trusting any of these numbers.",
+  },
+  {
     id: "fair_value_calendar",
     name: "Fair-Value Calendar (Monthly)",
     kind: "Options",
@@ -858,6 +885,14 @@ export const META: Record<string, Meta> = {
             ["Booking", "FIFO tiers"], ["Cadence", "Weekly"], ["Kind", "Cash equity"]],
     deployNote: "Weekly SST with FIFO tiered profit booking.",
     deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
+  monthly_butterfly: {
+    group: "Premium selling", biasKind: "neutral",
+    facts: [["Bias", "Neutral, pinned at the money"], ["Instrument", "NIFTY monthly"],
+            ["Structure", "−2 ATM / +1 ±100"], ["Risk", "Capped at the debit paid"],
+            ["Target", "% of margin, then flat"], ["Cadence", "One cycle a month"]],
+    deployNote: "Backtest and 1-min replay only for now. The edge is thin per cycle across eight at-the-money fills, so measure your own slippage before considering a forward test.",
+    deployCta: { label: "Backtest it", to: "/backtest?tab=new" },
   },
   fair_value_calendar: {
     group: "Ratio & income", biasKind: "income",

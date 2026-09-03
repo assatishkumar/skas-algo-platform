@@ -48,6 +48,11 @@ _SERVICE_ONLY = {"momentum_theta_gainer_intra": {"vol_multiplier", "slippage_bps
 _INTENTIONAL = {("delta_neutral_monthly", "force_entry"), ("iron_fly_monthly", "force_entry"),
                 ("call_put_ratio_expiry", "sets"),
                 ("fair_value_calendar", "roll_days_before")}
+# monthly_butterfly: the FORM leads with what the 5-year store replay actually favours —
+# CALLS (they beat puts on both NIFTY and BANKNIFTY at every target) and the owner's measured
+# ₹70,000/lot-set anchor. The CTOR keeps the neutral spec defaults per §1: side "pe" as
+# described, and margin_per_set 0 = derive from the broker push like the rest of the family.
+_INTENTIONAL |= {("monthly_butterfly", "side"), ("monthly_butterfly", "margin_per_set")}
 _INTENTIONAL |= {(sid, "profit_check") for sid in (
     "intraday_straddle", "call_put_ratio_expiry", "delta_neutral_monthly",
     "iron_fly_monthly", "batman_ratio_monthly", "call_ratio_monthly",

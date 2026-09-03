@@ -58,7 +58,7 @@ REPLAYABLE = {"intraday_straddle", "straddle_btst", "weekly_intraday_straddle", 
               "intraday_strangle_combo", "asymmetric_premium_intra", "fair_value_calendar",
               "delta_neutral_monthly", "iron_fly_monthly", "call_ratio_monthly",
               "put_ratio_monthly", "batman_ratio_monthly", "hni_weekly", "21_ema_momentum",
-              "put_condor"}
+              "put_condor", "monthly_butterfly"}
 
 # Strategies whose strike rule counts the exchange's LISTING grid (NIFTY 50s), so the
 # harness must NOT apply the platform's NIFTY-100 coarsening. See allow_fifty_strikes.

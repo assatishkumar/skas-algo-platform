@@ -45,7 +45,7 @@ live. The invariant is guarded by golden tests (`tests/test_sst_parity.py`,
 
 ## 3. Strategy catalog
 
-Strategies register in `strategies/registry.py` (34 IDs across 31 files) and onboard there,
+Strategies register in `strategies/registry.py` (35 IDs across 32 files) and onboard there,
 never by editing the engine. `intraday=True` means "decide every tick"; otherwise the run
 decides once per day at a set time. "Backtest" notes whether a strategy runs the FULL shared
 engine, a dedicated Black-Scholes service, or is deploy-only.
@@ -296,6 +296,37 @@ are validated paper-first.
   adjustments inside 3 DTE; at the near expiry the WHOLE structure squares — far hedges are
   never left naked. Subclasses `delta_neutral_monthly` (margin freeze / cadences / exits /
   persistence spine). Deploy-only, broker source required, no backtest.
+- **`monthly_butterfly` — a plain ATM butterfly held for one monthly expiry (NIFTY).**
+  The simplest option book here, and deliberately so. Per lot-SET, on ONE side only: SELL
+  **2 lots ATM**, BUY **1 lot ATM + `wing_points`** (100), BUY **1 lot ATM − `wing_points`**.
+  That is a long butterfly — a small net DEBIT, **max loss bounded by that debit**, max payoff
+  ≈ the wing width if spot pins the body at expiry. Defined risk BY CONSTRUCTION, which is the
+  point of it next to this repo's other option books: no single month can run away, so there
+  is no stop to tune and **no adjustments and no rolls at all**.
+  **The cycle:** enter on the first session AFTER the previous month's expiry (`entry_time`,
+  09:20) on the CURRENT month's monthly; retry every tick in the entry window and every
+  following day, so a data hole or an unpriced wing costs a day and never the month. Exit on
+  the first of **+`profit_target_pct` of the margin base** or **`exit_time` (15:15) on expiry
+  day** — the time exit is checked FIRST and is never cadence-gated. `done_expiry` then parks
+  the month: one cycle per monthly expiry, however it ended. `side` is `pe` or `ce`; the spec
+  does not mix them. `sets` is the lot-SET count and `margin_per_set` the ₹ anchor the
+  %-target measures against (~₹70,000/set measured by the owner); 0 falls back to the broker
+  push like the rest of the family. `phase` stays `"butterfly"` so the base class's
+  delta-adjustment and iron-fly machinery never engages.
+  **Store replay 2021-07-29 → 2026-09-02** (62 monthly cycles, 10 sets at ₹70,000/set, wing
+  100): NIFTY PE 2/3/4% → ₹338k/₹399k/₹424k and CE → ₹545k/**₹593k**/₹439k; BANKNIFTY PE 2/3%
+  → ₹595k/₹760k and CE → ₹1,106k/**₹1,310k**. The best is **BANKNIFTY CE at a 3% target**
+  (₹1,310,276, 80.6% win, **2.4% max drawdown, worst cycle −₹3,131**), strongly positive in
+  BOTH the 2021-23 and 2024-26 halves — against −₹188,383 for `fair_value_calendar`'s worst
+  cycle on comparable capital. Three results shaped the defaults: the **weekly** cadence is
+  worse everywhere (NIFTY CE 3% falls to ₹122k at a 16.6% drawdown — a week is not long enough
+  for the index to return to the body); entering **later** to dodge the opening spread costs
+  more than the spread does (11:00 vs 09:20 = −₹285k on BANKNIFTY); and the **target is
+  essential** — hold blindly to settlement with no target and the same book loses ₹17k at a
+  59% drawdown. **SENSEX is not evaluable**: the 1-min store holds almost none of it.
+  **The caveat that matters:** six fills a cycle (three legs, in and out) all near the money,
+  so execution IS the strategy — measure real slippage before trusting these figures.
+  Backtest/replay only for now (no deploy card). Coverage: `tests/test_monthly_butterfly.py`.
 - **`fair_value_calendar` — premium-matched ratio calendar with a fair-value side pick (NIFTY).**
   The owner's video spec (ref video: https://www.youtube.com/watch?v=tn-73I63yBw&t=2162s),
   two halves:

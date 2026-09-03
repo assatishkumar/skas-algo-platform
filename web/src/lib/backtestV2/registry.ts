@@ -567,6 +567,64 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
     ],
   },
 
+  monthly_butterfly: {
+    id: "monthly_butterfly",
+    // Reads the chain at entry for the ATM body and both wings -> intraday store only.
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY", "BANKNIFTY", "SENSEX"], eod: NONE },
+    monthlyCycle: true,
+    note: "A plain ATM butterfly held for one expiry: sell 2 lots ATM, buy 1 lot each "
+      + "100 points either side, one side only. Net debit, and that debit is the whole "
+      + "downside. Enters the session AFTER the previous expiry and closes on the target "
+      + "or at 15:15 on expiry day. No rolls, no adjustments, no stop. Store replay "
+      + "2021-2026: BANKNIFTY calls at a 3% target is the best of the grid (worst month "
+      + "-3,131); the WEEKLY cadence is worse everywhere, and with no target at all the "
+      + "same book loses money — the target is the edge.",
+    sizing: "intradayHarness",
+    entry: {
+      frequency: "monthly",
+      frequencyHint: "the first session after the previous expiry, retried daily until "
+        + "the body and both wings price",
+      fields: [
+        TIME("entry_time", "ENTRY TIME", "09:20"),
+        TIME("entry_window_end", "ENTRY CUTOFF", "15:00"),
+        f("side", "SIDE", "select", "ce", {
+          options: [
+            { value: "ce", label: "Calls" },
+            { value: "pe", label: "Puts" },
+          ],
+        }),
+        f("cycle", "CYCLE", "select", "monthly", {
+          options: [
+            { value: "monthly", label: "Monthly expiry" },
+            { value: "weekly", label: "Weekly expiry" },
+          ],
+          hint: "monthly is better on every underlying tested; weekly costs 4x the fills",
+        }),
+        f("wing_points", "WING WIDTH (PTS)", "number", 100, { step: "any",
+          hint: "distance from the ATM body to each long wing" }),
+        f("body_lots", "BODY LOTS PER SET", "number", 2),
+        f("wing_lots", "WING LOTS PER SET", "number", 1),
+      ],
+    },
+    exit: {
+      basisNote: "% of the margin anchor, on the whole butterfly",
+      fields: [
+        f("profit_target_pct", "PROFIT TARGET %", "number", 3, { step: "any" }),
+        f("stop_loss_pct", "STOP LOSS %", "number", 0, { step: "any",
+          hint: "0 = off. The debit paid is already the floor" }),
+        TIME("exit_time", "EXPIRY-DAY EXIT", "15:15"),
+        f("margin_per_set", "MARGIN PER LOT-SET (RS)", "number", 70000, { step: "any",
+          hint: "the % target is measured against this. 0 = use the broker's basket margin" }),
+        EXIT_MARGIN_BASIS,
+        ...cadenceFields("1min", "1min", "15:15"),
+      ],
+    },
+    extras: [
+      f("min_leg_oi", "MIN LEG OI", "number", 1),
+    ],
+  },
+
   iron_fly_monthly: {
     id: "iron_fly_monthly",
     bases: ["intraday"],
