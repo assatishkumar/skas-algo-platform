@@ -693,6 +693,7 @@ async def monthly_butterfly_deploy(
         "exit_margin_basis": body.exit_margin_basis,
         "min_leg_oi": body.min_leg_oi,
         "order_protect_pct": body.order_protect_pct,
+        "max_spread_pct": body.max_spread_pct,
     }
     req = LiveStartRequest(
         strategy_id="monthly_butterfly",

@@ -416,6 +416,10 @@ class MonthlyButterflyDeploy(BaseModel):
     exit_margin_basis: str = "entry"
     min_leg_oi: int = 1
     order_protect_pct: float = 0.5
+    # Refuse to open when any leg's bid-ask spread exceeds this % of mid. 1.5% is loose
+    # for a 09:30 BANKNIFTY monthly (~0.3% ATM) and would have refused the 09:15 fill that
+    # cost paper run 30 ₹9,765 (3-7%). Live-only — the backtest chain has no book.
+    max_spread_pct: float = 1.5
     capital: float = 500_000
     mode: str = "PAPER"
     quote_source: str = "zerodha"

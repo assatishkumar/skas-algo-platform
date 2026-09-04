@@ -236,3 +236,46 @@ class SkipReasonMixin:
 
     def _entered(self) -> None:
         self.last_skip = None
+
+
+class EntrySpreadGateMixin:
+    """Refuse a FRESH entry when any leg's bid-ask spread is wider than ``max_spread_pct``
+    of its mid.
+
+    Paper run 30 (2026-09-04): a butterfly forced at 09:15:03 crossed ₹20-60 spreads on
+    three BANKNIFTY monthly legs, about ₹25 a unit round trip on a structure whose whole
+    edge is ~₹17 a unit. A strategy marks on LTP, so it could not see the cost it had just
+    paid — it saw a +3% "target" two minutes later on a book that was down ₹9,765. The
+    spread is the one execution cost a strategy CAN see before it trades, off the same
+    chain it picks strikes from, so it should look.
+
+    FAIL-OPEN where there is no bid/ask: the backtest chain carries only close/oi, so this
+    gate never fires in a replay — it is a LIVE-ONLY refusal rail (a skipped entry, never a
+    different trade), and it says so in the reason. ``max_spread_pct`` 0 = off (§1)."""
+
+    max_spread_pct: float = 0.0
+
+    @staticmethod
+    def _spread_pct(cell: dict | None) -> float | None:
+        bid, ask = (cell or {}).get("bid"), (cell or {}).get("ask")
+        if bid is None or ask is None:
+            return None
+        bid, ask = float(bid), float(ask)
+        mid = (bid + ask) / 2.0
+        if mid <= 0 or ask < bid:
+            return None
+        return (ask - bid) / mid * 100.0
+
+    def _spread_refusal(self, cells: dict[str, dict | None]) -> str | None:
+        """``cells`` = {leg label: chain cell}. The first leg over the cap, described, or
+        None when every leg passes (or has no book to judge)."""
+        cap = float(getattr(self, "max_spread_pct", 0.0) or 0.0)
+        if cap <= 0:
+            return None
+        for label, cell in cells.items():
+            spr = self._spread_pct(cell)
+            if spr is not None and spr > cap:
+                bid, ask = float(cell["bid"]), float(cell["ask"])
+                return (f"{label}: bid {bid:.2f} / ask {ask:.2f} = {spr:.1f}% spread > "
+                        f"{cap:g}% cap — not paying that to open")
+        return None

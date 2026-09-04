@@ -330,3 +330,36 @@ def test_force_waits_for_the_entry_window():
     b.request_force_entry()
     assert tick(b, bctx, datetime(2026, 8, 12, 9, 20)) == [] and b.force_pending
     assert len(tick(b, bctx, datetime(2026, 8, 12, 9, 31))) == 3 and not b.force_pending
+
+
+def _booked(spot=SPOT, spread_pct=0.3):
+    """A chain whose cells carry a top bid/ask ``spread_pct`` wide around the LTP."""
+    c = chain(spot=spot)
+    for r in c["rows"]:
+        for side in ("ce", "pe"):
+            ltp = r[side]["ltp"]; half = ltp * spread_pct / 200.0
+            r[side]["bid"], r[side]["ask"] = round(ltp - half, 2), round(ltp + half, 2)
+    return c
+
+
+def test_a_wide_spread_refuses_a_fresh_entry_and_says_which_leg():
+    """Run 30 crossed ₹20-60 spreads at 09:15:03 — ~₹25 a unit on a ₹17-a-unit edge — and
+    the LTP-marking strategy could not see it. The spread IS visible on the chain before
+    the trade, so the gate looks; the refusal names the leg and the numbers."""
+    st, ctx = setup(aug=_booked(spread_pct=4.0), max_spread_pct=1.5)
+    assert tick(st, ctx, datetime(2026, 7, 29, 9, 20)) == []
+    r = st.last_skip["reason"]
+    assert "spread" in r and "1.5% cap" in r and "PE 25000" in r      # the body is checked first
+    # a normal book passes
+    ok, ctx2 = setup(aug=_booked(spread_pct=0.3), max_spread_pct=1.5)
+    assert len(tick(ok, ctx2, datetime(2026, 7, 29, 9, 20))) == 3
+
+
+def test_the_spread_gate_stands_aside_without_a_book_and_when_off():
+    """The backtest chain has only close/oi — no bid/ask — so the gate can never change a
+    replay (parity): it is a live-only refusal rail. And 0 = off, the ctor default (§1)."""
+    st, ctx = setup(max_spread_pct=1.5)                     # plain chain: no bid/ask cells
+    assert len(tick(st, ctx, datetime(2026, 7, 29, 9, 20))) == 3
+    off, ctx2 = setup(aug=_booked(spread_pct=9.0))          # 9% spread, gate off
+    assert off.max_spread_pct == 0.0
+    assert len(tick(off, ctx2, datetime(2026, 7, 29, 9, 20))) == 3

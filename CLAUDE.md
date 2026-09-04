@@ -87,6 +87,15 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   target on LTPs is only honest when the round-trip spread is small next to it: enter
   inside the window (09:30, never the open), and treat `strategy_pnl − book` as the
   live number that decides whether the target is real.
+  **The spread is the one execution cost a strategy CAN see before it trades** —
+  `EntrySpreadGateMixin` (`_options_common`, generic): `max_spread_pct` refuses a FRESH
+  entry when any leg's (ask−bid)/mid exceeds it, naming the leg and the numbers via
+  `_skip`. Live chain cells carry `bid`/`ask` (Zerodha depth[0], Dhan top_bid/ask); the
+  backtest chain has only close/oi, so the gate is FAIL-OPEN there — a live-only refusal
+  rail, never a different trade. Ctor default 0 = off (§1); butterfly deploy default 1.5
+  (09:30 BANKNIFTY monthly ATM ≈0.3%, the 09:15 print was 3-7%). Wired into
+  monthly_butterfly + fair_value_calendar (`_spread_refusal({label: cell})` after the OI
+  check); the ratio family reads a different chain shape and has not adopted it.
 - **NSE's per-ORDER quantity freeze is an exchange control, and LiveBroker splits for it
   (2026-09-04).** BANKNIFTY 600 units / NIFTY 1,800 from the 2026-09-01 circular; it is
   re-derived several times a year and the Kite instruments dump does NOT carry it, so it

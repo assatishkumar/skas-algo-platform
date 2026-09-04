@@ -333,12 +333,19 @@ are validated paper-first.
   200/300/400/500/600 → 1.20/1.27/1.57/1.17/1.42m, so treat the gap as noise and the width
   as a risk dial: debit and worst cycle rise monotonically with it), entry **09:30** (equal-best to 09:20 at both widths
   and clear of the opening spread; 09:45 and later cost real money), 3% target, no stop.
-  Three live-only guards ride with it: legs go **wings first, body last** on entry and body
+  Four live-only guards ride with it: legs go **wings first, body last** on entry and body
   first on exit (a rejected order abandons the rest of the decision's actions — body-first
   would have left a naked 40-lot short); a per-run **`order_protect_pct`** (deploy default
   0.5% = ₹1.50 on a ₹300 body, against the platform's square-off 3% = ₹9) that the manager
-  hands to the LiveBroker at injection; and the LiveBroker's **freeze-quantity split** (a
-  20-set body is 1,200 units against NSE's 600 cap — two child orders, one combined fill).
+  hands to the LiveBroker at injection; the LiveBroker's **freeze-quantity split** (a
+  20-set body is 1,200 units against NSE's 600 cap — two child orders, one combined fill);
+  and a **bid-ask spread gate** (`max_spread_pct`, deploy default 1.5% of mid, ctor 0 = off)
+  that refuses to OPEN when any leg's book is wider than that and says which leg on the
+  tile. Paper run 30 (2026-09-04) is why: forced at 09:15:03, the first tick, it crossed
+  ₹20-60 spreads on all three legs (3-7% of mid), saw its LTP-marked P&L reach +3% two
+  minutes later, exited on "target", and the book realised −₹9,765 — about ₹25 a unit of
+  spread, round trip. Force now also respects the entry window (it skips the expiry wait,
+  never the time of day). The gate is fail-open on the backtest chain, which has no book.
   Coverage: `tests/test_monthly_butterfly.py`, the split/crossing tests in `tests/test_live_broker.py`.
 - **`fair_value_calendar` — premium-matched ratio calendar with a fair-value side pick (NIFTY).**
   The owner's video spec (ref video: https://www.youtube.com/watch?v=tn-73I63yBw&t=2162s),

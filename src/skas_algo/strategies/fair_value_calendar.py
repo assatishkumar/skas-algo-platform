@@ -50,7 +50,7 @@ from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 from skas_algo.live.holidays import previous_trading_day
 
-from ._options_common import bad_close
+from ._options_common import EntrySpreadGateMixin, bad_close
 from .delta_neutral_monthly import DeltaNeutralMonthlyStrategy, _hhmm
 
 
@@ -61,7 +61,7 @@ def _iso_date(s: str, fallback: date) -> date:
         return fallback
 
 
-class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
+class FairValueCalendarStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy):
     strategy_id = "fair_value_calendar"
     intraday = True
 
@@ -111,6 +111,7 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
         risk_free_rate: float = 0.065,
+        max_spread_pct: float = 0.0,  # refuse to open on a leg wider than this % of mid; 0 = off
         **_ignored,
     ):
         super().__init__(
@@ -133,6 +134,7 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
             lot_overrides=lot_overrides,
         )
         self.sets = max(1, int(sets))
+        self.max_spread_pct = max(0.0, float(max_spread_pct or 0.0))
         self.sell_premium_1 = float(sell_premium_1)
         self.sell_premium_2 = float(sell_premium_2)
         self.buy_premium = float(buy_premium)
@@ -322,6 +324,13 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
                 return self._skip(f"{right} sells landed on the same strike {s1[0]:.0f}", today)
             # The 900-point rule: dead zone (buy strike ↔ furthest sell) ≤ 2× the
             # expected monthly rollover income, era-scaled with the premiums.
+            wide = self._spread_refusal({
+                f"sell {right} {s1[0]:.0f}": (rows_sold.get(s1[0]) or {}).get(side),
+                f"sell {right} {s2[0]:.0f}": (rows_sold.get(s2[0]) or {}).get(side),
+                f"buy {right} {b[0]:.0f}": (rows_buy.get(b[0]) or {}).get(side),
+            })
+            if wide:
+                return self._skip(wide, today)
             if max(abs(s1[0] - b[0]), abs(s2[0] - b[0])) > gap_cap:
                 return self._skip(f"gap rule: buy {b[0]:.0f} to furthest sell "
                                   f"{max(abs(s1[0] - b[0]), abs(s2[0] - b[0])):.0f} pts > "

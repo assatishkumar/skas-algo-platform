@@ -56,7 +56,7 @@ from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import bad_close
+from ._options_common import EntrySpreadGateMixin, bad_close
 from .delta_neutral_monthly import DeltaNeutralMonthlyStrategy
 
 
@@ -68,7 +68,7 @@ def _hhmm(s: str, fallback: time) -> time:
         return fallback
 
 
-class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
+class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy):
     strategy_id = "monthly_butterfly"
     intraday = True
 
@@ -106,6 +106,11 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
         # the platform default; the DEPLOY sets a tight rung. Read by the manager at
         # LiveBroker injection — deploy-level, not hot-editable (stop + redeploy).
         order_protect_pct: float | None = None,
+        # Refuse to OPEN when a leg's bid-ask spread exceeds this % of mid (0 = off, §1).
+        # Live-only by construction — the backtest chain has no book. Deploy default 1.5:
+        # a 09:30 BANKNIFTY monthly ATM is ~0.3%, the 09:15 print that cost run 30 ₹9,765
+        # was 3-7%. See EntrySpreadGateMixin.
+        max_spread_pct: float = 0.0,
         **_ignored,
     ):
         super().__init__(
@@ -136,6 +141,7 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
         self.exit_time = _hhmm(exit_time, time(15, 15))
         self.order_protect_pct = (None if order_protect_pct is None
                                   else max(0.0, float(order_protect_pct)))
+        self.max_spread_pct = max(0.0, float(max_spread_pct or 0.0))
         # Replay-harness sizing hint: SHORT lots per lot-set, so margin_per_lot is read as
         # the ₹ for one set's short body (the family convention).
         self.sell_lots = self.body_lots
@@ -271,6 +277,9 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
             return self._skip(f"{right} {', '.join(miss)} did not price — retry", today)
         if any(not self._oi_ok(cells[k]) for k in cells):
             return self._skip(f"a leg's open interest is under min_leg_oi={self.min_leg_oi}", today)
+        wide = self._spread_refusal({f"{right} {k:.0f}": cells[k] for k in (body, up, dn)})
+        if wide:
+            return self._skip(wide, today)
         try:
             lot = lot_size_for(self.underlying, exp, overrides=self.lot_overrides)
         except KeyError:

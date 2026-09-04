@@ -339,6 +339,8 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       f("profit_target_pct", "Target % of margin", "number", 3, { step: "any" }),
       f("order_protect_pct", "Max chase through touch %", "number", 0.5, { step: "any",
         hint: "how far a leg may be pushed through the touch if it does not fill. 0.5% = ₹1.50 on a ₹300 body; the platform's 3% would be ₹9. Never chase an entry that can wait a day" }),
+      f("max_spread_pct", "Max bid-ask spread %", "number", 1.5, { step: "any",
+        hint: "refuse to open when any leg's spread is wider than this % of mid. A 09:30 BANKNIFTY monthly ATM is ~0.3%; the 09:15 fill that cost paper run 30 ₹9,765 was 3-7%" }),
       TIME("entry_time", "Entry time", "09:30"),
       TIME("exit_time", "Expiry-day exit", "15:15"),
       f("cycle", "Cycle", "select", "monthly", {
