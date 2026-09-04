@@ -1070,6 +1070,18 @@ weekly / monthly / positional), a summary panel, and only that strategy's own kn
   `loss_study.reconstruct_path` over the 1-min store (intraday basis only — other bases fail
   closed with amber notices, never fake); the melt MTM overlay is SURVIVOR-tilted by
   construction (help text says so). STOCK runs keep `EquityTradeAnalysis`.
+- **The sampled greeks history records UNREALIZED P&L only** (`persistence.record_greeks`
+  sums the open positions), yet the Live tile drew it under "Overall P&L" until 2026-09-04.
+  `GET /live/{id}/greeks-history` now adds `realized_cum` per sample (realized booked up to
+  it, running runs only — `services/live_cycles.realized_cumulative`), so overall =
+  `pnl + realized_cum`. The tile's sparkline is the **CYCLE's** P&L (overall − the cycle's
+  `realized_before`, from `tile["cycle"]` = `live_cycles.cycle_info` over the transaction
+  log: entry stamp, the `underlying_spot` stamped on the entry fill, the last closed cycle);
+  the expanded card's P&L panel is the overall one. Every option trade event already carried
+  `underlying_spot` (`manager._tag_underlying_spot`) — that is what "entered 23,922.85" on
+  the tile reads. `GET /live/indices` (declared ABOVE `/{run_id}` — FastAPI would 422
+  "indices" as an int) is the header strip: one Kite `day_quotes` per 10s off any logged-in
+  Zerodha account, falling back to the running deployments' own spots.
 - **Option tickers are `UNDERLYING|YYYY-MM-DD|STRIKE|RIGHT`** — never render the raw form: the `|`
   reads as an `I` (`NIFTYI2026-07-07I24500ICE`). Display option symbols through
   `formatOptionSymbol()` (`lib/symbol.ts`) → `NIFTY 24500 CE · 7 Jul '26`; it passes equity tickers

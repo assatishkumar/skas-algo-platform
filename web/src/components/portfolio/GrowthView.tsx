@@ -6,16 +6,19 @@ import {
 import { Card, Kpi, Notice, Segments } from "./primitives";
 
 type Scope = "total" | "class" | "holding" | "bucket";
+type Basis = "pct" | "inr";
 
 const MAX_LINES = 8;
 const H = 320; // svg user units — the chart's own coordinate space
 const W = 1000;
+const MARKER_MAX = 60; // draw a dot on every recorded day up to this many — the history is DAILY
+const TICK_MAX = 14; // label every day up to this many, else ~8 spaced ticks
 
 interface Series {
   key: string;
   label: string;
   color: string;
-  points: (number | null)[];
+  points: (number | null)[]; // rupees, as recorded
   end: number;
 }
 
@@ -32,16 +35,29 @@ function pathOf(points: (number | null)[], x: (i: number) => number, y: (v: numb
   return d.trim();
 }
 
+/** Rebase a series to % change from its FIRST recorded day. Eight lines that span ₹14 L to
+ * ₹2 Cr share one rupee axis only by flattening every one of them into a ruler line; on a
+ * common % axis a 0.8% day on gold and a 0.3% day on EPF are both visible and comparable. */
+function rebase(points: (number | null)[]): (number | null)[] {
+  const first = points.find((v): v is number => v !== null && v > 0);
+  if (first == null) return points.map(() => null);
+  return points.map((v) => (v === null ? null : (v / first - 1) * 100));
+}
+
 export default function GrowthView({
   rows, payload, buckets,
 }: { rows: Holding[]; payload: PortfolioPayload; buckets: Bucket[] }) {
   const [scope, setScope] = useState<Scope>("total");
+  const [basis, setBasis] = useState<Basis>("pct");
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
   const [hover, setHover] = useState<number | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
 
   const g = payload.growth;
   const n = g.dates.length;
+  // The total view is a rupee chart (value vs invested only makes sense in rupees); the
+  // comparative scopes default to % change and can switch back.
+  const pctMode = scope !== "total" && basis === "pct";
 
   const series: Series[] = useMemo(() => {
     if (scope === "total") {
@@ -116,23 +132,46 @@ export default function GrowthView({
   );
   const overflow = scope !== "total" && series.filter((s) => !hidden[s.key]).length > MAX_LINES;
 
+  // What is PLOTTED: rupees, or % change from each series' first day.
+  const plotted = useMemo(
+    () => visible.map((s) => ({ ...s, plot: pctMode ? rebase(s.points) : s.points })),
+    [visible, pctMode],
+  );
+
   const bounds = useMemo(() => {
     let lo = Infinity;
     let hi = -Infinity;
-    for (const s of visible) {
-      for (const v of s.points) {
+    for (const s of plotted) {
+      for (const v of s.plot) {
         if (v === null) continue;
         lo = Math.min(lo, v);
         hi = Math.max(hi, v);
       }
     }
     if (!Number.isFinite(lo)) return { lo: 0, hi: 1 };
+    if (pctMode) {
+      // Symmetric-ish around zero with headroom, so a flat first day sits mid-chart.
+      const span = Math.max(hi - lo, 0.5);
+      return { lo: Math.min(lo, 0) - span * 0.15, hi: Math.max(hi, 0) + span * 0.15 };
+    }
     if (lo === hi) return { lo: lo * 0.95, hi: hi * 1.05 || 1 };
     return { lo: lo * 0.96, hi: hi * 1.03 };
-  }, [visible]);
+  }, [plotted, pctMode]);
 
   const x = (i: number) => (n <= 1 ? W / 2 : (i / (n - 1)) * W);
   const y = (v: number) => H - 10 - ((v - bounds.lo) / (bounds.hi - bounds.lo)) * (H - 20);
+  const fmtAxis = (v: number) => (pctMode ? `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` : money(v));
+
+  // Day ticks: EVERY recorded day while there are few (the history is one point per trading
+  // day — four points must read as four days, not as a line between two dates), else spaced.
+  const ticks = useMemo(() => {
+    if (n <= 1) return n === 1 ? [0] : [];
+    if (n <= TICK_MAX) return Array.from({ length: n }, (_, i) => i);
+    const count = 8;
+    const out = new Set<number>();
+    for (let k = 0; k < count; k += 1) out.add(Math.round((k / (count - 1)) * (n - 1)));
+    return [...out].sort((a, b) => a - b);
+  }, [n]);
 
   // ---- KPIs, from what was actually recorded. No history, no number.
   const kpis = useMemo(() => {
@@ -235,6 +274,17 @@ export default function GrowthView({
               { value: "bucket", label: "By bucket" },
             ]}
           />
+          {scope !== "total" && (
+            <Segments
+              size="sm"
+              value={basis}
+              onChange={setBasis}
+              options={[
+                { value: "pct", label: "% since start" },
+                { value: "inr", label: "₹ value" },
+              ]}
+            />
+          )}
           {scope === "total" && (
             <span className="ml-auto flex gap-4 text-[12px] font-bold text-[var(--muted)]">
               <span className="flex items-center gap-1.5">
@@ -244,6 +294,11 @@ export default function GrowthView({
                 <span className="inline-block w-3.5 border-t-2 border-dashed border-[var(--faint)]" />
                 Invested
               </span>
+            </span>
+          )}
+          {n > 0 && (
+            <span className="ml-auto text-[11.5px] font-semibold text-[var(--faint)]">
+              {n} trading day{n === 1 ? "" : "s"} · one point per close
             </span>
           )}
         </div>
@@ -298,6 +353,20 @@ export default function GrowthView({
                 onMouseLeave={() => setHover(null)}
               >
                 <line x1="0" y1={H - 1} x2={W} y2={H - 1} stroke="#9aa8a4" strokeWidth="1.5" />
+                {/* Day gridlines: one per recorded close while they are few. */}
+                {n <= MARKER_MAX && ticks.map((i) => (
+                  <line
+                    key={`g${i}`}
+                    x1={x(i)} y1="0" x2={x(i)} y2={H}
+                    stroke="var(--border)" strokeWidth="1" strokeDasharray="3 4" vectorEffect="non-scaling-stroke"
+                  />
+                ))}
+                {pctMode && bounds.lo < 0 && bounds.hi > 0 && (
+                  <line
+                    x1="0" y1={y(0)} x2={W} y2={y(0)}
+                    stroke="var(--faint)" strokeWidth="1" strokeDasharray="5 4" vectorEffect="non-scaling-stroke"
+                  />
+                )}
                 {scope === "total" && g.total.length > 0 && (
                   <path
                     d={`${pathOf(g.total, x, y)} L${W},${H} L0,${H} Z`}
@@ -305,10 +374,10 @@ export default function GrowthView({
                     fillOpacity=".12"
                   />
                 )}
-                {visible.map((s) => (
+                {plotted.map((s) => (
                   <path
                     key={s.key}
-                    d={pathOf(s.points, x, y)}
+                    d={pathOf(s.plot, x, y)}
                     fill="none"
                     stroke={s.key === "invested" ? "#9aa8a4" : s.color}
                     strokeWidth={s.key === "invested" ? 2 : 2.4}
@@ -324,6 +393,22 @@ export default function GrowthView({
                 )}
               </svg>
 
+              {/* A dot on every recorded day (HTML, so the stretched SVG can't squash it). */}
+              {n <= MARKER_MAX && plotted.map((s) => s.plot.map((v, i) => (
+                v === null ? null : (
+                  <span
+                    key={`${s.key}-${i}`}
+                    className="pointer-events-none absolute h-[7px] w-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full border-[1.5px] border-[var(--card)]"
+                    style={{
+                      left: `${(x(i) / W) * 100}%`,
+                      top: `${(y(v) / H) * 100}%`,
+                      background: s.key === "invested" ? "#9aa8a4" : s.color,
+                      opacity: hover === null || hover === i ? 1 : 0.55,
+                    }}
+                  />
+                )
+              )))}
+
               {[0, 1, 2, 3].map((k) => {
                 const v = bounds.lo + ((bounds.hi - bounds.lo) * k) / 3;
                 return (
@@ -332,23 +417,25 @@ export default function GrowthView({
                     className="absolute -left-16 w-14 -translate-y-1/2 text-right text-[11px] font-bold text-[var(--faint)]"
                     style={{ top: `${(y(v) / H) * 100}%` }}
                   >
-                    {money(v)}
+                    {fmtAxis(v)}
                   </span>
                 );
               })}
 
-              {n > 1 && [0, n - 1].map((i) => (
+              {ticks.map((i) => (
                 <span
                   key={i}
-                  className="absolute -bottom-[22px] -translate-x-1/2 text-[11px] font-bold text-[var(--faint)]"
+                  className={`absolute -bottom-[22px] whitespace-nowrap text-[11px] font-bold ${
+                    i === hover ? "text-[var(--strong)]" : "text-[var(--faint)]"
+                  } ${i === 0 && n > 1 ? "" : i === n - 1 ? "-translate-x-full" : "-translate-x-1/2"}`}
                   style={{ left: `${(x(i) / W) * 100}%` }}
                 >
                   {dayLabel(g.dates[i])}
                 </span>
               ))}
 
-              {scope !== "total" && visible.map((s) => {
-                const last = [...s.points].reverse().find((v) => v !== null);
+              {scope !== "total" && plotted.map((s) => {
+                const last = [...s.plot].reverse().find((v) => v !== null);
                 if (last == null) return null;
                 return (
                   <span
@@ -356,7 +443,7 @@ export default function GrowthView({
                     className="absolute right-0.5 -translate-y-full rounded px-[3px] text-[11px] font-extrabold"
                     style={{ top: `${(y(last) / H) * 100}%`, color: s.color, background: "var(--card)" }}
                   >
-                    {money(s.end)}
+                    {pctMode ? pct(last) : money(s.end)}
                   </span>
                 );
               })}
@@ -364,7 +451,7 @@ export default function GrowthView({
 
             {hover !== null && (
               <div
-                className="pointer-events-none absolute top-1 z-10 min-w-[150px] rounded-[10px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-[11.5px] shadow-lg"
+                className="pointer-events-none absolute top-1 z-10 min-w-[190px] rounded-[10px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-[11.5px] shadow-lg"
                 style={{
                   left: `calc(64px + ${(x(hover) / W) * 100}% * (100% - 72px) / 100%)`,
                   transform: hover > n / 2 ? "translateX(-108%)" : "translateX(8px)",
@@ -373,20 +460,34 @@ export default function GrowthView({
                 <div className="mb-1 font-extrabold text-[var(--strong)]">
                   {dayLabel(g.dates[hover])}
                 </div>
-                {visible.map((s) => (
-                  <div key={s.key} className="flex items-center justify-between gap-3">
-                    <span className="flex items-center gap-1.5 text-[var(--muted)]">
-                      <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{ background: s.key === "invested" ? "#9aa8a4" : s.color }}
-                      />
-                      {s.label}
-                    </span>
-                    <span className="font-bold tabular-nums text-[var(--strong)]">
-                      {s.points[hover] == null ? "—" : money(s.points[hover] as number)}
-                    </span>
-                  </div>
-                ))}
+                {plotted.map((s) => {
+                  const raw = s.points[hover];
+                  const prev = hover > 0 ? s.points[hover - 1] : null;
+                  const day = raw != null && prev != null && prev > 0 ? (raw / prev - 1) * 100 : null;
+                  const sinceStart = s.plot[hover];
+                  return (
+                    <div key={s.key} className="flex items-center justify-between gap-3">
+                      <span className="flex items-center gap-1.5 text-[var(--muted)]">
+                        <span
+                          className="inline-block h-2 w-2 rounded-full"
+                          style={{ background: s.key === "invested" ? "#9aa8a4" : s.color }}
+                        />
+                        {s.label}
+                      </span>
+                      <span className="font-bold tabular-nums text-[var(--strong)]">
+                        {raw == null ? "—" : money(raw)}
+                        {day != null && (
+                          <span className={`ml-1.5 font-semibold ${day >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>
+                            {pct(day, 2)}
+                          </span>
+                        )}
+                        {pctMode && sinceStart != null && (
+                          <span className="ml-1.5 text-[var(--faint)]">{pct(sinceStart, 2)} total</span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

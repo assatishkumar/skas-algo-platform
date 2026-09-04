@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, brokers, liveWsUrl } from "../api/client";
 import { Badge, timeAgo } from "../components/ui";
@@ -22,6 +22,7 @@ import { isOptionsStrategy, PARAM_ENUMS } from "../lib/params";
 import { LIVE_CATEGORIES, liveCategoryOf } from "../lib/strategyMeta";
 import { compareOptionSymbol, formatOptionSymbol } from "../lib/symbol";
 import { KebabMenu, Sparkline, Segmented, Tag, type MenuItem } from "../components/redesign";
+import type { DeploymentCycle, GreeksHistoryPoint } from "../types";
 import type {
   Deployment,
   LiveRunSnapshot,
@@ -1346,15 +1347,17 @@ function DeploymentTile({
     setEditing(false);
   }
 
-  // Overall-P&L sparkline from the sampled greeks/PnL history (active deployments only).
+  // The tile's sparkline is the CYCLE's P&L — since the open cycle's entry, or the last closed
+  // cycle while flat — not the run's; the run's overall P&L lives inside (GreeksHistoryCard).
+  // Sampled once per tick, so 3000 points ≈ the last ~3 sessions at a 15s refresh.
   const { data: pnlHist } = useQuery({
     queryKey: ["pnlspark", dep.run_id],
-    queryFn: () => api.liveGreeksHistory(dep.run_id),
+    queryFn: () => api.liveGreeksHistory(dep.run_id, 3000),
     enabled: dep.status === "active",
     staleTime: 30000,
     refetchInterval: 60000,
   });
-  const pnlSeries = (pnlHist?.points ?? []).map((p) => p.pnl ?? 0).slice(-60);
+  const spark = useMemo(() => cycleSpark(pnlHist?.points ?? [], dep.cycle), [pnlHist, dep.cycle]);
 
   const menuItems: MenuItem[] =
     dep.status === "active"
@@ -1492,11 +1495,24 @@ function DeploymentTile({
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
-      ) : (dep.notes || dep.underlying_spot != null) ? (
+      ) : (dep.notes || dep.underlying_spot != null || dep.cycle?.entry_spot != null) ? (
         <div className="mt-1.5 text-xs text-[var(--muted)] line-clamp-2">
           {dep.notes}
           {dep.underlying_spot != null && (
             <span className="text-[var(--strong)] font-semibold">{dep.notes ? " · " : ""}spot {dep.underlying_spot.toLocaleString("en-IN")}</span>
+          )}
+          {/* The index level the OPEN cycle was entered at (stamped on the entry fill), and how
+              far spot has moved since — the number the reader compares the payoff against. */}
+          {dep.cycle?.open && dep.cycle.entry_spot != null && (
+            <span>
+              {" · "}entered {dep.cycle.entry_spot.toLocaleString("en-IN")}
+              {dep.cycle.entry_at ? ` (${stampIST(dep.cycle.entry_at)})` : ""}
+              {dep.underlying_spot != null && dep.cycle.entry_spot > 0 && (
+                <span className={dep.underlying_spot >= dep.cycle.entry_spot ? "text-[var(--pos)]" : "text-[var(--danger)]"}>
+                  {" "}{dep.underlying_spot >= dep.cycle.entry_spot ? "▲" : "▼"} {Math.abs(dep.underlying_spot / dep.cycle.entry_spot - 1).toLocaleString("en-IN", { style: "percent", minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              )}
+            </span>
           )}
         </div>
       ) : null}
@@ -1531,13 +1547,18 @@ function DeploymentTile({
         </div>
       </div>
 
-      {/* Overall-P&L sparkline. Colour tracks the SIGN of the live overall P&L (realized +
-          unrealized) — green = in profit, red = losing — so it agrees with the numbers above; a
-          window trend (last≥first) would paint a still-deep loss green just because it narrowed. */}
-      {dep.status === "active" && pnlSeries.length > 1 && (
+      {/* Cycle-P&L sparkline. Colour tracks the SIGN of the series' latest value — the cycle's
+          P&L now — not a window trend (last≥first), which would paint a still-deep loss green
+          just because it narrowed. */}
+      {dep.status === "active" && spark && (
         <div className="mt-3">
-          <div className="text-[10px] uppercase tracking-wide text-[var(--faint)] mb-1">Overall P&L</div>
-          <Sparkline values={pnlSeries} up={(realized ?? 0) + (upnl ?? 0) >= 0} height={40} />
+          <div className="text-[10px] uppercase tracking-wide text-[var(--faint)] mb-1 flex justify-between">
+            <span>{spark.label}</span>
+            <span className={`normal-case tabular-nums font-semibold ${spark.values[spark.values.length - 1] >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>
+              {formatInr(spark.values[spark.values.length - 1])}
+            </span>
+          </div>
+          <Sparkline values={spark.values} up={spark.values[spark.values.length - 1] >= 0} height={40} />
         </div>
       )}
 
@@ -1978,6 +1999,81 @@ function EditParamsPanel({ dep, busy, onClose, onSave }: {
   );
 }
 
+/** "4 Sep 09:31" — every stamp the page prints carries its time (owner rule). */
+function stampIST(iso: string): string {
+  return new Date(iso).toLocaleString("en-IN", {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata",
+  }).replace(",", "");
+}
+
+/** Keep a sparkline to ~120 points; the last sample always survives. */
+function thin(values: number[], max = 120): number[] {
+  if (values.length <= max) return values;
+  const step = values.length / max;
+  const out = Array.from({ length: max }, (_, k) => values[Math.floor(k * step)]);
+  out.push(values[values.length - 1]);
+  return out;
+}
+
+/** The tile's series: the OPEN cycle's P&L since its entry (overall − what was realized before
+ *  it), the LAST closed cycle while flat, and only when neither can be read, the run's overall.
+ *  `pnl` in the samples is unrealized; `realized_cum` lifts it to overall. */
+function cycleSpark(points: GreeksHistoryPoint[], cyc?: DeploymentCycle | null): { label: string; values: number[] } | null {
+  const pts = points
+    .filter((p) => p.ts)
+    .map((p) => ({ t: new Date(p.ts).getTime(), v: (p.pnl ?? 0) + (p.realized_cum ?? 0) }));
+  if (cyc?.open && cyc.entry_at) {
+    const t0 = new Date(cyc.entry_at).getTime();
+    const base = cyc.realized_before ?? 0;
+    const vals = pts.filter((p) => p.t >= t0).map((p) => p.v - base);
+    if (vals.length > 1) return { label: `Cycle P&L · since ${stampIST(cyc.entry_at)}`, values: thin(vals) };
+  } else if (cyc?.last?.entry_at && cyc.last.exit_at) {
+    const t0 = new Date(cyc.last.entry_at).getTime();
+    const t1 = new Date(cyc.last.exit_at).getTime();
+    const base = cyc.last.realized_before ?? 0;
+    const vals = pts.filter((p) => p.t >= t0 && p.t <= t1).map((p) => p.v - base);
+    if (vals.length > 1) {
+      return { label: `Last cycle P&L · ${stampIST(cyc.last.entry_at)} → ${stampIST(cyc.last.exit_at)}`, values: thin(vals) };
+    }
+  }
+  const vals = pts.map((p) => p.v);
+  return vals.length > 1 ? { label: "Overall P&L", values: thin(vals) } : null;
+}
+
+/** NIFTY · BANKNIFTY · SENSEX with the day change, at the top of the deployments. One backend
+ *  quote per 10s however many tabs poll; with no broker session the backend answers from the
+ *  running deployments' own spots (no day change) and the strip says so. */
+function IndexStrip() {
+  const { data } = useQuery({
+    queryKey: ["live-indices"],
+    queryFn: api.liveIndices,
+    refetchInterval: 15000,
+    staleTime: 10000,
+  });
+  const rows = data?.indices ?? [];
+  if (!rows.length) return null;
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap" title={data?.as_of ? `as of ${stampIST(data.as_of)}${data.source ? ` · ${data.source}` : ""}` : undefined}>
+      {rows.map((ix) => {
+        const up = (ix.change ?? 0) >= 0;
+        return (
+          <span key={ix.name} className="inline-flex items-baseline gap-1.5 rounded-full bg-[var(--card)] border border-[var(--border)] px-2.5 py-1 text-xs">
+            <span className="font-semibold text-[var(--muted)]">{ix.name}</span>
+            <span className="font-bold tabular-nums text-[var(--strong)]">{ix.last.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+            {ix.change != null && ix.change_pct != null ? (
+              <span className={`tabular-nums font-semibold ${up ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>
+                {up ? "▲" : "▼"} {Math.abs(ix.change).toLocaleString("en-IN", { maximumFractionDigits: 1 })} ({Math.abs(ix.change_pct).toFixed(2)}%)
+              </span>
+            ) : (
+              <span className="text-[var(--faint)]">run spot</span>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function HeroStrip({ deployments }: { deployments: Deployment[] }) {
   // Five compact KPI cards with an options/equity split subline (design handoff live2):
   // replaces the old two-block summary — same numbers, one row. Every figure is a sum of
@@ -2121,6 +2217,9 @@ export default function LivePage() {
           </div>
           <Link to="/trade" className="rounded-[11px] bg-[var(--ft)] text-white px-4 py-2 text-sm font-semibold">+ Deploy new strategy</Link>
         </div>
+
+        {/* The indices the books trade against, at the top of the deployments. */}
+        <IndexStrip />
 
         {filtered.length > 0 && <HeroStrip deployments={filtered} />}
 

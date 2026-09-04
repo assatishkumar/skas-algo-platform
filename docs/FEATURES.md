@@ -807,6 +807,12 @@ see, are left alone.
 per trading day from the manager's maintenance pass (≥16:00 IST, after a best-effort sync); the
 chart starts at the first one and says how thin it is until there are eight. A holding tracked
 later reads **null**, not zero, before it existed — zero would draw a line rising off the floor.
+The chart is **daywise** (2026-09-04): a dot and a dashed gridline on every recorded close while
+there are few, a label per day up to fourteen, and the comparative scopes (class / holding /
+bucket) default to **% since start** — eight lines spanning ₹14 L to ₹2 Cr on one rupee axis
+flatten every one of them into a ruler line, while on a common % axis a 0.8% day on gold and a
+0.3% day on EPF are both visible. "₹ value" switches back; the tooltip shows the rupee value,
+the day's move and the running change either way.
 Reconstructing the past from today's units would be fabrication, so it isn't done.
 
 **The other tabs** are plain arithmetic in the browser over the server's per-holding records, so
@@ -895,6 +901,17 @@ theme. All data goes through `api/client.ts` (`/api/v1`) plus a live WebSocket f
   its last look — "Cycle skipped · waiting for the entry day: 2026-09-29 (last Tuesday of
   the month)" / "…premium hunt missed…" / "…did not price…" — from `SkipReasonMixin`
   (snapshot `entry_skip`, 2026-09-04), instead of a bare "No open positions".
+  **What the tile reads (2026-09-04):** an **index strip** at the top of the deployments —
+  NIFTY · BANKNIFTY · SENSEX with the day change, one Kite quote per 10s off any logged-in
+  Zerodha account (`GET /live/indices`; the deployments' own spots when no session);
+  next to the live spot, **the level the open cycle was entered at** and how far spot has
+  moved since ("spot 23,970.75 · entered 23,922.85 (4 Sept 09:18) ▲ 0.20%" — the
+  `underlying_spot` stamped on the entry fill, read off the transaction log by
+  `services/live_cycles`); and a sparkline of the **CYCLE's P&L** since that entry (the
+  last closed cycle while flat), labelled with its stamp and current value. The run's
+  **overall** P&L chart moved inside the expanded card ("Overall P&L · realized + open"):
+  the sampled history is unrealized-only, and the endpoint now adds the realized total
+  booked up to each sample so the panel can show the whole number.
 - **Basket monitor** (`/live/:id`) — the rich Donchian deployment view: hero KPIs, an aggregate
   expiry payoff, the index hedge, a portfolio-stop gauge, and per-name cards → a drawer with
   each leg's ITM/OTM/flip state, the flip timeline, and a per-name payoff.

@@ -53,10 +53,15 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
     refetchInterval: 30000,
   });
 
-  const { rows, breaks, edgeLabel, cycleLabel } = useMemo(() => {
+  const { rows, breaks, edgeLabel, cycleLabel, overall } = useMemo(() => {
     const hasOpen = (run.positions ?? []).length > 0;
+    // The samples carry UNREALIZED P&L; `realized_cum` (booked up to the sample, running runs
+    // only) lifts them to OVERALL — the number the tile's KPI shows — so the panel inside is the
+    // run's P&L, while the tile's sparkline outside shows the cycle alone.
+    const overall = (data?.points ?? []).some((p) => p.realized_cum != null);
     const pts = (data?.points ?? [])
-      .map((p) => ({ t: p.ts ? new Date(p.ts).getTime() : 0, delta: p.net_delta, iv: p.net_iv != null ? p.net_iv * 100 : null, pnl: p.pnl }))
+      .map((p) => ({ t: p.ts ? new Date(p.ts).getTime() : 0, delta: p.net_delta, iv: p.net_iv != null ? p.net_iv * 100 : null,
+        pnl: p.pnl == null ? null : p.pnl + (overall ? (p.realized_cum ?? 0) : 0) }))
       .filter((r) => r.t)
       .sort((a, b) => a.t - b.t);
     // Scope to ONE cycle so the panels aren't a concatenation of every past cycle: an OPEN book →
@@ -87,12 +92,13 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
     const edgeLabel = rows.length
       ? `${hasOpen ? "now" : "last"} · ${_timeIST.format(new Date(rows[rows.length - 1].t))}`
       : "";
-    return { rows, breaks, edgeLabel, cycleLabel: hasOpen ? "this cycle" : "last cycle" };
+    return { rows, breaks, edgeLabel, cycleLabel: hasOpen ? "this cycle" : "last cycle", overall };
   }, [data, run.positions]);
 
   const netDelta = run.net_delta;
   const netIv = run.net_iv;
-  const livePnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
+  const livePnl = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0)
+    + (overall ? (run.realized_pnl ?? 0) : 0);
   const last = rows.length ? rows[rows.length - 1] : null;
   // P&L series colour tracks its SIGN (green in profit, red in loss) — not a fixed "P&L = red"
   // series identity, which mislabels a winning cycle as a loss. Δ/IV keep their identity hues.
@@ -150,7 +156,7 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           <span className="font-['Space_Grotesk'] font-bold text-[14px] text-[var(--strong)]">History · {cycleLabel}</span>
-          <Chip color={PNL} label="P&L" value={formatInr(pnlVal)} />
+          <Chip color={PNL} label={overall ? "Overall P&L" : "P&L"} value={formatInr(pnlVal)} />
           <Chip color={OPT} label="Net Δ" value={netDelta != null ? netDelta.toFixed(1) : "—"} />
           <Chip color={WARN} label="IV" value={netIv != null ? `${(netIv * 100).toFixed(1)}%` : "—"} />
         </div>
@@ -158,7 +164,7 @@ export default function GreeksHistoryCard({ run }: { run: LiveRunSnapshot }) {
       </div>
       {rows.length > 1 ? (
         <div className="mt-2 space-y-1">
-          <Panel height={110} corner="P&L" dataKey="pnl" color={PNL} area
+          <Panel height={110} corner={overall ? "Overall P&L · realized + open" : "P&L"} dataKey="pnl" color={PNL} area
             fill={pnlVal >= 0 ? "var(--pos-fill)" : "var(--neg-fill)"}
             fmt={(v) => formatInr(v)} yFmt={(v) => `${(v / 1000).toFixed(0)}k`} />
           <Panel height={96} corner="Net Δ · position" dataKey="delta" color={OPT} zeroLine

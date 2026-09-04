@@ -262,6 +262,16 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             tile["resume_orders_pending"] = snap.get("resume_orders_pending")
             tile["strategy_alert"] = snap.get("strategy_alert")
             tile["underlying_spot"] = snap.get("underlying_spot")  # live spot for the tile subline
+            # The open cycle's entry stamp + the index level it was entered at, read off the
+            # transaction log (services/live_cycles) — the tile shows "entered 57,515" next to
+            # the live spot and draws the CYCLE's P&L, not the run's.
+            try:
+                from skas_algo.services.live_cycles import cycle_info
+
+                tile["cycle"] = cycle_info(list(live.session.transactions), live.config.underlying)
+            except Exception:
+                logger.exception("cycle read failed for run %s", run.id)
+                tile["cycle"] = None
             upnl = sum(p["unrealized_pnl"] for p in snap.get("positions", []))
             tile["metrics"] = {
                 "equity": snap.get("equity"),
@@ -369,6 +379,81 @@ def live_summary() -> dict:
         # Last daily option-bar capture (the self-built GFD store; SKAS_OPTION_BARS_*).
         "last_option_capture": manager.last_option_capture,
     }
+
+
+# The Live page's index strip: NIFTY / BANKNIFTY / SENSEX with a day change. ONE Kite quote
+# call per 10s no matter how many tabs poll (module cache), off any logged-in Zerodha account;
+# with no session it falls back to the running deployments' own live spots (no day change).
+# Declared ABOVE the /{run_id} routes — a path "indices" would otherwise 422 as a run id.
+_INDEX_QUOTE_KEYS = {"NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK", "SENSEX": "SENSEX"}
+_INDEX_TTL_S = 10.0
+_index_cache: dict = {"at": 0.0, "body": None}
+
+
+def index_rows(quotes: dict) -> list[dict]:
+    """Rows for the strip from a ``day_quotes`` answer keyed by Kite index name."""
+    out: list[dict] = []
+    for name, key in _INDEX_QUOTE_KEYS.items():
+        row = quotes.get(key) or {}
+        last = row.get("last")
+        if not last:
+            continue
+        prev = row.get("prev_close")
+        change = (float(last) - float(prev)) if prev else None
+        out.append({
+            "name": name,
+            "last": float(last),
+            "prev_close": float(prev) if prev else None,
+            "change": round(change, 2) if change is not None else None,
+            "change_pct": round(change / float(prev) * 100, 2) if change is not None else None,
+        })
+    return out
+
+
+def _index_quotes(db: Session) -> dict:
+    import time
+    from datetime import datetime
+
+    from skas_algo.services.live_cycles import IST
+
+    now = time.monotonic()
+    if _index_cache["body"] is not None and now - _index_cache["at"] < _INDEX_TTL_S:
+        return _index_cache["body"]
+    rows: list[dict] = []
+    source = None
+    accounts = [
+        a for a in broker_svc.list_accounts(db)
+        if "zerodha" in str(a.broker).lower() and broker_svc.has_valid_session(a)
+    ]
+    if accounts:
+        try:
+            quotes = broker_svc.make_adapter(accounts[0]).day_quotes(list(_INDEX_QUOTE_KEYS.values()))
+            rows = index_rows(quotes)
+            source = accounts[0].label
+        except Exception:
+            logger.warning("index quotes failed — falling back to run spots", exc_info=True)
+    if not rows:
+        seen: dict[str, float] = {}
+        for lr in manager.list():
+            u = str(lr.config.underlying or "").upper()
+            if u in _INDEX_QUOTE_KEYS and u not in seen:
+                try:
+                    spot = lr._underlying_spot()
+                except Exception:
+                    spot = None
+                if spot:
+                    seen[u] = float(spot)
+        rows = [{"name": u, "last": v, "prev_close": None, "change": None, "change_pct": None}
+                for u, v in seen.items()]
+        source = "runs" if rows else None
+    body = {"indices": rows, "source": source, "as_of": datetime.now(IST).isoformat()}
+    _index_cache.update(at=now, body=body)
+    return body
+
+
+@router.get("/indices")
+def live_indices(db: Session = Depends(get_db)) -> dict:
+    return _index_quotes(db)
 
 
 @router.get("/{run_id}")
@@ -506,17 +591,30 @@ async def greeks_history(run_id: int, limit: int = 1000, db: Session = Depends(g
         .scalars()
         .all()
     )
+    ordered = list(reversed(rows))  # oldest → newest for charting
     points = [
         {
             "ts": iso_utc(r.ts),
             "spot": r.spot,
             "net_delta": r.net_delta,
             "net_iv": r.net_iv,
-            "pnl": r.pnl,
+            "pnl": r.pnl,  # UNREALIZED at the sample (persistence.record_greeks)
             "legs": r.legs,
         }
-        for r in reversed(rows)  # oldest → newest for charting
+        for r in ordered
     ]
+    # Realized P&L booked up to each sample, so a chart can show OVERALL (pnl + realized_cum)
+    # or one CYCLE (overall − the cycle's realized_before). Running deployments only — the
+    # transaction log lives on the session.
+    live = manager.get(run_id)
+    if live is not None and points:
+        from datetime import timezone as _tz
+
+        from skas_algo.services.live_cycles import realized_cumulative
+
+        stamps = [(r.ts if r.ts.tzinfo else r.ts.replace(tzinfo=_tz.utc)) for r in ordered]
+        for p, cum in zip(points, realized_cumulative(list(live.session.transactions), stamps)):
+            p["realized_cum"] = cum
     return {"run_id": run_id, "points": points}
 
 

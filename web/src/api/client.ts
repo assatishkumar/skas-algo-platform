@@ -33,6 +33,7 @@ import type {
   OptionTradeLeg,
   OptionsTradeDeploy,
   GreeksHistory,
+  LiveIndices,
   RunAnalysis,
   StockSeries,
   LiveControlsInput,
@@ -431,7 +432,9 @@ export const api = {
       `/live/${id}/manual-order`,
       { method: "POST", body: JSON.stringify(body) },
     ),
-  liveGreeksHistory: (id: number) => request<GreeksHistory>(`/live/${id}/greeks-history`),
+  liveGreeksHistory: (id: number, limit = 1000) =>
+    request<GreeksHistory>(`/live/${id}/greeks-history?limit=${limit}`),
+  liveIndices: () => request<LiveIndices>("/live/indices"),
   liveTrades: (id: number) => request<{ run_id: number; trades: Trade[] }>(`/live/${id}/trades`),
   liveDeployments: (status?: string) =>
     request<Deployment[]>(`/live/deployments${status ? `?status=${status}` : ""}`),

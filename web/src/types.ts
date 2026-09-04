@@ -537,7 +537,8 @@ export interface GreeksHistoryPoint {
   spot: number | null;
   net_delta: number | null;
   net_iv: number | null;
-  pnl: number | null; // net unrealized P&L (₹) at this sample
+  pnl: number | null; // net UNREALIZED P&L (₹) at this sample
+  realized_cum?: number | null; // realized P&L booked up to this sample (running deployments) — pnl + realized_cum = overall
   legs: { symbol: string; iv: number | null; delta: number | null; pos_delta: number | null }[];
 }
 
@@ -1414,6 +1415,40 @@ export interface Deployment {
   strategy_alert?: string | null; // strategy-surfaced warning: data health, or an
   // operational one like value_investing's fund source running dry. Self-clearing.
   underlying_spot?: number | null; // live underlying spot (tile subline)
+  cycle?: DeploymentCycle | null; // the open cycle (entry stamp/spot, realized before it) + the last closed one
+}
+
+/** The Live tile's read of the run's CURRENT cycle, derived from its transaction log
+ *  (services/live_cycles). `realized_before` is what the run had booked before this cycle
+ *  opened, so cycle P&L = overall − realized_before. While flat it is the whole realized
+ *  total and `last` describes the most recent closed cycle. */
+export interface DeploymentCycle {
+  open: boolean;
+  entry_at: string | null;
+  entry_spot: number | null;
+  realized_before: number;
+  last: {
+    entry_at: string | null;
+    exit_at: string | null;
+    entry_spot: number | null;
+    exit_spot: number | null;
+    pnl: number;
+    realized_before: number;
+  } | null;
+}
+
+export interface LiveIndexQuote {
+  name: string; // NIFTY | BANKNIFTY | SENSEX
+  last: number;
+  prev_close: number | null;
+  change: number | null;
+  change_pct: number | null;
+}
+
+export interface LiveIndices {
+  indices: LiveIndexQuote[];
+  source: string | null; // broker account label, "runs" (deployments' own spots), or null
+  as_of: string;
 }
 
 export interface OptionBarsDay {
