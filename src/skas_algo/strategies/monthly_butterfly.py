@@ -200,14 +200,23 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
             self.adjust_realized = 0.0
             self.peak_pct = 0.0
 
+        # The entry WINDOW binds even when forced. Force skips the wait for the previous
+        # expiry — not the time of day. Paper run 30 (2026-09-04) forced at 09:15:03, the
+        # first tick of the session, when the chain's option prints are still the prior
+        # close or the odd opening print: the legs were booked against those, the marks
+        # two minutes later were real, and the "target" fired on a book that was down
+        # ₹9,765. Entering at 09:30 is exactly what keeps the decision basis and the fills
+        # on the same prices.
+        if not (self.entry_time <= now.time() <= self.entry_window_end):
+            return self._skip(f"outside the entry window {self.entry_time:%H:%M}–"
+                              f"{self.entry_window_end:%H:%M}"
+                              + (" (force waits for it too)" if self.force_pending or
+                                 self.force_entry else ""), today)
         if self.force_pending or (self.force_entry and self.done_expiry is None):
             got = self._try_enter(ctx, now, today, force=True)
             if got:
                 self.force_pending = False
             return got
-        if not (self.entry_time <= now.time() <= self.entry_window_end):
-            return self._skip(f"outside the entry window {self.entry_time:%H:%M}–"
-                              f"{self.entry_window_end:%H:%M}", today)
         return self._try_enter(ctx, now, today)
 
     # ----------------------------------------------------------------- entry

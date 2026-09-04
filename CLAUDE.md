@@ -74,7 +74,19 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   new option strategy inherits the mixin and follows the same rule. In-memory only.
   Related: a FRESH monthly_butterfly run waits for the current expiry to pass (it marks
   it spent on first sight) — un-forced it used to open a three-week fly at 09:30 the next
-  morning; force (deploy toggle / tile button) is the deliberate way in.
+  morning; force (deploy toggle / tile button) is the deliberate way in, and **force
+  respects the entry WINDOW** (it skips the expiry wait, never the time of day).
+- **A PAPER options run measures spread cost — the strategy's P&L does not see it (2026-09-04).**
+  `PaperBroker` in a live session fills SELL@bid / BUY@ask off the live chain, while a
+  strategy's `legs[*]["entry"]` and its target/stop marks are chain LTPs. Paper run 30
+  (monthly_butterfly, 10 sets, forced at 09:15:03 — the first tick, when BANKNIFTY monthly
+  spreads are ₹20-60) booked the legs at those spreads, saw LTP-basis P&L cross +3%
+  (₹21,000) two minutes later, exited on "target", and the book realised **−₹9,765**: a
+  ~₹30,000 round trip of spread, ₹25 a unit. Two lessons. A paper cycle IS a spread
+  measurement (queue/impact excepted) — read book P&L against `strategy_pnl`. And a %
+  target on LTPs is only honest when the round-trip spread is small next to it: enter
+  inside the window (09:30, never the open), and treat `strategy_pnl − book` as the
+  live number that decides whether the target is real.
 - **NSE's per-ORDER quantity freeze is an exchange control, and LiveBroker splits for it
   (2026-09-04).** BANKNIFTY 600 units / NIFTY 1,800 from the 2026-09-01 circular; it is
   re-derived several times a year and the Kite instruments dump does NOT carry it, so it

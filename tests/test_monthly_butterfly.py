@@ -313,3 +313,20 @@ def test_a_refused_entry_says_why_and_the_reason_clears_on_entry():
     # …and a successful entry clears it
     tick(st3, ctx3, datetime(2026, 7, 29, 9, 20))
     assert st3.legs and st3.last_skip is None
+
+
+def test_force_waits_for_the_entry_window():
+    """Paper run 30 (2026-09-04): force_entry opened the fly at 09:15:03, the first tick of
+    the session, on a chain whose option prints were still the prior close. Two minutes
+    later the marks were real and the 'target' fired on a book that was down ₹9,765. Force
+    skips the wait for the previous expiry, never the time of day."""
+    st, ctx = setup(primed=False, force_entry=True, entry_time="09:30")
+    assert tick(st, ctx, datetime(2026, 8, 12, 9, 15)) == []
+    assert "entry window" in st.last_skip["reason"] and "force waits" in st.last_skip["reason"]
+    assert tick(st, ctx, datetime(2026, 8, 12, 9, 29)) == []
+    assert len(tick(st, ctx, datetime(2026, 8, 12, 9, 30))) == 3
+    # the tile button obeys the same window
+    b, bctx = setup(primed=False, entry_time="09:30")
+    b.request_force_entry()
+    assert tick(b, bctx, datetime(2026, 8, 12, 9, 20)) == [] and b.force_pending
+    assert len(tick(b, bctx, datetime(2026, 8, 12, 9, 31))) == 3 and not b.force_pending
