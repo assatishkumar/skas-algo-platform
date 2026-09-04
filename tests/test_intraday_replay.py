@@ -372,7 +372,9 @@ def test_banknifty_lot_size_eras():
     assert lot_size_for("BANKNIFTY", date(2022, 6, 1)) == 25
     assert lot_size_for("BANKNIFTY", date(2023, 8, 1)) == 15
     assert lot_size_for("BANKNIFTY", date(2024, 12, 1)) == 30
-    assert lot_size_for("BANKNIFTY", date(2026, 2, 1)) == 35
+    # 30, not 35: the 2026-01-01 → 35 row was unsourced and the live Kite dump reads 30
+    # for every listed series (2026-09-04). This assertion had been pinning the error.
+    assert lot_size_for("BANKNIFTY", date(2026, 2, 1)) == 30
 
 
 def _monthly_day(day, spot=24000.0, exp="2026-08-25", prem=200.0):

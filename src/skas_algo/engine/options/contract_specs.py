@@ -31,13 +31,16 @@ _LOT_SIZES: dict[str, list[tuple[date, int]]] = {
     #   …→2023-06-30: 25   (long-standing)
     #   2023-07-01→: 15    (NSE circular 56233, 2023-03-31 — July-2023 expiry onward)
     #   2024-11-20→: 30    (SEBI ₹15L minimum contract value revision)
-    #   2026-01-01→: 35    (Oct/Dec-2025 periodic revision — same boundary convention
-    #                       as NIFTY's 65 above; front contracts carried 30 until then)
+    #   2026-01-01→: 30    (the 35 this row carried from 2026-07-17 was UNSOURCED — the
+    #                       live Kite dump on 2026-09-04 reads lot_size 30 for EVERY listed
+    #                       BANKNIFTY series, Sep-2026 through Jun-2027, and the owner
+    #                       confirms 30 from the January-2026 series. A 35-lot era may have
+    #                       run during 2025; do not re-add it without the NSE circular date.
+    #                       Wrong here = every live BANKNIFTY order a non-multiple → rejected.)
     "BANKNIFTY": [
         (date(2000, 1, 1), 25),
         (date(2023, 7, 1), 15),
         (date(2024, 11, 20), 30),
-        (date(2026, 1, 1), 35),
     ],
     # Others seeded with current sizes — historical revisions NEEDS-CONFIRM vs NSE circulars.
     "FINNIFTY": [(date(2000, 1, 1), 65)],

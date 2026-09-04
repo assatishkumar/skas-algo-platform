@@ -140,7 +140,7 @@ def test_18_delta_strikes_are_otm_and_sane():
     assert ce_k > SPOT > pe_k
     # 18Δ at 14% IV / 26d on 57000 ≈ 1400-2600 pts OTM — sanity band, not exact.
     assert 700 <= ce_k - SPOT <= 3500 and 700 <= SPOT - pe_k <= 3500
-    assert all(s.quantity == 35 for s in sigs)  # 1 lot × 35
+    assert all(s.quantity == 30 for s in sigs)  # 1 lot × 30 (the live dump's BANKNIFTY lot)
     # Broker-only rule: at entry the base is PENDING until the manager pushes it...
     assert st.margin_source == "pending" and st.margin_base == 0.0
     # ...and the first managed tick after a push freezes it.
