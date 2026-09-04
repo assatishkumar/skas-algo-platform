@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from datetime import UTC
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
@@ -18,7 +19,6 @@ from sqlalchemy.orm import Session
 from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
     AdoptBrokerCloseInput,
-    SetHoldingInput,
     DeploymentUpdate,
     GoLiveRequest,
     LiveControlsInput,
@@ -26,6 +26,7 @@ from skas_algo.api.models import (
     ManualOrderInput,
     OverrideInput,
     QuoteSourceInput,
+    SetHoldingInput,
     iso_utc,
 )
 from skas_algo.config import get_settings
@@ -613,12 +614,12 @@ async def greeks_history(run_id: int, limit: int = 1000, db: Session = Depends(g
     # transaction log lives on the session.
     live = manager.get(run_id)
     if live is not None and points:
-        from datetime import timezone as _tz
 
         from skas_algo.services.live_cycles import realized_cumulative
 
-        stamps = [(r.ts if r.ts.tzinfo else r.ts.replace(tzinfo=_tz.utc)) for r in ordered]
-        for p, cum in zip(points, realized_cumulative(list(live.session.transactions), stamps)):
+        stamps = [(r.ts if r.ts.tzinfo else r.ts.replace(tzinfo=UTC)) for r in ordered]
+        cums = realized_cumulative(list(live.session.transactions), stamps)
+        for p, cum in zip(points, cums, strict=True):
             p["realized_cum"] = cum
     return {"run_id": run_id, "points": points}
 
@@ -631,7 +632,7 @@ def pnl_history(run_id: int, db: Session = Depends(get_db)) -> dict:
     greeks sample (0 when the book was flat at the close); ``overall`` is the sum. The
     daily equity ``history`` was NOT used: it books charges and short premium differently
     from the KPIs, so its last point would disagree with the number beside the chart."""
-    from datetime import timedelta, timezone as _tz
+    from datetime import timedelta
 
     from sqlalchemy import func
 
@@ -660,7 +661,7 @@ def pnl_history(run_id: int, db: Session = Depends(get_db)) -> dict:
     ):
         if ts is None:
             continue
-        utc = ts if ts.tzinfo else ts.replace(tzinfo=_tz.utc)
+        utc = ts if ts.tzinfo else ts.replace(tzinfo=UTC)
         eod[(utc + timedelta(minutes=ist_minutes)).date().isoformat()] = float(pnl or 0.0)
     return {
         "run_id": run_id,

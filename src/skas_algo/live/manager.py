@@ -1458,7 +1458,9 @@ class LiveRun:
             snap["margin_used"] = self._margin
             # Which broker priced it: Kite's basket for a Dhan run reads "zerodha" with
             # margin_via="reference" so the UI can say so; Dhan's own per-leg sum rides along.
-            snap["margin_source"] = "zerodha" if self._margin_via == "reference" else self.config.quote_source
+            snap["margin_source"] = (
+                "zerodha" if self._margin_via == "reference" else self.config.quote_source
+            )
             snap["margin_via"] = self._margin_via
             snap["margin_via_label"] = self._margin_via_label
             snap["margin_dhan_sum"] = self._margin_dhan_sum
