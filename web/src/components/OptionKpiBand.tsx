@@ -109,7 +109,11 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
   const overall = prior + thisRealized + thisUnrealized;
 
   const margin = run.margin_used ?? null;
-  const marginSrc = run.margin_source === "zerodha" ? "Zerodha basket" : run.margin_source === "dhan" ? "Dhan basket" : run.margin_source === "model" ? "model estimate" : null;
+  // Dhan has NO basket API: its figure is each SHORT leg's standalone margin added up, so a
+  // hedged book reads far above what the broker actually blocks (run 27's five-leg volcano:
+  // ₹13.44L for a structure the owner measured at ₹5.7L). Say so — "basket" was a lie there.
+  const dhanSum = run.margin_source === "dhan";
+  const marginSrc = run.margin_source === "zerodha" ? "Zerodha basket" : dhanSum ? "Dhan · each short leg added up, no hedge benefit" : run.margin_source === "model" ? "model estimate" : null;
   const target = run.profit_target_amt ?? null;
   const stop = run.stop_loss_amt ?? null;
   // The %-thresholds are a percent of the strategy's FROZEN anchor when it has one — a
@@ -203,6 +207,12 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
       <Card title="Margin used">
         <div className="mt-1 font-['Space_Grotesk'] font-bold tabular-nums text-[22px] text-[var(--strong)]">{margin != null ? formatInr(margin) : "—"}</div>
         {marginSrc && <div className="text-[11.5px] text-[var(--muted)]">{marginSrc}</div>}
+        {dhanSum && (
+          <div className="mt-1 text-[11px] text-[var(--faint)]">
+            Dhan has no basket API, so this counts every short leg as if it stood alone — the real
+            blocked margin on a hedged book is lower{run.threshold_base != null ? "; the rules use the anchor below" : ""}.
+          </div>
+        )}
         {(target != null || stop != null || anchorDiffers) && (
           <div className="mt-2 pt-2 border-t border-[var(--divider)]">
             {anchorDiffers && (

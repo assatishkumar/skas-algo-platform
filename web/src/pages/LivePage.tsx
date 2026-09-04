@@ -1472,7 +1472,9 @@ function DeploymentTile({
         </div>
         <div className="flex items-start gap-2 shrink-0">
           <div className="text-right text-sm">
-            <div className="text-[var(--muted)] text-[11px]">{isOptions ? "Margin" : "Equity"}</div>
+            <div className="text-[var(--muted)] text-[11px]" title={m.margin_source === "dhan" ? "Dhan has no basket API: each short leg's margin added up, no hedge benefit — reads high on a hedged book" : undefined}>
+              {isOptions ? (m.margin_source === "dhan" ? "Margin · per-leg sum" : "Margin") : "Equity"}
+            </div>
             <div className="font-semibold tabular-nums text-[var(--strong)]">
               {isOptions
                 ? marginUsed != null ? formatInr(marginUsed) : "—"
