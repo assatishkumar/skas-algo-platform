@@ -85,8 +85,13 @@ class FakeCtx:
         raise KeyError(s)
 
 
-def setup(aug=None, spot=SPOT, **kw):
+def setup(aug=None, spot=SPOT, primed=True, **kw):
+    """``primed`` = a run that has already seen the July expiry pass (what a deployed run
+    holds after its first cycle), so 29 July is a legitimate entry day. A FRESH run
+    (primed=False) must instead wait for the current expiry — see the wait test."""
     st = MonthlyButterflyStrategy(universe=["NIFTY"], **kw)
+    if primed:
+        st.done_expiry = JUL_MON.isoformat()
     c = aug if aug is not None else chain(spot=spot)
     mkt = FakeMarket({e.isoformat(): c for e in EXPIRIES}, spot=spot)
     return st, FakeCtx(mkt)
@@ -266,3 +271,24 @@ def test_banknifty_lot_size_is_thirty_in_the_current_series():
     assert lot_size_for("BANKNIFTY", _d(2026, 9, 29)) == 30
     assert lot_size_for("BANKNIFTY", _d(2026, 3, 31)) == 30
     assert lot_size_for("BANKNIFTY", _d(2025, 6, 26)) == 30   # 2024-11-20 revision onward
+
+
+def test_a_fresh_run_waits_for_the_current_expiry_to_pass_unless_forced():
+    """A run started mid-cycle has not seen an expiry yet. Un-forced, it must stand down
+    until the current one passes and open the session after (the spec's entry day) —
+    before this it opened a three-week butterfly at 09:30 the next morning, which a paper
+    test could not tell apart from the real cadence. Force is the deliberate way in."""
+    st, ctx = setup(primed=False)
+    assert tick(st, ctx, datetime(2026, 8, 12, 11, 0)) == []        # mid-cycle: wait
+    assert st.done_expiry == AUG_MON.isoformat()                      # …for THIS expiry
+    assert tick(st, ctx, datetime(2026, 8, 25, 9, 30)) == []          # the expiry day itself
+    assert len(tick(st, ctx, datetime(2026, 8, 26, 9, 30))) == 3      # the session after
+    assert st.cycle_expiry == SEP_MON.isoformat()
+    # the deploy toggle opens on the current expiry at once
+    f, fctx = setup(primed=False, force_entry=True)
+    assert len(tick(f, fctx, datetime(2026, 8, 12, 11, 0))) == 3 and f.cycle_expiry == AUG_MON.isoformat()
+    # …and so does the tile button, on the next tick
+    b, bctx = setup(primed=False)
+    assert tick(b, bctx, datetime(2026, 8, 12, 11, 0)) == []
+    assert "ATM" in b.request_force_entry()
+    assert len(tick(b, bctx, datetime(2026, 8, 12, 11, 1))) == 3

@@ -148,6 +148,13 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
         the number of butterflies held."""
         return max(1, int(self.sets))
 
+    def request_force_entry(self) -> str:
+        """Live tile 'Force entry now': the next tick opens the butterfly on the current
+        expiry, skipping the wait for the previous one to pass."""
+        self.force_pending = True
+        return (f"next tick sells {self.body_lots} lot(s) ATM and buys {self.wing_lots} "
+                f"lot(s) each ±{self.wing_points:g} on the current {self.cycle} expiry")
+
     def _index_spot(self, ctx) -> float | None:
         spot_fn = getattr(ctx.market, "index_spot", None)
         spot = spot_fn(self.underlying) if spot_fn else None
@@ -219,6 +226,15 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
         # the weekly cadence the next expiry is already ahead, so ``done_expiry`` does the
         # same job one line down.
         if exp is None or exp <= today:
+            return []
+        if not force and self.done_expiry is None:
+            # A FRESH run (deploy or backtest start) mid-cycle: the spec's entry is the
+            # session after an expiry, and this one has not seen one yet. Mark the current
+            # expiry as spent and wait for it to pass — otherwise a deploy on the 4th opened
+            # a three-week butterfly at 09:30 the next morning, which a paper test cannot
+            # tell apart from the real cadence. Force (the deploy toggle or the tile button)
+            # is the deliberate way to open a cycle now.
+            self.done_expiry = exp.isoformat()
             return []
         if not force and self.done_expiry:
             if self.done_expiry == exp.isoformat():
