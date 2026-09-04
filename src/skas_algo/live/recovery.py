@@ -226,6 +226,13 @@ def _rebuild(db, run: AlgoRun, loader) -> None:
             session.set_margin_override(float(bm))
         except (TypeError, ValueError):
             pass
+        # …and how it was priced (Kite's reference for a Dhan run + Dhan's own sum), so the
+        # label survives the restart too.
+        st = run.state or {}
+        live._margin_via = st.get("broker_margin_via")
+        live._margin_via_label = st.get("broker_margin_via_label")
+        ds = st.get("broker_margin_dhan_sum")
+        live._margin_dhan_sum = float(ds) if ds is not None else None
 
     manager.register(live)
     if config.auto:

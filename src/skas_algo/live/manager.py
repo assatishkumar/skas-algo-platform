@@ -386,6 +386,38 @@ def _broker_delivery_book(adapter, holdings=None, traded_today=None) -> dict[str
     return book
 
 
+def _kite_reference_margin(legs: list[dict]) -> tuple[float, str] | None:
+    """Kite's basket margin for the SAME legs, priced through any logged-in Zerodha account —
+    the reference a DHAN run shows and pushes instead of Dhan's per-leg sum (owner call,
+    2026-09-04). Dhan has no basket API: its figure adds each short leg's standalone margin
+    and read ₹13.44L on run 27's five-leg volcano against the ₹5.7L the owner measured.
+    Kite nets the hedges, so it is the closer estimate of what a hedged book blocks —
+    on either broker. Read-only (a basket-margin quote places nothing; §1 untouched).
+    Returns (margin, account label) or None when there is no Kite session or the call
+    fails; the caller then falls back to Dhan's own figure."""
+    from skas_algo.services import broker as broker_svc
+
+    try:
+        with session_scope() as db:
+            accounts = [
+                a for a in broker_svc.list_accounts(db)
+                if "zerodha" in str(a.broker).lower() and broker_svc.has_valid_session(a)
+            ]
+            if not accounts:
+                return None
+            label = str(accounts[0].label)
+            adapter = broker_svc.make_adapter(accounts[0])
+    except Exception:  # pragma: no cover - never break the loop on a lookup
+        logger.exception("kite reference margin: account lookup failed")
+        return None
+    try:
+        ref = adapter.basket_margin(legs)
+    except Exception:
+        logger.warning("kite reference margin failed", exc_info=True)
+        return None
+    return (float(ref), label) if ref is not None else None
+
+
 class LiveRun:
     def __init__(self, run_id, algo_id, config, session, quote_source, broadcaster):
         self.run_id = run_id
@@ -431,6 +463,11 @@ class LiveRun:
         # Real Zerodha basket margin, refreshed ~1/min (overrides the model estimate).
         self._margin: float | None = None
         self._last_margin_at: datetime | None = None
+        # How the margin figure was priced: None = the run's own broker; "reference" = Kite's
+        # basket for a Dhan run (+ which Kite account), with Dhan's per-leg sum kept beside it.
+        self._margin_via: str | None = None
+        self._margin_via_label: str | None = None
+        self._margin_dhan_sum: float | None = None
         self._last_funds_at: datetime | None = None
         self._wire_quote_source()
 
@@ -943,6 +980,9 @@ class LiveRun:
         symbols = self.session.portfolio.lot_symbols()
         if not symbols:
             self._margin = None
+            self._margin_via = None
+            self._margin_via_label = None
+            self._margin_dhan_sum = None
             self._margin_symbols = []
             return
         now = datetime.now(IST)
@@ -969,8 +1009,23 @@ class LiveRun:
             m = adapter.basket_margin(legs)
         except Exception:  # pragma: no cover - never break the loop on a margin call
             m = None
+        # A DHAN account: its "basket" is each short leg added up (no basket API, no hedge
+        # benefit). When a Kite session exists, price the same legs there and use THAT as the
+        # margin — displayed and pushed — with Dhan's sum kept only as a footnote. No Kite
+        # session → Dhan's own figure stands (the KPI band then shows the manual anchor as
+        # the headline where one exists). Owner call, 2026-09-04.
+        via = None
+        dhan_sum = None
+        via_label = None
+        if str(self.config.quote_source).lower() == "dhan":
+            ref = _kite_reference_margin(legs)
+            if ref is not None:
+                dhan_sum, (m, via_label), via = m, ref, "reference"
         if m is not None:
             self._margin = m
+            self._margin_via = via
+            self._margin_via_label = via_label
+            self._margin_dhan_sum = dhan_sum
             # Let the strategy's %-of-margin profit/stop targets apply to the real basket margin.
             self.session.set_margin_override(m)
             # Broker-margin-tracked strategies (delta_neutral, cp_ratio_expiry, and the
@@ -1401,7 +1456,12 @@ class LiveRun:
         # Prefer the real Zerodha basket margin (throttled) over the model estimate.
         if self._margin is not None:
             snap["margin_used"] = self._margin
-            snap["margin_source"] = self.config.quote_source  # which broker's basket margin
+            # Which broker priced it: Kite's basket for a Dhan run reads "zerodha" with
+            # margin_via="reference" so the UI can say so; Dhan's own per-leg sum rides along.
+            snap["margin_source"] = "zerodha" if self._margin_via == "reference" else self.config.quote_source
+            snap["margin_via"] = self._margin_via
+            snap["margin_via_label"] = self._margin_via_label
+            snap["margin_dhan_sum"] = self._margin_dhan_sum
         # Multi-underlying basket strategies (donchian) expose a per-name breakdown + aggregate payoff.
         basket_fn = getattr(getattr(self.session, "strategy", None), "basket_status", None)
         if basket_fn is not None:
@@ -1433,6 +1493,9 @@ class LiveRun:
             # lose it, dropping the display to the ≈2×-inflated model estimate until 09:15 next
             # day. Persisting + restoring it keeps the broker number across restarts (2026-07-10).
             "broker_margin": self._margin,
+            "broker_margin_via": self._margin_via,
+            "broker_margin_via_label": self._margin_via_label,
+            "broker_margin_dhan_sum": self._margin_dhan_sum,
         }
 
     def _persist_state(self) -> None:

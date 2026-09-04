@@ -585,7 +585,10 @@ export interface LiveRunSnapshot {
   net_delta?: number | null; // options: Σ position delta (None for equity)
   net_iv?: number | null; // options: units-weighted IV (decimal)
   margin_used?: number | null; // options: real Zerodha basket margin or model estimate
-  margin_source?: string | null; // "zerodha" | "model"
+  margin_source?: string | null; // "zerodha" | "dhan" | "model"
+  margin_via?: string | null; // "reference" = Kite priced a Dhan run's legs (lib/margin.ts)
+  margin_via_label?: string | null;
+  margin_dhan_sum?: number | null; // Dhan's per-leg sum, kept as a footnote beside the Kite figure
   net_credit?: number | null; // options: net premium (+credit / −debit)
   realized_pnl?: number | null; // booked P&L so far (incl. a backtest seed's trades)
   profit_target_amt?: number | null; // ₹ profit target the strategy will act on
@@ -1373,6 +1376,11 @@ export interface DeploymentMetrics {
   // Options tiles: margin utilised + net credit/debit instead of equity value.
   margin_used?: number | null;
   margin_source?: string | null;
+  margin_via?: string | null;
+  margin_via_label?: string | null;
+  margin_dhan_sum?: number | null;
+  threshold_base?: number | null;
+  threshold_source?: string | null;
   net_credit?: number | null;
   net_delta?: number | null;
   realized_pnl?: number | null;

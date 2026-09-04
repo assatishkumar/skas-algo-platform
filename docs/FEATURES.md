@@ -915,6 +915,12 @@ theme. All data goes through `api/client.ts` (`/api/v1`) plus a live WebSocket f
   today's point is live, so the right edge equals the KPI), with days up/down, best and
   worst day, max drawdown and charges in the header. The history card at the bottom stays
   cycle-scoped (its P&L panel now includes what the cycle has realized so far).
+  **Margin on a Dhan run is Kite's basket for the same legs** (2026-09-04): Dhan has no
+  basket API and adds each short leg's standalone margin (run 27's five-leg volcano read
+  ₹13.44L for a ₹5.7L structure), so when a Zerodha session exists the manager prices the
+  identical legs through Kite, shows and pushes that figure ("Kite basket · reference"),
+  and keeps Dhan's sum as a footnote; with no Kite session the tile headlines the manual
+  anchor where the strategy has one, and only otherwise Dhan's sum, labelled as such.
 - **Basket monitor** (`/live/:id`) — the rich Donchian deployment view: hero KPIs, an aggregate
   expiry payoff, the index hedge, a portfolio-stop gauge, and per-name cards → a drawer with
   each leg's ITM/OTM/flip state, the flip timeline, and a per-name payoff.

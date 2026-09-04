@@ -252,10 +252,15 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   dispatches. **Dhan** (`brokers/dhan.py`): no api key/secret — client id + a portal-generated
   JWT the user PASTES (its `exp` claim is the session expiry); instruments resolve via the
   public scrip-master CSV (module-cached daily; underlying recovered with `rsplit("-", 3)` —
-  hyphenated names like BAJAJ-AUTO); `basket_margin` = Σ per-SHORT-leg margins (Dhan has no basket API → overstates,
-  conservative — run 27's five-leg volcano read ₹13.44L for a structure the owner measured
-  at ₹5.7L, so the tile and KPI band LABEL it "each short leg added up, no hedge benefit"
-  since 2026-09-04; the %-rules read the manual anchor, never this figure); its option-chain endpoint is throttled (~1/3s) so
+  hyphenated names like BAJAJ-AUTO); `basket_margin` = Σ per-SHORT-leg margins (Dhan has no basket API → overstates: run 27's
+  five-leg volcano read ₹13.44L for a structure the owner measured at ₹5.7L). **So a Dhan
+  DERIV run prices its legs through KITE when a Zerodha session exists** (owner call
+  2026-09-04: `manager._kite_reference_margin`, read-only, any logged-in Zerodha account) —
+  that figure is what the tile shows AND what `set_broker_margin` pushes, snapshot
+  `margin_source="zerodha"` + `margin_via="reference"`, Dhan's own sum kept as
+  `margin_dhan_sum` for the footnote; no Kite session → Dhan's figure stands and the UI
+  headlines the manual anchor where one exists (`web/src/lib/margin.ts` is the ONE display
+  rule — tile header and KPI band both read it); persisted with `broker_margin`; its option-chain endpoint is throttled (~1/3s) so
   the 50-name screeners STAY on Zerodha, as does the skas-data cache refresh (Kite-coupled —
   `make_data_session` rejects dhan accounts). **Dhan live quotes/chains need the paid "Data
   APIs" subscription** (error 806 without it; expirylist/funds/orders don't) — the owner

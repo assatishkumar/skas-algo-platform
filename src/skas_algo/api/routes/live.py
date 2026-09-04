@@ -284,6 +284,11 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
                 # Options tiles surface margin + net credit/debit instead of equity value.
                 "margin_used": snap.get("margin_used"),
                 "margin_source": snap.get("margin_source"),
+                "margin_via": snap.get("margin_via"),
+                "margin_via_label": snap.get("margin_via_label"),
+                "margin_dhan_sum": snap.get("margin_dhan_sum"),
+                "threshold_base": snap.get("threshold_base"),
+                "threshold_source": snap.get("threshold_source"),
                 "net_credit": snap.get("net_credit"),
                 "net_delta": snap.get("net_delta"),
                 "realized_pnl": snap.get("realized_pnl"),

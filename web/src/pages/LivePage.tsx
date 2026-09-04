@@ -19,6 +19,7 @@ import PositionsGreeksTable from "../components/PositionsGreeksTable";
 import GreeksHistoryCard from "../components/GreeksHistoryCard";
 import WeeklyStraddlePanel from "../components/WeeklyStraddlePanel";
 import { formatInr } from "../lib/format";
+import { marginDisplay } from "../lib/margin";
 import { isOptionsStrategy, PARAM_ENUMS } from "../lib/params";
 import { LIVE_CATEGORIES, liveCategoryOf } from "../lib/strategyMeta";
 import { compareOptionSymbol, formatOptionSymbol } from "../lib/symbol";
@@ -1310,7 +1311,10 @@ function DeploymentTile({
   const auto = snapshot?.auto ?? true;
   const paused = dep.status === "active" && snapshot != null && !auto;
   // Options tiles surface the blocked margin (in the header) instead of equity value.
-  const marginUsed = snapshot?.margin_used ?? m.margin_used ?? null;
+  // Headline margin: Kite's basket; on a Dhan run Kite's reference for the same legs, else
+  // the manual anchor, else Dhan's per-leg sum (lib/margin.ts — the KPI band uses the same rule).
+  const mdisp = marginDisplay(snapshot?.margin_used != null ? snapshot : m);
+  const marginUsed = mdisp.value;
   const realized = snapshot?.realized_pnl ?? m.realized_pnl ?? null;
   // Deployment lot-set count (the ×N on the strategy's base structure). Scalar strategies expose a
   // single number; multi-underlying ones (momentum_theta, cp_ratio_expiry) expose a per-name map.
@@ -1472,8 +1476,8 @@ function DeploymentTile({
         </div>
         <div className="flex items-start gap-2 shrink-0">
           <div className="text-right text-sm">
-            <div className="text-[var(--muted)] text-[11px]" title={m.margin_source === "dhan" ? "Dhan has no basket API: each short leg's margin added up, no hedge benefit — reads high on a hedged book" : undefined}>
-              {isOptions ? (m.margin_source === "dhan" ? "Margin · per-leg sum" : "Margin") : "Equity"}
+            <div className="text-[var(--muted)] text-[11px]" title={isOptions ? (mdisp.note ?? mdisp.label ?? undefined) : undefined}>
+              {isOptions ? `Margin${mdisp.label ? ` · ${mdisp.label.split(" ·")[0].split(" (")[0]}` : ""}` : "Equity"}
             </div>
             <div className="font-semibold tabular-nums text-[var(--strong)]">
               {isOptions

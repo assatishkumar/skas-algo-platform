@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { formatInr } from "../lib/format";
+import { marginDisplay } from "../lib/margin";
 import { reconstructCycles } from "../lib/optionCycles";
 import { computeMetrics, effectiveSpot, type LiveLeg, type PositionMetrics } from "../lib/payoff";
 import { parseOptionSymbol } from "../lib/symbol";
@@ -108,12 +109,12 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
   const thisUnrealized = (run.positions ?? []).reduce((s, p) => s + p.unrealized_pnl, 0);
   const overall = prior + thisRealized + thisUnrealized;
 
-  const margin = run.margin_used ?? null;
-  // Dhan has NO basket API: its figure is each SHORT leg's standalone margin added up, so a
-  // hedged book reads far above what the broker actually blocks (run 27's five-leg volcano:
-  // ₹13.44L for a structure the owner measured at ₹5.7L). Say so — "basket" was a lie there.
-  const dhanSum = run.margin_source === "dhan";
-  const marginSrc = run.margin_source === "zerodha" ? "Zerodha basket" : dhanSum ? "Dhan · each short leg added up, no hedge benefit" : run.margin_source === "model" ? "model estimate" : null;
+  const md0 = marginDisplay(run);
+  const margin = md0.value;
+  // ONE rule for the headline margin (lib/margin.ts): Kite's basket, or on a Dhan run Kite's
+  // reference for the same legs, else the manual anchor, else Dhan's per-leg sum said plainly.
+  const md = md0;
+  const marginSrc = md.label;
   const target = run.profit_target_amt ?? null;
   const stop = run.stop_loss_amt ?? null;
   // The %-thresholds are a percent of the strategy's FROZEN anchor when it has one — a
@@ -207,12 +208,8 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
       <Card title="Margin used">
         <div className="mt-1 font-['Space_Grotesk'] font-bold tabular-nums text-[22px] text-[var(--strong)]">{margin != null ? formatInr(margin) : "—"}</div>
         {marginSrc && <div className="text-[11.5px] text-[var(--muted)]">{marginSrc}</div>}
-        {dhanSum && (
-          <div className="mt-1 text-[11px] text-[var(--faint)]">
-            Dhan has no basket API, so this counts every short leg as if it stood alone — the real
-            blocked margin on a hedged book is lower{run.threshold_base != null ? "; the rules use the anchor below" : ""}.
-          </div>
-        )}
+        {md.footnote && <div className="mt-0.5 text-[11px] text-[var(--faint)] tabular-nums">{md.footnote}</div>}
+        {md.note && <div className="mt-1 text-[11px] text-[var(--faint)]">{md.note}</div>}
         {(target != null || stop != null || anchorDiffers) && (
           <div className="mt-2 pt-2 border-t border-[var(--divider)]">
             {anchorDiffers && (
