@@ -13,6 +13,7 @@ export interface MarginFields {
 
 export interface MarginDisplay {
   value: number | null; // the headline figure
+  short: string | null; // the tile header's suffix ("Margin · Kite basket")
   label: string | null; // one line under it
   note: string | null; // the longer explanation (KPI band only)
   footnote: string | null; // Dhan's per-leg sum when it is not the headline
@@ -32,16 +33,18 @@ export function marginDisplay(m: MarginFields): MarginDisplay {
   if (src === "zerodha" && m.margin_via === "reference") {
     return {
       value: used,
+      short: "Kite basket",
       label: `Kite basket · reference${m.margin_via_label ? ` (${m.margin_via_label})` : ""}`,
       note: "This is a Dhan account: Dhan has no basket API, so Kite priced the same legs with hedge benefit. Dhan's own per-leg sum is below.",
       footnote: m.margin_dhan_sum != null ? `Dhan per-leg sum ${formatInr(m.margin_dhan_sum)} · no hedge benefit` : null,
     };
   }
-  if (src === "zerodha") return { value: used, label: "Zerodha basket", note: null, footnote: null };
+  if (src === "zerodha") return { value: used, short: "Zerodha basket", label: "Zerodha basket", note: null, footnote: null };
   if (src === "dhan") {
     if (m.threshold_source === "manual" && m.threshold_base != null) {
       return {
         value: m.threshold_base,
+        short: "manual anchor",
         label: "manual anchor (margin per set × sets)",
         note: "No Kite session to price the basket, and Dhan has no basket API — the anchor stands in for the blocked margin. Log in to Kite for a netted figure.",
         footnote: used != null ? `Dhan per-leg sum ${formatInr(used)} · no hedge benefit` : null,
@@ -49,11 +52,12 @@ export function marginDisplay(m: MarginFields): MarginDisplay {
     }
     return {
       value: used,
+      short: "Dhan per-leg sum",
       label: "Dhan · each short leg added up, no hedge benefit",
       note: "Dhan has no basket API, so this counts every short leg as if it stood alone — the real blocked margin on a hedged book is lower. Log in to Kite for a netted reference.",
       footnote: null,
     };
   }
-  if (src === "model") return { value: used, label: "model estimate", note: null, footnote: null };
-  return { value: used, label: null, note: null, footnote: null };
+  if (src === "model") return { value: used, short: "model estimate", label: "model estimate", note: null, footnote: null };
+  return { value: used, short: null, label: null, note: null, footnote: null };
 }

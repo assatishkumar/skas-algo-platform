@@ -646,7 +646,9 @@ def pnl_history(run_id: int, db: Session = Depends(get_db)) -> dict:
     else:
         txns = list((run.state or {}).get("transactions") or [])
     # The last sample of each IST day: ids are monotonic with ts, so max(id) per day is it.
-    day_expr = func.date(GreeksSnapshot.ts, "+330 minutes")
+    # Samples are stored UTC; bucket them by IST calendar day (one offset, used on both sides).
+    ist_minutes = int(IST.utcoffset(None).total_seconds() // 60)
+    day_expr = func.date(GreeksSnapshot.ts, f"+{ist_minutes} minutes")
     last_ids = (
         select(func.max(GreeksSnapshot.id))
         .where(GreeksSnapshot.algo_run_id == run_id)
@@ -659,8 +661,7 @@ def pnl_history(run_id: int, db: Session = Depends(get_db)) -> dict:
         if ts is None:
             continue
         utc = ts if ts.tzinfo else ts.replace(tzinfo=_tz.utc)
-        eod[(utc + timedelta(minutes=330)).date().isoformat()] = float(pnl or 0.0)
-    del IST  # the offset above is the same +05:30; the name is imported for the reader
+        eod[(utc + timedelta(minutes=ist_minutes)).date().isoformat()] = float(pnl or 0.0)
     return {
         "run_id": run_id,
         "started_at": iso_utc(run.started_at),

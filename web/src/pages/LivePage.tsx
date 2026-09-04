@@ -1477,7 +1477,7 @@ function DeploymentTile({
         <div className="flex items-start gap-2 shrink-0">
           <div className="text-right text-sm">
             <div className="text-[var(--muted)] text-[11px]" title={isOptions ? (mdisp.note ?? mdisp.label ?? undefined) : undefined}>
-              {isOptions ? `Margin${mdisp.label ? ` · ${mdisp.label.split(" ·")[0].split(" (")[0]}` : ""}` : "Equity"}
+              {isOptions ? `Margin${mdisp.short ? ` · ${mdisp.short}` : ""}` : "Equity"}
             </div>
             <div className="font-semibold tabular-nums text-[var(--strong)]">
               {isOptions
