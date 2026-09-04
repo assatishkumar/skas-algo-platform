@@ -1089,6 +1089,10 @@ class LiveRun:
         "data_basis", "lookback", "refresh_seconds", "decision_time",
         "ignore_market_hours", "excluded_symbols", "entry_legs", "warm_from_date",
         "tax_rate", "withdrawal_rate",
+        # Read ONCE at LiveBroker injection (the escalation ladder is derived from it in
+        # the broker's __init__); a hot-edit would update the strategy and leave the
+        # broker on the old ladder while reporting "applied". Stop + redeploy.
+        "order_protect_pct",
     })
 
     def _editable_param_surface(self) -> dict:
@@ -1530,6 +1534,11 @@ class LiveRunManager:
                     return px
             return None
 
+        # A strategy may declare its OWN crossing (`order_protect_pct`): the platform's 3%
+        # is a square-off setting, and an entry that can wait a day should not chase 3%
+        # through the touch on a 1,200-unit body. Read once, here — the ladder is derived
+        # from it in the broker's __init__, which is why the key is edit-blocklisted.
+        own = getattr(getattr(session, "strategy", None), "order_protect_pct", None)
         session.broker = LiveBroker(
             adapter,
             account_id=config.broker_account_id,
@@ -1538,8 +1547,9 @@ class LiveRunManager:
             max_order_notional=settings.live_max_order_notional,
             max_orders_per_day=settings.live_max_orders_per_day,
             order_timeout_s=settings.live_order_timeout_s,
-            protect_pct=settings.live_order_protect_pct,
+            protect_pct=(float(own) if own is not None else settings.live_order_protect_pct),
             protect_pct_equity=settings.live_order_protect_pct_equity,
+            freeze_qty=settings.freeze_quantities(),
         )
         logger.warning(
             "REAL-ORDER broker injected for %s (account %s)", config.name, config.broker_account_id

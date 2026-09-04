@@ -381,6 +381,50 @@ class RatioManualDeploy(BaseModel):
     auto: bool = True
 
 
+class MonthlyButterflyDeploy(BaseModel):
+    """Deploy monthly_butterfly: sell 2 lots ATM, buy 1 lot each ``wing_points`` either
+    side, one side, on the current monthly; target % of the margin anchor else close at
+    ``exit_time`` on expiry day. Reads the LIVE chain for the ATM body and both wings →
+    broker source required. Deploy defaults are the store-replay pick (BANKNIFTY calls,
+    400-point wings, 3%, entry 09:30 — see docs/FEATURES.md §3); the ctor keeps the
+    neutral spec defaults (§1). ``order_protect_pct`` is the per-run crossing the
+    LiveBroker uses when a leg does not fill at the touch: 0.5% is ₹1.50 on a ₹300 body,
+    against the platform's 3% = ₹9 — this entry can wait a day and must never chase."""
+
+    name: str
+    notes: str | None = None
+    underlying: str = "BANKNIFTY"
+    sets: int = 1
+    # ₹ margin for ONE lot-set — the anchor the % target is measured against. MEASURE it on
+    # Kite's basket calculator for the exact three legs before the first live cycle; the
+    # ₹70,000 is the owner's working figure (2026-09-03), not a broker quote.
+    margin_per_set: float = 70000.0
+    side: str = "ce"  # ce | pe
+    cycle: str = "monthly"  # monthly | weekly (weekly backtested worse everywhere)
+    wing_points: float = 400.0
+    body_lots: int = 2
+    wing_lots: int = 1
+    entry_time: str = "09:30"
+    entry_window_end: str = "15:00"
+    exit_time: str = "15:15"
+    profit_target_pct: float = 3.0
+    stop_loss_pct: float = 0.0  # 0 = off; the debit paid is the floor
+    force_entry: bool = False
+    profit_check: str = "1min"
+    stop_check: str = "1min"
+    pnl_basis: str = "total"
+    exit_margin_basis: str = "entry"
+    min_leg_oi: int = 1
+    order_protect_pct: float = 0.5
+    capital: float = 500_000
+    mode: str = "PAPER"
+    quote_source: str = "zerodha"
+    broker_account_id: int | None = None
+    refresh_seconds: int = 15
+    ignore_market_hours: bool = False
+    auto: bool = True
+
+
 class FairValueCalendarDeploy(BaseModel):
     """Deploy fair_value_calendar: the monthly premium-matched ratio calendar (sell ~150 +
     ~450 near-weekly, buy 3× ~200 monthly, same side; 900-pt gap rule; weekly rolls at the

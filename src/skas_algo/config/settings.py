@@ -93,6 +93,27 @@ class Settings(BaseSettings):
     live_order_protect_pct: float = 3.0  # SKAS_LIVE_ORDER_PROTECT_PCT (options)
     # Equity spreads are basis points, not percents — see LiveBroker.protect_pct_equity.
     live_order_protect_pct_equity: float = 1.0  # SKAS_LIVE_ORDER_PROTECT_PCT_EQUITY
+    # NSE's per-ORDER quantity freeze, units per underlying — an EXCHANGE control every
+    # broker enforces, per order not per account. It is re-derived several times a year
+    # (Nov-25, Dec-25, Feb-26, Apr-26, Jul-26, Sep-26 …) and the Kite instruments dump does
+    # NOT carry it, so it lives here as config, env-overridable like NSE_HOLIDAYS_ADD:
+    # SKAS_FREEZE_QTY="NIFTY:1800,BANKNIFTY:600". Values = the 2026-09-01 circular. A
+    # LiveBroker splits any larger order into children of at most this size; a stale
+    # number here is a rejected first order, not a silent loss.
+    live_freeze_qty: str = "NIFTY:1800,BANKNIFTY:600,FINNIFTY:1800,MIDCPNIFTY:2800,NIFTYNXT50:600"
+
+    def freeze_quantities(self) -> dict[str, int]:
+        """``live_freeze_qty`` parsed to {UNDERLYING: units}; malformed entries are skipped."""
+        out: dict[str, int] = {}
+        for part in str(self.live_freeze_qty or "").split(","):
+            if ":" not in part:
+                continue
+            u, _, n = part.partition(":")
+            try:
+                out[u.strip().upper()] = int(n)
+            except ValueError:
+                continue
+        return out
     # Resume REAL-order management for a LIVE run after a restart/recovery. Default False =
     # fail-safe: a recovered live run keeps PaperBroker (a restart PAUSES real orders until
     # the owner re-activates). When True, recovery re-injects the LiveBroker — but the 4-key

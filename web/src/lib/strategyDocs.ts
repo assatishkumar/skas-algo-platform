@@ -891,8 +891,8 @@ export const META: Record<string, Meta> = {
     facts: [["Bias", "Neutral, pinned at the money"], ["Instrument", "NIFTY monthly"],
             ["Structure", "−2 ATM / +1 ±100"], ["Risk", "Capped at the debit paid"],
             ["Target", "% of margin, then flat"], ["Cadence", "One cycle a month"]],
-    deployNote: "Backtest and 1-min replay only for now. The edge is thin per cycle across eight at-the-money fills, so measure your own slippage before considering a forward test.",
-    deployCta: { label: "Backtest it", to: "/backtest?tab=new" },
+    deployNote: "Deploy on Zerodha quotes. Scale in one cycle at a time — 1 set, then 5, 10, 20 — and read the order trace for the measured slippage per unit before each step; the edge is thin across six near-the-money fills a cycle.",
+    deployCta: { label: "Deploy butterfly", to: "/trade" },
   },
   fair_value_calendar: {
     group: "Ratio & income", biasKind: "income",

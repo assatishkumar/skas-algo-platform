@@ -326,7 +326,20 @@ are validated paper-first.
   59% drawdown. **SENSEX is not evaluable**: the 1-min store holds almost none of it.
   **The caveat that matters:** six fills a cycle (three legs, in and out) all near the money,
   so execution IS the strategy — measure real slippage before trusting these figures.
-  Backtest/replay only for now (no deploy card). Coverage: `tests/test_monthly_butterfly.py`.
+  **Deploy** (`POST /trade/options/monthly-butterfly/deploy` + the Trade page card, 2026-09-04;
+  broker source required): defaults are the replay pick with the lot-30 correction —
+  BANKNIFTY calls, **400-point wings** (₹1,568,070 / 23.7% CAGR / 2.3% DD, best in BOTH
+  halves; 300 gives ₹1,272,916 with a smaller debit and tail — the width surface is jagged,
+  200/300/400/500/600 → 1.20/1.27/1.57/1.17/1.42m, so treat the gap as noise and the width
+  as a risk dial: debit and worst cycle rise monotonically with it), entry **09:30** (equal-best to 09:20 at both widths
+  and clear of the opening spread; 09:45 and later cost real money), 3% target, no stop.
+  Three live-only guards ride with it: legs go **wings first, body last** on entry and body
+  first on exit (a rejected order abandons the rest of the decision's actions — body-first
+  would have left a naked 40-lot short); a per-run **`order_protect_pct`** (deploy default
+  0.5% = ₹1.50 on a ₹300 body, against the platform's square-off 3% = ₹9) that the manager
+  hands to the LiveBroker at injection; and the LiveBroker's **freeze-quantity split** (a
+  20-set body is 1,200 units against NSE's 600 cap — two child orders, one combined fill).
+  Coverage: `tests/test_monthly_butterfly.py`, the split/crossing tests in `tests/test_live_broker.py`.
 - **`fair_value_calendar` — premium-matched ratio calendar with a fair-value side pick (NIFTY).**
   The owner's video spec (ref video: https://www.youtube.com/watch?v=tn-73I63yBw&t=2162s),
   two halves:

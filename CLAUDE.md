@@ -61,6 +61,23 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   rather MISS than chase. **An unfilled entry still HALTS the run** (owner call: intervention
   is wanted; do not quietly retry). Coverage: `test_an_equity_entry_crosses_one_percent_*`,
   `test_an_option_entry_still_crosses_three_percent` in tests/test_live_broker.py.
+- **NSE's per-ORDER quantity freeze is an exchange control, and LiveBroker splits for it
+  (2026-09-04).** BANKNIFTY 600 units / NIFTY 1,800 from the 2026-09-01 circular; it is
+  re-derived several times a year and the Kite instruments dump does NOT carry it, so it
+  lives in `settings.live_freeze_qty` (`SKAS_FREEZE_QTY="NIFTY:1800,BANKNIFTY:600"`, like
+  `NSE_HOLIDAYS_ADD`). `LiveBroker.execute` places an over-cap option order as consecutive
+  children ≤ cap (each through the full rails/touch/ladder/trace path, `ORDER split`
+  line) and returns ONE combined fill; a child that fails after earlier children filled is
+  a PARTIAL (real fills are never raised away), only a first child failing raises. Equity
+  never splits; a broker built without the table never splits (every older path).
+  Note `kiteconnect` 5.2.x has no `auto_slice`; the split is ours. **A strategy may declare
+  its own crossing**: `order_protect_pct` on the strategy is read ONCE at injection
+  (`_maybe_inject_live_broker`) and overrides `SKAS_LIVE_ORDER_PROTECT_PCT` for that run —
+  the platform's 3% is a square-off setting (₹9 on a ₹300 body); an entry that can wait a
+  day must not chase it. Edit-blocklisted (the ladder is derived in the broker's ctor).
+  **BANKNIFTY lot is 30, not 35**: the contract table's 2026-01-01 → 35 row was unsourced;
+  the live dump reads 30 for every listed series (verified 2026-09-04). Backtests dated
+  2026 that ran before the fix sized BANKNIFTY 17% too large.
 - Safety rails live in LiveBroker pre-flight: per-order notional cap, per-run daily order cap,
   market-hours check, account-level rate governor (settings SKAS_LIVE_MAX_ORDER_NOTIONAL /
   _MAX_ORDERS_PER_DAY / _ORDER_TIMEOUT_S). An `OrderExecutionError` (reject/unfillable) or hourly

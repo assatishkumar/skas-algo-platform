@@ -231,3 +231,38 @@ def test_the_forms_lots_reach_the_strategy_as_lot_sets():
     st = MonthlyButterflyStrategy(universe=["NIFTY"], lots=10)
     assert st.sets == 1
     assert MonthlyButterflyStrategy(universe=["NIFTY"], sets=10).sets == 10
+
+
+def test_the_wings_are_sent_before_the_body():
+    """Live, a real order that fails abandons the rest of the decision's actions. Body
+    first would leave a naked short on a wing rejection — the exposure the butterfly
+    exists to rule out. Wings first leaves two long options at worst."""
+    st, ctx = setup(sets=20)
+    sigs = tick(st, ctx, datetime(2026, 7, 29, 9, 20))
+    assert [s.action.name for s in sigs] == ["ENTER_LONG", "ENTER_LONG", "ENTER_SHORT"]
+    assert sigs[-1].quantity == 20 * 2 * LOT   # the body is last, and it is the big one
+
+
+def test_the_body_is_covered_before_the_wings_are_sold():
+    """Mirror of the entry order: on the way out the short body goes first, so a failure
+    later in the list leaves a long wing, never a naked short."""
+    st, ctx = setup()
+    tick(st, ctx, datetime(2026, 7, 29, 9, 20))
+    mark_all(st, ctx)
+    sigs = tick(st, ctx, datetime(2026, 8, 25, 15, 15))
+    assert [s.action.name for s in sigs] == ["EXIT_ALL"] * 3
+    assert float(sigs[0].symbol.split("|")[2]) == 25_000.0   # the ATM body first
+
+
+def test_banknifty_lot_size_is_thirty_in_the_current_series():
+    """The contract table carried an UNSOURCED 35 for BANKNIFTY from 2026-01-01 (added
+    2026-07-17). The live Kite instruments dump on 2026-09-04 reads 30 for every listed
+    series, Sep-2026 to Jun-2027, and the owner confirms 30 from the January-2026 series.
+    A wrong lot here makes every live order a non-multiple → rejected on arrival."""
+    from datetime import date as _d
+
+    from skas_algo.engine.options.contract_specs import lot_size_for
+
+    assert lot_size_for("BANKNIFTY", _d(2026, 9, 29)) == 30
+    assert lot_size_for("BANKNIFTY", _d(2026, 3, 31)) == 30
+    assert lot_size_for("BANKNIFTY", _d(2025, 6, 26)) == 30   # 2024-11-20 revision onward

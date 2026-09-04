@@ -896,3 +896,95 @@ def test_an_explicit_ladder_overrides_both_segments():
     with pytest.raises(OrderExecutionError):
         lb.execute(BrokerOrder("ITC", OrderSide.BUY, 1, reduce_only=True))
     assert [p for (_, t, p) in a.modified if t is OrderType.LIMIT] == [105.0, 125.0]
+
+
+# ---------------------------------------------------------------- freeze-quantity split
+_DONE = {"status": "COMPLETE", "filled_quantity": None, "average_price": 101.0}
+
+
+class _SecondChildRejects(FakeAdapter):
+    """Fills the first child, rejects the second place — the partial-split case."""
+
+    def place_order(self, order):
+        if len(self.placed) == 1:
+            raise RuntimeError("quantity exceeds freeze limit")
+        return super().place_order(order)
+
+
+def test_an_order_over_the_freeze_is_placed_as_children_and_returns_one_fill():
+    """NSE's per-ORDER quantity freeze (BANKNIFTY 600 units from 2026-09-01) is an exchange
+    control every broker enforces. A 20 lot-set butterfly body is 1,200 units; sent as one
+    order it is rejected on arrival and halts the run. Split into ≤600 children, run each
+    through the full single-order path, book ONE combined fill."""
+    ad = FakeAdapter(initial=_DONE)
+    b = make(ad, freeze_qty={"BANKNIFTY": 600})
+    fill = b.execute(BrokerOrder("BANKNIFTY|2026-09-29|55000|CE", OrderSide.SELL, 1200))
+    assert [o.quantity for o in ad.placed] == [600, 600]
+    assert (fill.quantity, fill.price) == (1200, 101.0)
+    # an uneven split keeps every child at or under the cap and sums exactly
+    ad2 = FakeAdapter(initial=_DONE)
+    make(ad2, freeze_qty={"BANKNIFTY": 600}).execute(
+        BrokerOrder("BANKNIFTY|2026-09-29|55000|CE", OrderSide.SELL, 1400))
+    assert [o.quantity for o in ad2.placed] == [600, 600, 200]
+
+
+def test_at_or_under_the_freeze_and_equity_are_never_split():
+    ad = FakeAdapter(initial=_DONE)
+    b = make(ad, freeze_qty={"BANKNIFTY": 600, "NIFTY": 1800})
+    b.execute(BrokerOrder("BANKNIFTY|2026-09-29|55000|CE", OrderSide.SELL, 600))
+    b.execute(BrokerOrder("NIFTY|2026-09-29|24000|PE", OrderSide.BUY, 1800))
+    b.execute(BrokerOrder("ITC", OrderSide.BUY, 5000))          # equity: no such cap
+    assert [o.quantity for o in ad.placed] == [600, 1800, 5000]
+    # and a broker built without the table (every older caller) never splits anything
+    ad3 = FakeAdapter(initial=_DONE)
+    make(ad3).execute(BrokerOrder("BANKNIFTY|2026-09-29|55000|CE", OrderSide.SELL, 1200))
+    assert [o.quantity for o in ad3.placed] == [1200]
+
+
+def test_a_child_that_fails_after_a_fill_is_a_partial_not_a_lost_fill():
+    """The first child's fill is REAL money at the broker. Raising it away would desync the
+    book from the account exactly the way the 2026-07-27 partial did. Return what filled,
+    flag it, and let the run's normal halt/partial handling take over."""
+    ad = _SecondChildRejects(initial=_DONE)
+    b = make(ad, freeze_qty={"BANKNIFTY": 600})
+    fill = b.execute(BrokerOrder("BANKNIFTY|2026-09-29|55000|CE", OrderSide.SELL, 1200))
+    assert fill.quantity == 600 and [o.quantity for o in ad.placed] == [600]
+    assert any("Partial fill (split order)" in a.title for a in b.notifier.alerts)
+    # a FIRST child failing has nothing to keep → the ordinary rejection path raises
+    ad2 = FakeAdapter(initial=_DONE, place_raises=RuntimeError("rejected"))
+    with pytest.raises(OrderExecutionError):
+        make(ad2, freeze_qty={"BANKNIFTY": 600}).execute(
+            BrokerOrder("BANKNIFTY|2026-09-29|55000|CE", OrderSide.SELL, 1200))
+
+
+def test_a_strategy_may_set_its_own_crossing():
+    """protect_pct steers the whole options ladder; a butterfly entry that can wait a day
+    asks for 0.5% (₹1.50 on a ₹300 body) instead of the square-off default's 3% (₹9)."""
+    b = make(FakeAdapter(initial=_DONE), protect_pct=0.5)
+    assert b.protect_ladder[0] == 0.5
+    assert b.protect_ladder[0] < make(FakeAdapter(initial=_DONE)).protect_ladder[0]
+
+
+def test_injection_reads_the_strategys_crossing_and_the_freeze_table(monkeypatch):
+    """The manager hands a strategy-declared `order_protect_pct` and the settings' freeze
+    table to the LiveBroker it injects. Without the first, the butterfly would chase 3%;
+    without the second, its 1,200-unit body is rejected on the first real order."""
+    from types import SimpleNamespace
+
+    from skas_algo.brokers.live_broker import LiveBroker
+    from skas_algo.config import get_settings
+    from skas_algo.live.manager import manager
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
+    monkeypatch.setattr(settings, "live_freeze_qty", "BANKNIFTY:600,NIFTY:1800")
+    sess = _Sess()
+    sess.strategy = SimpleNamespace(order_protect_pct=0.5)
+    manager._maybe_inject_live_broker(sess, _cfg("LIVE"), _QS(_ExecAdapter(armed=True)))
+    assert isinstance(sess.broker, LiveBroker)
+    assert sess.broker.protect_ladder[0] == 0.5
+    assert sess.broker.freeze_qty == {"BANKNIFTY": 600, "NIFTY": 1800}
+    # a strategy that declares nothing keeps the platform default
+    sess2 = _Sess()
+    manager._maybe_inject_live_broker(sess2, _cfg("LIVE"), _QS(_ExecAdapter(armed=True)))
+    assert sess2.broker.protect_ladder[0] == settings.live_order_protect_pct

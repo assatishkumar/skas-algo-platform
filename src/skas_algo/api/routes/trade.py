@@ -25,6 +25,7 @@ from skas_algo.api.models import (
     EquityTradeDeploy,
     IntradayStraddleDeploy,
     FairValueCalendarDeploy,
+    MonthlyButterflyDeploy,
     IntradayStrangleComboDeploy,
     VolcanoCalendarDeploy,
     IronFlyDeploy,
@@ -639,6 +640,62 @@ async def iron_fly_deploy(
     }
     req = LiveStartRequest(
         strategy_id="iron_fly_monthly",
+        name=body.name,
+        notes=body.notes,
+        instrument_class="DERIV",
+        underlying=body.underlying.upper(),
+        capital=body.capital,
+        params=params,
+        mode=body.mode,
+        quote_source=body.quote_source,
+        broker_account_id=body.broker_account_id,
+        refresh_seconds=max(5, int(body.refresh_seconds)),
+        ignore_market_hours=body.ignore_market_hours,
+        auto=body.auto,
+    )
+    return start_deployment(req, db, loader, avail).snapshot()
+
+
+@router.post("/options/monthly-butterfly/deploy")
+async def monthly_butterfly_deploy(
+    body: MonthlyButterflyDeploy,
+    db: Session = Depends(get_db),
+    loader: PriceLoader = Depends(get_price_loader),
+    avail: set[str] = Depends(get_available_symbols),
+) -> dict:
+    """Deploy the monthly ATM butterfly (monthly_butterfly)."""
+    if body.quote_source == "cache":
+        raise HTTPException(
+            status_code=422,
+            detail="the ATM body and both wings are read off the LIVE chain — deploy with a "
+            "broker quote source (zerodha)",
+        )
+    if body.side.lower() not in ("ce", "pe"):
+        raise HTTPException(status_code=422, detail="side must be 'ce' or 'pe'")
+    params = {
+        "underlying": body.underlying.upper(),
+        "sets": body.sets,
+        "margin_per_set": body.margin_per_set,
+        "side": body.side.lower(),
+        "cycle": body.cycle,
+        "wing_points": body.wing_points,
+        "body_lots": body.body_lots,
+        "wing_lots": body.wing_lots,
+        "entry_time": body.entry_time,
+        "entry_window_end": body.entry_window_end,
+        "exit_time": body.exit_time,
+        "profit_target_pct": body.profit_target_pct,
+        "stop_loss_pct": body.stop_loss_pct,
+        "force_entry": body.force_entry,
+        "profit_check": body.profit_check,
+        "stop_check": body.stop_check,
+        "pnl_basis": body.pnl_basis,
+        "exit_margin_basis": body.exit_margin_basis,
+        "min_leg_oi": body.min_leg_oi,
+        "order_protect_pct": body.order_protect_pct,
+    }
+    req = LiveStartRequest(
+        strategy_id="monthly_butterfly",
         name=body.name,
         notes=body.notes,
         instrument_class="DERIV",

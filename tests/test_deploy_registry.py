@@ -128,9 +128,6 @@ _DEPLOYS_ELSEWHERE = {
     "custom_options": "Trade → Build a position (a manual multi-leg position)",
     "donchian_strangle_monthly": "Trade → Screener (the basket comes from a scan)",
     "donchian_strangle_bt": "backtest-only sibling of donchian_strangle_monthly — no live path",
-    # Backtest/replay only while the owner measures real slippage: six near-the-money fills a
-    # cycle against ~₹21k of edge, so the forward test is an execution question first.
-    "monthly_butterfly": "backtest + 1-min replay only — no deploy card until slippage is measured",
 }
 
 

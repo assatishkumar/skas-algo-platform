@@ -107,6 +107,10 @@ class LiveBroker:
         # the owner would rather skip than chase (owner call, 2026-08-24).
         protect_pct_equity: float = 1.0,
         protect_ladder: tuple[float, ...] | None = None,  # explicit override — BOTH segments
+        # NSE per-order quantity freeze, {UNDERLYING: units} (settings.freeze_quantities()).
+        # An order above it is placed as consecutive children of at most that size — see
+        # execute(). None/{} = never split (every pre-2026-09 caller and the tests).
+        freeze_qty: dict[str, int] | None = None,
         notifier=None,
         clock=None,                          # injectable for tests (datetime-like)
     ):
@@ -119,6 +123,7 @@ class LiveBroker:
         self.order_timeout_s = float(order_timeout_s)
         self.poll_interval_s = float(poll_interval_s)
         self.protect_pct = float(protect_pct)
+        self.freeze_qty = {str(k).upper(): int(v) for k, v in (freeze_qty or {}).items()}
         # Escalation ladder. ONE 3% rung is far too thin for a near-the-money option on
         # expiry day: on 2026-08-11 the 24500 PE ran 31.30 → 41.75 (+33%) during the ~20s
         # run 10's square-off was resting, so a limit 3% through a touch read seconds
@@ -211,7 +216,62 @@ class LiveBroker:
                 )
 
     # ---------------------------------------------------------------- execute
+    def _freeze_for(self, symbol: str) -> int | None:
+        """NSE's per-order quantity freeze for this contract's underlying, or None for
+        anything that is not an index option (equity has no such cap)."""
+        from skas_algo.engine.options.instrument import is_option_symbol as _is_opt
+
+        if not self.freeze_qty or not _is_opt(symbol):
+            return None
+        cap = self.freeze_qty.get(str(symbol).split("|")[0].upper())
+        return int(cap) if cap and cap > 0 else None
+
     def execute(self, order: BrokerOrder) -> Fill:
+        """Place ``order``; when it is larger than the exchange's per-order freeze, place
+        it as consecutive children of at most that size and return ONE combined fill.
+
+        The freeze is an exchange control, per ORDER — the account can hold far more, it
+        just cannot establish it in one instruction, and a 20 lot-set BANKNIFTY body
+        (1,200 units against a 600 freeze, 2026-09) would otherwise be rejected on the
+        first real order and halt the run. Children run the full single-order path each
+        (rails, touch, ladder, trace), in sequence, so a fill is booked before the next
+        child goes out. A child that fails AFTER earlier children filled is a partial —
+        the earlier fills are real and are returned, never raised away; only a first
+        child failing raises. Same semantics the single-order partial path already has."""
+        cap = self._freeze_for(order.symbol)
+        qty = int(order.quantity)
+        if cap is None or qty <= cap:
+            return self._execute_one(order)
+        parts: list[int] = []
+        left = qty
+        while left > 0:
+            parts.append(min(cap, left))
+            left -= parts[-1]
+        gid = uuid.uuid4().hex[:16]
+        self._trace(gid, "split", symbol=order.symbol, side=order.side.value, qty=qty,
+                    freeze=cap, children=len(parts))
+        fills: list[Fill] = []
+        for i, n in enumerate(parts):
+            child = BrokerOrder(symbol=order.symbol, side=order.side, quantity=n,
+                                order_type=order.order_type, price=order.price,
+                                reduce_only=bool(getattr(order, "reduce_only", False)))
+            try:
+                fills.append(self._execute_one(child))
+            except OrderExecutionError as exc:
+                if not fills:
+                    raise
+                self._trace(gid, "splitpartial", child=f"{i + 1}/{len(parts)}",
+                            filled=f"{sum(f.quantity for f in fills)}/{qty}",
+                            error=str(exc)[:200])
+                self._notify(AlertLevel.WARNING, "Partial fill (split order)",
+                             f"{order.side.value} {sum(f.quantity for f in fills)}/{qty} "
+                             f"{order.symbol}: child {i + 1} failed — {exc}")
+                break
+        fq = sum(f.quantity for f in fills)
+        avg = sum(f.quantity * f.price for f in fills) / fq
+        return Fill(order.symbol, order.side, fq, avg, broker_order_id=fills[0].broker_order_id)
+
+    def _execute_one(self, order: BrokerOrder) -> Fill:
         touch = None
         if self.touch_fn is not None:
             try:

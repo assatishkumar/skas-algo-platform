@@ -99,6 +99,13 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
         risk_free_rate: float = 0.065,
+        # How far (%) a real order may be pushed THROUGH the touch when it does not fill at
+        # the touch. The platform default (3%, SKAS_LIVE_ORDER_PROTECT_PCT) is a square-off
+        # setting: on a ₹300 body that is ₹9 a unit, ₹12,600 across a 20-set order. This
+        # entry has a five-hour window and can wait a day, so it should never chase. None =
+        # the platform default; the DEPLOY sets a tight rung. Read by the manager at
+        # LiveBroker injection — deploy-level, not hot-editable (stop + redeploy).
+        order_protect_pct: float | None = None,
         **_ignored,
     ):
         super().__init__(
@@ -127,6 +134,8 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
         self.body_lots = max(1, int(body_lots))
         self.wing_lots = max(1, int(wing_lots))
         self.exit_time = _hhmm(exit_time, time(15, 15))
+        self.order_protect_pct = (None if order_protect_pct is None
+                                  else max(0.0, float(order_protect_pct)))
         # Replay-harness sizing hint: SHORT lots per lot-set, so margin_per_lot is read as
         # the ₹ for one set's short body (the family convention).
         self.sell_lots = self.body_lots
@@ -237,10 +246,16 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
 
         body_units = float(self.sets * self.body_lots * lot)
         wing_units = float(self.sets * self.wing_lots * lot)
+        # WINGS FIRST, BODY LAST — the order is load-bearing live. The executor runs a
+        # decision's actions in sequence and a real order that fails ABANDONS the rest of
+        # the list (SliceExecutor._run raises; the manager halts). Body first would leave a
+        # naked short of body_lots × sets on a wing rejection — the one exposure this
+        # structure exists to rule out. Wings first leaves, at worst, two long options whose
+        # entire risk is the premium paid. Same cost either way when everything fills.
         legs = [
-            self._leg(exp, body, right, -1, body_units, px[body], lot),
             self._leg(exp, up, right, 1, wing_units, px[up], lot),
             self._leg(exp, dn, right, 1, wing_units, px[dn], lot),
+            self._leg(exp, body, right, -1, body_units, px[body], lot),
         ]
         self.legs = legs
         self.phase = "butterfly"  # never "strangle"/"ironfly" → base adjustments stay off
@@ -295,6 +310,15 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
             self.realized_rolls += (intr - leg["entry"]) * leg["units"] * leg["dir"]
         self.legs = [leg for leg in self.legs if ctx.lots(leg["symbol"])]
         return self.legs
+
+    def _exit_all(self, live: list[dict], reason: str) -> list[Signal]:
+        """BODY FIRST on the way out — the mirror of the entry order. Buying the short body
+        back is the leg that removes the open-ended exposure; a wing close that fails after
+        it leaves a long option, a body cover that fails after the wings are gone leaves a
+        naked short. Exits walk the full escalation ladder so a failure is rarer than on
+        entry, but the order costs nothing and decides what a failure leaves behind."""
+        ordered = sorted(live, key=lambda leg: 0 if leg["dir"] < 0 else 1)
+        return super()._exit_all(ordered, reason)
 
     # ------------------------------------------------------------ snapshot hooks
     def exit_rules(self) -> list[str]:
