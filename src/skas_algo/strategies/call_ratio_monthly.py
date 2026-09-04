@@ -34,6 +34,7 @@ from skas_algo.engine.types import Signal, SignalAction
 from ._options_common import (
     EntryVolFilterMixin,
     ExitCadenceMixin,
+    SkipReasonMixin,
     TrailingStopMixin,
     legs_mtm_pnl,
     next_monthly_expiry,
@@ -47,7 +48,8 @@ def _last_weekday_of_month(d: date, weekday: int) -> date:
     return last - timedelta(days=(last.weekday() - weekday) % 7)
 
 
-class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin, TrailingStopMixin):
+class CallRatioMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, EntryVolFilterMixin,
+                               TrailingStopMixin):
     strategy_id = "call_ratio_monthly"
     right = "CE"  # PutRatioMonthlyStrategy flips this to "PE" (the downside mirror)
     entry_reason = "call_ratio"
@@ -246,7 +248,20 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin, TrailingSt
                 m, y = 12, y - 1
         return max(anchors) if anchors else None
 
+    def _entry_wait_reason(self, today: date) -> str:
+        """The entry-day rule in words, with the NEXT entry day — the marker a flat tile
+        needs most, since by design the ratio family waits ~3 weeks of every month."""
+        if self.entry_rule == "post_expiry":
+            return (f"waiting for the session after the monthly expiry "
+                    f"(entry window {self.entry_window_days} days)")
+        nxt = _last_weekday_of_month(today, self.entry_weekday)
+        if today >= nxt or self.last_entry_month == (today.year, today.month):
+            y, m = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
+            nxt = _last_weekday_of_month(date(y, m, 1), self.entry_weekday)
+        return f"waiting for the entry day: {nxt.isoformat()} (last {nxt.strftime('%A')} of the month)"
+
     def _mark_entered(self, today: date) -> None:
+        self._entered()
         self.last_entry_month = (today.year, today.month)
         if self.entry_rule == "post_expiry":
             self._entered_after_expiry = self._last_completed_expiry(today)
@@ -522,20 +537,21 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin, TrailingSt
             return [] if self._manual_done else self._enter_manual(ctx, chain, today)
         forced = getattr(self, "_force_pending", False)
         if not forced and not self._entry_allowed(today):
-            return []
+            return self._skip(self._entry_wait_reason(today), today)
         if not forced and not self._entry_time_ok(self._now(ctx)):
-            return []  # entry window not yet reached today (live intraday; EOD-safe)
+            # entry window not yet reached today (live intraday; EOD-safe)
+            return self._skip(f"before the {getattr(self, 'entry_time', '')} entry time", today)
         expiry = self._select_expiry(chain, today)
         spot = chain.spot(self.underlying, today)
         if expiry is None or spot is None:
-            return []
+            return self._skip("no monthly expiry / spot on the chain", today)
         # Vol-premium gate (default off): don't sell into a thin ATM-IV − HV premium. A
         # market-wide condition, so checked ONCE here (not per wing). Like min_vix/credit it
         # applies even to a forced entry — a structure that fails a risk gate stays out.
         if self.vol_premium_min > 0 and not self._vol_premium_ok(
             self.underlying, today, self._entry_atm_iv(chain, today, expiry, spot)
         ):
-            return []
+            return self._skip(f"vol premium below {self.vol_premium_min:g} pts", today)
         lot_size = lot_size_for(self.underlying, expiry, overrides=self.lot_overrides)
         base = self._capital_base(ctx)
         self._entry_capital_base = base  # credit gates scale with the same base as the lots
@@ -556,7 +572,11 @@ class CallRatioMonthlyStrategy(ExitCadenceMixin, EntryVolFilterMixin, TrailingSt
 
         sides = self._entry_sides(chain, today, expiry, spot, units, limit)
         if not sides:
-            return []  # one (or more) required side didn't qualify → skip the month
+            # one (or more) required side didn't qualify → skip the month
+            return self._skip(
+                "no side qualified: net credit outside its window "
+                f"[{self.min_credit_pct:g}%, {self.credit_debit_limit_pct:g}% of capital], "
+                "an unresolved core leg, or ATM IV under min_vix", today)
 
         self.legs = []
         signals: list[Signal] = []

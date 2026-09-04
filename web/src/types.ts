@@ -593,6 +593,9 @@ export interface LiveRunSnapshot {
   // margin ("broker") or margin_per_set × sets ("manual"); absent → margin_used is the base
   threshold_base?: number | null;
   threshold_source?: string | null;
+  // why the strategy did NOT enter on its last look (options families) — the gate that
+  // refused it and the session it was refused on; null once it holds a position
+  entry_skip?: { reason: string; day?: string | null } | null;
   strategy_pnl?: number | null; // the P&L measure the strategy's exit checks compare (decision-entry basis)
   exit_rules?: string[] | null; // human-readable exit triggers (spot levels, %-targets, …)
   // live controls + exclusion editing

@@ -884,7 +884,10 @@ theme. All data goes through `api/client.ts` (`/api/v1`) plus a live WebSocket f
   (override / manual-order), Exit-all, **Go LIVE**, **Acknowledge** an order halt,
   Reconnect-quotes, quote-source switch, Stop/Archive/Delete). Panels: option metrics
   (Sensibull-style max P/L, breakevens, POP, target/stop), the live payoff chart, greeks with
-  history, and executed-trades tables.
+  history, and executed-trades tables. A FLAT options run says **why** it did not enter on
+  its last look — "Cycle skipped · waiting for the entry day: 2026-09-29 (last Tuesday of
+  the month)" / "…premium hunt missed…" / "…did not price…" — from `SkipReasonMixin`
+  (snapshot `entry_skip`, 2026-09-04), instead of a bare "No open positions".
 - **Basket monitor** (`/live/:id`) — the rich Donchian deployment view: hero KPIs, an aggregate
   expiry payoff, the index hedge, a portfolio-stop gauge, and per-name cards → a drawer with
   each leg's ITM/OTM/flip state, the flip timeline, and a per-name payoff.

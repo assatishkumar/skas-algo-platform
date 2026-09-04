@@ -637,6 +637,10 @@ class LiveSession:
             # Human-readable exit criteria the strategy will act on (spot levels, %-targets,
             # per-leg / calendar exits) — surfaced so the live card shows WHY a run would exit.
             "exit_rules": self._exit_rules(),
+            # WHY the strategy did not enter on its last look — {reason, day}, from
+            # SkipReasonMixin. Two paper ratio runs sat flat for two weeks with nothing in
+            # the log or on the tile to say which gate had refused them (owner, 2026-09-04).
+            "entry_skip": getattr(self.strategy, "last_skip", None),
             # None unless the strategy has the iron-fly adjustment (delta_neutral / iron_fly) —
             # lets the live UI show + toggle it.
             "ironfly_adjust": getattr(getattr(self, "strategy", None), "ironfly_adjust", None),

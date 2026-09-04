@@ -61,6 +61,20 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   rather MISS than chase. **An unfilled entry still HALTS the run** (owner call: intervention
   is wanted; do not quietly retry). Coverage: `test_an_equity_entry_crosses_one_percent_*`,
   `test_an_option_entry_still_crosses_three_percent` in tests/test_live_broker.py.
+- **A refused entry must say why (`SkipReasonMixin`, 2026-09-04).** Every option
+  strategy's entry path is a chain of silent `return []`s — entry day, entry window, a
+  chain that did not price, a credit outside its window, a premium hunt that missed. All
+  correct, all invisible: two paper ratio runs sat flat 08-20 → 09-04 with nothing in the
+  log or on the tile, and the owner read it as "didn't take off" (they were waiting for the
+  last-Tuesday entry day, and had been refused by a gate in their August window). Use
+  `self._skip("reason", today)` in place of a bare `return []` on ANY entry refusal and
+  `self._entered()` when legs land; the snapshot carries `entry_skip` and the Live tile
+  renders "Cycle skipped · reason · day" while the run is flat. Wired into the ratio base
+  (batman/call/put/hni), the delta base, fair_value_calendar and monthly_butterfly; a
+  new option strategy inherits the mixin and follows the same rule. In-memory only.
+  Related: a FRESH monthly_butterfly run waits for the current expiry to pass (it marks
+  it spent on first sight) — un-forced it used to open a three-week fly at 09:30 the next
+  morning; force (deploy toggle / tile button) is the deliberate way in.
 - **NSE's per-ORDER quantity freeze is an exchange control, and LiveBroker splits for it
   (2026-09-04).** BANKNIFTY 600 units / NIFTY 1,800 from the 2026-09-01 circular; it is
   re-derived several times a year and the Kite instruments dump does NOT carry it, so it

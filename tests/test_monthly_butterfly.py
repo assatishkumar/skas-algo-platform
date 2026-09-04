@@ -292,3 +292,24 @@ def test_a_fresh_run_waits_for_the_current_expiry_to_pass_unless_forced():
     assert tick(b, bctx, datetime(2026, 8, 12, 11, 0)) == []
     assert "ATM" in b.request_force_entry()
     assert len(tick(b, bctx, datetime(2026, 8, 12, 11, 1))) == 3
+
+
+def test_a_refused_entry_says_why_and_the_reason_clears_on_entry():
+    """Every entry path was a chain of silent `return []`s; two paper ratio runs sat flat for
+    two weeks looking broken when they were waiting for their entry day (owner, 2026-09-04).
+    Each refusal now records WHY, the snapshot carries it as `entry_skip`, and the tile
+    shows it while the run is flat."""
+    fresh, ctx = setup(primed=False)
+    tick(fresh, ctx, datetime(2026, 8, 12, 11, 0))
+    assert "waiting for 2026-08-25" in fresh.last_skip["reason"] and fresh.last_skip["day"] == "2026-08-12"
+    # a wing that does not price names the strike
+    st, ctx2 = setup(aug=chain(drop={25_100.0}))
+    tick(st, ctx2, datetime(2026, 7, 29, 9, 20))
+    assert "25100" in st.last_skip["reason"] and "did not price" in st.last_skip["reason"]
+    # outside the window
+    st3, ctx3 = setup()
+    tick(st3, ctx3, datetime(2026, 7, 29, 8, 0))
+    assert "entry window" in st3.last_skip["reason"]
+    # …and a successful entry clears it
+    tick(st3, ctx3, datetime(2026, 7, 29, 9, 20))
+    assert st3.legs and st3.last_skip is None

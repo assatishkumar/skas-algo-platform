@@ -206,7 +206,8 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
                 self.force_pending = False
             return got
         if not (self.entry_time <= now.time() <= self.entry_window_end):
-            return []
+            return self._skip(f"outside the entry window {self.entry_time:%H:%M}–"
+                              f"{self.entry_window_end:%H:%M}", today)
         return self._try_enter(ctx, now, today)
 
     # ----------------------------------------------------------------- entry
@@ -225,8 +226,10 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
         # For the monthly cadence _current_monthly returns THAT date and this blocks it; for
         # the weekly cadence the next expiry is already ahead, so ``done_expiry`` does the
         # same job one line down.
-        if exp is None or exp <= today:
-            return []
+        if exp is None:
+            return self._skip("no expiry listed on the chain", today)
+        if exp <= today:
+            return self._skip(f"expiry day {exp.isoformat()} — the next cycle opens the session after", today)
         if not force and self.done_expiry is None:
             # A FRESH run (deploy or backtest start) mid-cycle: the spec's entry is the
             # session after an expiry, and this one has not seen one yet. Mark the current
@@ -235,30 +238,34 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
             # tell apart from the real cadence. Force (the deploy toggle or the tile button)
             # is the deliberate way to open a cycle now.
             self.done_expiry = exp.isoformat()
-            return []
+            return self._skip(f"fresh run: waiting for {exp.isoformat()} to pass "
+                              "(force entry to open now)", today)
         if not force and self.done_expiry:
             if self.done_expiry == exp.isoformat():
-                return []  # one cycle per expiry, however the last one ended
+                return self._skip(f"done for the {exp.isoformat()} expiry — next cycle opens "
+                                  "the session after it", today)
             if today <= date.fromisoformat(self.done_expiry):
-                return []  # the session the last cycle expired on is not a new entry day
+                return self._skip("the session the last cycle expired on is not an entry day", today)
 
         spot = self._index_spot(ctx)
         rows = self._chain_rows(ctx, exp.isoformat())
         if spot is None or not rows:
-            return []
+            return self._skip("no index spot / chain rows for the expiry", today)
         body = min(rows, key=lambda k: abs(k - spot))
         up, dn = body + self.wing_points, body - self.wing_points
         right = self.side.upper()
         cells = {k: (rows.get(k) or {}).get(self.side) for k in (body, up, dn)}
         px = {k: self._ltp(c) for k, c in cells.items()}
         if any(v is None for v in px.values()):
-            return []  # a wing didn't price today → retry, never a partial butterfly
+            miss = [f"{k:.0f}" for k, v in px.items() if v is None]
+            # a wing didn't price today → retry, never a partial butterfly
+            return self._skip(f"{right} {', '.join(miss)} did not price — retry", today)
         if any(not self._oi_ok(cells[k]) for k in cells):
-            return []
+            return self._skip(f"a leg's open interest is under min_leg_oi={self.min_leg_oi}", today)
         try:
             lot = lot_size_for(self.underlying, exp, overrides=self.lot_overrides)
         except KeyError:
-            return []
+            return self._skip(f"no lot size known for {self.underlying} {exp.isoformat()}", today)
 
         body_units = float(self.sets * self.body_lots * lot)
         wing_units = float(self.sets * self.wing_lots * lot)
@@ -274,6 +281,7 @@ class MonthlyButterflyStrategy(DeltaNeutralMonthlyStrategy):
             self._leg(exp, body, right, -1, body_units, px[body], lot),
         ]
         self.legs = legs
+        self._entered()
         self.phase = "butterfly"  # never "strangle"/"ironfly" → base adjustments stay off
         self.cycle_expiry = exp.isoformat()
         self.entry_spot = round(spot, 2)

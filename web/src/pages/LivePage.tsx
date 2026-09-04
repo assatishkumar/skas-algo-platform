@@ -216,6 +216,21 @@ function SignalsPanel({ runId, version, supertrend = false }: { runId: number; v
   );
 }
 
+/** WHY a flat options run did not enter on its last look — the gate that refused it and the
+ *  session it happened on. Every entry path is a chain of silent early returns, and two
+ *  paper ratio runs sat flat for two weeks looking broken when they were simply waiting for
+ *  their entry day (owner, 2026-09-04). Renders nothing while the run holds a position. */
+function EntrySkipNote({ skip }: { skip?: { reason: string; day?: string | null } | null }) {
+  if (!skip?.reason) return null;
+  return (
+    <div className="mt-1.5 inline-flex flex-wrap items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+      <span className="font-semibold">Cycle skipped</span>
+      <span>· {skip.reason}</span>
+      {skip.day && <span className="opacity-70">· {skip.day}</span>}
+    </div>
+  );
+}
+
 function useLiveFeed() {
   const [snapshots, setSnapshots] = useState<Record<number, LiveRunSnapshot>>({});
   const [trades, setTrades] = useState<(LiveTradeEvent & { run_id: number })[]>([]);
@@ -790,7 +805,10 @@ function RunCard({
           {run.positions?.length ? (
             <PositionsGreeksTable run={run} />
           ) : (
-            <div className="text-[var(--muted)] text-sm mt-3">No open positions.</div>
+            <div className="text-[var(--muted)] text-sm mt-3">
+              No open positions.
+              <EntrySkipNote skip={run.entry_skip} />
+            </div>
           )}
           {run.positions?.length ? (
             <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
@@ -907,7 +925,10 @@ function RunCard({
           </table>
         </div>
       ) : (
-        <div className="text-slate-500 text-sm mt-3">No open positions.</div>
+        <div className="text-slate-500 text-sm mt-3">
+          No open positions.
+          <EntrySkipNote skip={run.entry_skip} />
+        </div>
       )}
 
       {/* The FUNDING LEDGER. This strategy's whole behaviour is "buy from settled cash, sell

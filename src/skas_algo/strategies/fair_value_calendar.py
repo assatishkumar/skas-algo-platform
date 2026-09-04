@@ -243,7 +243,7 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
         if not (self.entry_time <= now.time() <= self.entry_window_end):
             return []
         if self.entered_month == today.strftime("%Y-%m"):
-            return []  # one cycle per calendar month (owner: done for the month)
+            return self._skip("done for this month (one cycle per calendar month)", today)
         return self._try_enter(ctx, now, today)
 
     # ----------------------------------------------------------------- entry
@@ -288,14 +288,14 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
             return []
         spot = self._index_spot(ctx)
         if spot is None:
-            return []
+            return self._skip("no index spot", today)
         sold_e, buy_e = self._pick_expiries(ctx, today)
         if sold_e is None or buy_e is None:
-            return []
+            return self._skip(f"no sold weekly ≥{self.min_sold_dte} DTE with a monthly beyond it", today)
         rows_sold = self._chain_rows(ctx, sold_e.isoformat())
         rows_buy = self._chain_rows(ctx, buy_e.isoformat())
         if rows_sold is None or rows_buy is None:
-            return []
+            return self._skip("chain did not price (sold or buy expiry)", today)
         try:
             sold_lot = lot_size_for(self.underlying, sold_e, overrides=self.lot_overrides)
             buy_lot = lot_size_for(self.underlying, buy_e, overrides=self.lot_overrides)
@@ -313,13 +313,19 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
             s2 = self._hunt_premium(rows_sold, side, self.sell_premium_2 * scale)
             b = self._hunt_premium(rows_buy, side, self.buy_premium * scale)
             if s1 is None or s2 is None or b is None:
-                return []  # a leg didn't price today → retry tomorrow
+                miss = [n for n, v in (("sell ~%g" % (self.sell_premium_1 * scale), s1),
+                                       ("sell ~%g" % (self.sell_premium_2 * scale), s2),
+                                       ("buy ~%g" % (self.buy_premium * scale), b)) if v is None]
+                return self._skip(f"{right} premium hunt missed {', '.join(miss)} "
+                                  f"(±{self.premium_tolerance_pct:g}%) — retry tomorrow", today)
             if s1[0] == s2[0]:
-                return []  # the two sells must sit on distinct strikes
+                return self._skip(f"{right} sells landed on the same strike {s1[0]:.0f}", today)
             # The 900-point rule: dead zone (buy strike ↔ furthest sell) ≤ 2× the
             # expected monthly rollover income, era-scaled with the premiums.
             if max(abs(s1[0] - b[0]), abs(s2[0] - b[0])) > gap_cap:
-                return []
+                return self._skip(f"gap rule: buy {b[0]:.0f} to furthest sell "
+                                  f"{max(abs(s1[0] - b[0]), abs(s2[0] - b[0])):.0f} pts > "
+                                  f"{gap_cap:.0f} cap", today)
             s_units = float(self.sets * sold_lot)
             b_units = float(self.sets * self.buy_lots_per_set * buy_lot)
             legs += [
@@ -329,6 +335,7 @@ class FairValueCalendarStrategy(DeltaNeutralMonthlyStrategy):
             ]
 
         self.legs = legs
+        self._entered()
         self.phase = "calendar"  # never "strangle"/"ironfly" → base adjustments stay off
         self.sold_expiry = sold_e.isoformat()
         self.buy_expiry = buy_e.isoformat()

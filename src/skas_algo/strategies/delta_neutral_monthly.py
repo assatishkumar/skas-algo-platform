@@ -39,7 +39,9 @@ from skas_algo.engine.options.contract_specs import lot_size_for, selection_step
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import ExitCadenceMixin, TrailingStopMixin, bad_close, legs_mtm_pnl
+from ._options_common import (
+    ExitCadenceMixin, SkipReasonMixin, TrailingStopMixin, bad_close, legs_mtm_pnl,
+)
 
 # NSE / BSE derivatives open at 09:15 IST — the reference for ``adjust_after_open_min`` (no
 # adjustment decision inside the first N minutes, when deep-OTM wing strikes are still untraded).
@@ -78,7 +80,7 @@ def _hhmm(s: str, fallback: time) -> time:
         return fallback
 
 
-class DeltaNeutralMonthlyStrategy(ExitCadenceMixin, TrailingStopMixin):
+class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingStopMixin):
     strategy_id = "delta_neutral_monthly"
     intraday = True  # ticks every refresh; entry window / adjustments / exits self-gate
 

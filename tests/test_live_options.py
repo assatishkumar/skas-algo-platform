@@ -370,3 +370,17 @@ def test_correcting_units_is_capped_and_idempotent():
     assert sess.release_broker_holding(ts, "LIQUIDCASE", 0) == 0.0        # no-op, no raise
     with pytest.raises(ValueError):
         sess.release_broker_holding(ts, "LIQUIDCASE", 5)                  # nothing held now
+
+
+def test_the_snapshot_carries_why_a_flat_run_did_not_enter():
+    """`entry_skip` = the strategy's last refused-entry reason (SkipReasonMixin), so the Live
+    tile can say 'Cycle skipped · <why>' instead of a bare 'No open positions'."""
+    cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
+    sd = FakeLiveSD(cal)
+    sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
+    snap = sess.snapshot()
+    assert "entry_skip" in snap                         # always present
+    strat.last_skip = {"reason": "waiting for the entry day: 2026-01-27", "day": "2026-01-05"}
+    assert sess.snapshot()["entry_skip"]["reason"].startswith("waiting")
+    strat.last_skip = None                              # …and clears once it has entered
+    assert sess.snapshot()["entry_skip"] is None

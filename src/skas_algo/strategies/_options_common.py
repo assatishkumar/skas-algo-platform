@@ -213,3 +213,26 @@ def next_monthly_expiry(chain, underlying: str, today: date, min_dte: int,
         return sum(r.oi for r in chain.chain(underlying, today, exp) if r.right == right)
 
     return max(cands, key=total_oi)
+
+
+class SkipReasonMixin:
+    """Remember WHY the last entry attempt was refused, so the Live tile can say so.
+
+    Every option strategy's entry path is a chain of silent ``return []``s — the entry
+    day, the entry window, a chain that did not price, a credit outside its window, a
+    premium hunt that missed. All correct, all invisible: two paper ratio runs sat flat
+    for two weeks (2026-08-20 → 09-04) with nothing in the log or on the tile to say
+    which gate had refused them, and the owner reasonably read it as "didn't take off".
+
+    ``_skip(reason, day)`` records and returns ``[]`` so it drops into any ``return []``
+    unchanged; ``_entered()`` clears it. The snapshot carries it as ``entry_skip`` and the
+    tile renders it while the run is flat. In-memory only — the next slice re-records."""
+
+    last_skip: dict | None = None
+
+    def _skip(self, reason: str, day: date | None = None) -> list:
+        self.last_skip = {"reason": str(reason), "day": day.isoformat() if day else None}
+        return []
+
+    def _entered(self) -> None:
+        self.last_skip = None
