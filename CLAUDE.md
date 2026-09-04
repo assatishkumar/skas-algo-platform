@@ -1077,7 +1077,16 @@ weekly / monthly / positional), a summary panel, and only that strategy's own kn
   `pnl + realized_cum`. The tile's sparkline is the **CYCLE's** P&L (overall − the cycle's
   `realized_before`, from `tile["cycle"]` = `live_cycles.cycle_info` over the transaction
   log: entry stamp, the `underlying_spot` stamped on the entry fill, the last closed cycle);
-  the expanded card's P&L panel is the overall one. Every option trade event already carried
+  the expanded view's history card is the cycle's too. **The run's whole life is
+  `GET /live/{id}/pnl-history`** (`live_cycles.daily_pnl`, the "Overall P&L · since deploy"
+  card under the KPI band): one row per IST day — realized by day off the transaction log
+  (gross, the KPI's basis) + the day's LAST greeks sample as the closing unrealized, **zeroed
+  when the book ended the day flat** (samples stop once a book is flat, so an intraday run's
+  last sample is the moment BEFORE its square-off — carrying it counted run 248's first day
+  twice); today's row is replaced client-side by the live realized+open so the right edge
+  equals the KPI. NOT the daily equity `history`: it books charges and short premium
+  differently from the KPIs, and its last point disagreed with the number beside the chart
+  by ₹8,606 on run 248. Every option trade event already carried
   `underlying_spot` (`manager._tag_underlying_spot`) — that is what "entered 23,922.85" on
   the tile reads. `GET /live/indices` (declared ABOVE `/{run_id}` — FastAPI would 422
   "indices" as an int) is the header strip: one Kite `day_quotes` per 10s off any logged-in

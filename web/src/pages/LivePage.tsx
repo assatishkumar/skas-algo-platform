@@ -13,6 +13,7 @@ import OptionMetricsPanel from "../components/OptionMetricsPanel";
 // Redesigned options deployment-detail (design handoff): grouped KPI band, exit callout,
 // full-greeks positions table, and a 3-panel history — for single-underlying option books.
 import OptionKpiBand from "../components/OptionKpiBand";
+import LiveOverallPnlCard from "../components/LiveOverallPnlCard";
 import ExitCriteriaCallout from "../components/ExitCriteriaCallout";
 import PositionsGreeksTable from "../components/PositionsGreeksTable";
 import GreeksHistoryCard from "../components/GreeksHistoryCard";
@@ -799,6 +800,9 @@ function RunCard({
            3-panel history. Cycle P&L (LiveCyclePanel) + Trades (LiveTradesPanel) retained. */
         <>
           <OptionKpiBand run={run} version={version} />
+          {/* The deployment's whole life on dated axes, right under the KPIs; the tile's
+              sparkline outside is the current cycle only. */}
+          <LiveOverallPnlCard run={run} />
           <ExitCriteriaCallout run={run} />
           {/* weekly_intraday_straddle: signal monitor — today's combined premium vs its VWAP,
               prior-day low/close reference levels (the entry gate), per-leg VWAP chips. */}

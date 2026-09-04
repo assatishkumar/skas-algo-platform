@@ -34,6 +34,7 @@ import type {
   OptionsTradeDeploy,
   GreeksHistory,
   LiveIndices,
+  LivePnlHistory,
   RunAnalysis,
   StockSeries,
   LiveControlsInput,
@@ -435,6 +436,7 @@ export const api = {
   liveGreeksHistory: (id: number, limit = 1000) =>
     request<GreeksHistory>(`/live/${id}/greeks-history?limit=${limit}`),
   liveIndices: () => request<LiveIndices>("/live/indices"),
+  livePnlHistory: (id: number) => request<LivePnlHistory>(`/live/${id}/pnl-history`),
   liveTrades: (id: number) => request<{ run_id: number; trades: Trade[] }>(`/live/${id}/trades`),
   liveDeployments: (status?: string) =>
     request<Deployment[]>(`/live/deployments${status ? `?status=${status}` : ""}`),

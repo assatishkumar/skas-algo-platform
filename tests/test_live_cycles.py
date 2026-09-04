@@ -108,3 +108,26 @@ def test_index_rows_carry_a_day_change_and_skip_an_index_with_no_print():
     assert [r["name"] for r in rows] == ["NIFTY", "BANKNIFTY"]
     assert rows[0]["change"] == 100.0 and rows[0]["change_pct"] == 0.42
     assert rows[1]["change"] is None and rows[1]["change_pct"] is None
+
+
+def test_daily_pnl_rows_days_by_ist_and_carries_the_days_last_unrealized():
+    from skas_algo.services.live_cycles import daily_pnl
+
+    log = [
+        _t(1, 9, 20, CE, "SHORT", 30),
+        _t(1, 15, 20, CE, "COVER", 30, profit=1500.0),
+        {"date": "2026-09-02T09:30:00+05:30", "ticker": CE, "action": "SHORT", "units": 30, "charge": 20.0},
+        _t(3, 15, 20, CE, "COVER", 30, profit=-700.0),
+        # 03:40 UTC on the 4th is 09:10 IST on the 4th; a stamp before 18:30 UTC stays on its day
+        {"date": "2026-09-04T03:40:00+00:00", "ticker": UP, "action": "BUY", "units": 30, "charge": 5.0},
+    ]
+    # The 1st and 3rd close flat: a stale sample there (the moment before the square-off, which
+    # is the last one an intraday run records) must NOT be carried — that counts the day twice.
+    rows = daily_pnl(log, {"2026-09-01": 1490.0, "2026-09-02": -400.0, "2026-09-03": -690.0,
+                           "2026-09-04": 250.0})
+    assert [r["date"] for r in rows] == ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"]
+    assert rows[0]["overall"] == 1500.0 and rows[0]["closes"] == 1
+    assert rows[1] == {"date": "2026-09-02", "realized_day": 0.0, "charges_day": 20.0, "closes": 0,
+                       "realized_cum": 1500.0, "unrealized_eod": -400.0, "overall": 1100.0}
+    assert rows[2]["realized_cum"] == 800.0 and rows[2]["overall"] == 800.0
+    assert rows[3]["overall"] == 1050.0 and rows[3]["charges_day"] == 5.0

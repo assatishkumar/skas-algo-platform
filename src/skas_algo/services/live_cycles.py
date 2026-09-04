@@ -131,3 +131,58 @@ def realized_cumulative(txns: list[dict], stamps: list[datetime]) -> list[float]
             j += 1
         out.append(round(acc, 2))
     return out
+
+
+def daily_pnl(txns: list[dict], unrealized_eod: dict[str, float] | None = None) -> list[dict]:
+    """One row per IST trading day the run touched: realized (gross — the Live KPI's basis)
+    and charges booked that day, the running realized total, the day's LAST sampled
+    unrealized (``unrealized_eod``, from the greeks history; 0 = flat at the close), and
+    ``overall`` = realized_cum + that. Days the book was merely HELD through (samples, no
+    fills) are rows too, so a positional run's line does not jump across them."""
+    realized: dict[str, float] = {}
+    charges: dict[str, float] = {}
+    closes: dict[str, int] = {}
+    # Whether the book was FLAT after the day's last fill. The greeks samples stop once a book
+    # is flat, so an intraday run's last sample of the day is the moment BEFORE its square-off
+    # — carrying that unrealized past the close would count the day's P&L twice (run 248,
+    # 2026-08-07: realized 6,796 + a stale 6,815 "open"). A flat close is 0, whatever the sample.
+    held: dict[str, int] = {}
+    flat_after: dict[str, bool] = {}
+    stamped = sorted(((d, t) for t in txns if (d := _as_dt(t.get("date")))), key=lambda e: e[0])
+    for d, t in stamped:
+        key = d.astimezone(IST).date().isoformat()
+        realized[key] = realized.get(key, 0.0) + float(t.get("profit") or 0.0)
+        charges[key] = charges.get(key, 0.0) + float(t.get("charge") or 0.0)
+        act = str(t.get("action") or "").upper()
+        if act in ("SELL", "COVER", "SETTLE"):
+            closes[key] = closes.get(key, 0) + 1
+        ticker = str(t.get("ticker") or "")
+        units = int(t.get("units") or 0)
+        cur = held.get(ticker, 0)
+        if act in _OPENS:
+            held[ticker] = cur + _OPENS[act] * units
+        elif act in _CLOSES:
+            held[ticker] = cur + _CLOSES[act] * units
+        elif act == "SETTLE" and cur:
+            held[ticker] = cur - (units if cur > 0 else -units)
+        if held.get(ticker) == 0:
+            held.pop(ticker, None)
+        flat_after[key] = not any(held.values())
+    eod = dict(unrealized_eod or {})
+    out: list[dict] = []
+    cum = 0.0
+    flat = True  # a day with samples but no fills inherits the last fill's state
+    for key in sorted(set(realized) | set(eod)):
+        cum += realized.get(key, 0.0)
+        flat = flat_after.get(key, flat)
+        u = 0.0 if flat else float(eod.get(key) or 0.0)
+        out.append({
+            "date": key,
+            "realized_day": round(realized.get(key, 0.0), 2),
+            "charges_day": round(charges.get(key, 0.0), 2),
+            "closes": closes.get(key, 0),
+            "realized_cum": round(cum, 2),
+            "unrealized_eod": round(u, 2),
+            "overall": round(cum + u, 2),
+        })
+    return out

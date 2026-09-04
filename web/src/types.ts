@@ -1437,6 +1437,24 @@ export interface DeploymentCycle {
   } | null;
 }
 
+/** One trading day of a deployment's overall progress (GET /live/{id}/pnl-history). */
+export interface LivePnlDay {
+  date: string; // IST calendar day
+  realized_day: number; // gross realized booked that day (the tile's Realized basis)
+  charges_day: number;
+  closes: number; // exits booked that day
+  realized_cum: number;
+  unrealized_eod: number; // the day's last sampled unrealized (0 = flat at the close)
+  overall: number; // realized_cum + unrealized_eod
+}
+
+export interface LivePnlHistory {
+  run_id: number;
+  started_at: string | null;
+  days: LivePnlDay[];
+  running: boolean;
+}
+
 export interface LiveIndexQuote {
   name: string; // NIFTY | BANKNIFTY | SENSEX
   last: number;

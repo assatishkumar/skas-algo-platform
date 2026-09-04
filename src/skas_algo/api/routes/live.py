@@ -618,6 +618,52 @@ async def greeks_history(run_id: int, limit: int = 1000, db: Session = Depends(g
     return {"run_id": run_id, "points": points}
 
 
+@router.get("/{run_id}/pnl-history")
+def pnl_history(run_id: int, db: Session = Depends(get_db)) -> dict:
+    """The deployment's OVERALL progress, one point per trading day since deploy — the
+    expanded card's dated chart. Realized by day comes from the transaction log (gross, the
+    same basis as the tile's Realized KPI); each day's closing unrealized is that day's LAST
+    greeks sample (0 when the book was flat at the close); ``overall`` is the sum. The
+    daily equity ``history`` was NOT used: it books charges and short premium differently
+    from the KPIs, so its last point would disagree with the number beside the chart."""
+    from datetime import timedelta, timezone as _tz
+
+    from sqlalchemy import func
+
+    from skas_algo.services.live_cycles import IST, daily_pnl
+
+    run = db.get(AlgoRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    live = manager.get(run_id)
+    if live is not None:
+        txns = list(live.session.transactions)
+    else:
+        txns = list((run.state or {}).get("transactions") or [])
+    # The last sample of each IST day: ids are monotonic with ts, so max(id) per day is it.
+    day_expr = func.date(GreeksSnapshot.ts, "+330 minutes")
+    last_ids = (
+        select(func.max(GreeksSnapshot.id))
+        .where(GreeksSnapshot.algo_run_id == run_id)
+        .group_by(day_expr)
+    )
+    eod: dict[str, float] = {}
+    for ts, pnl in db.execute(
+        select(GreeksSnapshot.ts, GreeksSnapshot.pnl).where(GreeksSnapshot.id.in_(last_ids))
+    ):
+        if ts is None:
+            continue
+        utc = ts if ts.tzinfo else ts.replace(tzinfo=_tz.utc)
+        eod[(utc + timedelta(minutes=330)).date().isoformat()] = float(pnl or 0.0)
+    del IST  # the offset above is the same +05:30; the name is imported for the reader
+    return {
+        "run_id": run_id,
+        "started_at": iso_utc(run.started_at),
+        "days": daily_pnl(txns, eod),
+        "running": live is not None,
+    }
+
+
 def _orders_to_trades(orders: list[Order]) -> list[dict]:
     """Reconstruct trades (entry legs + exits with per-leg P&L) from the persisted Order rows —
     the durable audit trail — so a closed cycle survives restarts even before it's finalized.

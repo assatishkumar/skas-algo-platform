@@ -909,9 +909,12 @@ theme. All data goes through `api/client.ts` (`/api/v1`) plus a live WebSocket f
   `underlying_spot` stamped on the entry fill, read off the transaction log by
   `services/live_cycles`); and a sparkline of the **CYCLE's P&L** since that entry (the
   last closed cycle while flat), labelled with its stamp and current value. The run's
-  **overall** P&L chart moved inside the expanded card ("Overall P&L · realized + open"):
-  the sampled history is unrealized-only, and the endpoint now adds the realized total
-  booked up to each sample so the panel can show the whole number.
+  **overall** progress is the "Overall P&L · since deploy" card directly under the KPI
+  band of the expanded view: one point per trading day since deploy on dated axes (the
+  line = realized to date + the day's closing open book; bars = each day's realized;
+  today's point is live, so the right edge equals the KPI), with days up/down, best and
+  worst day, max drawdown and charges in the header. The history card at the bottom stays
+  cycle-scoped (its P&L panel now includes what the cycle has realized so far).
 - **Basket monitor** (`/live/:id`) — the rich Donchian deployment view: hero KPIs, an aggregate
   expiry payoff, the index hedge, a portfolio-stop gauge, and per-name cards → a drawer with
   each leg's ITM/OTM/flip state, the flip timeline, and a per-name payoff.
