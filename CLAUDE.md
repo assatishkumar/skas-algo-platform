@@ -680,6 +680,36 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   stored reports without them — `get_run` now derives the missing tables from the stored
   curve at READ time, `_backfill_period_tables` in `api/routes/backtest.py`, never
   mutating the row).
+- **THE OPENING FIVE MINUTES ARE HELD — no option strategy books a profit, a stop, a
+  calendar exit or a roll before 09:20 (OWNER RULE, 2026-09-06).** At 09:15 an index
+  option's spread is 3-7% of mid (≈0.3% by 09:30) and many LTPs are still yesterday's
+  close, so a %-rule evaluated there is measured on prices that mean nothing — and the
+  exit pays that spread on the way out (paper run 30 "booked a +3% target" that realised
+  −₹9,765 doing exactly this). `OpenSettleGuard` (`_options_common`, `EXIT_NOT_BEFORE`
+  = 09:20) is the rail: `ExitCadenceMixin._due` returns False before it **without
+  stamping `_last_check`**, so the window is NOT consumed and the first check at 09:20
+  fires at once instead of waiting out an interval it never used. That one gate covers
+  every cadence-sampled decision on ~15 strategies (target/stop/trail/adjust/time);
+  `custom_options` and `donchian_strangle_monthly` exit OUTSIDE the mixin (leg
+  target/stop, spot bands, breach flips) and carry the guard in their own `_manage`,
+  after the one-shot `done` housekeeping. NOT gated, deliberately: **hard time exits**
+  (all 15:00-15:25, so the guard cannot reach them — incl. straddle_btst's 09:20
+  `btst_exit`, which is why a held BTST stop costs nothing), **entries** (the intraday
+  decks enter 09:16-09:20 on purpose), and **manual** flatten / Exit-all /
+  adopt-broker-close, which never run through a strategy — the owner's hand is the
+  escape hatch. `exit_not_before` is a CLASS attribute, not a ctor param on fifteen
+  strategies: it is one uniform rail the owner asked for on every option book, running
+  deploys included (a deliberate departure from §1's default-to-old-behaviour rule —
+  the deploys already running are the ones exposed on Monday morning); a malformed
+  value falls back to 09:20, never wider. It applies in **BACKTEST too** — the 1-min
+  replay ticks from 09:15 and a live-only rail would break §3 — so intraday-basis
+  replays differ slightly from ones run before 2026-09-06; the EOD engine decides at
+  15:20 and never sees it. Accepted trade-off: a genuine gap can widen a loss in those
+  five minutes, but the stop that would have fired is reading fiction. Coverage: the
+  opening-window block in `tests/test_exit_cadence.py`.
+  FOOTGUN this created: `inspect.getdoc` walks the MRO, so a strategy with NO docstring
+  of its own started exporting the MIXIN's — `services/vault_export` now reads
+  `cls.__dict__["__doc__"]` and falls back to the MODULE docstring as before.
 - **Two-cadence model + ALL index options on the store (2026-07-18, owner design):**
   every options strategy samples its PROFIT/ADJUST decision on `profit_check` and its
   STOP/EXIT on `stop_check` (tick/1..60min/eod@`eod_time`) via `ExitCadenceMixin`

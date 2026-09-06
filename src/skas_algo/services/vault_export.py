@@ -212,7 +212,11 @@ def _strategy_doc(strategy_id: str) -> tuple[str, dict]:
         cls = get_strategy(strategy_id)
     except Exception:  # pragma: no cover - unknown strategy
         return "", {}
-    doc = inspect.getdoc(cls)
+    # The class's OWN docstring, never an inherited one: `inspect.getdoc` walks the MRO, so a
+    # strategy with no docstring of its own would export a shared MIXIN's description instead
+    # of the module's (2026-09-06: donchian + custom_options started exporting OpenSettleGuard's
+    # after it was added as a base). A mixin describes a rail, never the strategy.
+    doc = inspect.cleandoc(cls.__dict__.get("__doc__") or "").strip()
     if not doc:
         mod = sys.modules.get(cls.__module__)
         doc = (mod.__doc__ or "").strip() if mod else ""

@@ -15,7 +15,61 @@ def snap(strikes: list[float], target: float) -> float | None:
     return min(strikes, key=lambda k: abs(k - target)) if strikes else None
 
 
-class ExitCadenceMixin:
+# The first minutes of the session are not a price anyone should act on. Spreads on an index
+# option run 3-7% of mid at 09:15 against ~0.3% by 09:30, many LTPs are still yesterday's
+# close, and the marks a %-rule is measured against are therefore fiction — paper run 30
+# (2026-09-04) crossed those spreads and "booked a target" on a book that was down ₹9,765.
+# OWNER RULE, 2026-09-06: no option strategy books a profit, a stop, a calendar exit or a
+# roll before this time. The trade-off is accepted deliberately: a genuine gap can widen a
+# loss in these five minutes, but the stop that would have fired is measured on prices that
+# do not mean anything yet, and the exit itself would pay the same spread. Manual exits are
+# NOT gated — the Exit-all button and "Mark closed at broker" are the owner's hand.
+EXIT_NOT_BEFORE = time(9, 20)
+
+
+class OpenSettleGuard:
+    """Holds every PRICE-DRIVEN exit decision until the open has settled (``EXIT_NOT_BEFORE``).
+
+    Gates discretionary decisions only — target, stop, trail, calendar exit, adjustment, roll.
+    A HARD time exit is never gated (they all sit at 15:00-15:25, so the guard cannot reach
+    them), an ENTRY is never gated (the intraday decks deliberately enter 09:16-09:20), and
+    neither is a manual flatten, which does not run through a strategy at all.
+
+    ``exit_not_before`` (None = the platform's 09:20) is a class attribute rather than a ctor
+    param on fifteen strategies: it is one uniform rail the owner asked for on every option
+    book, running deploys included, so there is nothing per-deploy to set. It applies in
+    BACKTEST too — the 1-min replay ticks from 09:15, and a rail that fired only in live
+    would break the mode-equivalence invariant (§3). The EOD engine decides once a day at
+    15:20 and never sees it."""
+
+    exit_not_before: str | None = None
+
+    def _now(self, ctx) -> datetime:
+        fn = getattr(ctx, "now", None)
+        if fn is not None:
+            return fn()
+        return datetime.combine(ctx.today(), time(15, 30))  # stub ctx → treat as EOD
+
+    def _open_settled(self, now: datetime) -> bool:
+        """False in the opening minutes — hold every price-driven exit until then."""
+        floor_t = EXIT_NOT_BEFORE
+        raw = getattr(self, "exit_not_before", None)
+        if raw:
+            try:
+                floor_t = time.fromisoformat(str(raw))
+            except (ValueError, TypeError):
+                floor_t = EXIT_NOT_BEFORE  # malformed → the platform default, never wider
+        try:
+            return now.time() >= floor_t
+        except AttributeError:  # pragma: no cover - a dateless stub is EOD by convention
+            return True
+
+    def _settle_phrase(self) -> str:
+        raw = getattr(self, "exit_not_before", None) or EXIT_NOT_BEFORE.strftime("%H:%M")
+        return f"never before {raw}"
+
+
+class ExitCadenceMixin(OpenSettleGuard):
     """The two-cadence decision model shared by ALL options strategies (owner design,
     2026-07-18): every strategy has a PROFIT/ADJUST cadence (`profit_check`) and a
     STOP/EXIT cadence (`stop_check`), each ∈ tick/1min/5min/15min/30min/60min/eod —
@@ -38,12 +92,6 @@ class ExitCadenceMixin:
 
     _INTERVAL_MIN = {"tick": 0, "1min": 1, "5min": 5, "15min": 15, "30min": 30, "60min": 60}
 
-    def _now(self, ctx) -> datetime:
-        fn = getattr(ctx, "now", None)
-        if fn is not None:
-            return fn()
-        return datetime.combine(ctx.today(), time(15, 30))  # stub ctx → treat as EOD
-
     def _eod_reached(self, now: datetime) -> bool:
         try:
             return now.time() >= time.fromisoformat(getattr(self, "eod_time", "15:15"))
@@ -53,6 +101,11 @@ class ExitCadenceMixin:
     def _due(self, kind: str, now: datetime) -> bool:
         """Is the ``kind`` check ("profit"/"stop"/"time", optionally ":<book>"-suffixed)
         due at ``now``? The cadence attr is looked up from the BASE kind (before ":")."""
+        # The opening minutes are held (OpenSettleGuard). Return WITHOUT stamping
+        # ``_last_check``: the window is not consumed, so the first check at 09:20 fires at
+        # once rather than waiting out a cadence interval from a slot it never got to use.
+        if not self._open_settled(now):
+            return False
         cadence = getattr(self, f"{kind.split(':', 1)[0]}_check", "eod")
         if cadence == "eod":
             return self._eod_reached(now)
@@ -79,9 +132,10 @@ class ExitCadenceMixin:
         cadence = getattr(self, f"{kind}_check", "eod")
         if cadence == "eod":
             return f"checked at EOD {getattr(self, 'eod_time', '15:15')}"
+        settle = f", {self._settle_phrase()}"
         if cadence == "tick":
-            return "checked every tick"
-        return f"checked every {cadence.replace('min', ' min')}"
+            return f"checked every tick{settle}"
+        return f"checked every {cadence.replace('min', ' min')}{settle}"
 
 
 class TrailingStopMixin:

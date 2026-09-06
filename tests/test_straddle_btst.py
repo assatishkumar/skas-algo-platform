@@ -128,9 +128,28 @@ def test_premium_target_and_stop():
     enter(st2, ctx2, datetime(2026, 7, 22, 15, 20))
     for leg in st2.legs:
         ctx2.market.prices[leg["symbol"]] = leg["entry"] * 0.6  # −40% of premium
-    ctx2._now = datetime(2026, 7, 23, 9, 16)  # before exit_time — the stop still runs
+    # Same session, before the overnight: the stop fires on the tick that crosses it.
+    ctx2._now = datetime(2026, 7, 22, 15, 24)
     sigs = st2.on_slice(ctx2)
     assert sigs and all(s.reason == "stop" for s in sigs)
+
+
+def test_the_morning_stop_waits_for_0920_and_the_hard_exit_takes_it_anyway():
+    """Owner rule 2026-09-06: no option strategy books a stop in the first five minutes. For
+    BTST that costs nothing — its own hard exit is 09:20, so a 09:16 stop only ever meant
+    selling a long straddle four minutes early into a 3-7% opening spread. The position still
+    leaves at 09:20, by the time exit, which is never cadence-gated."""
+    st = StraddleBtstStrategy(underlying="NIFTY", lots=1, stop_loss_pct=30.0)
+    ctx = FakeCtx(FakeMarket(chain()), FakeCacheChain([NEXT_EXPIRY]))
+    enter(st, ctx, datetime(2026, 7, 22, 15, 20))
+    for leg in st.legs:
+        ctx.market.prices[leg["symbol"]] = leg["entry"] * 0.6      # −40% of premium
+
+    ctx._now = datetime(2026, 7, 23, 9, 16)
+    assert st.on_slice(ctx) == []                                  # held — opening prices
+    ctx._now = datetime(2026, 7, 23, 9, 20)
+    sigs = st.on_slice(ctx)
+    assert sigs and all(s.reason == "btst_exit" for s in sigs)     # the hard exit, on time
 
 
 def test_state_round_trip():

@@ -21,10 +21,10 @@ from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import bad_close
+from ._options_common import OpenSettleGuard, bad_close
 
 
-class CustomOptionsStrategy:
+class CustomOptionsStrategy(OpenSettleGuard):
     strategy_id = "custom_options"
     intraday = True  # decide every tick (the loop already ticks DERIV; explicit for clarity)
 
@@ -134,6 +134,11 @@ class CustomOptionsStrategy:
         open_legs = self._open_legs(ctx)
         if not open_legs:
             self.done = True  # engine settled/closed everything — one-shot, no re-entry
+            return []
+        # The opening minutes are not a price to act on (OpenSettleGuard, owner rule
+        # 2026-09-06): no target, no stop, no spot-band exit until 09:20. Housekeeping above
+        # still runs — a book the engine already closed must still be marked done.
+        if not self._open_settled(self._now(ctx)):
             return []
 
         # 1) Per-leg premium target / stop.

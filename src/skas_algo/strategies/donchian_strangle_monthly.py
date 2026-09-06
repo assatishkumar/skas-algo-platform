@@ -32,13 +32,13 @@ from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import bad_close
+from ._options_common import OpenSettleGuard, bad_close
 
 _EOD_CUTOFF = time(15, 15)  # breach_basis="close" → only flip a breach at/after this IST time
 _R_FREE = 0.065             # risk-free for the 30Δ flip's implied-vol / delta calc
 
 
-class DonchianStrangleMonthlyStrategy:
+class DonchianStrangleMonthlyStrategy(OpenSettleGuard):
     strategy_id = "donchian_strangle_monthly"
     intraday = True  # tick-driven DERIV run — the portfolio stop + breach/flip checks run every refresh
 
@@ -374,6 +374,12 @@ class DonchianStrangleMonthlyStrategy:
         if not open_legs:
             self.done = True  # engine settled/closed everything — one-shot, no re-entry
             return []
+        # The opening minutes are not a price to act on (OpenSettleGuard, owner rule
+        # 2026-09-06): no target, no stop, no breach flip until 09:20. Housekeeping above
+        # still runs — a book the engine already closed must still be marked done.
+        if not self._open_settled(self._now(ctx)):
+            return []
+
         stop = self._portfolio_exit(ctx, open_legs)
         if stop:
             return stop

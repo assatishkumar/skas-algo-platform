@@ -460,11 +460,27 @@ are validated paper-first.
 
 ### 3.4 Shared strategy machinery
 
+**The opening five minutes are held (owner rule, 2026-09-06).** No option strategy books a
+profit, a stop, a calendar exit or a roll before **09:20**. At 09:15 an index option's spread
+is 3-7% of its mid (about 0.3% by 09:30) and many last-traded prices are still yesterday's
+close, so a percentage rule evaluated then is measured on a price that means nothing — and
+the exit pays that spread on the way out. A paper butterfly booked a "+3% target" that
+realised −₹9,765 doing exactly this. The rail (`OpenSettleGuard`) sits on the shared cadence
+check, so it covers every option book at once, and it holds without consuming the check's
+window — the first evaluation at 09:20 happens immediately. Four things are deliberately NOT
+held: **hard time exits** (every one sits at 15:00–15:25, and straddle_btst's own 09:20 sell
+still fires on time), **entries** (the intraday decks enter 09:16–09:20 by design), **manual**
+exits (Exit-all, Mark closed at broker — the owner's hand is the escape hatch), and the
+opening auction itself, which nothing trades into. It applies in backtest as well as live, so
+the two still agree; 1-min-replay results therefore differ slightly from runs made before this
+date, and the daily EOD engine (which decides at 15:20) is unaffected. The delta family's
+older `adjust_after_open_min` is the same idea for adjustments; this generalises it.
+
 `base.py::Strategy` (the `on_slice(ctx) → [Signal]` protocol) · `_options_common.py`
-(premium-sanity guard, nearest-strike snap, most-liquid monthly-expiry picker, plus three
-mixins: `ExitCadenceMixin` — every options strategy samples its profit/adjust decision on
-`profit_check` and its stop/exit on `stop_check`, each tick/1..60min/eod, hard time exits never
-gated; `TrailingStopMixin` — the shared ratchet/below-peak trail; `EntryVolFilterMixin` — the
+(premium-sanity guard, nearest-strike snap, most-liquid monthly-expiry picker, plus the
+mixins: `OpenSettleGuard` — the 09:20 floor above; `ExitCadenceMixin` — every options strategy
+samples its profit/adjust decision on `profit_check` and its stop/exit on `stop_check`, each
+tick/1..60min/eod, hard time exits never gated; `TrailingStopMixin` — the shared ratchet/below-peak trail; `EntryVolFilterMixin` — the
 ATM-IV−HV vol-premium entry gate any option seller can inherit) ·
 `call_ratio_monthly.py` (the ratio-family base: strike-mode resolution in points/percent/delta/
 SD, the credit-gated leg-shift search, margin-auto sizing, intraday exit cadences, force-entry,
