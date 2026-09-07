@@ -109,6 +109,7 @@ class FairValueCalendarStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrateg
         pnl_basis: str = "total",
         exit_margin_basis: str = "entry",
         min_leg_oi: int = 1,
+        mark_basis: str = "ltp",
         lot_overrides: dict | None = None,
         risk_free_rate: float = 0.065,
         max_spread_pct: float = 0.0,  # refuse to open on a leg wider than this % of mid; 0 = off
@@ -131,6 +132,7 @@ class FairValueCalendarStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrateg
             exit_margin_basis=exit_margin_basis,
             margin_per_set=margin_per_set,
             min_leg_oi=min_leg_oi,
+            mark_basis=mark_basis,
             lot_overrides=lot_overrides,
         )
         self.sets = max(1, int(sets))

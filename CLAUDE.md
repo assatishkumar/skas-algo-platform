@@ -96,6 +96,28 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   (09:30 BANKNIFTY monthly ATM ≈0.3%, the 09:15 print was 3-7%). Wired into
   monthly_butterfly + fair_value_calendar (`_spread_refusal({label: cell})` after the OI
   check); the ratio family reads a different chain shape and has not adopted it.
+- **`mark_basis` — read the %-target/stop on EXIT prices against the REAL fills (owner
+  2026-09-07).** The delta family (`DeltaNeutralMonthlyStrategy` + every subclass: iron fly,
+  butterfly, fv/volcano/double-diagonal calendars, put condor) historically recorded each
+  leg's entry as the LTP at the DECISION and marked every leg at LTP — the strategy never saw
+  what it paid or what an exit would fetch, which is how run 30 "booked +3%" on a book that
+  realised −₹9,765. `mark_basis="exit"` closes both halves: `_adopt_fills` overwrites the
+  entry with the book's real average fill on the first slice the lots exist (once per leg,
+  `fill_seen`; a symbol two legs share is never attributed — the run-#203 merge), and
+  `_exit_mark` marks a long at the BID and a short at the ASK (`ctx.market._bid_ask`, the
+  manager's touch precedent), LTP when there is no book — so the backtest chain and a cache
+  source decide exactly as before (§3). `marks` handed to the delta solves/adjustments stays
+  LTP. **Ctor default `"ltp"` (§1)**, deploy models + registry default `"exit"`; hot-editable
+  on a running tile. **Both bases are computed every slice whichever is acted on**, and the
+  evidence is in the log, prefixed `MARKS ` like `ORDER `: `MARKS fill` per leg at adoption
+  (decision vs fill, ₹ shortfall, cumulative `entry_shortfall` for the cycle — persisted),
+  `MARKS diverge` (≤1/min) whenever the two bases DISAGREE on a threshold, naming what the
+  other basis would do, and `MARKS exit` on every `_exit_all` with both P&Ls and the gap.
+  The snapshot carries `strategy_pnl` (acted on) + `strategy_pnl_ltp` + `mark_basis`; the KPI
+  band prints the LTP figure and the spread beside "strategy sees" under "exit". To judge
+  the flag after a few cycles: grep `MARKS exit` for `gap=` (the spread an LTP run would
+  have paid blind) and `MARKS diverge … would fire` on an "exit" run (targets it held that
+  LTP would have booked). Coverage: `tests/test_mark_basis.py`.
 - **NSE's per-ORDER quantity freeze is an exchange control, and LiveBroker splits for it
   (2026-09-04).** BANKNIFTY 600 units / NIFTY 1,800 from the 2026-09-01 circular; it is
   re-derived several times a year and the Kite instruments dump does NOT carry it, so it
@@ -674,6 +696,25 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   FOOTGUN: never set `report["options"]` unless the FULL options sub-report is built —
   its mere presence flips ReportView into a layout that dereferences
   `options.summary.total_charges`. Coverage: `tests/test_intraday_replay.py`.
+  **Replay marks are FLOORED AT INTRINSIC and a print older than 5 min is NOT a print
+  (2026-09-07).** The store is trades only. A deep-ITM leg can go hours between prints
+  while the index moves 1,000 points, and the harness marked it at the last trade: the
+  BANKNIFTY long condor (wings ±1,200) entered 2025-10-01, the index ran +5% straight
+  through it, and the replay booked a **target win** — the four legs' stale prints
+  valued a structure intrinsically worth 0 at ₹390/unit (₹1.2L of fiction on 300
+  units) after marking the book ₹5.9L underwater mid-cycle off the same stale wing.
+  `_Market.close` now returns `max(print, discounted intrinsic off the expiry's parity
+  forward)` and `has_print` is false when the last print is older than
+  `mark_stale_min` (harness param, default 5; 0 = the old "printed today"), so a
+  strategy defers on a stale leg exactly as it does live. The DAILY-CLOSE mark of an
+  open leg that never printed today falls back to the same floor (`mark_or_floor`) —
+  it used to be carried at ENTRY beside live-marked siblings, which put a one-day ₹7L
+  hole in a BANKNIFTY fly's curve on 2022-07-22 (a 3,000-pt-ITM wing with no trades).
+  Consequence: replays with
+  ITM legs run before 2026-09-07 are optimistic, and a structure whose legs sit >800
+  points ITM on BANKNIFTY is still only as honest as its prints. Coverage:
+  `test_a_replay_mark_never_sits_below_discounted_intrinsic`,
+  `test_a_print_older_than_the_stale_window_is_not_a_print`.
   **Intraday replays run as a BACKGROUND JOB (2026-07-17):** POST /backtest/intraday
   returns `{job_id}` (409 while one runs — single-flight, `services/replay_jobs.py`);
   GET /backtest/intraday/progress carries {done,total,day} + the full result when done

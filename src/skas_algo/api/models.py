@@ -287,6 +287,8 @@ class DeltaNeutralDeploy(BaseModel):
     trail_mode: str = "ratchet"  # "ratchet" | "below_peak"
     # Which P&L the target/stop/trail measure: "total" (realized+unrealized) | "open_legs".
     pnl_basis: str = "total"
+    # "exit" = P&L on exit prices against real fills (owner 2026-09-07); ctor keeps "ltp"
+    mark_basis: str = "exit"
     # Which MARGIN anchors the ₹ thresholds: "entry" = frozen once at cycle entry (absolute ₹,
     # owner's two-margin scheme 2026-07-27) | "current" = re-frozen after every roll/hedge/add.
     exit_margin_basis: str = "entry"
@@ -330,6 +332,8 @@ class IronFlyDeploy(BaseModel):
     trail_step_pct: float = 0.0
     trail_mode: str = "ratchet"  # "ratchet" | "below_peak"
     pnl_basis: str = "total"  # "total" (realized+unrealized) | "open_legs"
+    # "exit" = P&L on exit prices against real fills (owner 2026-09-07); ctor keeps "ltp"
+    mark_basis: str = "exit"
     exit_margin_basis: str = "entry"  # ₹-threshold anchor: "entry" (frozen once) | "current"
     eod_time: str = "15:20"
     # Build-view manual deploy: explicit entry legs — enter these verbatim, then run the adjustment.
@@ -368,6 +372,8 @@ class RatioManualDeploy(BaseModel):
     # rolls its exit check could not see, and peaked 0.2% short of a target the UI
     # already showed as cleared (2026-08-21).
     pnl_basis: str = "total"
+    # "exit" = P&L on exit prices against real fills (owner 2026-09-07); ctor keeps "ltp"
+    mark_basis: str = "exit"
     profit_check: str = "1min"
     stop_check: str = "eod"
     time_check: str = "eod"
@@ -413,6 +419,8 @@ class MonthlyButterflyDeploy(BaseModel):
     profit_check: str = "1min"
     stop_check: str = "1min"
     pnl_basis: str = "total"
+    # "exit" = P&L on exit prices against real fills (owner 2026-09-07); ctor keeps "ltp"
+    mark_basis: str = "exit"
     exit_margin_basis: str = "entry"
     min_leg_oi: int = 1
     order_protect_pct: float = 0.5
@@ -476,6 +484,8 @@ class FairValueCalendarDeploy(BaseModel):
     stop_check: str = "1min"
     eod_time: str = "15:20"
     pnl_basis: str = "total"  # the rolls ARE the income — whole-cycle basis
+    # "exit" = P&L on exit prices against real fills (owner 2026-09-07); ctor keeps "ltp"
+    mark_basis: str = "exit"
     exit_margin_basis: str = "entry"
     min_leg_oi: int = 1
     capital: float = 500_000
@@ -559,6 +569,8 @@ class VolcanoCalendarDeploy(BaseModel):
     profit_check: str = "1min"
     stop_check: str = "1min"
     pnl_basis: str = "open_legs"
+    # "exit" = P&L on exit prices against real fills (owner 2026-09-07); ctor keeps "ltp"
+    mark_basis: str = "exit"
     exit_margin_basis: str = "entry"
     min_leg_oi: int = 1
     capital: float = 500_000
@@ -600,6 +612,8 @@ class DoubleDiagonalDeploy(BaseModel):
     stop_loss_pct: float = 1.5
     # Whole-cycle measure for the %-thresholds (see RatioManualDeploy) — new deploys only.
     pnl_basis: str = "total"
+    # "exit" = P&L on exit prices against real fills (owner 2026-09-07); ctor keeps "ltp"
+    mark_basis: str = "exit"
     # Two-cadence: deploy default = owner policy (1min); ctor default stays "tick" (recovered
     # runs unchanged — §1). eod_time squares the structure at the near expiry.
     profit_check: str = "1min"

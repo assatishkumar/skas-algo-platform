@@ -32,6 +32,7 @@ Design notes:
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time, timedelta
 
 from skas_algo.engine.options import black_scholes as bs
@@ -42,6 +43,8 @@ from skas_algo.engine.types import Signal, SignalAction
 from ._options_common import (
     ExitCadenceMixin, SkipReasonMixin, TrailingStopMixin, bad_close, legs_mtm_pnl,
 )
+
+log = logging.getLogger(__name__)
 
 # NSE / BSE derivatives open at 09:15 IST — the reference for ``adjust_after_open_min`` (no
 # adjustment decision inside the first N minutes, when deep-OTM wing strikes are still untraded).
@@ -148,6 +151,20 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
         # (the historical decision-entry basis, §1 default) or "total" = open MTM + banked realized
         # (rolls + naked-short adjustments), i.e. the WHOLE cycle's realized+unrealized P&L.
         pnl_basis: str = "open_legs",
+        # Which PRICES the P&L above is measured on (owner 2026-09-07). "ltp" = the historical
+        # basis (§1 default): each leg's entry is the LTP at the DECISION and every mark is the
+        # LTP — the strategy never sees what it actually paid or what an exit would fetch.
+        # "exit" = the entry is ADOPTED from the book's real fills on the next slice, and each
+        # leg marks at the side an exit would cross: a long at the BID, a short at the ASK.
+        # That is exit-price accounting (IFRS 13's fair value; a desk's prudent valuation):
+        # "+3%" then means "+3% if I hit the exit button now". Backtest fills at the decision
+        # close and its chain has no book, so the flag is a numeric no-op there (§3 parity);
+        # live it moves the target later and the stop earlier by exactly the spread, which
+        # is the honest direction — paper run 30 booked a +3% "target" on LTP marks that the
+        # book realised as −₹9,765. Both bases are computed EVERY slice whichever one is acted
+        # on, and every disagreement is logged (``MARKS`` lines) so a running LTP deploy
+        # still reports what the exit basis would have done.
+        mark_basis: str = "ltp",
         # Which MARGIN the %-thresholds are ₹-anchored to (owner design 2026-07-27, the
         # "two-margin scheme"): "current" = re-freeze after every structural change (the
         # historical behaviour, §1 default — the iron-fly targets 2.5% of the fly's smaller
@@ -195,6 +212,9 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
         self.trail_step_pct = float(trail_step_pct)
         self.trail_mode = str(trail_mode or "ratchet")
         self.pnl_basis = str(pnl_basis or "open_legs")
+        self.mark_basis = str(mark_basis or "ltp")
+        if self.mark_basis not in ("ltp", "exit"):
+            raise ValueError(f"mark_basis must be 'ltp' or 'exit', got {mark_basis!r}")
         self.exit_margin_basis = str(exit_margin_basis or "current")
         self.eod_time = str(eod_time)
         self.min_leg_oi = int(min_leg_oi)
@@ -213,6 +233,14 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
         self.adjust_count: int = 0
         self.entered_day: str | None = None  # entry attempted/made this day (once/day gate)
         self.force_pending: bool = False  # Live-page force entry (persisted)
+        # Implementation shortfall of THIS cycle's entry: Σ (fill − decision LTP) × units × dir
+        # in ₹, positive = the entry cost more than the decision said (persisted; logged).
+        self.entry_shortfall: float = 0.0
+        # Diagnostics for the mark-basis question, refreshed every _manage slice (not
+        # persisted): the P&L on both bases and the exit-side marks the snapshot reads.
+        self._pnl_pair: tuple[float, float] | None = None
+        self._exit_marks: dict[str, float] = {}
+        self._marks_log_at: datetime | None = None
         self.adjust_symbol: str | None = (
             None  # the active untested-side adjustment short (persisted)
         )
@@ -257,10 +285,122 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
         excluded); "total" = open MTM + banked realized (rolls + naked-short adjustments), i.e.
         the whole cycle's realized+unrealized P&L. Surfaced so the screen shows what the strategy
         ACTS on."""
+        marks = {**closes, **self._exit_marks} if self.mark_basis == "exit" else closes
+        mtm = legs_mtm_pnl(self.legs, marks)
+        if mtm is None:
+            return None
+        return mtm + (self._realized_banked() if self.pnl_basis == "total" else 0.0)
+
+    def strategy_pnl_ltp(self, closes: dict) -> float | None:
+        """The same measure on LTP marks — what the historical basis would read. Equal to
+        ``strategy_pnl`` under ``mark_basis="ltp"``; under "exit" the gap between the two is
+        the spread an exit would pay right now, shown beside it on the tile."""
         mtm = legs_mtm_pnl(self.legs, closes)
         if mtm is None:
             return None
         return mtm + (self._realized_banked() if self.pnl_basis == "total" else 0.0)
+
+    # ------------------------------------------------------- mark basis (2026-09-07)
+    def _adopt_fills(self, ctx) -> None:
+        """Read each leg's REAL fill off the book once it exists and record the entry
+        shortfall against the decision LTP. Under ``mark_basis="exit"`` the fill REPLACES
+        the leg's entry (cost basis is what was paid — no desk carries a position at the
+        price it was thinking about); under "ltp" it is only recorded (``entry_fill``) and
+        logged, so a running deploy still reports the cost without changing behaviour.
+
+        A leg is adopted ONCE (``fill_seen``). Only lots with ``units``/``price`` count —
+        the test fakes hand back ints, and a symbol that several legs share (a naked
+        adjustment landing on a fly strike is exactly the run-#203 merge) cannot be
+        attributed, so those are left alone."""
+        shared = {leg["symbol"] for leg in self.legs
+                  if sum(1 for x in self.legs if x["symbol"] == leg["symbol"]) > 1}
+        for leg in self.legs:
+            if leg.get("fill_seen") or leg["symbol"] in shared:
+                continue
+            try:
+                lots = ctx.lots(leg["symbol"]) or []
+            except Exception:  # pragma: no cover - a ctx without a book
+                continue
+            if not isinstance(lots, (list, tuple)) or not lots:
+                continue
+            try:
+                units = sum(float(lot.units) for lot in lots)
+                cost = sum(float(lot.units) * float(lot.price) for lot in lots)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if units <= 0 or cost <= 0:
+                continue
+            fill = cost / units
+            decision = float(leg["entry"])
+            # positive = it cost more than the decision said: a long filled above the
+            # LTP, or a short filled below it
+            slip = (fill - decision) * float(leg["units"]) * int(leg["dir"])
+            leg["fill_seen"] = True
+            leg["entry_ltp"] = decision
+            leg["entry_fill"] = round(fill, 4)
+            self.entry_shortfall += slip
+            if self.mark_basis == "exit":
+                leg["entry"] = fill
+            log.info(
+                "MARKS fill %s sym=%s dir=%+d units=%d decision=%.2f fill=%.2f "
+                "slip_per_unit=%+.2f shortfall=%+.0f cycle_shortfall=%+.0f basis=%s%s",
+                self.strategy_id, leg["symbol"], int(leg["dir"]), int(leg["units"]),
+                decision, fill, (fill - decision) * int(leg["dir"]), slip,
+                self.entry_shortfall, self.mark_basis,
+                " adopted" if self.mark_basis == "exit" else "",
+            )
+
+    def _exit_mark(self, ctx, leg: dict, ltp: float) -> float:
+        """The price an exit would cross RIGHT NOW: a long leg sells into the BID, a short
+        leg buys back at the ASK. LTP when there is no two-sided book (cache source, the
+        backtest chain, a one-sided quote) — the same fail-open as the spread gate."""
+        ba_fn = getattr(ctx.market, "_bid_ask", None)
+        if ba_fn is None:
+            return ltp
+        try:
+            ba = ba_fn(leg["symbol"])
+        except Exception:  # pragma: no cover - a chain read that fails must not stop a decision
+            return ltp
+        if not ba:
+            return ltp
+        bid, ask = ba
+        px = bid if int(leg["dir"]) > 0 else ask
+        try:
+            px = float(px)
+        except (TypeError, ValueError):
+            return ltp
+        return px if px > 0 else ltp
+
+    def _log_marks_divergence(self, now: datetime, pnl_ltp: float, pnl_exit: float) -> None:
+        """One greppable line whenever the two bases DISAGREE on a threshold — the direct
+        measure of what the flag changes. Rate-limited to one a minute per run."""
+        if self.margin_source not in ("broker", "manual") or self.margin_base <= 0:
+            return
+        target = self.margin_base * self.target_pct / 100.0
+        stop = -self.margin_base * self.stop_pct / 100.0 if self.stop_pct > 0 else None
+        verdicts = []
+        if (pnl_ltp >= target) != (pnl_exit >= target):
+            verdicts.append(f"target {target:+.0f}")
+        if stop is not None and (pnl_ltp <= stop) != (pnl_exit <= stop):
+            verdicts.append(f"stop {stop:+.0f}")
+        if not verdicts:
+            return
+        if self._marks_log_at is not None:
+            try:
+                if (now - self._marks_log_at).total_seconds() < 60:
+                    return
+            except TypeError:  # pragma: no cover - mixed tz-awareness between ticks
+                pass
+        self._marks_log_at = now
+        other = "ltp" if self.mark_basis == "exit" else "exit"
+        other_pnl = pnl_ltp if other == "ltp" else pnl_exit
+        other_fires = other_pnl >= target or (stop is not None and other_pnl <= stop)
+        log.info(
+            "MARKS diverge %s acting=%s pnl_ltp=%+.0f pnl_exit=%+.0f gap=%+.0f on %s "
+            "(the %s basis would %s)",
+            self.strategy_id, self.mark_basis, pnl_ltp, pnl_exit, pnl_exit - pnl_ltp,
+            ", ".join(verdicts), other, "fire" if other_fires else "hold",
+        )
 
     def request_force_entry(self) -> str:
         """Live-page 'Force entry now': next tick sells the 18Δ strangle into the current
@@ -596,10 +736,18 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
 
     # ---------------------------------------------------------------- manage
     def _manage(self, ctx, live: list[dict], now: datetime) -> list[Signal]:
-        # P&L exits first (any phase).
+        # The book's real fills, once they exist (a no-op after the first look at each leg).
+        self._adopt_fills(ctx)
+        # P&L exits first (any phase). Two numbers every slice: ``pnl_ltp`` on LTP marks
+        # (the historical basis) and ``pnl_exit`` on the side an exit would cross, against
+        # the real fills where known. ``mark_basis`` picks which one the thresholds read;
+        # the other is logged whenever they disagree. ``marks`` stays LTP — it feeds the
+        # delta solves and the adjustment logic, which want the traded price.
         has_print = getattr(ctx.market, "has_print", None)
-        pnl = 0.0
+        pnl_ltp = 0.0
+        pnl_exit = 0.0
         marks: dict[str, float] = {}
+        exit_marks: dict[str, float] = {}
         for leg in live:
             if has_print is not None and not has_print(leg["symbol"]):
                 return []  # a stale mark would make the P&L judgement dishonest
@@ -608,12 +756,19 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
             except KeyError:
                 return []
             marks[leg["symbol"]] = cur
-            pnl += (cur - leg["entry"]) * leg["units"] * leg["dir"]
+            xm = self._exit_mark(ctx, leg, cur)
+            exit_marks[leg["symbol"]] = xm
+            pnl_ltp += (cur - leg["entry"]) * leg["units"] * leg["dir"]
+            pnl_exit += (xm - leg.get("entry_fill", leg["entry"])) * leg["units"] * leg["dir"]
         # "total" basis (owner 2026-07-22): fold in realized banked from closed rolls +
         # naked-short adjustments so target/stop/trail measure the WHOLE cycle's
         # realized+unrealized P&L. "open_legs" (§1 default) = open-leg MTM only, as before.
         if self.pnl_basis == "total":
-            pnl += self._realized_banked()
+            pnl_ltp += self._realized_banked()
+            pnl_exit += self._realized_banked()
+        self._exit_marks = exit_marks
+        self._pnl_pair = (pnl_ltp, pnl_exit)
+        pnl = pnl_exit if self.mark_basis == "exit" else pnl_ltp
         # Freeze / re-freeze the threshold base from the latest BROKER margin push.
         # (Also upgrades runs recovered with an old "model" base — e.g. run 203.)
         if (manual := self._manual_margin()) > 0:
@@ -637,6 +792,8 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
         due_profit = self._due("profit", now)
         due_stop = self._due("stop", now)
         due_adjust = self._due("adjust", now)
+        if pnl_ltp != pnl_exit:
+            self._log_marks_divergence(now, pnl_ltp, pnl_exit)
         if self.margin_source in ("broker", "manual") and self.margin_base > 0:
             pnl_pct = 100.0 * pnl / self.margin_base
             if due_profit:
@@ -1019,6 +1176,17 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
 
     def _exit_all(self, live: list[dict], reason: str) -> list[Signal]:
         sigs = [Signal(leg["symbol"], SignalAction.EXIT_ALL, reason=reason) for leg in live]
+        if self._pnl_pair is not None:
+            pnl_ltp, pnl_exit = self._pnl_pair
+            log.info(
+                "MARKS exit %s reason=%s basis=%s pnl_ltp=%+.0f pnl_exit=%+.0f gap=%+.0f "
+                "entry_shortfall=%+.0f legs=%d",
+                self.strategy_id, reason, self.mark_basis, pnl_ltp, pnl_exit,
+                pnl_exit - pnl_ltp, self.entry_shortfall, len(live),
+            )
+        self.entry_shortfall = 0.0
+        self._pnl_pair = None
+        self._exit_marks = {}
         self.done_expiry = self.cycle_expiry
         self.legs = []
         self.phase = "idle"
@@ -1065,6 +1233,8 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
 
     def exit_rules(self) -> list[str]:
         basis = "realized+unrealized P&L" if self.pnl_basis == "total" else "open-leg MTM"
+        if self.mark_basis == "exit":
+            basis += " at exit prices (longs at bid, shorts at ask, against the real fills)"
         mlabel = self._margin_label()
         rules = [
             f"Book profit at +{self.target_pct:g}% of {mlabel}, on {basis} "
@@ -1109,6 +1279,10 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
             "cycle_expiry": self.cycle_expiry,
             "ironfly_adjust": self.ironfly_adjust,
             "adjust_symbol": self.adjust_symbol,
+            "mark_basis": self.mark_basis,
+            "entry_shortfall": round(self.entry_shortfall, 2),
+            "pnl_ltp": round(self._pnl_pair[0], 2) if self._pnl_pair else None,
+            "pnl_exit": round(self._pnl_pair[1], 2) if self._pnl_pair else None,
         }
         try:
             shorts = [leg for leg in self.legs if leg["dir"] < 0]
@@ -1142,6 +1316,7 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
             # total-P&L basis + trailing high-water (default to 0 for a pre-2026-07-22 state).
             "realized_rolls": self.realized_rolls,
             "peak_pct": self.peak_pct,
+            "entry_shortfall": self.entry_shortfall,
         }
 
     def load_state(self, state: dict) -> None:
@@ -1165,3 +1340,4 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
         self.adjust_realized = float(state.get("adjust_realized", 0.0))
         self.realized_rolls = float(state.get("realized_rolls", 0.0))
         self.peak_pct = float(state.get("peak_pct", 0.0))
+        self.entry_shortfall = float(state.get("entry_shortfall", 0.0))

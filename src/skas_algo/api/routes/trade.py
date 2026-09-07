@@ -578,6 +578,7 @@ async def delta_neutral_deploy(
         "trail_step_pct": body.trail_step_pct,
         "trail_mode": body.trail_mode,
         "pnl_basis": body.pnl_basis,
+        "mark_basis": body.mark_basis,
         "exit_margin_basis": body.exit_margin_basis,
         "eod_time": body.eod_time,
         "profit_target_pct": body.profit_target_pct,
@@ -632,6 +633,7 @@ async def iron_fly_deploy(
         "trail_step_pct": body.trail_step_pct,
         "trail_mode": body.trail_mode,
         "pnl_basis": body.pnl_basis,
+        "mark_basis": body.mark_basis,
         "exit_margin_basis": body.exit_margin_basis,
         "eod_time": body.eod_time,
         "profit_target_pct": body.profit_target_pct,
@@ -690,6 +692,7 @@ async def monthly_butterfly_deploy(
         "profit_check": body.profit_check,
         "stop_check": body.stop_check,
         "pnl_basis": body.pnl_basis,
+        "mark_basis": body.mark_basis,
         "exit_margin_basis": body.exit_margin_basis,
         "min_leg_oi": body.min_leg_oi,
         "order_protect_pct": body.order_protect_pct,
@@ -758,6 +761,7 @@ async def fair_value_calendar_deploy(
         "stop_check": body.stop_check,
         "eod_time": body.eod_time,
         "pnl_basis": body.pnl_basis,
+        "mark_basis": body.mark_basis,
         "exit_margin_basis": body.exit_margin_basis,
         "min_leg_oi": body.min_leg_oi,
     }
@@ -867,6 +871,7 @@ async def volcano_calendar_deploy(
         "profit_check": body.profit_check,
         "stop_check": body.stop_check,
         "pnl_basis": body.pnl_basis,
+        "mark_basis": body.mark_basis,
         "exit_margin_basis": body.exit_margin_basis,
         "min_leg_oi": body.min_leg_oi,
     }
@@ -923,6 +928,7 @@ async def double_diagonal_deploy(
         "stop_check": body.stop_check,
         "exit_margin_basis": body.exit_margin_basis,
         "pnl_basis": body.pnl_basis,
+        "mark_basis": body.mark_basis,
         "eod_time": body.eod_time,
         "profit_target_pct": body.profit_target_pct,
         "stop_loss_pct": body.stop_loss_pct,
@@ -985,6 +991,7 @@ async def ratio_manual_deploy(
         "stop_check": body.stop_check,
         "time_check": body.time_check,
         "pnl_basis": body.pnl_basis,
+        "mark_basis": body.mark_basis,
         "eod_time": body.eod_time,
     }
     req = LiveStartRequest(

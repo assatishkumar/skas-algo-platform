@@ -600,7 +600,9 @@ export interface LiveRunSnapshot {
   // why the strategy did NOT enter on its last look (options families) — the gate that
   // refused it and the session it was refused on; null once it holds a position
   entry_skip?: { reason: string; day?: string | null } | null;
-  strategy_pnl?: number | null; // the P&L measure the strategy's exit checks compare (decision-entry basis)
+  strategy_pnl?: number | null; // the P&L measure the strategy's exit checks compare
+  strategy_pnl_ltp?: number | null; // the same measure on LTP marks (differs under mark_basis "exit")
+  mark_basis?: "ltp" | "exit" | null; // which prices the strategy reads its %-thresholds on
   exit_rules?: string[] | null; // human-readable exit triggers (spot levels, %-targets, …)
   // live controls + exclusion editing
   auto: boolean;

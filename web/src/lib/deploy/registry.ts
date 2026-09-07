@@ -102,6 +102,17 @@ const FORCE = f("force_entry", "Force entry now", "toggle", false,
 /** Deploy-time margin anchor. The broker's basket margin is NOT stable — the same legs priced
  *  ~₹70k/set at entry and ₹4.5L/set on expiry day with a deep-ITM short (run 15, 2026-08-25) —
  *  so a "% of margin" target means different rupees at different times unless anchored. */
+/** Which prices the %-target/stop are read on (owner 2026-09-07). "exit" = the real fills as
+ *  the entry, longs marked at the bid and shorts at the ask — what an exit would fetch NOW.
+ *  The ctor keeps "ltp" (§1) so a running deploy is unchanged until it is hot-edited. */
+const MARK_BASIS = f("mark_basis", "P&L marks", "select", "exit", {
+  options: [
+    { value: "exit", label: "Exit prices — real fills, longs at bid, shorts at ask" },
+    { value: "ltp", label: "Last traded price (the historical basis)" },
+  ],
+  hint: "on \"exit\" a +3% reading means +3% if you hit the exit now; paper run 30 booked a +3% target on LTP marks that the book realised as −₹9,765",
+});
+
 const MARGIN_PER_SET = (def: number, extra?: string): DeployField =>
   f("margin_per_set", "Margin per lot-set (₹)", "number", def, {
     step: "any",
@@ -292,6 +303,7 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       f("adjust_cooldown_min", "Cooldown (min)", "number", 15),
       f("profit_target_pct", "Target % of margin", "number", 2.5, { step: "any" }),
       f("stop_loss_pct", "Stop % of margin (0 = off)", "number", 0, { step: "any" }),
+      MARK_BASIS,
       FORCE,
     ],
   },
@@ -311,6 +323,7 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       f("adjust_cooldown_min", "Cooldown (min)", "number", 15),
       f("profit_target_pct", "Target % of margin", "number", 2.5, { step: "any" }),
       f("stop_loss_pct", "Stop % of margin (0 = off)", "number", 0, { step: "any" }),
+      MARK_BASIS,
       FORCE,
     ],
     warn: "SENSEX (and BANKNIFTY beyond its ~2-month cache) needs Force entry — the "
@@ -353,6 +366,7 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       f("wing_lots", "Wing lots per set", "number", 1),
       f("stop_loss_pct", "Stop % (0 = off)", "number", 0, { step: "any",
         hint: "the debit paid is already the floor" }),
+      MARK_BASIS,
       FORCE,
     ],
   },
@@ -389,6 +403,7 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       TIME("roll_time", "Roll time", "15:00"),
       f("roll_days_before", "Roll days before expiry", "number", 1,
         { hint: "1 = the day before — a short weekly's margin spikes into settlement" }),
+      MARK_BASIS,
       FORCE,
     ],
   },
@@ -410,6 +425,7 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       f("stop_loss_pct", "Stop % of margin", "number", 2, { step: "any" }),
       TIME("entry_time", "Entry time (last Friday)", "15:16"),
       TIME("cycle_exit_time", "Expiry-day exit", "15:15"),
+      MARK_BASIS,
       FORCE,
     ],
   },
@@ -437,6 +453,7 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       }),
       f("profit_target_pct", "Target % of margin", "number", 1.5, { step: "any" }),
       f("stop_loss_pct", "Stop % of margin", "number", 1.5, { step: "any" }),
+      MARK_BASIS,
       FORCE,
     ],
     warn: "ONE cycle per deploy by design — after the exit it sits idle until you deploy again.",

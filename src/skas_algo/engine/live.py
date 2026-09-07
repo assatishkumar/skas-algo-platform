@@ -634,6 +634,11 @@ class LiveSession:
             # (fill slippage); showing both is what makes "target achieved but no exit"
             # explainable at a glance (run-7, 2026-07-17).
             "strategy_pnl": self._strategy_pnl(closes),
+            # The SAME measure on LTP marks, and which basis the strategy acts on. Under
+            # mark_basis="exit" the two differ by the spread an exit would pay right now —
+            # the tile prints the gap so the owner can see what the flag is costing/saving.
+            "strategy_pnl_ltp": self._strategy_pnl(closes, attr="strategy_pnl_ltp"),
+            "mark_basis": getattr(self.strategy, "mark_basis", None),
             # Human-readable exit criteria the strategy will act on (spot levels, %-targets,
             # per-leg / calendar exits) — surfaced so the live card shows WHY a run would exit.
             "exit_rules": self._exit_rules(),
@@ -646,10 +651,10 @@ class LiveSession:
             "ironfly_adjust": getattr(getattr(self, "strategy", None), "ironfly_adjust", None),
         }
 
-    def _strategy_pnl(self, closes: dict) -> float | None:
+    def _strategy_pnl(self, closes: dict, attr: str = "strategy_pnl") -> float | None:
         """Ask the strategy for the P&L measure its exit checks use (None when it has no
         such measure — equity strategies, or a flat/unmarked book)."""
-        fn = getattr(self.strategy, "strategy_pnl", None)
+        fn = getattr(self.strategy, attr, None)
         if fn is None:
             return None
         try:

@@ -76,6 +76,7 @@ class PutCondorStrategy(DeltaNeutralMonthlyStrategy):
         adjust_check: str | None = None,
         eod_time: str = "15:20",
         min_leg_oi: int = 1,
+        mark_basis: str = "ltp",
         risk_free_rate: float = 0.065,
         lot_overrides: dict | None = None,
         **_ignored,
@@ -98,6 +99,7 @@ class PutCondorStrategy(DeltaNeutralMonthlyStrategy):
             adjust_check=adjust_check,
             eod_time=eod_time,
             min_leg_oi=min_leg_oi,
+            mark_basis=mark_basis,
             lot_overrides=lot_overrides,
         )
         step = selection_step(self.underlying, 100)

@@ -40,6 +40,50 @@ to the body. Entering LATER to dodge the opening spread costs more than the spre
 it work at all: hold blindly to settlement with no target and the same book loses ₹17k with
 a 59% drawdown. SENSEX is not evaluable — the 1-min store holds barely any of it.
 
+STRUCTURE VARIANTS, same store, 61 cycles, 10 sets, ₹70,000/set anchor, 3% target, entry
+09:20 (2026-09-07; IS = 2021-23, OOS = 2024-26; net / IS / OOS / hit% / max DD% / worst cycle):
+
+    BANKNIFTY, wing 400
+      plain fly CE          1,125,551   601,649   523,902   80.3   2.8   -14,381
+      plain fly PE            868,847   275,123   593,724   68.9   2.9   -18,933
+      broken wing CE 400/800 1,086,975  403,725   683,250   93.4   9.3   -69,639
+      broken wing PE 400/800   993,965  473,563   520,402   91.8   5.5   -89,416
+      condor CE ±400/±1200  1,377,507   741,474   636,032   96.7  28.0   -44,134
+      condor PE ±400/±1200    885,200   209,552   675,648   86.9  27.9  -115,357
+      body +500 CE / −500 PE  620,853 / 445,444;  +1100 / −1100: 464,423 / 535,908
+      trend-follow ±500 / ±1100          477,411 / 530,416
+    NIFTY
+      plain fly CE w100/w200  539,999 (dd 3.5) / 603,488 (dd 9.6)
+      plain fly PE w100/w200  408,293 (IS 2,492) / 551,498 (IS 61,793)
+      broken wing CE 100/200 / 200/400   379,453 (IS −7,539) / −168,107 (dd 60.2)
+      broken wing PE 100/200 / 200/400   129,959 (IS −44,904) / 398,962 (worst −121,109)
+      condor CE / PE ±100/±300           490,530 (IS −42,017) / 597,629 (IS 67,568)
+      body ±200 CE/PE   138,509 / 276,360 (hit 20-31%);  ±500: 44,814 / 105,444
+      trend-follow ±200 / ±500           199,150 / 143,446
+
+RE-RUN ON THE HONEST HARNESS (same day; replay marks floored at intrinsic, a print older
+than 5 min is not a print, a dark leg carries yesterday's mark — see CLAUDE.md §8). The
+table above is OPTIMISTIC wherever a leg sat deep ITM; these are the corrected rows:
+
+    BANKNIFTY fly CE w400        908,203   448,495   459,708   68.9  12.6   -48,483
+    BANKNIFTY fly PE w400        828,087   282,585   545,501   67.2   2.9   -18,933
+    BANKNIFTY condor ±400/±1200  755,981   216,292   539,689   80.3  46.6   -96,438
+    BANKNIFTY broken CE 400/800  639,897    75,352   564,546   85.2  20.9   -97,768
+    NIFTY fly CE w100            335,799   -16,181   351,980   39.3   9.7   -54,449
+    NIFTY fly CE w200            509,903    69,261   440,642   52.5  10.5   -18,554
+    NIFTY condor PE ±100/±300    495,421    19,419   476,002   65.6  10.0   -34,070
+
+The BANKNIFTY CE fly's 12.6% drawdown is the July-2022 cycle (spot 33,101 → 37,378, the
+fly 4,000 points ITM and worth ~0) marked off sparse prints for a week — the cycle itself
+closed at −11,986. The condor's ±1,200 wing does not trade at all for days at a time and
+no marking rule can price a leg that never prints; its row is a bound, not a result.
+
+Reading: the ATM fly with the target is the thing that works, and every way of moving
+the body away from spot (OTM, trend) roughly halves it — the target rescues a pin bet,
+not a direction bet. The broken wing raises the hit rate to ~92% but its one bad month
+is 4-6× the plain fly's worst, and on NIFTY it is the only variant that LOSES money. The
+wide BANKNIFTY CE condor makes the most but marks 28% underwater mid-cycle for it.
+
 Execution is the real risk. Six fills a cycle (three legs, in and out) all near the money,
 against an average edge of ~₹21,000 a cycle on the best variant, so measure your own realised
 slippage before trusting any of the figures above.
@@ -85,6 +129,24 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
         wing_points: float = 100.0,
         body_lots: int = 2,
         wing_lots: int = 1,
+        # --- structure variants (owner research 2026-09-07; every default = the plain fly) ---
+        # BROKEN WING: the wing on the OTM side of the option (above the body for a CE fly,
+        # below it for a PE fly) sits this far out instead of ``wing_points``. Further out =
+        # cheaper = a smaller debit or a credit; that side's loss is capped at the width
+        # difference less the credit, the other side has none. 0 = symmetric.
+        far_wing_points: float = 0.0,
+        # LONG CONDOR: split the short body into two strikes at body ± this, ``body_lots``
+        # shared between them (2 → 1 each). Wings stay at body ± ``wing_points``, so the
+        # owner's "sell ATM−100/+100, buy ±300" is split 100, wings 300. 0 = a butterfly.
+        body_split_points: float = 0.0,
+        # DIRECTIONAL: the body sits at the strike nearest spot + this (signed points; +
+        # above spot). 0 = ATM.
+        body_offset_points: float = 0.0,
+        # …and with ``trend_follow`` the side AND the offset's sign follow the one-month
+        # trend: spot above the previous cycle's entry spot → a CE fly ABOVE spot, below it
+        # → a PE fly BELOW. The first cycle has no history and uses ``side`` with the
+        # offset signed to match it. Replaces ``side`` while on.
+        trend_follow: bool = False,
         # --- cycle ---
         entry_time: str = "09:20",
         entry_window_end: str = "15:00",
@@ -97,6 +159,7 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
         pnl_basis: str = "total",
         exit_margin_basis: str = "entry",
         min_leg_oi: int = 1,
+        mark_basis: str = "ltp",
         lot_overrides: dict | None = None,
         risk_free_rate: float = 0.065,
         # How far (%) a real order may be pushed THROUGH the touch when it does not fill at
@@ -130,6 +193,7 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
             exit_margin_basis=exit_margin_basis,
             margin_per_set=margin_per_set,
             min_leg_oi=min_leg_oi,
+            mark_basis=mark_basis,
             lot_overrides=lot_overrides,
         )
         self.sets = max(1, int(sets))
@@ -138,6 +202,10 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
         self.wing_points = float(wing_points)
         self.body_lots = max(1, int(body_lots))
         self.wing_lots = max(1, int(wing_lots))
+        self.far_wing_points = max(0.0, float(far_wing_points or 0.0))
+        self.body_split_points = max(0.0, float(body_split_points or 0.0))
+        self.body_offset_points = float(body_offset_points or 0.0)
+        self.trend_follow = bool(trend_follow)
         self.exit_time = _hhmm(exit_time, time(15, 15))
         self.order_protect_pct = (None if order_protect_pct is None
                                   else max(0.0, float(order_protect_pct)))
@@ -145,8 +213,9 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
         # Replay-harness sizing hint: SHORT lots per lot-set, so margin_per_lot is read as
         # the ₹ for one set's short body (the family convention).
         self.sell_lots = self.body_lots
-        self.entry_spot: float | None = None
+        self.entry_spot: float | None = None   # persisted; ALSO the previous cycle's while flat
         self.body_strike: float | None = None
+        self.entry_side: str | None = None     # the side the open cycle trades (trend may flip it)
 
     # ------------------------------------------------------------------ util
     def _size_multiple(self) -> int:
@@ -234,6 +303,29 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
             return min((e for e in expiries if e > today), default=None)
         return self._current_monthly(expiries, today)
 
+    def _structure(self, rows: dict, spot: float) -> tuple[str, float, list[float], float, float]:
+        """(side, body centre, short strikes, upper wing, lower wing) for this cycle.
+
+        The plain fly is side/ATM/[body]/body±wing. The variants compose: a trend-followed
+        or fixed OFFSET moves the centre, a SPLIT turns the one short strike into two, a FAR
+        wing pushes the OTM-side wing out. ``entry_spot`` is the PREVIOUS cycle's entry
+        while the book is flat (persisted, never cleared by an exit), which is all the
+        history the trend rule needs."""
+        side = self.side
+        offset = self.body_offset_points
+        if self.trend_follow:
+            prev = self.entry_spot
+            if prev is not None and prev > 0:
+                side = "ce" if spot >= prev else "pe"
+            offset = abs(offset) if side == "ce" else -abs(offset)
+        body = min(rows, key=lambda k: abs(k - (spot + offset)))
+        far = self.far_wing_points or self.wing_points
+        up = body + (far if side == "ce" else self.wing_points)
+        dn = body - (far if side == "pe" else self.wing_points)
+        split = self.body_split_points
+        shorts = [body + split, body - split] if split > 0 else [body]
+        return side, body, shorts, up, dn
+
     def _try_enter(self, ctx, now: datetime, today: date, force: bool = False) -> list[Signal]:
         exp = self._target_expiry(ctx, today)
         # ``exp > today`` is the spec's "previous expiry + 1 day": on the old expiry's own
@@ -266,10 +358,10 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
         rows = self._chain_rows(ctx, exp.isoformat())
         if spot is None or not rows:
             return self._skip("no index spot / chain rows for the expiry", today)
-        body = min(rows, key=lambda k: abs(k - spot))
-        up, dn = body + self.wing_points, body - self.wing_points
-        right = self.side.upper()
-        cells = {k: (rows.get(k) or {}).get(self.side) for k in (body, up, dn)}
+        side, body, shorts, up, dn = self._structure(rows, spot)
+        right = side.upper()
+        strikes = (*shorts, up, dn)
+        cells = {k: (rows.get(k) or {}).get(side) for k in strikes}
         px = {k: self._ltp(c) for k, c in cells.items()}
         if any(v is None for v in px.values()):
             miss = [f"{k:.0f}" for k, v in px.items() if v is None]
@@ -277,7 +369,7 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
             return self._skip(f"{right} {', '.join(miss)} did not price — retry", today)
         if any(not self._oi_ok(cells[k]) for k in cells):
             return self._skip(f"a leg's open interest is under min_leg_oi={self.min_leg_oi}", today)
-        wide = self._spread_refusal({f"{right} {k:.0f}": cells[k] for k in (body, up, dn)})
+        wide = self._spread_refusal({f"{right} {k:.0f}": cells[k] for k in strikes})
         if wide:
             return self._skip(wide, today)
         try:
@@ -285,7 +377,8 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
         except KeyError:
             return self._skip(f"no lot size known for {self.underlying} {exp.isoformat()}", today)
 
-        body_units = float(self.sets * self.body_lots * lot)
+        # a split body shares body_lots between its two strikes (2 → 1 each)
+        body_units = float(self.sets * (self.body_lots // len(shorts) or 1) * lot)
         wing_units = float(self.sets * self.wing_lots * lot)
         # WINGS FIRST, BODY LAST — the order is load-bearing live. The executor runs a
         # decision's actions in sequence and a real order that fails ABANDONS the rest of
@@ -296,14 +389,14 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
         legs = [
             self._leg(exp, up, right, 1, wing_units, px[up], lot),
             self._leg(exp, dn, right, 1, wing_units, px[dn], lot),
-            self._leg(exp, body, right, -1, body_units, px[body], lot),
-        ]
+        ] + [self._leg(exp, k, right, -1, body_units, px[k], lot) for k in shorts]
         self.legs = legs
         self._entered()
         self.phase = "butterfly"  # never "strangle"/"ironfly" → base adjustments stay off
         self.cycle_expiry = exp.isoformat()
         self.entry_spot = round(spot, 2)
         self.body_strike = body
+        self.entry_side = side
         self._freeze_margin(ctx, spot)
         return [
             Signal(
@@ -380,7 +473,7 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
             {
                 "kind": "monthly_butterfly",
                 "phase": "butterfly" if self.legs else self.phase,
-                "side": self.side.upper(),
+                "side": (self.entry_side or self.side).upper(),
                 "body_strike": self.body_strike,
                 "wing_points": self.wing_points,
                 "entry_spot": self.entry_spot,
@@ -391,10 +484,12 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
     # ------------------------------------------------------- (de)serialize
     def export_state(self) -> dict:
         state = super().export_state()
-        state.update({"entry_spot": self.entry_spot, "body_strike": self.body_strike})
+        state.update({"entry_spot": self.entry_spot, "body_strike": self.body_strike,
+                      "entry_side": self.entry_side})
         return state
 
     def load_state(self, state: dict) -> None:
         super().load_state(state)
         self.entry_spot = state.get("entry_spot")
         self.body_strike = state.get("body_strike")
+        self.entry_side = state.get("entry_side")

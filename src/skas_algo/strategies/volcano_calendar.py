@@ -101,6 +101,7 @@ class VolcanoCalendarStrategy(DeltaNeutralMonthlyStrategy):
         pnl_basis: str = "open_legs",        # one shot, no rolls — nothing banked mid-cycle
         exit_margin_basis: str = "entry",
         min_leg_oi: int = 1,
+        mark_basis: str = "ltp",
         lot_overrides: dict | None = None,
         risk_free_rate: float = 0.065,
         **_ignored,
@@ -122,6 +123,7 @@ class VolcanoCalendarStrategy(DeltaNeutralMonthlyStrategy):
             exit_margin_basis=exit_margin_basis,
             margin_per_set=margin_per_set,
             min_leg_oi=min_leg_oi,
+            mark_basis=mark_basis,
             lot_overrides=lot_overrides,
         )
         self.wing_1 = float(wing_1)

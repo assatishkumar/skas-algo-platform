@@ -346,6 +346,19 @@ are validated paper-first.
   minutes later, exited on "target", and the book realised −₹9,765 — about ₹25 a unit of
   spread, round trip. Force now also respects the entry window (it skips the expiry wait,
   never the time of day). The gate is fail-open on the backtest chain, which has no book.
+  **Structure variants (2026-09-07 research, all default-off = the plain fly):**
+  `far_wing_points` pushes the OTM-side wing out (broken wing: smaller debit or a credit,
+  loss capped on that side only); `body_split_points` splits the short body into two
+  strikes at body ± that with `body_lots` shared (long condor: a flat tent instead of a
+  pin); `body_offset_points` centres the body away from spot (signed), and `trend_follow`
+  picks the side and the sign each cycle from spot vs the previous cycle's entry spot (a CE
+  fly above in an up month, a PE fly below in a down month). Replay results in the class
+  docstring once measured.
+  **P&L marks (`mark_basis`, 2026-09-07, whole delta family):** `exit` (deploy default) reads
+  the % target/stop on exit prices — the entry is the book's real fill, a long marks at the
+  bid, a short at the ask — so "+3%" means +3% if you exit now; `ltp` (ctor default, running
+  deploys) is the old decision-LTP basis. Both are computed every slice and the tile shows
+  the gap; `MARKS fill/diverge/exit` log lines record what each basis would have done.
   Coverage: `tests/test_monthly_butterfly.py`, the split/crossing tests in `tests/test_live_broker.py`.
 - **`fair_value_calendar` — premium-matched ratio calendar with a fair-value side pick (NIFTY).**
   The owner's video spec (ref video: https://www.youtube.com/watch?v=tn-73I63yBw&t=2162s),

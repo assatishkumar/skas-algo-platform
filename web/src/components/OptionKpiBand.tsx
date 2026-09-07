@@ -156,9 +156,16 @@ export default function OptionKpiBand({ run, version }: { run: LiveRunSnapshot; 
             said "target achieved" while this measure was still below the target). */}
         {run.strategy_pnl != null && (
           <div className="mt-1 text-[11.5px] text-[var(--muted)] tabular-nums"
-            title="The strategy marks its legs from its decision-time entry premiums, not the actual fills — this is the P&L its target/stop checks compare.">
+            title={run.mark_basis === "exit"
+              ? "The strategy reads its target/stop on EXIT prices: real fills as the entry, longs marked at the bid, shorts at the ask — what an exit would fetch right now. The LTP figure is the historical basis; the gap is the spread an exit would pay."
+              : "The strategy marks its legs from its decision-time entry premiums at LTP, not the actual fills — this is the P&L its target/stop checks compare."}>
             strategy sees <span className={`font-semibold ${sign(run.strategy_pnl)}`}>{formatInr(run.strategy_pnl)}</span>
+            {run.mark_basis === "exit" ? " at exit prices" : ""}
             {target != null ? <> vs target <span className="font-semibold text-[var(--pos)]">+{formatInr(target)}</span></> : null}
+            {run.mark_basis === "exit" && run.strategy_pnl_ltp != null && Math.round(run.strategy_pnl_ltp) !== Math.round(run.strategy_pnl) ? (
+              <> · <span className={sign(run.strategy_pnl_ltp)}>{formatInr(run.strategy_pnl_ltp)}</span> on LTP
+                {" "}(<span className={sign(run.strategy_pnl - run.strategy_pnl_ltp)}>{formatInr(run.strategy_pnl - run.strategy_pnl_ltp)}</span> spread)</>
+            ) : null}
           </div>
         )}
         {target != null && (

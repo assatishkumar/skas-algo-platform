@@ -76,14 +76,25 @@ class _Market:
     """ctx.market for the replay: per-day forward-filled marks + store-built chains."""
 
     def __init__(self, underlying: str, lot_overrides: dict | None = None,
-                 allow_fifty_strikes: bool = False):
+                 allow_fifty_strikes: bool = False, stale_minutes: int = 5):
         self.underlying = underlying
         self.lot_overrides = lot_overrides   # params["contract_specs"] — parity w/ engine
         # BACKTEST-ONLY escape hatch: lift the NIFTY 100-multiples rule so a replay can
         # mirror pre-2026-07-14 live history (which legitimately traded 50s) or probe
         # 50-strike variants. A harness param — strategies and LIVE paths never see it.
         self.allow_fifty_strikes = allow_fifty_strikes
-        self.quotes: dict[str, tuple[float, float]] = {}   # symbol -> (close, oi)
+        # A print older than this many minutes is NOT a print (``has_print`` → False, so a
+        # strategy defers its decision exactly as it does live on a stale mark). The store
+        # is trades only: a deep-ITM leg can go HOURS between prints while the index moves
+        # 1,000 points, and "printed today" then hands the strategy a price a week old.
+        # 0 = the pre-2026-09-07 rule (printed today). Harness param ``mark_stale_min``.
+        self.stale_minutes = max(0, int(stale_minutes))
+        self.quotes: dict[str, tuple[float, float, str]] = {}   # symbol -> (close, oi, minute)
+        self._floor_cache: dict[str, float | None] = {}          # expiry -> parity F (per minute)
+        # The last close of every symbol across days — the daily-close mark of an open leg
+        # that did not print today (the live view's forward-filled ``_last_close``). Never
+        # read by a decision: ``close``/``has_print`` stay strictly today's prints.
+        self.last_marks: dict[str, float] = {}
         # expiry_iso -> strike -> {"CE": sym, "PE": sym}; rebuilt per day from stored symbols.
         self.chains: dict[str, dict[float, dict[str, str]]] = {}
         self.current_date: date | None = None
@@ -121,17 +132,83 @@ class _Market:
         return s
 
     def feed(self, symbol: str, close: float, oi: float) -> None:
-        self.quotes[symbol] = (float(close), float(oi))
+        stamp = self.now.strftime("%Y-%m-%dT%H:%M") if self.now else ""
+        self.quotes[symbol] = (float(close), float(oi), stamp)
         self._spot_dirty = True
 
     def close(self, symbol: str) -> float:
+        """The leg's last print, floored at its DISCOUNTED INTRINSIC. An option never
+        trades below intrinsic, but a stale print of a deep-ITM leg sits wherever the
+        index was when it last traded: on 2025-10-17 a BANKNIFTY condor's four legs were
+        marked at prices that valued it at ₹390/unit when it was intrinsically worth 0 —
+        a max-loss month booked as a target win, ₹1.2L of fiction on 300 units — and the
+        same stale long wing marked the book ₹5.9L underwater mid-cycle. The floor uses
+        the same expiry's parity forward (the liquid ATM pair) and the harness's own
+        carry discount, so it is exact on expiry day and a few points conservative before."""
         q = self.quotes.get(symbol)
         if q is None:
             raise KeyError(symbol)
-        return q[0]
+        floor = self._intrinsic_floor(symbol)
+        return q[0] if floor is None or q[0] >= floor else floor
 
     def has_print(self, symbol: str) -> bool:
-        return symbol in self.quotes
+        q = self.quotes.get(symbol)
+        if q is None:
+            return False
+        if not self.stale_minutes or self.now is None or not q[2]:
+            return True
+        try:
+            age = self.now - datetime.fromisoformat(q[2])
+        except (TypeError, ValueError):  # pragma: no cover - a malformed stamp is not stale
+            return True
+        return age.total_seconds() <= self.stale_minutes * 60
+
+    def _intrinsic_floor(self, symbol: str) -> float | None:
+        try:
+            _u, e, strike_s, right = symbol.split("|")
+            k = float(strike_s)
+        except ValueError:
+            return None
+        if self._spot_dirty:
+            self._floor_cache = {}
+        if e not in self._floor_cache:
+            self._floor_cache[e] = self._parity(e)
+        f = self._floor_cache[e]
+        # A thin far expiry can hand back a parity pair that is stale on one side; if its
+        # forward sits more than 3% from the liquid nearest-expiry spot, use that spot
+        # (undiscounted intrinsic — a slightly looser, always-valid bound).
+        spot = self.index_spot(self.underlying)
+        if f is None or f <= 0 or (spot and abs(f - spot) > 0.03 * spot):
+            if not spot:
+                return None
+            return max(0.0, spot - k if right == "CE" else k - spot)
+        intr = max(0.0, f - k if right == "CE" else k - f)
+        return intr * (self._decarry(f, e) / f)
+
+    def mark_or_floor(self, symbol: str) -> float | None:
+        """The daily-close mark for an open leg: today's (floored) print, else YESTERDAY'S
+        mark, floored. Two holes taught the fallback. 2022-07-22: a BANKNIFTY fly's lower
+        wing sat 3,000 points ITM and did not trade all day; carried at ENTRY beside a
+        live-marked body it put a ₹7L hole in the equity curve that vanished the next
+        session. 2025-01-02: the whole 2025-01-29 chain went dark in the store for the rest
+        of the month, and flooring the ITM wing at intrinsic while the ATM body (floor 0)
+        stayed at entry mixed two bases into a ₹3.4L loss that was not there. A carried
+        mark keeps every leg on the SAME basis, one day stale; the floor still catches a
+        carry the index has since run through. None = nothing known: leave it at entry."""
+        try:
+            return self.close(symbol)
+        except KeyError:
+            pass
+        carried = self.last_marks.get(symbol)
+        floor = self._intrinsic_floor(symbol)
+        if carried is None:
+            return floor or None
+        return max(carried, floor) if floor is not None else carried
+
+    def end_day(self) -> None:
+        """Roll today's closes into the cross-day marks (after the daily-close marking)."""
+        for sym, q in self.quotes.items():
+            self.last_marks[sym] = q[0]
 
     def _parity(self, expiry_iso: str) -> float | None:
         best = None
@@ -171,6 +248,7 @@ class _Market:
                 val = self._decarry(spot, e)
                 break
         self._spot_cache = val
+        self._floor_cache = {}
         self._spot_dirty = False
         return val
 
@@ -418,6 +496,7 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
     sizing = str(p.pop("sizing", "fixed") or "fixed")
     buffer_pct = float(p.pop("sizing_buffer_pct", 10) or 0)
     allow_fifty = bool(p.pop("allow_fifty_strikes", False))
+    stale_min = int(p.pop("mark_stale_min", 5) or 0)
     # intraday_strangle_combo counts its OTM steps on the LISTING grid (NIFTY 50s — the
     # owner's spec: spot 25000 → OTM3 PE 24850). FORCED on rather than left to a form
     # checkbox: coarsened to 100s the replay would place different strikes and still look
@@ -446,7 +525,8 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
         # sizing bug. Keep this a SET, not a chain of `==` checks.
         p["sets"] = int(p.pop("lots") or 1)
     strategy = factory(universe=[u], initial_capital=capital, **p)
-    market = _Market(u, lot_overrides=lot_overrides, allow_fifty_strikes=allow_fifty)
+    market = _Market(u, lot_overrides=lot_overrides, allow_fifty_strikes=allow_fifty,
+                     stale_minutes=stale_min)
     chain = _Chain(market)
     ctx = _Ctx(market, chain)
     if hasattr(strategy, "set_option_bars_fn"):
@@ -655,9 +735,9 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
             if pi < n_prints and min_strs[pi] == minute_key:
                 q = market.quotes
                 while pi < n_prints and min_strs[pi] == minute_key:
-                    q[p_syms[pi]] = (p_close[pi], p_oi[pi])   # == market.feed, no dispatch
+                    q[p_syms[pi]] = (p_close[pi], p_oi[pi], minute_key)   # == feed, no dispatch
                     pi += 1
-                market._spot_dirty = True  # invalidate the per-minute parity cache
+                market._spot_dirty = True  # invalidate the per-minute parity + floor caches
             ctx._now = cur
             market.now = cur
             if track_spot:
@@ -733,13 +813,13 @@ def run_intraday_backtest(strategy_id: str, underlying: str, start: date, end: d
         unreal = 0.0
         open_prem = 0.0
         for sym, pos in ctx.positions.items():
-            try:
-                mark = market.close(sym)
-            except KeyError:
-                continue  # never printed today — carry at entry (flat contribution)
+            mark = market.mark_or_floor(sym)
+            if mark is None:
+                continue  # an OTM leg that never printed today — carry at entry (~0 anyway)
             unreal += (mark - pos["entry"]) * pos["units"] * pos["dir"]
             open_prem += mark * pos["units"]   # buy-back cost, sign-free (engine parity)
         open_premium_by_day[day.isoformat()] = round(open_prem, 2)
+        market.end_day()
         if episode is not None:
             # The open cycle's MTM at this close (owner ask: per-cycle EOD P&L) —
             # legs already closed within the episode + the open book's unreal.

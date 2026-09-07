@@ -605,6 +605,20 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
           hint: "distance from the ATM body to each long wing" }),
         f("body_lots", "BODY LOTS PER SET", "number", 2),
         f("wing_lots", "WING LOTS PER SET", "number", 1),
+        // Structure variants (2026-09-07). Defaults = the plain fly. On the 61-cycle
+        // store replay nothing here beat the plain ATM fly with the 3% target: moving the
+        // body off spot halved it, the broken wing traded a fatter tail for the same
+        // average, and the wide condor's deep-ITM legs do not trade often enough to
+        // mark honestly (the harness now floors marks at intrinsic and refuses a
+        // decision on a print older than 5 minutes because of it).
+        f("body_split_points", "BODY SPLIT (PTS)", "number", 0, { step: "any",
+          hint: "0 = butterfly. N = a long CONDOR: the short body becomes two strikes at body ± N, body lots shared; wings stay at body ± wing width (owner's spec: split 100, wings 300)" }),
+        f("far_wing_points", "FAR WING (PTS)", "number", 0, { step: "any",
+          hint: "0 = symmetric. N = BROKEN WING: the OTM-side wing (above a call fly, below a put fly) sits N from the body instead of the wing width — a smaller debit or a credit, loss capped on that side only" }),
+        f("body_offset_points", "BODY OFFSET (PTS)", "number", 0, { step: "any",
+          hint: "signed: + centres the body above spot, − below. The directional / low-probability fly" }),
+        f("trend_follow", "FOLLOW THE TREND", "toggle", false,
+          { hint: "each cycle: spot above the previous cycle's entry → a call fly ABOVE spot by the offset, below → a put fly BELOW. Overrides SIDE after the first cycle" }),
       ],
     },
     exit: {

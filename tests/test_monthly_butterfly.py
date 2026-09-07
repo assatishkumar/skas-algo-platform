@@ -363,3 +363,60 @@ def test_the_spread_gate_stands_aside_without_a_book_and_when_off():
     off, ctx2 = setup(aug=_booked(spread_pct=9.0))          # 9% spread, gate off
     assert off.max_spread_pct == 0.0
     assert len(tick(off, ctx2, datetime(2026, 7, 29, 9, 20))) == 3
+
+
+# ---------------------------------------------------------------- structure variants
+
+
+def test_a_broken_wing_pushes_only_the_otm_side_wing_out():
+    """PE fly: the lower wing is the OTM one. CE fly: the upper. The other wing stays put."""
+    st, ctx = setup(side="pe", wing_points=100, far_wing_points=300)
+    tick(st, ctx, datetime(2026, 7, 29, 9, 20))
+    assert set(parts(st)) == {25_000.0, 25_100.0, 24_700.0}
+    st, ctx = setup(side="ce", wing_points=100, far_wing_points=300)
+    tick(st, ctx, datetime(2026, 7, 29, 9, 20))
+    assert set(parts(st)) == {25_000.0, 25_300.0, 24_900.0}
+
+
+def test_a_split_body_is_a_long_condor_with_the_lots_shared():
+    st, ctx = setup(side="ce", wing_points=300, body_split_points=100, body_lots=2)
+    sigs = tick(st, ctx, datetime(2026, 7, 29, 9, 20))
+    assert len(sigs) == 4
+    p = parts(st)
+    assert p[25_100.0] == (-1, LOT) and p[24_900.0] == (-1, LOT)      # 1 lot each short
+    assert p[25_300.0] == (1, LOT) and p[24_700.0] == (1, LOT)        # wings ±300 off centre
+    # wings still go FIRST — the same naked-short argument, four legs instead of three
+    assert [s.action.name for s in sigs] == ["ENTER_LONG", "ENTER_LONG", "ENTER_SHORT", "ENTER_SHORT"]
+    assert st.body_strike == 25_000.0
+
+
+def test_a_body_offset_centres_the_fly_away_from_spot():
+    st, ctx = setup(side="ce", body_offset_points=260)          # 25,260 → nearest 25,300
+    tick(st, ctx, datetime(2026, 7, 29, 9, 20))
+    assert st.body_strike == 25_300.0 and set(parts(st)) == {25_300.0, 25_400.0, 25_200.0}
+    st, ctx = setup(side="pe", body_offset_points=-300)
+    tick(st, ctx, datetime(2026, 7, 29, 9, 20))
+    assert st.body_strike == 24_700.0
+
+
+def test_trend_follow_picks_the_side_and_the_sign_from_the_previous_cycles_entry():
+    """No history → the configured side, offset signed to match it. Next cycle: spot below
+    the last entry → a PE fly BELOW spot; above → a CE fly ABOVE."""
+    st, ctx = setup(side="ce", body_offset_points=300, trend_follow=True)
+    tick(st, ctx, datetime(2026, 7, 29, 9, 20))
+    assert st.entry_side == "ce" and st.body_strike == 25_300.0
+    mark_all(st, ctx)
+    assert {s.reason for s in tick(st, ctx, datetime(2026, 8, 25, 15, 15))} == {"mbf_expiry"}
+    assert st.entry_spot == SPOT                                  # the history survives the exit
+    ctx.market.spot = 24_500.0                                    # the month fell
+    ctx.market.by_expiry = {e: chain(spot=24_500.0) for e in ctx.market.by_expiry}
+    tick(st, ctx, datetime(2026, 8, 26, 9, 20))
+    assert st.entry_side == "pe" and st.body_strike == 24_200.0   # 24,500 − 300
+    state = st.export_state()
+    assert state["entry_side"] == "pe" and state["entry_spot"] == 24_500.0
+
+
+def test_the_plain_fly_is_unchanged_by_the_variant_defaults():
+    st, ctx = setup(side="pe")
+    tick(st, ctx, datetime(2026, 7, 29, 9, 20))
+    assert set(parts(st)) == {25_000.0, 25_100.0, 24_900.0} and st.entry_side == "pe"

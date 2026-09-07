@@ -595,3 +595,99 @@ def test_a_position_past_its_expiry_settles_even_if_that_day_is_missing():
     assert due == [stale], "a past-expiry leg must be picked up for settlement"
     # the old equality test would have missed it entirely
     assert [s for s in positions if s.split("|")[1] == _d(2026, 7, 21).isoformat()] == []
+
+
+def test_a_replay_mark_never_sits_below_discounted_intrinsic():
+    """2025-10-17: a BANKNIFTY condor's deep-ITM legs printed 3-14 times all day, at prices
+    that valued a structure intrinsically worth 0 at ₹390/unit — a max-loss month booked
+    as a target win. A stale print of an ITM leg is floored at what the liquid ATM pair
+    says it must at least be worth; a fresh print above the floor is untouched."""
+    from skas_algo.services.intraday_replay import _Market
+
+    m = _Market("BANKNIFTY")
+    exp = "2026-10-28"
+    syms = [f"BANKNIFTY|{exp}|{k}|{r}" for k in (53600, 55000) for r in ("CE", "PE")]
+    m.start_day(date(2026, 10, 17), syms)
+    m.now = datetime(2026, 10, 17, 14, 11)
+    # the ATM pair says F ≈ 55,000 + 1,400 − 100 = 56,300 (de-carried a touch: 11 DTE)
+    m.feed(f"BANKNIFTY|{exp}|55000|CE", 1400.0, 1)
+    m.feed(f"BANKNIFTY|{exp}|55000|PE", 100.0, 1)
+    m.feed(f"BANKNIFTY|{exp}|53600|CE", 2319.75, 1)   # a print from a week ago
+    floor = (56300 - 53600) * (m._decarry(56300.0, exp) / 56300.0)
+    assert m.close(f"BANKNIFTY|{exp}|53600|CE") == pytest.approx(floor)
+    assert 2690 < floor < 2700                         # ≈ 2,700 less 11 days of carry
+    m.feed(f"BANKNIFTY|{exp}|53600|CE", 2800.0, 1)     # a real print above intrinsic
+    assert m.close(f"BANKNIFTY|{exp}|53600|CE") == 2800.0
+    # an OTM leg has no floor
+    m.feed(f"BANKNIFTY|{exp}|53600|PE", 3.0, 1)
+    assert m.close(f"BANKNIFTY|{exp}|53600|PE") == 3.0
+    # on expiry day the floor is exact intrinsic
+    m.start_day(date(2026, 10, 28), syms)
+    m.now = datetime(2026, 10, 28, 15, 0)
+    m.feed(f"BANKNIFTY|{exp}|55000|CE", 1400.0, 1)
+    m.feed(f"BANKNIFTY|{exp}|55000|PE", 0.05, 1)
+    m.feed(f"BANKNIFTY|{exp}|53600|CE", 2000.0, 1)
+    assert m.close(f"BANKNIFTY|{exp}|53600|CE") == pytest.approx(56399.95 - 53600)
+
+
+def test_a_print_older_than_the_stale_window_is_not_a_print():
+    """The strategies' has_print guard means "this mark is fresh" live; the store used to
+    answer "printed today", which for a deep-ITM leg can mean hours ago and 1,000 points
+    away. Default 5 minutes; 0 keeps the old rule."""
+    from skas_algo.services.intraday_replay import _Market
+
+    sym = "NIFTY|2026-08-25|23000|CE"
+    for stale, later in ((5, False), (0, True)):
+        m = _Market("NIFTY", stale_minutes=stale)
+        m.start_day(date(2026, 8, 10), [sym])
+        m.now = datetime(2026, 8, 10, 9, 20)
+        m.feed(sym, 1500.0, 1)
+        assert m.has_print(sym)
+        m.now = datetime(2026, 8, 10, 9, 25)
+        assert m.has_print(sym)                        # exactly at the window
+        m.now = datetime(2026, 8, 10, 9, 31)
+        assert m.has_print(sym) is later
+    assert not m.has_print("NIFTY|2026-08-25|24000|CE")   # never printed
+
+
+def test_an_unprinted_deep_itm_leg_is_marked_at_its_floor_not_its_entry():
+    """2022-07-22: the fly's 32,700 call, 3,000 points ITM, did not trade all day. Carried
+    at entry beside a live-marked short body, the daily equity showed a ₹7L hole that was
+    gone the next session. The close-of-day mark falls back to the intrinsic floor; an
+    OTM leg with no print stays at entry (it is worth nothing either way)."""
+    from skas_algo.services.intraday_replay import _Market
+
+    m = _Market("BANKNIFTY")
+    exp = "2022-07-28"
+    syms = [f"BANKNIFTY|{exp}|{k}|{r}" for k in (32700, 36700, 40000) for r in ("CE", "PE")]
+    m.start_day(date(2022, 7, 22), syms)
+    m.now = datetime(2022, 7, 22, 15, 29)
+    m.feed(f"BANKNIFTY|{exp}|36700|CE", 210.0, 1)
+    m.feed(f"BANKNIFTY|{exp}|36700|PE", 190.0, 1)          # F = 36,720
+    with pytest.raises(KeyError):
+        m.close(f"BANKNIFTY|{exp}|32700|CE")               # a decision still cannot use it
+    floor = (36720 - 32700) * (m._decarry(36720.0, exp) / 36720.0)
+    assert m.mark_or_floor(f"BANKNIFTY|{exp}|32700|CE") == pytest.approx(floor)
+    assert m.mark_or_floor(f"BANKNIFTY|{exp}|40000|CE") is None   # OTM, no print → entry
+    # yesterday's mark carries into a dark day and is floored, never left at entry
+    m.end_day()
+    m.start_day(date(2022, 7, 25), syms)
+    m.now = datetime(2022, 7, 25, 15, 29)
+    m.feed(f"BANKNIFTY|{exp}|36700|CE", 210.0, 1)
+    m.feed(f"BANKNIFTY|{exp}|36700|PE", 190.0, 1)
+    assert m.mark_or_floor(f"BANKNIFTY|{exp}|36700|CE") == 210.0
+    # still no print and nothing carried → today's floor (three days less carry)
+    floor2 = (36720 - 32700) * (m._decarry(36720.0, exp) / 36720.0)
+    assert floor2 > floor
+    assert m.mark_or_floor(f"BANKNIFTY|{exp}|32700|CE") == pytest.approx(floor2)
+    m.feed(f"BANKNIFTY|{exp}|32700|CE", 4100.0, 1)      # a real print today
+    m.feed(f"BANKNIFTY|{exp}|40000|CE", 12.5, 1)
+    m.end_day()
+    # a whole chain that goes dark: every leg carries YESTERDAY's mark, on one basis
+    m.start_day(date(2022, 7, 26), syms)
+    m.now = datetime(2022, 7, 26, 15, 29)
+    assert m.mark_or_floor(f"BANKNIFTY|{exp}|40000|CE") == 12.5
+    assert m.mark_or_floor(f"BANKNIFTY|{exp}|32700|CE") == 4100.0   # above its floor
+    m.feed(f"BANKNIFTY|{exp}|36700|CE", 1010.0, 1)     # …unless the index ran through it
+    m.feed(f"BANKNIFTY|{exp}|36700|PE", 10.0, 1)       # F = 37,700 → floor ≈ 5,000
+    assert m.mark_or_floor(f"BANKNIFTY|{exp}|32700|CE") > 4900
