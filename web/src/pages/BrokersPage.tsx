@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { api, brokers } from "../api/client";
 import { ErrorBox, Spinner } from "../components/ui";
+import BrokerBookCard from "../components/BrokerBookCard";
 import type { BrokerAccount } from "../types";
 
 /** Brokers — broker account management, rebuilt per the Claude Design handoff
@@ -757,6 +758,9 @@ export default function BrokersPage() {
                 ))
               )}
             </div>
+            {/* The broker mirror: the broker's net book beside the live runs', per contract —
+                the view behind the hourly reconciliation. Account-level, so it lives here. */}
+            {accounts.length > 0 && <BrokerBookCard accounts={accounts} />}
           </div>
         </div>
       </div>

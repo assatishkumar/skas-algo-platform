@@ -1719,22 +1719,46 @@ class LiveRunManager:
         from skas_algo.engine.options.instrument import parse
 
         ours: dict[str, float] = {}
+        # The per-run breakdown behind each net figure, for the Brokers page's book view
+        # (services/broker_book). Built in THIS loop, from THIS filter, so the screen can never
+        # disagree with the hourly halt about which runs count — a second aggregation drifts.
+        lots_by_ts: dict[str, list[dict]] = {}
+        counted: list[dict] = []
+        skipped: list[dict] = []
         _acct_runs = []
         for run in self.runs.values():
             if run.config.mode.upper() != "LIVE":
                 continue
             if run.config.broker_account_id != account_id:
                 continue
+            ident = {
+                "run_id": getattr(run, "run_id", None),
+                "name": getattr(run.config, "name", None),
+                "strategy_id": getattr(run.config, "strategy_id", None),
+            }
             if not isinstance(getattr(run.session, "broker", None), LiveBroker):
+                # A LIVE run whose orders are on PAPER right now (restart demotion, waiting
+                # for the login re-arm): the broker is not managing its book, so it is not in
+                # the aggregate — and the screen must say so rather than show it as absent.
+                skipped.append({**ident, "reason": "orders on paper"})
                 continue
             _acct_runs.append(run)
+            counted.append(ident)
             for sym in run.session.portfolio.lot_symbols():
                 for lot in run.session.portfolio.lots(sym):
                     inst = parse(sym)
                     ts = None
                     if inst is not None:
                         ts = adapter._option_tradingsymbol(inst)
-                    ours[ts or sym] = ours.get(ts or sym, 0.0) + lot.direction * lot.units
+                    key = ts or sym
+                    ours[key] = ours.get(key, 0.0) + lot.direction * lot.units
+                    lots_by_ts.setdefault(key, []).append({
+                        **ident,
+                        "symbol": sym,
+                        "direction": int(lot.direction),
+                        "units": float(lot.units),
+                        "price": (float(lot.price) if getattr(lot, "price", None) is not None else None),
+                    })
         try:
             broker_net = _broker_delivery_book(
                 adapter, traded_today=_traded_today(_acct_runs)
@@ -1760,6 +1784,9 @@ class LiveRunManager:
         if details is not None:
             details["ours"] = dict(ours)
             details["broker"] = {ts: q for ts, q in broker_net.items() if abs(q) > 1e-6}
+            details["lots"] = lots_by_ts
+            details["runs_counted"] = counted
+            details["runs_skipped"] = skipped
         problems = []
         for ts, qty in ours.items():
             b = broker_net.get(ts, 0.0)

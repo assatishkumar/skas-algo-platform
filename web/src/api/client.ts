@@ -6,6 +6,7 @@ import type {
   BenchmarkPoint,
   LoginResponse,
   BrokerAccount,
+  BrokerBook,
   BrokerConnectRequest,
   BsCalibrationResult,
   CycleDetail,
@@ -562,6 +563,7 @@ export const portfolio = {
 
 export const brokers = {
   list: () => request<BrokerAccount[]>("/brokers"),
+  book: (id: number) => request<BrokerBook>(`/brokers/${id}/book`),
   connect: (body: BrokerConnectRequest) =>
     request<BrokerAccount>("/brokers", { method: "POST", body: JSON.stringify(body) }),
   loginUrl: (id: number) => request<{ login_url: string }>(`/brokers/${id}/login-url`),

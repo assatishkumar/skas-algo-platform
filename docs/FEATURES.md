@@ -630,6 +630,22 @@ disarmed account paper-fills.
 
 ## 7. Brokers & sessions
 
+- **Broker book · net positions (2026-09-07)** — on the Brokers page, per account: the
+  broker's net book beside the live runs', one line per contract, with the runs behind each
+  line (which run, long or short, how many, at what entry). It is a read-only view over the
+  same reconciliation that halts a run on a mismatch, so the two can never disagree; a
+  mismatch shows in the reconciler's own words. Each line also carries **"booked at
+  broker"**: where two runs sit on opposite sides of one contract (an iron fly short and a
+  calendar long on the same strike), the broker has already netted the matched quantity and
+  booked it as a closed trade — realised on its side, still open on ours. That is the
+  ₹48,496 by which Kite and the tiles disagreed on 2 Sep, and no screen could say so
+  before. Paper runs are left out (they mirror the live books and place nothing); a live run
+  whose orders are on paper after a restart is named as "not counted" rather than silently
+  absent; anything the broker holds that no run does — a manual trade, a stopped run's leg —
+  is listed as broker-only. Quantities only: the broker's P&L is day-based and ours is
+  since-entry, so no subtraction is offered. A dead session or a failed read says so in red
+  — an empty table must never read as "flat". F&O by default, equity behind a toggle.
+
 - **Two brokers** (`BrokerAccount.broker` ∈ {zerodha, dhan}; `services/broker.make_adapter`
   dispatches). Credentials (`api_secret`, `session_token`) are Fernet-encrypted at rest.
 - **Zerodha (Kite)**: the primary. You enter Kite Connect app credentials, click Login to open

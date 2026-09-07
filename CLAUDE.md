@@ -125,6 +125,21 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   treated as **transient** (stay reconcile-pending, retry next tick), NOT a halt — only a genuine
   quantity mismatch halts. (Pre-2026-07 a token-expiry read failure off-hours fired a false
   ~4:50 AM "BOOK MISMATCH" halt.)
+  **The book is now VISIBLE (2026-09-07): the Brokers page's "Broker book · net positions"
+  card** (`GET /brokers/{id}/book` → `services/broker_book.build_book`) is a read-only view
+  over the SAME `reconcile_account_book` call — it fills `details` with `lots` (per-run,
+  per-contract: run, direction, units, entry), `runs_counted` and `runs_skipped` (a LIVE run
+  demoted to paper orders is NAMED, never silently absent) in the same loop that decides a
+  halt, so the screen cannot disagree with it; pinned by a test that forbids the service
+  from walking portfolios itself. Per contract: platform net, broker net, diff, status
+  (match / mismatch / platform-only / broker-only), the lots underneath, and
+  **`booked_at_broker`** — when runs sit on both sides of one contract the broker has
+  already netted the matched quantity and booked (avg short − avg long) × matched: the
+  ₹48,496 Kite showed on 2026-09-02 that no platform screen could explain. Three rules:
+  paper runs excluded (they mirror the live books and place nothing); NO P&L subtraction
+  (Zerodha's is day-based, ours since-entry — not comparable); a failed read answers
+  `ok: false` with the reason (an empty table reads as "flat" — the 04:50 false comfort
+  in reverse). F&O by default, equity behind a toggle.
 - Do **not** run ad-hoc scripts that could place/modify/cancel orders. Be deliberate around anything
   in `live/` and order placement. When in doubt, ask.
 - Tests use simulated brokers and an isolated DB — they never touch the broker or dev data.

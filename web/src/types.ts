@@ -1339,6 +1339,43 @@ export interface BrokerAccount {
   can_place_orders?: boolean;   // adapter exposes the real order surface (server-side truth)
 }
 
+/** One run's lot behind a contract line in the broker book (GET /brokers/{id}/book). */
+export interface BrokerBookLot {
+  run_id: number | null;
+  name: string | null;
+  strategy_id: string | null;
+  symbol: string; // our internal form (UNDERLYING|EXPIRY|STRIKE|RIGHT)
+  direction: 1 | -1;
+  units: number;
+  price: number | null; // our entry
+}
+
+export interface BrokerBookRow {
+  tradingsymbol: string; // the broker's name for the contract
+  symbol: string | null; // our internal form, when a run holds it
+  segment: "fno" | "equity";
+  platform_net: number;
+  broker_net: number;
+  diff: number; // broker − platform
+  status: "match" | "mismatch" | "platform_only" | "broker_only";
+  lots: BrokerBookLot[];
+  // Runs on BOTH sides of one contract: the broker has already netted the matched quantity
+  // and booked (avg short entry − avg long entry) × matched — realised on its side, open on ours.
+  booked_at_broker: { matched_units: number; avg_long: number; avg_short: number; amount: number } | null;
+}
+
+export interface BrokerBook {
+  ok: boolean;
+  error?: string; // when ok is false: why the broker could not be read — never an empty table
+  as_of: string | null;
+  account: { id: number; label: string; broker: string } | null;
+  mismatch?: string | null; // the reconciler's own words; null when the books agree
+  rows: BrokerBookRow[];
+  runs_counted?: { run_id: number | null; name: string | null; strategy_id: string | null }[];
+  runs_skipped?: { run_id: number | null; name: string | null; strategy_id: string | null; reason: string }[];
+  totals?: { rows: number; mismatches: number; booked_at_broker: number };
+}
+
 export interface BrokerConnectRequest {
   broker: string;
   label: string;

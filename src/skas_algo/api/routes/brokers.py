@@ -139,6 +139,30 @@ def refresh_gold(
     return {"account_id": account_id, "refreshed": {"GOLD": result}}
 
 
+@router.get("/{account_id}/book")
+def account_book(account_id: int, db: Session = Depends(get_db)) -> dict:
+    """The broker's NET book beside the platform's, per contract, with the runs behind each
+    line — a read-only view over the same reconciliation the hourly halt runs
+    (services/broker_book). A dead session or a failed read answers ``ok: false`` with the
+    reason: an empty table must never read as "flat"."""
+    from skas_algo.live.manager import manager
+    from skas_algo.services.broker_book import build_book
+
+    account = db.get(BrokerAccount, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="broker account not found")
+    ident = {"id": account.id, "label": account.label, "broker": str(account.broker)}
+    if not broker_svc.has_valid_session(account):
+        return {"ok": False, "error": "no valid broker session — log in first",
+                "as_of": None, "account": ident, "rows": []}
+    try:
+        adapter = broker_svc.make_adapter(account)
+    except Exception as exc:  # pragma: no cover - credentials/crypto problems
+        return {"ok": False, "error": f"could not build the broker adapter: {exc}",
+                "as_of": None, "account": ident, "rows": []}
+    return build_book(manager, account.id, adapter, account=ident)
+
+
 @router.post("/{account_id}/arm", response_model=BrokerAccountOut)
 def arm(account_id: int, db: Session = Depends(get_db)) -> BrokerAccountOut:
     return _to_out(broker_svc.set_armed(db, _get(db, account_id), True))
