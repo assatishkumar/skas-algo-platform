@@ -196,6 +196,24 @@ def _build_session(
     return session
 
 
+def _adoptable_units(strategy, portfolio, symbol: str, missing: float, price: float) -> float:
+    """Cap what one run adopts of a broker holding by the run's OWN fund size, when the
+    strategy declares one (``fund_units_wanted``): the gap between its declared size and
+    what it already holds of that fund. Whole units, never more than is missing, and the
+    historical "take it all" when the hook is absent, returns None, or fails."""
+    hook = getattr(strategy, "fund_units_wanted", None)
+    if hook is None or symbol != str(getattr(strategy, "fund_source", "") or "").upper():
+        return float(missing)
+    try:
+        wanted = hook(portfolio, price)
+    except Exception:  # pragma: no cover - a bad hook must not stop adoption
+        logger.exception("fund_units_wanted failed; adopting the full shortfall")
+        return float(missing)
+    if wanted is None:
+        return float(missing)
+    return float(min(int(missing), int(wanted)))
+
+
 def _seed_supertrend(session, strategy, loader, symbols) -> None:
     """For a SuperTrend strategy, compute each symbol's latest completed-bar direction from the
     cached OHLC and set it on the live view (live quotes carry no high/low, so ATR comes from the
@@ -953,6 +971,13 @@ class LiveRun:
                 except Exception:  # pragma: no cover
                     price = 0.0
             if price <= 0:
+                continue
+            # THIS run's share of what is missing. Two strategies funding themselves from
+            # one ETF on one account (owner 2026-09-08) must each adopt only up to their
+            # own fund size, or the first to look takes the lot and the other reads FUND
+            # DRY beside a full holding. A strategy without the hook adopts as before.
+            missing = _adoptable_units(strategy, self.session.portfolio, sym, missing, price)
+            if missing < 1:
                 continue
             try:
                 self.session.adopt_broker_holding(datetime.now(IST), sym, missing, price)

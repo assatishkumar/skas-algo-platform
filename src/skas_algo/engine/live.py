@@ -241,6 +241,15 @@ class LiveSession:
         self.portfolio.buy(symbol, int(units), float(price), ts)
         self.portfolio.cash = before
         self.sync_strategy_book(ts)
+        # A strategy that funds itself from this holding keeps its cash share as book cash
+        # LESS what was adopted (no cash moved for it) — tell it, so its settled-cash
+        # figure never counts a sibling run's balance as its own (owner 2026-09-08).
+        hook = getattr(self.strategy, "on_fund_adopted", None)
+        if hook is not None:
+            try:
+                hook(symbol, units, price)
+            except Exception:  # pragma: no cover - bookkeeping must not stop the adoption
+                logger.exception("on_fund_adopted failed for %s", symbol)
 
     def release_broker_holding(self, ts: date | datetime, symbol: str, units: float,
                                *, reason: str = "book_correction") -> float:

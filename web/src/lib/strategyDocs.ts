@@ -17,6 +17,14 @@ export type Rule = {
   exit: string[];
   risk: string;
   links?: { label: string; url: string }[];
+  /** Measured results worth keeping beside the rules: one table + the reading of it. */
+  findings?: {
+    title: string;
+    intro: string;
+    columns: string[];                       // the numeric columns, in order
+    rows: { name: string; set: string; cells: string[]; read: string }[];
+    notes: string[];
+  };
 };
 
 // Curated from the strategy implementations (src/skas_algo/strategies/*) and the design decks.
@@ -423,6 +431,7 @@ export const STRATEGIES: Rule[] = [
     entry: [
       "Buy one lot when SuperTrend flips GREEN (−1 → +1) on the chosen timeframe.",
       "Optional 'pullback' entry: after the green flip, wait for a dip and enter only when price breaks back above the post-flip high.",
+      "FUNDING (2026-09-08): on demand — a buy the account cannot pay for is queued, you get a push with the rupees to add, and it is retried at each 15:05 decision while SuperTrend stays green; or from an ETF — the capital sits in LIQUIDCASE/GOLDBEES, the strategy sells what tomorrow needs (T+1) and keeps one part as settled cash so a signal fills the day it fires.",
     ],
     exit: [
       "A SuperTrend RED flip exits whatever remains.",
@@ -495,7 +504,37 @@ export const STRATEGIES: Rule[] = [
       "Either way the month is done — the next cycle waits for the next monthly expiry.",
     ],
     risk:
-      "Defined risk by construction: the worst month is the debit, which is why this sits at the opposite end of the shelf from the ratio and calendar books. Over the 1-min store (2021-2026, 62 monthly cycles, 10 sets at ₹70,000) the best variant was BANKNIFTY calls at a 3% target — ₹1,310,276 with an 80.6% win rate, a 2.4% maximum drawdown and a worst month of −₹3,131. NIFTY calls at 3% made ₹592,528. The weekly cadence was worse everywhere, and holding to expiry with no target actually loses money, so the target is doing the work. The cost of the safety is a thin edge across six near-the-money fills a cycle, which makes slippage the real adversary — measure yours before trusting any of these numbers.",
+      "Defined risk by construction: the worst month is the debit, which is why this sits at the opposite end of the shelf from the ratio and calendar books. Over the 1-min store (2021-2026, 61 monthly cycles, 10 sets at ₹70,000, marks floored at intrinsic) BANKNIFTY calls with 400-point wings at a 3% target made ₹9,08,203 with a 69% hit rate and a worst month of −₹48,483; BANKNIFTY puts ₹8,28,087 with a worst month of −₹18,933. The weekly cadence was worse everywhere, and holding to expiry with no target actually loses money, so the target is doing the work. The cost of the safety is a thin edge across six near-the-money fills a cycle, which makes slippage the real adversary — measure yours before trusting any of these numbers.",
+    findings: {
+      title: "Structure variants — what the replay said (2026-09-07)",
+      intro: "Same store, 61 monthly cycles from July 2021, 10 lot-sets, ₹70,000/set anchor, 3% target, entry 09:20. Net is after charges; IS = 2021-23, OOS = 2024-26. Rows marked ✓ were re-run after the replay's marks were fixed (a deep-ITM leg's stale print used to be its mark); the rest are on the old marks and read high wherever a leg sat deep in the money.",
+      columns: ["Net", "2021-23", "2024-26", "Hit", "Worst cycle"],
+      rows: [
+        { name: "Plain fly · BANKNIFTY CE ✓", set: "side ce · wing 400 · everything else 0", cells: ["9,08,203", "4,48,495", "4,59,708", "69%", "−48,483"], read: "The trade. Deploy first." },
+        { name: "Plain fly · BANKNIFTY PE ✓", set: "side pe · wing 400", cells: ["8,28,087", "2,82,585", "5,45,501", "67%", "−18,933"], read: "Second book; smallest tail of all." },
+        { name: "Plain fly · NIFTY CE w200 ✓", set: "side ce · wing 200", cells: ["5,09,903", "69,261", "4,40,642", "53%", "−18,554"], read: "Third; mostly since 2024." },
+        { name: "Plain fly · NIFTY CE w100 ✓", set: "side ce · wing 100", cells: ["3,35,799", "−16,181", "3,51,980", "39%", "−54,449"], read: "Prefer wing 200." },
+        { name: "Long condor · BANKNIFTY CE ✓", set: "side ce · wing 1200 · body split 400", cells: ["7,55,981", "2,16,292", "5,39,689", "80%", "−96,438"], read: "Not measurable: the ±1,200 wing goes days without a trade." },
+        { name: "Long condor · NIFTY PE ✓", set: "side pe · wing 300 · body split 100", cells: ["4,95,421", "19,419", "4,76,002", "66%", "−34,070"], read: "Flat before 2024." },
+        { name: "Broken wing · BANKNIFTY CE ✓", set: "side ce · wing 400 · far wing 800", cells: ["6,39,897", "75,352", "5,64,546", "85%", "−97,768"], read: "High hit rate, 2× the plain fly's worst month." },
+        { name: "Broken wing · BANKNIFTY PE", set: "side pe · wing 400 · far wing 800", cells: ["9,93,965", "4,73,563", "5,20,402", "92%", "−89,416"], read: "Old marks; same shape as the CE." },
+        { name: "Broken wing · NIFTY CE 100/200", set: "side ce · wing 100 · far wing 200", cells: ["3,79,453", "−7,539", "3,86,992", "69%", "−42,812"], read: "Old marks; loses before 2024." },
+        { name: "Broken wing · NIFTY CE 200/400", set: "side ce · wing 200 · far wing 400", cells: ["−1,68,107", "−5,29,102", "3,60,995", "72%", "−1,13,237"], read: "Old marks; the only structure that lost." },
+        { name: "Body 500 above spot · BANKNIFTY CE", set: "side ce · wing 400 · body offset +500", cells: ["6,20,853", "3,16,983", "3,03,870", "57%", "−47,958"], read: "Old marks; half the ATM fly." },
+        { name: "Body 500 below spot · BANKNIFTY PE", set: "side pe · wing 400 · body offset −500", cells: ["4,45,444", "89,547", "3,55,897", "49%", "−35,263"], read: "Old marks; half the ATM fly." },
+        { name: "Body 200 above / below · NIFTY", set: "wing 100 · body offset ±200", cells: ["1,38,509 / 2,76,360", "", "", "20% / 31%", ""], read: "Old marks; the lottery. Barely pays." },
+        { name: "Body 500 above / below · NIFTY", set: "wing 100 · body offset ±500", cells: ["44,814 / 1,05,444", "", "", "18% / 16%", ""], read: "Old marks; nothing." },
+        { name: "Trend-follow · BANKNIFTY ±500 / ±1100", set: "trend on · body offset 500 or 1100", cells: ["4,77,411 / 5,30,416", "", "", "~50%", ""], read: "Old marks; worse than either fixed side." },
+        { name: "Trend-follow · NIFTY ±200 / ±500", set: "trend on · body offset 200 or 500", cells: ["1,99,150 / 1,43,446", "", "", "~24%", ""], read: "Old marks; worse than either fixed side." },
+      ],
+      notes: [
+        "The plain at-the-money fly with the target is the strategy. Every way of moving the body off spot — a fixed offset or following the month's trend — roughly halved the result on both indices. The target rescues a pin bet, not a direction bet.",
+        "The broken wing buys hit rate with tail: 85-92% of months win, and the losing month is 2-6× the plain fly's worst. On NIFTY, whose grid is finer, it lost money outright at 200/400.",
+        "The wide condor makes the index need a band instead of a pin, but its far wing sits 1,200 points in the money and does not trade for days at a stretch. No marking rule can price a leg that never prints; treat its row as a bound.",
+        "Results measured before the 2026-09-07 mark fix were optimistic wherever a leg sat deep in the money: the BANKNIFTY CE fly read ₹11,25,551 on the old marks against ₹9,08,203 on the fixed ones, the condor ₹13,77,507 against ₹7,55,981. The put fly barely moved, because its in-the-money leg is rarely deep.",
+        "Deploy order if you deploy from this: BANKNIFTY CE, then BANKNIFTY PE, then NIFTY CE at wing 200 — three plain flies as separate paper runs. Leave the variant knobs at zero.",
+      ],
+    },
   },
   {
     id: "fair_value_calendar",
@@ -888,9 +927,9 @@ export const META: Record<string, Meta> = {
   },
   monthly_butterfly: {
     group: "Premium selling", biasKind: "neutral",
-    facts: [["Bias", "Neutral, pinned at the money"], ["Instrument", "NIFTY monthly"],
-            ["Structure", "−2 ATM / +1 ±100"], ["Risk", "Capped at the debit paid"],
-            ["Target", "% of margin, then flat"], ["Cadence", "One cycle a month"]],
+    facts: [["Bias", "Neutral, pinned at the money"], ["Instrument", "BANKNIFTY / NIFTY monthly"],
+            ["Structure", "−2 ATM / +1 ±400 (BN)"], ["Risk", "Capped at the debit paid"],
+            ["Target", "3% of the margin anchor"], ["Cadence", "One cycle a month"]],
     deployNote: "Deploy on Zerodha quotes. Scale in one cycle at a time — 1 set, then 5, 10, 20 — and read the order trace for the measured slippage per unit before each step; the edge is thin across six near-the-money fills a cycle.",
     deployCta: { label: "Deploy butterfly", to: "/trade" },
   },

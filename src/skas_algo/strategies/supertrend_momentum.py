@@ -11,6 +11,14 @@ Timeframe ∈ {daily, weekly, monthly}: the SuperTrend direction (computed from 
 view and read via ``ctx.supertrend_dir``) reflects the chosen timeframe, so a flip occurs on the
 relevant bar's close. Sizing reuses SST's capital/parts (fixed or equity-scaled). Runs unchanged
 in BACKTEST and PAPER/LIVE (live SuperTrend is computed from the cached OHLC).
+
+Funding (``funding``, 2026-09-08 — see ``_funding.EntryFundingMixin``): ``ledger`` spends the
+run's own cash ledger exactly as before (ctor default, §1); ``on_demand`` queues a buy the
+account cannot pay for, tells the owner the rupees to add and retries it while the signal
+holds; ``park`` keeps the capital in ``fund_source`` (an ETF) and sells what tomorrow needs,
+T+1 aware, holding ``float_parts`` allocations as settled cash so a signal still fills the
+day it fires. Decides at 15:05 (``default_decision_time``): the platform's 15:20 is inside the
+closing auction for F&O-listed cash names since CAS, where an unfilled entry halts the run.
 """
 
 from __future__ import annotations
@@ -20,11 +28,17 @@ from typing import Any
 from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.types import Signal, SignalAction
 
+from ._funding import EntryFundingMixin
 
-class SuperTrendMomentumStrategy:
+
+class SuperTrendMomentumStrategy(EntryFundingMixin):
     strategy_id = "supertrend_momentum"
     needs_supertrend = True  # tells the build wiring to compute SuperTrend for this run
     report_deployed_metrics = True  # adds deployed-capital + idle-cash CAGR to the report
+    # 15:20 lands in the closing auction for F&O-listed cash stocks (CAS, 2026-08); an
+    # order resting there does not fill, and an unfilled ENTRY halts the run. Same call as
+    # value_investing; the deploy route resolves it, explicit → this → the platform's 15:20.
+    default_decision_time = "15:05"
 
     def __init__(
         self,
@@ -45,9 +59,20 @@ class SuperTrendMomentumStrategy:
         # EXPOSURE BRAKE: no NEW entries while this symbol's SuperTrend (same config as
         # the run's) is red; exits unaffected. None = no brake (unchanged).
         regime_symbol: str | None = None,
+        # ---- entry funding (EntryFundingMixin; every default = the historical ledger) ----
+        funding: str = "ledger",             # "ledger" | "on_demand" | "park"
+        fund_source: str | None = None,      # park: the ETF that holds the capital
+        float_parts: float = 1.0,            # park: allocations kept as settled cash
+        settlement_days: int = 1,            # T+1 for every sale's proceeds (managed modes)
+        funding_buffer_pct: float = 5.0,     # park: sell this much extra ETF
+        fund_seed: str = "never",            # park backtest: "if_empty" parks day-1 cash
+        fund_size_cap: bool = False,         # adopt the ETF only up to capital (shared holding)
         **_ignored,
     ):
         self.universe = universe
+        self._init_funding(funding, fund_source, float_parts, settlement_days,
+                           funding_buffer_pct, fund_seed, fund_size=initial_capital,
+                           fund_size_cap=fund_size_cap)
         self.capital_parts = int(capital_parts)
         self.allocation_mode = allocation_mode
         self.allocation_amount = initial_capital / capital_parts
@@ -76,9 +101,16 @@ class SuperTrendMomentumStrategy:
             "timeframe": self.timeframe,
         }
 
+    def _float_target_hint(self) -> float:
+        return self.float_parts * self.allocation_amount if self.funding == "park" else 0.0
+
     def _allocation(self, ctx: AlgoContext) -> float:
         if self.allocation_mode == "equity_scaled":
-            return ctx.equity() / self.capital_parts
+            # The run's FUND, not its book equity. Adopted ETF units sit on the book without
+            # having been paid for, so ctx.equity() counts the deploy capital AND the ETF —
+            # ₹19L on a ₹10L fund, every part sized at ₹1.9L. Subtract what was adopted
+            # once; profits and losses then flow into every part through cash and holdings.
+            return max(0.0, ctx.equity() - self.adopted_value) / self.capital_parts
         return self.allocation_amount
 
     # ------------------------------------------------------- (de)serialize
@@ -90,20 +122,44 @@ class SuperTrendMomentumStrategy:
             "prev_dir": dict(self.prev_dir),
             "partial_booked": dict(self.partial_booked),
             "setup": {s: dict(v) for s, v in self.setup.items()},
+            **self.funding_state(),
         }
 
     def load_state(self, state: dict[str, Any]) -> None:
         self.prev_dir = {k: float(v) for k, v in state.get("prev_dir", {}).items()}
         self.partial_booked = {**self.partial_booked, **state.get("partial_booked", {})}
         self.setup = {s: dict(v) for s, v in state.get("setup", {}).items()}
+        self.load_funding_state(state)
+
+    def exit_rules(self) -> list[str]:
+        rules = ["SuperTrend flips red → exit everything that remains"]
+        if self.partial_book_pct > 0 and self.profit_target > 0:
+            share = ("the whole position" if self.partial_book_pct >= 1.0
+                     else f"{self.partial_book_pct * 100:g}% of the position")
+            rules.append(f"+{self.profit_target * 100:g}% over cost → book {share}")
+        return rules + self.funding_rules()
 
     # ------------------------------------------------------------------ decide
     def on_slice(self, ctx: AlgoContext) -> list[Signal]:
         present = ctx.present_symbols()
         signals: list[Signal] = []
-        running_cash = ctx.cash
+        managed = self.funds_managed
+        today = ctx.today() if hasattr(ctx, "today") else None
+        today_iso = today.isoformat() if today else "9999-12-31"
         allocation = self._allocation(ctx)
         held = set(ctx.lot_symbols())
+        fund = self.fund_source if managed else None
+        if fund:
+            held.discard(fund)   # the parking ETF is never a trading name
+        float_target = self.float_parts * allocation if self.funding == "park" else 0.0
+        if managed:
+            running_cash = self._settle(ctx, today)
+            seed = self._maybe_seed(ctx, float_target)
+            if seed:
+                self._remember_dirs(ctx, present)
+                return seed
+        else:
+            running_cash = ctx.cash
 
         # --- Step 1: exits (held names) — RED flip exits the remainder; % target books a share ---
         for sym in held:
@@ -121,7 +177,8 @@ class SuperTrendMomentumStrategy:
 
             if dir_now < 0:  # SuperTrend red → exit everything that remains
                 signals.append(Signal(symbol=sym, action=SignalAction.EXIT_ALL, reason="supertrend_red"))
-                running_cash += units * close
+                proceeds = units * close
+                running_cash += self._credit(today, proceeds) if managed else proceeds
                 self.partial_booked[sym] = False
                 continue
 
@@ -135,37 +192,65 @@ class SuperTrendMomentumStrategy:
                 book_units = int(round(units * self.partial_book_pct))
                 if self.partial_book_pct >= 1.0 or book_units >= units:
                     signals.append(Signal(symbol=sym, action=SignalAction.EXIT_ALL, reason="target"))
-                    running_cash += units * close
+                    proceeds = units * close
+                    running_cash += self._credit(today, proceeds) if managed else proceeds
                     self.partial_booked[sym] = False
                 elif book_units > 0:
                     lot = lots[0]  # one lot per entry → book part of it; remainder rides to red
                     signals.append(Signal(symbol=sym, action=SignalAction.EXIT, lot_id=lot.id,
                                           quantity=book_units, reason="partial_target",
                                           meta={"tag": "BOOK"}))
-                    running_cash += book_units * close
+                    running_cash += (self._credit(today, book_units * close) if managed
+                                     else book_units * close)
                     self.partial_booked[sym] = True
 
         # --- Step 2: entries — buy one lot on a GREEN flip ("flip"), or after a pullback +
         #     breakout of the post-flip high ("pullback") ---
+        buys: list[Signal] = []
+
         def _buy(sym: str, close: float) -> bool:
             nonlocal running_cash
-            if running_cash < allocation:
-                return False
             units = int(allocation // close)
             if units <= 0:
                 return False
+            if managed:
+                # Funded from settled cash, else QUEUED (the decision is made either way —
+                # the queue owns it from here, retried daily while the signal holds).
+                sig = self._want(sym, units, close, today)
+                if sig is not None:
+                    buys.append(sig)
+                    self.partial_booked[sym] = False
+                return True
+            if running_cash < allocation:
+                return False
             running_cash -= units * close
-            signals.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG, quantity=units))
+            buys.append(Signal(symbol=sym, action=SignalAction.ENTER_LONG, quantity=units))
             self.partial_booked[sym] = False
             return True
 
-        today_iso = ctx.today().isoformat() if hasattr(ctx, "today") else "9999-12-31"
         regime_ok = True
         if self.regime_symbol and self.regime_symbol in present:
             rd = ctx.supertrend_dir(self.regime_symbol)
             regime_ok = rd is None or rd > 0     # fail OPEN on missing data
+        if managed:
+            # Retry what is queued FIRST (oldest claims on today's cash), re-sized at today's
+            # price. A name that flipped red meanwhile is cancelled — the signal is gone.
+            for sym in list(self.pending_entries):
+                if sym in held or sym == fund:
+                    self.pending_entries.pop(sym, None)
+                    continue
+                if sym not in present:
+                    continue
+                d = ctx.supertrend_dir(sym)
+                if d is None:
+                    continue
+                if d < 0:
+                    self._cancel_pending(sym, today, "SuperTrend turned red before it was funded")
+                    continue
+                if regime_ok:
+                    _buy(sym, ctx.close(sym))
         for sym in present:
-            if sym in held:
+            if sym in held or sym == fund or sym in self.pending_entries:
                 continue
             if sym == self.regime_symbol or not regime_ok:
                 continue   # the index itself is never traded; red regime = no new parts
@@ -203,10 +288,20 @@ class SuperTrendMomentumStrategy:
             if close > s["pivot"] and _buy(sym, close):  # breakout above the pre-pullback high
                 self.setup.pop(sym, None)
 
-        # --- Step 3: remember today's direction for the next slice's flip detection ---
+        # --- Step 3: fund-source legs, then remember today's direction ---
+        if managed:
+            self._fund_signals(ctx, today, float_target)
+            # ORDER: stock exits, fund sales, stock buys, park-back. A rejected BUY halts the
+            # run and abandons the rest of the decision, so the sale that funds tomorrow must
+            # never sit behind a buy.
+            signals = signals + self._fund_exits + buys + self._late_buys + self._park_buy
+        else:
+            signals = signals + buys
+        self._remember_dirs(ctx, present)
+        return signals
+
+    def _remember_dirs(self, ctx, present) -> None:
         for sym in present:
             d = ctx.supertrend_dir(sym)
             if d is not None:
                 self.prev_dir[sym] = d
-
-        return signals

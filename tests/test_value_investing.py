@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
+import pytest
 
 from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.live_market import LiveMarketView
@@ -567,8 +568,9 @@ def test_the_strategies_endpoint_publishes_the_defaults(client):
 def test_the_auction_window_warns_but_never_blocks():
     """A hard block would be wrong: a watchlist of only non-F&O names trades continuously to
     15:30, so 15:20 is legitimate there. The owner is warned and decides."""
-    from skas_algo.live.quotes import auction_warning, in_closing_auction
     from datetime import time as _t
+
+    from skas_algo.live.quotes import auction_warning, in_closing_auction
 
     assert in_closing_auction(_t(15, 20)) and not in_closing_auction(_t(15, 5))
     assert "F&O-LISTED" in (auction_warning("15:20") or "")
@@ -695,9 +697,11 @@ def test_live_reconciliation_caps_at_the_brokers_real_balance():
     # The cap bounds what may be SPENT; it must NOT be written back into the ledger. The
     # broker balance is shared with every other run on the account, so an options run
     # blocking margin would otherwise destroy the difference permanently (2026-08-28).
-    assert st.settled_cash == 10_000_000.0, "the ledger is untouched — only the spend is capped"
+    # (₹1cr less the ₹50,000 of ETF held at cost: adopted units are the fund, not cash —
+    # the seeding rule since 2026-09-08. The point stands: the CAP never touches it.)
+    assert st.settled_cash == 9_950_000.0, "the ledger is untouched — only the spend is capped"
     st.set_broker_funds(10_000_000.0)          # margin released
-    assert st._settle(ctx, date(2026, 1, 2)) == 10_000_000.0, "and it recovers in full"
+    assert st._settle(ctx, date(2026, 1, 2)) == 9_950_000.0, "and it recovers in full"
 
 
 def test_settlement_days_zero_is_the_historical_behaviour():
@@ -1005,3 +1009,29 @@ def test_a_never_sells_run_adopts_shares_an_archived_run_left_behind(monkeypatch
     assert got["SOUTHBANK"] == 14, "7 strays + 7 bought today, all now this run's"
     assert got["LIQUIDCASE"] == 778
     assert "ITC" not in got, "never adopt a symbol the run is not configured for"
+
+
+def test_fund_size_cap_limits_adoption_to_this_runs_share_of_the_etf():
+    """Two strategies funding themselves from one ETF on one account (owner 2026-09-08):
+    with the cap on, capital is this run's fund size and it adopts only up to that, less
+    the ETF and cash it already holds. Off (the ctor default, §1), it adopts everything
+    missing as before — the running deploy's capital was never meant as a fund size."""
+    view = _view({FUND: (100.0, 100.0)})
+    ctx, pf = _ctx(view, cash=0.0)
+    st = _strat(initial_capital=600_000, fund_size_cap=True)    # budget 5,000, ctor buffer 0
+    assert st.fund_units_wanted(pf, 100.0) == pytest.approx(5_950)   # ₹6L less the ₹5,000 float
+    _fund_lots(pf, 2_500)                                       # ₹2.5L already adopted
+    assert st.fund_units_wanted(pf, 100.0) == pytest.approx(3_450)
+    assert _strat(initial_capital=600_000).fund_units_wanted(pf, 100.0) is None
+
+
+def test_the_ledger_seeds_to_capital_less_the_adopted_etf():
+    """Adopted ETF units moved no cash, so the cash ledger is capital − ETF at cost: the
+    float, not the whole fund. With nothing adopted (every backtest) it is unchanged."""
+    view = _view({FUND: (100.0, 100.0), "AAA": (100.0, 99.0)})
+    ctx, pf = _ctx(view, cash=600_000.0)                        # deploy capital
+    pf.buy(FUND, 5_500, 100.0, D1)
+    pf.cash = 600_000.0                                         # adopted: no cash moved
+    st = _strat(watchlist="AAA", initial_capital=600_000, settlement_days=1)
+    st.on_slice(ctx)
+    assert st.settled_cash is not None and st.settled_cash <= 50_000

@@ -214,6 +214,11 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   const [stBookPct, setStBookPct] = useState(50); // % booked at the profit target (100 = full)
   const [stEntryMode, setStEntryMode] = useState("flip"); // "flip" | "pullback"
   const [stPullbackPct, setStPullbackPct] = useState(0); // min dip below the post-flip peak
+  // Entry funding (2026-09-08): "ledger" = the classic backtest (spend the run's cash);
+  // "park" models the live ETF-funded deploy — T+1 settlement, a float, day-1 seeding.
+  const [stFunding, setStFunding] = useState("ledger");
+  const [stFundSource, setStFundSource] = useState("LIQUIDCASE");
+  const [stFloatParts, setStFloatParts] = useState(1);
   const [stIdleReturn, setStIdleReturn] = useState(6); // assumed idle-cash yield %/yr (reporting)
 
   // Gap Reversal params (gap-up + 21-EMA + oversold-RSI long)
@@ -880,6 +885,18 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                   partial_book_pct: stBookPct / 100,
                   entry_mode: stEntryMode,
                   pullback_pct: stPullbackPct / 100,
+                  funding: stFunding,
+                  ...(stFunding === "park"
+                    ? {
+                        fund_source: stFundSource.trim().toUpperCase(),
+                        float_parts: stFloatParts,
+                        settlement_days: 1,
+                        funding_buffer_pct: 5,
+                        // a backtest starts with cash and no ETF: day 1 parks everything
+                        // above the float (the ctor default is "never" — live must not)
+                        fund_seed: "if_empty",
+                      }
+                    : {}),
                   idle_return: stIdleReturn / 100,
                 }
               : {}),
@@ -1776,6 +1793,24 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                       <Field label="Min pullback %">
                         <NumberInput step="0.1" className={inputClass} value={stPullbackPct} onChange={setStPullbackPct} />
                       </Field>
+                    )}
+                    <Field label="Entry funding">
+                      <select className={inputClass} value={stFunding} onChange={(e) => setStFunding(e.target.value)}>
+                        <option value="ledger">Own ledger (classic)</option>
+                        <option value="park">From an ETF — T+1, with a cash float</option>
+                        <option value="on_demand">On demand (queue and retry)</option>
+                      </select>
+                    </Field>
+                    {stFunding === "park" && (
+                      <>
+                        <Field label="Fund source ETF">
+                          <input className={inputClass} value={stFundSource}
+                            onChange={(e) => setStFundSource(e.target.value)} />
+                        </Field>
+                        <Field label="Float (parts kept as cash)">
+                          <NumberInput step="0.5" className={inputClass} value={stFloatParts} onChange={setStFloatParts} />
+                        </Field>
+                      </>
                     )}
                     <Field label="Idle cash return %/yr">
                       <NumberInput step="0.5" className={inputClass} value={stIdleReturn} onChange={setStIdleReturn} />

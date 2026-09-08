@@ -230,6 +230,45 @@ export default function StrategiesPage() {
                 </div>
                 <p className="text-sm leading-[1.65] text-[var(--muted)]">{cur.risk}</p>
               </div>
+              {/* measured findings — a table the rules above were tuned against */}
+              {cur.findings && (
+                <div className="border-t border-[var(--divider)] py-4">
+                  <div className="font-['Space_Grotesk'] text-[13.5px] font-bold">{cur.findings.title}</div>
+                  <p className="mt-1.5 max-w-[820px] text-[12.5px] leading-[1.6] text-[var(--muted)]">{cur.findings.intro}</p>
+                  <div className="mt-3 overflow-x-auto rounded-[12px] border border-[var(--border)]">
+                    <table className="w-full text-[12px]">
+                      <thead>
+                        <tr className="bg-[var(--stat)] text-[10.5px] uppercase tracking-[0.06em] text-[var(--faint)]">
+                          <th className="px-3 py-2 text-left font-bold">Variant · what to set · reading</th>
+                          {cur.findings.columns.map((c) => (
+                            <th key={c} className="px-3 py-2 text-right font-bold whitespace-nowrap">{c}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cur.findings.rows.map((row) => (
+                          <tr key={row.name} className="border-t border-[var(--divider)] align-top">
+                            <td className="px-3 py-2">
+                              <div className="font-semibold text-[var(--strong)]">{row.name}</div>
+                              <div className="mt-0.5 font-mono text-[11px] text-[var(--muted)]">{row.set}</div>
+                              <div className="mt-0.5 text-[11.5px] text-[var(--muted)]">{row.read}</div>
+                            </td>
+                            {row.cells.map((cell, ci) => (
+                              <td key={ci} className="px-3 py-2 text-right tabular-nums whitespace-nowrap text-[var(--muted)]"
+                                style={ci <= 2 && cell.startsWith("−") ? { color: "var(--danger)" } : undefined}>
+                                {cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <ul className="mt-3 space-y-2">
+                    {cur.findings.notes.map((n, i) => <Bullet key={i} text={n} accent="var(--sec-risk)" />)}
+                  </ul>
+                </div>
+              )}
             </div>
 
             {/* deploy footer */}

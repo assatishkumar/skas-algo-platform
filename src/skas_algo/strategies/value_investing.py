@@ -143,6 +143,12 @@ class ValueInvestingStrategy:
         # badly. Stated as its own report line, NEVER folded into the engine's equity curve.
         # 0 = report nothing (the honest default when the rate is unknown).
         fund_yield_pct: float = 0.0,
+        # Per-run FUND SIZE (owner 2026-09-08): with another strategy sharing the account's
+        # ETF, adopt broker-held units only up to ``initial_capital`` less what this run
+        # already holds of its fund (ETF + cash). False = adopt everything missing (the
+        # historical behaviour — §1: the running deploy's capital is not a fund size);
+        # the deploy card sets True, and then capital IS the run's share of the pool.
+        fund_size_cap: bool = False,
         **_ignored,
     ):
         self.universe = list(universe or [])
@@ -163,6 +169,7 @@ class ValueInvestingStrategy:
             )
         self.max_skew_pct = float(max_skew_pct)
         self.fund_seed = str(fund_seed or "never").lower()
+        self.fund_size_cap = bool(fund_size_cap)
         # ---- the settlement ledger (persisted) ----
         # `settled_cash` is what is spendable NOW; `pending_credits` are sale proceeds and the
         # trading day they land. The strategy owns this rather than reading ctx.cash because
@@ -349,7 +356,10 @@ class ValueInvestingStrategy:
         Run 23 is the case in point — a ₹1,00,00,000 ledger against a ₹146.03 balance, which
         is how a ₹329.40 buy came to be rejected for want of ₹83.48."""
         if self.settled_cash is None:                    # first decision of this run
-            self.settled_cash = float(ctx.cash)
+            # The CASH portion of the share: capital less the ETF already adopted (no cash
+            # moved for those). Same figure as before when no ETF is held at the first
+            # decision — every backtest, and every run that only holds what it bought.
+            self.settled_cash = max(0.0, float(ctx.cash) - self._fund_value_at_cost(ctx))
         due = [c for c in self.pending_credits if date.fromisoformat(c[0]) <= today]
         for c in due:
             self.settled_cash += float(c[1])
@@ -369,6 +379,29 @@ class ValueInvestingStrategy:
 
     def _pending_total(self) -> float:
         return sum(float(c[1]) for c in self.pending_credits)
+
+    def _fund_value_at_cost(self, book) -> float:
+        try:
+            return sum(float(lot.units) * float(lot.price)
+                       for lot in (book.lots(self.fund_source) or []))
+        except Exception:  # pragma: no cover - an unpriceable book is an empty one
+            return 0.0
+
+    def fund_units_wanted(self, book, price: float) -> float | None:
+        """How many broker-held fund units this run may ADOPT (``fund_size_cap``): its
+        capital less what it holds of its fund — the ETF at cost plus its cash ledger. The
+        stock it has bought is NOT part of the fund (this strategy spends the fund into
+        holdings it never sells), so a top-up refills what was spent, up to the size the
+        run was deployed with. None = no cap, the historical behaviour."""
+        if not self.fund_size_cap or price <= 0:
+            return None
+        etf = self._fund_value_at_cost(book)
+        if self.settled_cash is None:
+            # no ledger yet: the cash share is the float this strategy keeps by design
+            cash = self.daily_budget * (1.0 + self.funding_buffer_pct / 100.0)
+        else:
+            cash = float(self.settled_cash) + self._pending_total()
+        return max(0.0, (self.initial_capital - etf - max(0.0, cash)) / price)
 
     def _presell(self, fund: str, fund_px: float, fund_lots, fund_units: int,
                  today: date) -> tuple[list[Signal], int]:

@@ -490,6 +490,47 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   auction raises a WARNING alert (never a 422 — a non-F&O-only watchlist is fine at 15:20).
   `decision_time` is DEPLOY-level and edit-blocklisted: stop + redeploy to change it, and
   `recovery.py`'s literal "15:20" fallback is untouched so existing deploys are unchanged (§1).
+- **supertrend_momentum entry FUNDING (`_funding.EntryFundingMixin`, owner 2026-09-08).**
+  The strategy sized every buy off the run's own cash ledger — live that is whatever
+  `capital` was typed, so the first signal would place a ₹1L order the account cannot pay,
+  be rejected, and HALT (an unfilled entry halts by rule). `funding` picks the fix:
+  `on_demand` QUEUES a buy settled cash cannot cover (`pending_entries`, persisted),
+  raises the banner + ONE push a day naming the rupees to add, and retries it at every
+  15:05 decision, re-sized at today's price, while SuperTrend stays green (a red flip
+  cancels + pushes); `park` keeps the capital in `fund_source` (LIQUIDCASE/GOLDBEES…) and
+  sells what tomorrow needs — T+1 like value_investing (`settled_cash`/`pending_credits`,
+  stock-sale proceeds included), holding `float_parts` allocations as SETTLED cash so a
+  signal still fills the day it fires; the ETF is refilled after every spend and the
+  excess above the float parked back after every sale (the buffer applies to QUEUED
+  buys only — on the float it churned 5% out and back every quiet day). Ctor default
+  `ledger` = byte-identical old behaviour (§1); the deploy card defaults `on_demand`, the
+  classic backtest form `ledger` with `park` selectable (`fund_seed="if_empty"` parks
+  day-1 cash — ctor `never`, a live deploy must not place that order). Live the broker
+  balance CAPS today's spend (`set_broker_funds`, the manager's existing push) and is
+  never written into the ledger; ETF units bought in the broker are adopted by
+  `_maybe_adopt_fund_holding` because the strategy exposes `fund_source`. SIGNAL ORDER:
+  stock exits → fund sales → stock buys → park-back (a rejected BUY abandons the rest of
+  the decision). `default_decision_time = "15:05"` (the CAS auction rule).
+  **ONE ACCOUNT, MANY RUNS (owner 2026-09-08): each strategy keeps its OWN funding ETF;
+  only the broker's CASH is shared, and neither run may spend the other's.** So a run's
+  settled cash is DERIVED from its own book every decision, never tallied beside it:
+  `portfolio.cash` (the engine's per-run cash — fills and charges exact) − the ETF it
+  ADOPTED at cost (`adopted_value`, persisted; `LiveSession.adopt_broker_holding` calls
+  `on_fund_adopted` because those units moved no cash) − sale proceeds still settling.
+  A run deployed with capital = ETF + float starts with exactly its float, and a
+  sibling's balance can never appear in its figure; a tally would have drifted by every
+  rupee of slippage and charge, and on a shared balance drift IS the other run's money.
+  The broker's available balance only CAPS today's spend (an overdraft guard). Optional
+  `fund_size_cap` (mixin + value_investing; ctor AND deploy default OFF) treats capital as
+  the run's fund size and adopts broker-held units of its ETF only up to
+  `(fund size − pool) / price` via `manager._adoptable_units` — for a HOLDING shared by
+  two runs, which is not the owner's setup; with separate ETFs a top-up must be adopted
+  in full. Still unchecked: Σ run ledgers vs the broker's cash (manual activity in the
+  account), the reconciliation nobody runs yet. Known gap, NOT
+  fixed here: `_seed_supertrend` reads the CACHED daily bars, so a live direction is
+  yesterday's completed bar — entries and exits run one session behind the backtest
+  until today's forming bar is fed in (the ema21 precedent). Coverage:
+  `tests/test_supertrend_funding.py`.
 - **21_ema_momentum** (`strategies/ema21_momentum.py`, NIFTY): daily EMA(21)-on-high/low
   channel; fresh close beyond the band at 15:20 → OTM 100-pt credit spread (bull put /
   bear call), width 300-500, credit ₹80-140 (ideal 90-130 preferred; miss → SKIP and

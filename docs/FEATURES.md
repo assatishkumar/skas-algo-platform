@@ -67,6 +67,18 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   and let the rest ride to the red flip. Daily/weekly/monthly cadence. FULL backtest. Params:
   `timeframe`, `supertrend_period` (10), `supertrend_multiplier` (3), `entry_mode`,
   `pullback_pct`.
+  **Entry funding (`funding`, 2026-09-08):** `on_demand` queues a buy the account's settled
+  cash cannot cover, sends one push a day with the rupees to add, and retries it at each
+  decision while SuperTrend stays green (a red flip cancels); `park` keeps the capital in a
+  `fund_source` ETF, sells what tomorrow needs (T+1, `settlement_days`), holds
+  `float_parts` allocations as settled cash so a signal fills the day it fires, and parks
+  the excess back after every sale; `ledger` is the classic backtest behaviour. Decides
+  at 15:05. Two strategies on one account keep separate funding ETFs but share the
+  broker's cash: each run's settled cash is derived from its OWN book (cash − adopted ETF −
+  proceeds still settling), so neither can spend the other's, and the broker balance only
+  caps the spend. `fund_size_cap` (off by default, both strategies) additionally limits
+  ETF adoption to the deploy capital, for a holding shared between runs.
+
 - **`nifty_shop` — dip-averaging "shop".** Rank the universe by how far each close sits below
   its N-DMA; buy the most-beaten-down not-held names (2/day), or average into the worst holder
   that fell > `avg_down_pct` (3%). Whole position sells at +`profit_target` (5%). Each buy is
@@ -352,8 +364,21 @@ are validated paper-first.
   strikes at body ± that with `body_lots` shared (long condor: a flat tent instead of a
   pin); `body_offset_points` centres the body away from spot (signed), and `trend_follow`
   picks the side and the sign each cycle from spot vs the previous cycle's entry spot (a CE
-  fly above in an up month, a PE fly below in a down month). Replay results in the class
-  docstring once measured.
+  fly above in an up month, a PE fly below in a down month). **Findings (61 cycles, 10 sets,
+  ₹70,000/set, 3% target; marks floored at intrinsic — the pre-fix table above reads high
+  wherever a leg sat deep ITM):** plain fly BANKNIFTY CE w400 **₹9,08,203** (IS 4,48,495 /
+  OOS 4,59,708, 69% hit, worst −48,483) · PE w400 ₹8,28,087 (worst −18,933) · NIFTY CE w200
+  ₹5,09,903 / w100 ₹3,35,799 (IS −16,181). Long condor BANKNIFTY (`body_split_points=400`,
+  `wing_points=1200`) ₹7,55,981 but its ±1,200 wing goes days without a print — a bound, not a
+  result (it read ₹13,77,507 on the old marks); NIFTY (`100`/`300`) ₹4,95,421, flat before
+  2024. Broken wing BANKNIFTY CE (`far_wing_points=800`) ₹6,39,897 at an 85% hit rate and a
+  −97,768 worst month; on NIFTY (100/200, 200/400) ₹3,79,453 and **−₹1,68,107**. Body offset
+  ±500 BANKNIFTY ₹6,20,853 / ₹4,45,444; NIFTY ±200 ₹1,38,509 / ₹2,76,360 at 20-31% hit — the
+  lottery barely pays. Trend-follow is worse than either fixed side everywhere. **Reading:**
+  the ATM fly with the target is the trade, every offset halves it, the broken wing trades a
+  2-6× worse month for hit rate, and the condor is unmeasurable. Deploy order: BANKNIFTY
+  CE, BANKNIFTY PE, NIFTY CE w200, all plain, variant knobs at 0. The same table and the
+  per-variant form settings are on the /docs card (`findings`, `web/src/lib/strategyDocs.ts`).
   **P&L marks (`mark_basis`, 2026-09-07, whole delta family):** `exit` (deploy default) reads
   the % target/stop on exit prices — the entry is the book's real fill, a long marks at the
   bid, a short at the ask — so "+3%" means +3% if you exit now; `ltp` (ctor default, running

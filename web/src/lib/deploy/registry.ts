@@ -556,6 +556,9 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       }),
       f("max_skew_pct", "Max overweight vs average %", "number", 25,
         { step: "any", showIf: (p) => p.sizing === "balanced" }),
+      f("fund_size_cap", "Cap adoption at the deploy capital", "toggle", false, {
+        hint: "only for an ETF SHARED with another run on this account: adopt broker-held units up to the deploy capital less what this run already holds. Off (each strategy keeps its own ETF) = adopt every top-up in full",
+      }),
       f("settlement_days", "Settlement days (T+1)", "number", 1, {
         hint: "an equity CNC sale's proceeds are NOT spendable the same day — buy from settled "
           + "cash and pre-sell for tomorrow. 0 = the old same-day model (backtest-only fiction)",
@@ -704,6 +707,27 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
           { value: "fixed", label: "Fixed" },
           { value: "equity_scaled", label: "Equity-scaled" },
         ],
+      }),
+      // Entry funding (owner 2026-09-08). The ctor default is "ledger" — the run's own cash
+      // ledger, which live is whatever capital was typed and would have its first buy
+      // rejected. A deploy never gets that: it asks (on_demand) or sells the ETF (park).
+      f("funding", "Entry funding", "select", "on_demand", {
+        options: [
+          { value: "on_demand", label: "On demand — queue the buy, tell me the rupees, retry while green" },
+          { value: "park", label: "From an ETF — sell what tomorrow needs (T+1), keep a float" },
+          { value: "ledger", label: "Own ledger (the backtest's fiction; live it halts on the first buy)" },
+        ],
+        hint: "on demand: a signal the account cannot pay for is queued and you get a push with the amount; it is retried at each 15:05 decision until funded or the SuperTrend turns red",
+      }),
+      f("fund_source", "Fund source ETF (park mode)", "text", "LIQUIDCASE",
+        { hint: "the ETF the capital sits in: LIQUIDCASE / GOLDBEES / GOLDCASE. Units bought in the broker are adopted by the run so it can sell them" }),
+      f("float_parts", "Float (parts kept as cash)", "number", 1, { step: "any",
+        hint: "park mode: allocations kept as SETTLED cash so a signal fills the day it fires; the ETF is sold to refill it (T+1). 0 = every entry waits a day for the sale to settle" }),
+      f("settlement_days", "Settlement days (T+1)", "number", 1),
+      f("funding_buffer_pct", "Sale buffer %", "number", 5, { step: "any",
+        hint: "park mode: sell this much extra ETF for a queued buy, so an overnight move still fills" }),
+      f("fund_size_cap", "Cap adoption at the deploy capital", "toggle", false, {
+        hint: "only for an ETF SHARED with another run on this account. Off (each strategy keeps its own ETF) = adopt every top-up in full",
       }),
     ],
   },
