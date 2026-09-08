@@ -1221,6 +1221,20 @@ weekly / monthly / positional), a summary panel, and only that strategy's own kn
   either in the registry or in `_DEPLOYS_ELSEWHERE` with the page that owns it (smoke test →
   Brokers, custom_options → Build, donchian → Screener). A new strategy with no deploy path
   now FAILS rather than being quietly unreachable.
+- **`pct: true` on a field = the form shows a PERCENT, the ctor takes a FRACTION.** The
+  generic `/live/start` path sends the form values VERBATIM, so until 2026-09-08 "Profit
+  target % = 6" reached every fraction-taking ctor (sst family, supertrend_momentum,
+  nifty_shop, hni_weekly, the ratio family, short_premium) as 6.0 — a 600% target that
+  could never fire. The page now divides `pct` fields by 100 on send and multiplies on
+  load (prefill / template); `test_a_fraction_taking_knob_is_flagged_pct_*` pins the
+  rule from the ctor defaults (a default strictly inside (0,1) ⇒ the flag is required,
+  otherwise forbidden). A strategy with its own `route` maps units in its model instead.
+  No running run carried a bad value (audited 2026-09-08: the hni/ratio deploys predate
+  the page and hold ctor defaults).
+- **The strategy's ★ template prefills the deploy page** (owner ask 2026-09-08): with no
+  forward-test prefill, selecting a strategy loads its template's params (declared knobs
+  only, `pct` converted), universe and capital, shows "Prefilled from template …" with a
+  reset; a forward-test prefill still outranks it.
 - **Deploy defaults live in the registry, ctor defaults stay put** (§1) — intraday exits
   15:20 vs ctor 15:25, cadences 1min vs tick, fvc side "ce" vs "fair_value".
 - **The summary panel reads `web/src/lib/strategyDocs.ts`** — the STRATEGIES/META tables

@@ -164,22 +164,53 @@ export default function DeployView() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Registry defaults first, then any prefilled values for THIS strategy — a prefill from
-    // another strategy's run must never leak a knob in (the ctor would swallow it).
+  const { data: templatesData } = useQuery({ queryKey: ["templates"], queryFn: api.templates });
+  const template = templatesData?.templates?.[spec.id];
+  // "Prefilled from …" — which source seeded the knobs (a forward-test prefill outranks the
+  // strategy's template, which outranks the registry defaults).
+  const [seededFrom, setSeededFrom] = useState<string | null>(null);
+
+  /** Load stored ctor params (a run's, a template's) into the form: only knobs this
+   *  strategy declares, fractions shown as percents where the field says so. */
+  const applyParams = (base: Record<string, unknown>, params: Record<string, unknown>) => {
+    for (const fd of spec.fields) {
+      if (!(fd.param in params)) continue;
+      const v = params[fd.param];
+      base[fd.param] = fd.pct && typeof v === "number" ? Math.round(v * 100 * 1e6) / 1e6 : v;
+    }
+  };
+  const seed = (source: "template" | "defaults") => {
     const base = defaultsFor(spec);
+    let from: string | null = null;
     if (pre?.strategy_id === spec.id && pre.params) {
-      for (const [k, v] of Object.entries(pre.params)) if (k in base) base[k] = v;
+      applyParams(base, pre.params);
       if (pre.capital) setCapital(pre.capital);
+      from = `run ${pre.name ?? ""}`.trim();
+    } else if (source === "template" && template?.params) {
+      // The strategy's template (★ on a run's detail page) is what the owner marked as
+      // "deploy it like this" — every declared knob, the universe and the capital.
+      applyParams(base, template.params);
+      if (template.capital) setCapital(template.capital);
+      const u = template.params.universe;
+      if (typeof u === "string" && u) setUniverse(u);
+      from = `template ${template.name ?? ""}${template.run_id ? ` (#${template.run_id})` : ""}`;
     }
     setVals(base);
-    setName(pre?.strategy_id === spec.id ? (pre.name ?? "") : "");
+    setSeededFrom(from);
+  };
+
+  useEffect(() => {
+    // Registry defaults first, then the strategy's template, then any prefilled values for
+    // THIS strategy — a prefill from another strategy's run must never leak a knob in
+    // (the ctor would swallow it).
     setUnderlying(spec.underlyings?.[0] ?? "NIFTY");
     setUniverse(spec.universe ?? "nifty50");
+    seed("template");
+    setName(pre?.strategy_id === spec.id ? (pre.name ?? "") : "");
     setQuoteSource(spec.needsBroker ? "zerodha" : quoteSource === "cache" ? "cache" : "zerodha");
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spec.id]);
+  }, [spec.id, template?.run_id]);
 
   const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
   const { data: universeList } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
@@ -208,6 +239,11 @@ export default function DeployView() {
       const runLevel = ["lookback", "tax_rate", "withdrawal_rate"] as const;
       const strategyParams = { ...all };
       for (const k of runLevel) delete strategyParams[k];
+      // percent-shown, fraction-taking knobs (DeployField.pct) go out as fractions
+      for (const fd of spec.fields) {
+        const v = strategyParams[fd.param];
+        if (fd.pct && typeof v === "number") strategyParams[fd.param] = v / 100;
+      }
       const num = (k: string, d: number) => (typeof all[k] === "number" ? (all[k] as number) : d);
 
       if (spec.route) {
@@ -310,7 +346,13 @@ export default function DeployView() {
             </div>
           )}
 
-          <div className="grid gap-3 md:grid-cols-2 mb-3">
+          {seededFrom && (
+          <div className="mb-3 flex items-center gap-3 rounded-[10px] border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+            <span>Prefilled from {seededFrom} — every knob below is that run's, in this form's units.</span>
+            <button type="button" className="underline" onClick={() => seed("defaults")}>Reset to defaults</button>
+          </div>
+        )}
+        <div className="grid gap-3 md:grid-cols-2 mb-3">
             <label className="block"><span className={lbl}>Deployment name</span>
               <input className={inputClass} placeholder={spec.name} value={name}
                 onChange={(e) => setName(e.target.value)} /></label>

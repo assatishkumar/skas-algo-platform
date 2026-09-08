@@ -43,6 +43,13 @@ export interface DeployField {
   showIf?: (p: Record<string, unknown>) => boolean;
   /** Full-width in the 4-column grid (long text like a watchlist). */
   wide?: boolean;
+  /** The form shows a PERCENT but the ctor takes a FRACTION (0.06 for 6%): divided by
+   *  100 on send, multiplied on load. Until 2026-09-08 "Profit target % = 6" reached the
+   *  generic /live/start path as a raw 6 — a 600% target — on every fraction-taking
+   *  strategy (sst family, supertrend, nifty_shop, hni, the ratio family, short_premium).
+   *  Pinned by test_deploy_registry: a generic-path field whose ctor default is a
+   *  fraction MUST carry this flag, and no other may. */
+  pct?: boolean;
 }
 
 /** Held-vs-flat is the thing an operator actually needs to know at a glance, so the left rail
@@ -281,8 +288,8 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
     underlyings: ["NIFTY"],
     fields: [
       f("lots", "Lot-sets", "number", 1),
-      f("profit_target_pct", "Target % of margin", "number", 2.5, { step: "any" }),
-      f("stop_loss_pct", "Stop % of margin (0 = off)", "number", 0, { step: "any" }),
+      f("profit_target_pct", "Target % of margin", "number", 2.5, { step: "any", pct: true }),
+      f("stop_loss_pct", "Stop % of margin (0 = off)", "number", 0, { step: "any", pct: true }),
       ...cadence("1min", "eod"),
     ],
   },
@@ -485,8 +492,8 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
     underlyings: ["NIFTY"],
     fields: [
       f("lots", "Lot-sets", "number", 1),
-      f("profit_target_pct", "Target % of margin", "number", 2.5, { step: "any" }),
-      f("stop_loss_pct", "Stop % of margin (0 = off)", "number", 0, { step: "any" }),
+      f("profit_target_pct", "Target % of margin", "number", 2.5, { step: "any", pct: true }),
+      f("stop_loss_pct", "Stop % of margin (0 = off)", "number", 0, { step: "any", pct: true }),
       f("vol_premium_min", "Min vol premium (ATM IV − HV)", "number", 0, {
         step: "any", hint: "0 = off. ~2 was the loss study's one OOS-robust finding",
       }),
@@ -502,8 +509,8 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
     underlyings: ["NIFTY"],
     fields: [
       f("lots", "Lot-sets", "number", 1),
-      f("profit_target_pct", "Target % of margin", "number", 2.5, { step: "any" }),
-      f("stop_loss_pct", "Stop % of margin (0 = off)", "number", 0, { step: "any" }),
+      f("profit_target_pct", "Target % of margin", "number", 2.5, { step: "any", pct: true }),
+      f("stop_loss_pct", "Stop % of margin (0 = off)", "number", 0, { step: "any", pct: true }),
       ...cadence("1min", "eod"),
     ],
   },
@@ -516,8 +523,8 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
     underlyings: ["NIFTY"],
     fields: [
       f("lots", "Lot-sets", "number", 1),
-      f("profit_target_pct", "Target % of margin", "number", 2.5, { step: "any" }),
-      f("stop_loss_pct", "Stop % of margin (0 = off)", "number", 0, { step: "any" }),
+      f("profit_target_pct", "Target % of margin", "number", 2.5, { step: "any", pct: true }),
+      f("stop_loss_pct", "Stop % of margin (0 = off)", "number", 0, { step: "any", pct: true }),
       ...cadence("1min", "eod"),
     ],
   },
@@ -593,8 +600,8 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       }),
       f("dte_target", "DTE target", "number", 30),
       f("strangle_delta", "Strangle delta", "number", 0.2, { step: "any" }),
-      f("profit_target_pct", "Target % of premium", "number", 50, { step: "any" }),
-      f("stop_loss_pct", "Stop % of premium", "number", 100, { step: "any" }),
+      f("profit_target_pct", "Target % of premium", "number", 50, { step: "any", pct: true }),
+      f("stop_loss_pct", "Stop % of premium", "number", 100, { step: "any", pct: true }),
       f("max_reentries", "Max re-entries", "number", 0),
     ],
   },
@@ -609,7 +616,7 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       f("lots", "Lots", "number", 1),
       f("etf_symbol", "ETF symbol", "text", "NIFTYBEES"),
       f("ce_otm_pct", "Call OTM %", "number", 3, { step: "any" }),
-      f("min_premium_pct", "Min premium %", "number", 0.5, { step: "any" }),
+      f("min_premium_pct", "Min premium %", "number", 0.5, { step: "any", pct: true }),
       f("keep_strike_above_cost", "Keep strike above cost", "toggle", true),
       f("sell_puts", "Also sell puts", "toggle", false),
     ],
@@ -622,7 +629,7 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
     instrument: "STOCK", universe: "nifty50",
     fields: [
       f("capital_parts", "Capital parts", "number", 10),
-      f("profit_target", "Profit target %", "number", 6, { step: "any" }),
+      f("profit_target", "Profit target %", "number", 6, { step: "any", pct: true }),
       f("donchian_weeks", "Donchian weeks", "number", 20),
       f("max_lots", "Max lots (0 = ∞)", "number", 0),
     ],
@@ -634,9 +641,9 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
     blurb: "Weekly Donchian breakout with FIFO tiered booking",
     instrument: "STOCK", universe: "nifty50",
     fields: [
-      f("profit_target_1", "Target % (1 lot)", "number", 6, { step: "any" }),
-      f("profit_target_2", "Target % (2)", "number", 8, { step: "any" }),
-      f("profit_target_3", "Target % (3+)", "number", 10, { step: "any" }),
+      f("profit_target_1", "Target % (1 lot)", "number", 6, { step: "any", pct: true }),
+      f("profit_target_2", "Target % (2)", "number", 8, { step: "any", pct: true }),
+      f("profit_target_3", "Target % (3+)", "number", 10, { step: "any", pct: true }),
     ],
   },
   {
@@ -696,12 +703,30 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
     instrument: "STOCK", universe: "nifty500mom50",
     fields: [
       f("capital_parts", "Capital parts", "number", 10),
-      f("profit_target", "Profit target %", "number", 6, { step: "any" }),
+      f("timeframe", "Timeframe", "select", "daily", {
+        options: [
+          { value: "daily", label: "Daily" },
+          { value: "weekly", label: "Weekly" },
+          { value: "monthly", label: "Monthly" },
+        ],
+      }),
       // NOT max_lots — this strategy has no such kwarg. The old generic form sent it to
       // every equity strategy and **_ignored ate it here; the registry test caught that.
       f("supertrend_period", "SuperTrend period", "number", 10),
       f("supertrend_multiplier", "SuperTrend multiplier", "number", 3, { step: "any" }),
-      f("partial_book_pct", "Partial book %", "number", 0, { step: "any" }),
+      f("entry_mode", "Entry", "select", "flip", {
+        options: [
+          { value: "flip", label: "Green flip — buy the bar the SuperTrend turns green" },
+          { value: "pullback", label: "Pullback breakout — wait for a dip, buy the break above the post-flip high" },
+        ],
+      }),
+      f("pullback_pct", "Min pullback %", "number", 10, { step: "any", pct: true,
+        showIf: (p) => p.entry_mode === "pullback",
+        hint: "the dip below the post-flip peak that counts as a pullback (the #266 template uses 10)" }),
+      f("profit_target", "Profit target %", "number", 6, { step: "any", pct: true,
+        hint: "over average cost; only acts when Partial book % is above 0" }),
+      f("partial_book_pct", "Partial book %", "number", 0, { step: "any", pct: true,
+        hint: "share sold at the target: 0 = no target, ride to the red flip (the #266 template); 100 = full exit at the target; 50 = half, the rest rides" }),
       f("allocation_mode", "Position sizing", "select", "fixed", {
         options: [
           { value: "fixed", label: "Fixed" },
@@ -738,11 +763,11 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
     blurb: "Buys dips across the index, books at a fixed target",
     instrument: "STOCK", universe: "nifty50",
     fields: [
-      f("allocation_pct", "Allocation % per trade", "number", 2, { step: "any" }),
-      f("profit_target", "Exit target %", "number", 5, { step: "any" }),
+      f("allocation_pct", "Allocation % per trade", "number", 2, { step: "any", pct: true }),
+      f("profit_target", "Exit target %", "number", 5, { step: "any", pct: true }),
       f("num_candidates", "Candidates", "number", 5),
       f("new_buys_per_day", "New buys / day", "number", 1),
-      f("avg_down_pct", "Average down %", "number", 5, { step: "any" }),
+      f("avg_down_pct", "Average down %", "number", 5, { step: "any", pct: true }),
     ],
   },
   {
@@ -753,7 +778,7 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
     instrument: "STOCK", universe: "nifty50",
     fields: [
       f("capital_parts", "Capital parts", "number", 10),
-      f("profit_target", "Profit target %", "number", 6, { step: "any" }),
+      f("profit_target", "Profit target %", "number", 6, { step: "any", pct: true }),
       f("max_lots", "Max lots (0 = ∞)", "number", 0),
       f("allocation_mode", "Position sizing", "select", "fixed", {
         options: [
@@ -771,9 +796,9 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
     instrument: "STOCK", universe: "nifty50",
     fields: [
       f("capital_parts", "Capital parts", "number", 10),
-      f("profit_target_1", "Target % (1 lot)", "number", 6, { step: "any" }),
-      f("profit_target_2", "Target % (2)", "number", 8, { step: "any" }),
-      f("profit_target_3", "Target % (3+)", "number", 10, { step: "any" }),
+      f("profit_target_1", "Target % (1 lot)", "number", 6, { step: "any", pct: true }),
+      f("profit_target_2", "Target % (2)", "number", 8, { step: "any", pct: true }),
+      f("profit_target_3", "Target % (3+)", "number", 10, { step: "any", pct: true }),
       f("max_lots", "Max lots (0 = ∞)", "number", 0),
     ],
   },

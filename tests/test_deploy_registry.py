@@ -148,3 +148,63 @@ def test_the_elsewhere_list_stays_honest():
     for sid in _DEPLOYS_ELSEWHERE:
         assert sid in available(), f"{sid} is listed as deployable elsewhere but is not registered"
         assert sid not in ids, f"{sid} is in BOTH the registry and _DEPLOYS_ELSEWHERE"
+
+
+# ---------------------------------------------------- percent vs fraction (2026-09-08)
+
+def _generic_number_fields() -> list[tuple[str, str, float, bool]]:
+    """(strategy_id, param, form default, pct flag) for every numeric field of a spec that
+    deploys through the GENERIC /live/start path (a `route` maps its own units)."""
+    src = _REGISTRY.read_text(encoding="utf-8")
+    body = src[src.index("export const DEPLOY_REGISTRY"):src.index("export const GROUP_LABEL")]
+    out = []
+    for chunk in re.split(r"\n  \{\n    id: ", body)[1:]:
+        sid = re.match(r'"([\w\d_]+)"', chunk).group(1)
+        if re.search(r'route: "', chunk) or "custom:" in chunk:
+            continue
+        for m in re.finditer(
+                r'\bf\(\s*"([\w\d_]+)",\s*"([^"]*)",\s*"number",\s*([-\d.]+)(?:,\s*\{([^}]*)\})?',
+                chunk):
+            param, label, dflt, rest = m.groups()
+            # only knobs that READ as percents — a delta or a ratio is neither
+            if "%" not in label and not param.endswith("_pct"):
+                continue
+            out.append((sid, param, float(dflt), bool(rest and "pct: true" in rest)))
+    return out
+
+
+def _ctor_default(strategy_id: str, param: str):
+    cls = get_strategy(strategy_id)
+    for klass in reversed(cls.__mro__):
+        init = klass.__dict__.get("__init__")
+        if init is None:
+            continue
+        p = inspect.signature(init).parameters.get(param)
+        if p is not None and p.default is not inspect.Parameter.empty:
+            return p.default
+    return None
+
+
+@pytest.mark.parametrize("sid,param,form_default,pct", _generic_number_fields(),
+                         ids=lambda x: str(x))
+def test_a_fraction_taking_knob_is_flagged_pct_and_a_percent_taking_one_is_not(
+        sid, param, form_default, pct):
+    """The generic path sends form values VERBATIM to the ctor. A ctor whose default is a
+    fraction (0.06) takes fractions, so its field must carry `pct: true` (the page divides
+    by 100); a ctor whose default is a whole percent (2.5, 40) must not. Before this pin,
+    "Profit target % = 6" reached supertrend/sst/hni/the ratio family as 6.0 — a 600%
+    target that could never fire — on every deploy from the page since 2026-08-27."""
+    cd = _ctor_default(sid, param)
+    if not isinstance(cd, (int, float)) or isinstance(cd, bool):
+        pytest.skip("no numeric ctor default to compare against")
+    if float(cd) == 0:
+        # 0 = "off" says nothing about units (pullback_pct is a fraction, max_spread_pct a
+        # percent) — those are settled by reading the strategy, not by this pin
+        pytest.skip("ctor default 0 is unit-agnostic")
+    fraction_ctor = 0 < abs(float(cd)) < 1
+    if fraction_ctor:
+        assert pct, (f"{sid}.{param}: ctor default {cd} is a FRACTION but the field is not "
+                     f"pct: true — the form would send {form_default} as {form_default}x")
+    else:
+        assert not pct, (f"{sid}.{param}: ctor default {cd} is not a fraction; pct: true "
+                         f"would send {form_default / 100}")
