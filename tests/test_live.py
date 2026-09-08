@@ -954,3 +954,58 @@ def test_a_client_that_hangs_up_in_a_quiet_window_releases_its_subscription():
     asyncio.run(asyncio.wait_for(live_ws(ws), timeout=2))
     assert ws.sent == []  # never broadcast anything; it left on the close frame alone
     assert len(manager.broadcaster._subs) == before
+
+
+def test_a_universe_run_follows_the_index(tmp_path, monkeypatch):
+    """A run deployed on a NAMED universe follows it (2026-09-08): a joiner is added and
+    seeded, a leaver is blocked from new entries but never removed (a held position still
+    needs prices and exits on its own rules), a returner is unblocked — and all of it is
+    persisted so a restart keeps the run on the same names."""
+    from skas_algo.data import nse_universe
+
+    monkeypatch.setenv("SKAS_UNIVERSE_DIR", str(tmp_path))
+    nse_universe.save("nifty50", ["AAA", "CCC"], date(2026, 9, 8))
+    fake = FakeQuoteSource()
+    config = LiveConfig(
+        name="universe-follow", strategy_id="sst_lifo", symbols=["AAA", "BBB"],
+        capital=100_000, params={"capital_parts": 10}, lookback=5, tax_rate=0.0,
+        ignore_market_hours=True, universe_name="nifty50",
+    )
+    live = manager.start(config, _flat_loader, fake)
+    try:
+        with session_scope() as db:
+            assert db.get(AlgoRun, live.run_id).params_snapshot["universe_name"] == "nifty50"
+        moved = live._maybe_sync_universe()
+        assert moved == {"added": ["CCC"], "dropped": ["BBB"], "returned": []}
+        assert live.config.symbols == ["AAA", "BBB", "CCC"]      # union, never a removal
+        assert live.session.excluded_symbols == ["BBB"]          # no NEW entries in BBB
+        assert "CCC" in live.session.strategy.universe
+        with session_scope() as db:
+            snap = db.get(AlgoRun, live.run_id).params_snapshot
+            assert snap["symbols"] == ["AAA", "BBB", "CCC"]
+            assert snap["universe_dropped"] == ["BBB"]
+        assert live._maybe_sync_universe() is None                # once a day
+        # the index takes BBB back → unblocked; the owner's own exclusions are untouched
+        live._universe_sync_day = None
+        live.config.params["excluded_symbols"] = ["AAA"]
+        nse_universe.save("nifty50", ["AAA", "BBB", "CCC"], date(2026, 9, 30))
+        moved = live._maybe_sync_universe()
+        assert moved == {"added": [], "dropped": [], "returned": ["BBB"]}
+        assert live.session.excluded_symbols == ["AAA"]
+        live._universe_sync_day = None
+        assert live._maybe_sync_universe() is None                # nothing moved → quiet
+    finally:
+        manager.stop(live.run_id)
+
+
+def test_a_custom_symbol_run_follows_nothing():
+    fake = FakeQuoteSource()
+    config = LiveConfig(name="custom", strategy_id="sst_lifo", symbols=["AAA"],
+                        capital=100_000, params={"capital_parts": 10}, lookback=5,
+                        tax_rate=0.0, ignore_market_hours=True)
+    live = manager.start(config, _flat_loader, fake)
+    try:
+        assert live._maybe_sync_universe() is None
+        assert live.config.symbols == ["AAA"]
+    finally:
+        manager.stop(live.run_id)

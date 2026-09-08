@@ -27,6 +27,9 @@ os.environ["SKAS_WS_FEED_ENABLED"] = "false"
 # tmp_path destination via monkeypatch.
 os.environ["SKAS_BACKUP_OFFBOX_DIR"] = ""
 os.environ["SKAS_BACKUP_REMOTE_CMD"] = ""
+# The official-constituent store is per box (~/.skas_data/universes); tests must neither
+# read the owner's captures nor write into them.
+os.environ["SKAS_UNIVERSE_DIR"] = tempfile.mkdtemp(prefix="skas-universes-")
 
 # A throwaway Fernet key so credential-encryption tests work in isolation.
 from cryptography.fernet import Fernet  # noqa: E402

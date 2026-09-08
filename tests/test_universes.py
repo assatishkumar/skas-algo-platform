@@ -10,9 +10,9 @@ from skas_algo.data import universes
 def test_lists_present_and_sized():
     assert len(universes.NIFTY_25) == 25
     assert len(universes.NIFTY_50) == 50
-    assert len(universes.NIFTY_100) == 109  # user-provided (2025/26 index revisions)
-    assert len(universes.NIFTY_200) == 199  # user-provided list (1 short of 200)
-    assert len(universes.NIFTY_500) == 500  # user-provided full constituent list
+    assert len(universes.NIFTY_100) == 100  # official NSE snapshot, 2026-09-08
+    assert len(universes.NIFTY_200) == 200
+    assert len(universes.NIFTY_500) == 500
     # No duplicates in any universe.
     for name in universes.UNIVERSES:
         symbols = universes.UNIVERSES[name][1]
@@ -20,8 +20,27 @@ def test_lists_present_and_sized():
     assert len(universes.NIFTY500_MOMENTUM_50) == 50  # official NSE snapshot, 2026-08-18
     assert set(universes.UNIVERSES) == {"nifty25", "nifty50", "nifty100", "nifty200",
                                         "nifty500", "nifty500mom50"}
-    # the top-25-by-weight basket is a strict subset of the Nifty 50
+    # the top-25-by-weight basket is a strict subset of the Nifty 50, and the index
+    # family nests (a broken nesting means one snapshot was regenerated and another not)
     assert set(universes.NIFTY_25) <= set(universes.NIFTY_50)
+    assert set(universes.NIFTY_50) <= set(universes.NIFTY_100) <= set(universes.NIFTY_200)
+    assert set(universes.NIFTY_200) <= set(universes.NIFTY_500)
+
+
+def test_a_stored_official_list_outranks_the_snapshot(tmp_path, monkeypatch):
+    """The snapshot is the baseline; what the fetcher stored on this box is the universe."""
+    from datetime import date
+
+    from skas_algo.data import nse_universe
+
+    monkeypatch.setenv("SKAS_UNIVERSE_DIR", str(tmp_path))
+    assert universes.as_of("nifty50")["source"] == "snapshot"
+    nse_universe.save("nifty50", ["RELIANCE", "TCS", "NEWNAME"], date(2026, 9, 8))
+    assert universes.current("nifty50") == ["RELIANCE", "TCS", "NEWNAME"]
+    assert universes.resolve("nifty50", {"TCS", "NEWNAME", "INFY"}) == ["TCS", "NEWNAME"]
+    assert universes.as_of("nifty50") == {"source": "official", "date": "2026-09-08"}
+    # a universe the fetcher does not know keeps its snapshot
+    assert universes.current("nifty25") == universes.NIFTY_25
 
 
 def test_resolve_without_cache_returns_full_list():
@@ -37,9 +56,10 @@ def test_resolve_intersects_and_preserves_order():
 
 
 def test_resolve_drops_missing_symbols():
-    available = set(universes.NIFTY_100) - {"YESBANK", "ABB"}
+    gone = set(universes.NIFTY_100[:2])
+    available = set(universes.NIFTY_100) - gone
     resolved = universes.resolve("nifty100", available)
-    assert "YESBANK" not in resolved and "ABB" not in resolved
+    assert not (gone & set(resolved))
     assert len(resolved) == len(universes.NIFTY_100) - 2
 
 

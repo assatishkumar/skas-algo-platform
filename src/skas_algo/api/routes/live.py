@@ -146,6 +146,9 @@ def start_deployment(req: LiveStartRequest, db: Session, loader: PriceLoader, av
             ignore_market_hours=req.ignore_market_hours,
             auto=req.auto,
             warm_from_date=req.warm_from_date,
+            # a NAMED universe is remembered so the run can follow the index (§8);
+            # a custom list has nothing to follow
+            universe_name=(req.universe or None) if not is_deriv else None,
         )
         live = manager.start(config, loader, quote_source)
     except KeyError as exc:  # unknown strategy

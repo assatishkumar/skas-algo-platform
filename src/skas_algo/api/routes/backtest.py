@@ -100,12 +100,28 @@ def list_benchmarks() -> dict:
 def list_universes(
     avail: set[str] = Depends(get_available_symbols),
 ) -> list[UniverseOut]:
-    return [
-        UniverseOut(
-            name=name, label=universes.label(name), count=len(universes.resolve(name, avail))
-        )
-        for name in universes.UNIVERSES
-    ]
+    out = []
+    for name in universes.UNIVERSES:
+        meta = universes.as_of(name)
+        out.append(UniverseOut(
+            name=name, label=universes.label(name),
+            count=len(universes.resolve(name, avail)),
+            total=len(universes.current(name)),
+            source=meta["source"], as_of=meta["date"],
+        ))
+    return out
+
+
+@router.post("/universes/refresh")
+def refresh_universes() -> dict:
+    """Pull the official NSE constituent lists now (the maintenance loop does this every
+    weekday; this is the hand-trigger). Read-only, public files, no broker. Reports what
+    moved per index; a failed fetch is reported, never raised."""
+    from skas_algo.data import nse_universe
+
+    baselines = {n: list(universes.UNIVERSES[n][1]) for n in nse_universe.INDEX_FILES
+                 if n in universes.UNIVERSES}
+    return nse_universe.refresh_all(baselines=baselines)
 
 
 @router.get("/universes/{name}/symbols")

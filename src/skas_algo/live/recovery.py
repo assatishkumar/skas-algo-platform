@@ -39,6 +39,8 @@ _NON_STRATEGY_KEYS = {
     "decision_time",
     "ignore_market_hours",
     "excluded_symbols",
+    "universe_name",     # the named index a run follows (LiveRun._maybe_sync_universe)
+    "universe_dropped",  # names that left it — blocked from new entries, never a ctor kwarg
     "warm_from_date",  # one-time seed at start; recovery restores the saved book instead.
     # passed explicitly below; also backtest bookkeeping a forward-tested run carries.
     "universe",
@@ -182,8 +184,15 @@ def _rebuild(db, run: AlgoRun, loader) -> None:
         ignore_market_hours=params.get("ignore_market_hours", False),
         auto=params.get("auto", False),
         excluded_symbols=params.get("excluded_symbols", []),
+        universe_name=params.get("universe_name"),
     )
+    if params.get("universe_dropped"):
+        # names that left the index while the run was up stay blocked across a restart
+        config.params = {**config.params, "universe_dropped": list(params["universe_dropped"])}
     session = _build_session(config, strategy, loader, is_deriv, underlying)
+    if params.get("universe_dropped"):
+        session.set_excluded(sorted(set(config.excluded_symbols)
+                                    | {str(x).upper() for x in params["universe_dropped"]}))
     if run.state:
         session.load_state(run.state)
 

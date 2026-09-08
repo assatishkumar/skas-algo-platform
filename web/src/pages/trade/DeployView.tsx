@@ -9,6 +9,7 @@ import {
   type DeployField, type DeploySpec,
 } from "../../lib/deploy/registry";
 import { STRATEGIES } from "../../lib/strategyDocs";
+import type { Universe } from "../../types";
 import EquityTradeBuilder from "../../components/trade/EquityTradeBuilder";
 
 /** Deploy a MANAGED strategy — ONE page for every deployable strategy, rendered from
@@ -20,10 +21,14 @@ const inputClass =
   "w-full rounded-[10px] bg-[var(--field)] border border-[var(--field-border)] px-2.5 py-1.5 text-sm text-[var(--strong)] focus:outline-none focus:border-[var(--accent)]";
 const lbl = "block text-xs text-[var(--muted)] mb-1";
 
-const UNIVERSES = [
-  { value: "nifty50", label: "Nifty 50" },
-  { value: "nifty500mom50", label: "Nifty500 Momentum 50" },
-  { value: "", label: "Custom symbols" },
+/** The universe list is the BACKEND's (`GET /universes`, the same query the backtest form
+ *  uses), not a copy: this used to be a hand-typed three-entry list that never learned
+ *  Nifty 100/200/500 existed. `count` is how many of the universe's names THIS box has
+ *  cached — the live route resolves a universe against the cache, so that number is what
+ *  a deploy would actually trade. Shown beside the label so a thin cache is visible. */
+const FALLBACK_UNIVERSES: Universe[] = [
+  { name: "nifty50", label: "Nifty 50", count: 0 },
+  { name: "nifty500mom50", label: "Nifty500 Momentum 50", count: 0 },
 ];
 
 function Field({ spec, value, onChange }: {
@@ -177,6 +182,8 @@ export default function DeployView() {
   }, [spec.id]);
 
   const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokers.list });
+  const { data: universeList } = useQuery({ queryKey: ["universes"], queryFn: api.universes });
+  const universeOptions = universeList?.length ? universeList : FALLBACK_UNIVERSES;
   // Accounts must MATCH the chosen feed: the backend rejects a quote_source that disagrees
   // with the account's broker, so offering a Dhan account under "Zerodha (live)" would only
   // produce a 422. The old bespoke builders hardcoded `broker === "zerodha"` and so hid Dhan
@@ -325,7 +332,14 @@ export default function DeployView() {
                 <label className="block"><span className={lbl}>Universe</span>
                   <select className={inputClass} value={universe}
                     onChange={(e) => setUniverse(e.target.value)}>
-                    {UNIVERSES.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+                    {universeOptions.map((u) => (
+                      <option key={u.name} value={u.name}>
+                        {u.label}
+                        {u.total ? ` · ${u.count}/${u.total} cached` : u.count ? ` · ${u.count} cached` : ""}
+                        {u.as_of ? ` · list ${u.source === "official" ? "" : "snapshot "}${u.as_of}` : ""}
+                      </option>
+                    ))}
+                    <option value="">Custom symbols</option>
                   </select></label>
                 {universe === "" && (
                   <label className="block md:col-span-3"><span className={lbl}>Symbols (comma-separated)</span>

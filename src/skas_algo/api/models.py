@@ -86,6 +86,9 @@ class UniverseOut(BaseModel):
     name: str
     label: str
     count: int  # symbols available in the cache
+    total: int = 0  # symbols in the list itself (official or snapshot)
+    source: str = "snapshot"  # "official" = fetched from NSE and stored on this box
+    as_of: str | None = None  # the list's observed / snapshot date
 
 
 class LiveStartRequest(BaseModel):

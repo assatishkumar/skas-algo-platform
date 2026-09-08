@@ -577,6 +577,17 @@ BS delta/IV helpers) · engine services: `black_scholes.py` (IV/delta), `contrac
   + 2025-02, live 2026-08), methodology replication elsewhere — validated 38-39/50 at the official
   checkpoints, with each rebalance's source labelled in `data/mom50_membership.json`. Consumed by
   `happy_twins`, `supertrend_momentum` and `nifty_shop`.
+- **Universes follow the index (2026-09-08).** The Nifty 50/100/200/500 and Momentum 50
+  lists are fetched from NSE's official constituent files every weekday (maintenance loop,
+  before the cache refresh; `POST /universes/refresh` by hand), validated (a truncated
+  download is refused, `DUMMY*` placeholders dropped) and stored dated per change under
+  `~/.skas_data/universes/`; the static lists in the repo are the 2026-09-08 snapshot and
+  the fallback. `GET /universes` reports each list's size, how many names this box has
+  cached and where the list came from — the Deploy page prints all three. A LIVE/PAPER run
+  deployed on a named universe follows it once a day before its decision: a joiner is
+  added and its history seeded, a leaver is blocked from NEW entries while any held
+  position exits on its own rules, a returner is unblocked; every move is persisted,
+  logged (`UNIVERSE …`) and alerted.
 - **Clone & template**: a finished run can be cloned into a new backtest form with its params
   prefilled (including its start/end dates).
 - **Parameter sweep on BOTH bases**: tick "Sweep a parameter", pick any numeric knob and 2-5

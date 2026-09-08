@@ -1723,7 +1723,10 @@ export interface LiveWsMessage {
 export interface Universe {
   name: string;
   label: string;
-  count: number;
+  count: number;      // names this box has cached (what a deploy would trade)
+  total?: number;     // names in the list itself
+  source?: "official" | "snapshot";
+  as_of?: string | null;
 }
 
 export interface BacktestRequest {

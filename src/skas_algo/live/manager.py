@@ -120,6 +120,11 @@ class LiveConfig:
     lookback: int = 20
     overrides: list[OverrideRule] = field(default_factory=list)
     excluded_symbols: list[str] = field(default_factory=list)  # blocked from new entries
+    # The NAMED universe an equity run was deployed on ("nifty500"), when it was one. A
+    # run that knows its universe follows the index: names that join are added and
+    # seeded, names that leave are blocked from NEW entries while any held position
+    # exits on its own signal (LiveRun._maybe_sync_universe). None = a custom list.
+    universe_name: str | None = None
     mode: str = "PAPER"
     quote_source: str = "cache"  # persisted so the run can be rebuilt after a restart
     broker_account_id: int | None = None
@@ -512,6 +517,7 @@ class LiveRun:
         self._margin_dhan_sum: float | None = None
         self._last_funds_at: datetime | None = None
         self._history_backfill_day: date | None = None   # SuperTrend cache backfill latch
+        self._universe_sync_day: date | None = None      # index-membership sync latch
         self._wire_quote_source()
 
     def _wire_quote_source(self) -> None:
@@ -1183,9 +1189,95 @@ class LiveRun:
             if spot is not None:
                 ev["underlying_spot"] = float(spot)
 
+    def _maybe_sync_universe(self) -> dict | None:
+        """Follow the index (once per day, before the decision) on a run deployed on a NAMED
+        universe. The official list is what ``universes.current`` holds — refreshed every
+        weekday by the manager — and this run's symbol list is the UNION of everything it
+        has ever traded on: a name that JOINS is appended, its history seeded (the
+        SuperTrend backfill then pulls its bars the same pass), and persisted so a restart
+        keeps it; a name that LEAVES is added to the no-new-entry blocklist (the same
+        resolver gate the owner's own exclusions use) but never removed from the run — a
+        held position still needs prices, and exits are never gated. A name that comes
+        back is unblocked. The owner's own exclusions live in ``excluded_symbols`` and are
+        kept apart from ``universe_dropped`` so neither list can erase the other. Returns
+        what moved, or None when nothing did / the run has no named universe."""
+        from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+        name = getattr(self.config, "universe_name", None)
+        if not name or self.config.instrument_class.upper() == "DERIV":
+            return None
+        today = datetime.now(IST).date()
+        if self._universe_sync_day == today:
+            return None
+        self._universe_sync_day = today
+        try:
+            from skas_algo.data import universes as _u
+
+            official = [x.upper() for x in _u.current(name)]
+        except Exception:  # pragma: no cover - never break the decision on a bad list
+            logger.exception("universe sync: cannot read %s", name)
+            return None
+        if not official:
+            return None
+        params = self.config.params or {}
+        helpers = set(_u.with_helper_symbols([], params))
+        have = list(self.config.symbols)
+        added = [x for x in official if x not in have]
+        dropped = sorted(x for x in have if x not in official and x not in helpers)
+        prev_dropped = sorted(str(x).upper() for x in (params.get("universe_dropped") or []))
+        if not added and dropped == prev_dropped:
+            return None
+        if added:
+            self.config.symbols = have + added
+            try:
+                from skas_algo.data.provider import get_price_loader
+
+                self.session.warmup(
+                    warmup_history(get_price_loader(), added, self.config.lookback))
+            except Exception:  # pragma: no cover - seeding is best-effort; backfill follows
+                logger.exception("universe sync: warm-up failed for %s", added)
+            strategy = getattr(self.session, "strategy", None)
+            uni = getattr(strategy, "universe", None)
+            if isinstance(uni, list):
+                for x in added:
+                    if x not in uni:
+                        uni.append(x)
+        owner_excluded = [str(x).upper() for x in (params.get("excluded_symbols")
+                                                   or self.config.excluded_symbols or [])]
+        self.session.set_excluded(sorted(set(owner_excluded) | set(dropped)))
+        self.config.params = {**params, "universe_dropped": dropped}
+        with session_scope() as db:
+            run = db.get(AlgoRun, self.run_id)
+            if run is not None:
+                snap = dict(run.params_snapshot or {})
+                snap["symbols"] = list(self.config.symbols)
+                snap["universe_dropped"] = dropped
+                run.params_snapshot = snap
+        joined = [x for x in dropped if x not in prev_dropped]
+        returned = [x for x in prev_dropped if x not in dropped]
+        logger.warning(
+            "UNIVERSE %s run %s: +%d joined %s, %d now out %s, %d back %s — dropped names "
+            "get no new entries; held ones exit on their own signal",
+            name, self.run_id, len(added), added[:15], len(joined), joined[:15],
+            len(returned), returned[:15])
+        try:
+            build_notifier().send(Alert(
+                f"[{self.config.name}] {_u.label(name)} changed",
+                f"joined: {', '.join(added) or '—'}; left: {', '.join(joined) or '—'}"
+                f"{'; back: ' + ', '.join(returned) if returned else ''}. Names that left "
+                "get no new entries; any held position exits on its own rules.",
+                AlertLevel.WARNING))
+        except Exception:  # pragma: no cover - alert is best-effort
+            logger.exception("universe change alert failed")
+        return {"added": added, "dropped": dropped, "returned": returned}
+
     def run_decision(self, ts: datetime | None = None) -> list[dict]:
         """Make today's entry/exit decision; persist trades + positions; broadcast."""
         ts = ts or datetime.now(IST)
+        try:
+            self._maybe_sync_universe()
+        except Exception:  # pragma: no cover - the decision must not die on a sync
+            logger.exception("universe sync failed for run %s", self.run_id)
         self._refresh_supertrend()
         from skas_algo.brokers.live_broker import OrderExecutionError
 
@@ -1234,7 +1326,7 @@ class LiveRun:
         "quote_source", "broker_account_id", "name", "notes", "auto", "capital",
         "data_basis", "lookback", "refresh_seconds", "decision_time",
         "ignore_market_hours", "excluded_symbols", "entry_legs", "warm_from_date",
-        "tax_rate", "withdrawal_rate",
+        "tax_rate", "withdrawal_rate", "universe_name", "universe_dropped",
         # Read ONCE at LiveBroker injection (the escalation ladder is derived from it in
         # the broker's __init__); a hot-edit would update the strategy and leave the
         # broker on the old ladder while reporting "applied". Stop + redeploy.
@@ -1617,6 +1709,8 @@ class LiveRunManager:
         self._last_portfolio_morning_day: date | None = None
         # Last successful daily cache refresh, surfaced to the UI (quiet "Data ✓ HH:MM" chip).
         self.last_cache_refresh: dict | None = None
+        self._last_universe_refresh_day: date | None = None
+        self.last_universe_refresh: dict | None = None
         self._last_option_capture_day: date | None = None
         # Last daily option-bar capture (the self-built GFD store), surfaced on /live/summary.
         self.last_option_capture: dict | None = None
@@ -1961,6 +2055,7 @@ class LiveRunManager:
             "decision_time": config.decision_time,
             "ignore_market_hours": config.ignore_market_hours,
             "excluded_symbols": config.excluded_symbols,
+            "universe_name": config.universe_name,
             **config.params,
         }
         with session_scope() as db:
@@ -2261,6 +2356,7 @@ class LiveRunManager:
                 await asyncio.sleep(300)
                 self._watchdog_scan()
                 self._rebind_order_sweep()
+                await self._maybe_refresh_universes()
                 await self._maybe_daily_cache_refresh()
                 await self._maybe_daily_option_capture()
                 await self._maybe_morning_portfolio_sync()
@@ -2398,6 +2494,42 @@ class LiveRunManager:
 
         # offbox=True → also ship this nightly snapshot off the machine (if configured).
         await asyncio.to_thread(backup_db, None, None, True)
+
+    async def _maybe_refresh_universes(self) -> None:
+        """Pull the official NSE constituent lists ONCE per weekday (before the cache
+        refresh, so a name that joined today is cached today). Read-only, no broker: the
+        files are public. A failed fetch is logged and retried next tick; a changed list
+        raises one WARNING alert naming what moved. Running universe runs pick the change
+        up at their next pre-decision sync."""
+        from skas_algo.data import nse_universe, universes
+        from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+        now = datetime.now(IST)
+        if now.weekday() >= 5 or self._last_universe_refresh_day == now.date():
+            return
+        baselines = {n: list(universes.UNIVERSES[n][1]) for n in nse_universe.INDEX_FILES
+                     if n in universes.UNIVERSES}
+        result = await asyncio.to_thread(
+            nse_universe.refresh_all, None, day=now.date(), baselines=baselines)
+        if not any(r.get("ok") for r in result.values()):
+            return  # site down / offline → try again next tick
+        self._last_universe_refresh_day = now.date()
+        self.last_universe_refresh = {"at": now.isoformat(timespec="seconds"),
+                                      "result": result}
+        changed = {n: r for n, r in result.items() if r.get("ok") and r.get("changed")}
+        for n, r in changed.items():
+            if r.get("added") or r.get("dropped"):
+                try:
+                    build_notifier().send(Alert(
+                        f"{universes.label(n)} constituents changed",
+                        f"+{len(r['added'])} {', '.join(r['added'][:20])}; "
+                        f"−{len(r['dropped'])} {', '.join(r['dropped'][:20])}",
+                        AlertLevel.INFO))
+                except Exception:  # pragma: no cover
+                    logger.exception("universe change alert failed")
+        logger.info("universe refresh: %s",
+                    {n: (r.get("count"), r.get("changed", r.get("error")))
+                     for n, r in result.items()})
 
     async def _maybe_daily_cache_refresh(self) -> None:
         """Refresh the index + running-equity DAILY cache ONCE per trading day, in the

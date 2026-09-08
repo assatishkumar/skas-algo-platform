@@ -235,6 +235,32 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   `web/src/pages/StrategiesPage.tsx` (STRATEGIES + META). Both are pinned by
   `tests/test_strategy_docs_coverage.py`, which also checks §3's ID/file counts — eight
   strategies had drifted out of the docs before it existed (2026-08-20).
+- **Universes FOLLOW the index (2026-09-08).** The lists in `data/universes.py` are
+  SNAPSHOTS of the official NSE constituent files and they rot: on 2026-09-08 the repo's
+  Nifty 500 had 95 names the index no longer held (ISEC, PEL, SWANENERGY …) and lacked 96
+  it did (SWIGGY, HYUNDAI, ETERNAL …); even the Nifty 50 was six out. `data/nse_universe.py`
+  fetches niftyindices.com's `ind_nifty*list.csv` (browser UA — a bare urllib gets 403),
+  rejects a list under 90% of the index size (a truncated download must never shrink a
+  universe), drops `DUMMY*` demerger placeholders, and stores one dated JSON per CHANGE
+  under `~/.skas_data/universes/<name>/` (`SKAS_UNIVERSE_DIR`; tests get a tmp dir).
+  `universes.current(name)` prefers the stored list, `resolve` reads `current`, and
+  `as_of(name)` says which (`GET /universes` carries `total/source/as_of`; the deploy
+  dropdown prints "489/500 cached · list 2026-09-08"). `manager._maybe_refresh_universes`
+  runs every weekday in the maintenance loop BEFORE the cache refresh (a joiner is cached
+  the day it appears); `POST /universes/refresh` is the hand trigger. Dates are OBSERVED
+  dates, not NSE's effective dates. **A run deployed on a NAMED universe follows it**:
+  `LiveConfig.universe_name` is persisted (`universe_name` in the snapshot; a custom list
+  has none) and `LiveRun._maybe_sync_universe` runs once a day before the decision — a
+  joiner is APPENDED to `config.symbols` (union; warm-up seeded, the SuperTrend backfill
+  pulls its bars the same pass) and persisted; a leaver is added to the resolver's
+  no-new-entry blocklist (the same gate the owner's `excluded_symbols` uses) but NEVER
+  removed from the run — a held position still needs prices and exits are never gated;
+  a returner is unblocked. `universe_dropped` is kept apart from the owner's
+  `excluded_symbols` in the snapshot so neither erases the other, and recovery re-applies
+  the union. Names the cache lacked at deploy (resolve trims to the cache) are added by
+  the first sync, so a thin box self-heals on day 1. One WARNING alert per change on the
+  run, one INFO per changed index. Coverage: `tests/test_nse_universe.py`,
+  `test_a_universe_run_follows_the_index` in tests/test_live.py.
 - **NIFTY strikes = 100-multiples only** (owner rule, 2026-07): NIFTY lists 50s but automated
   strategies must never SELECT one. Enforced centrally via `contract_specs.selection_step` /
   `eligible_strikes` (`_SELECTION_STEP={"NIFTY":100}`, extensible) at THREE candidate choke points —
