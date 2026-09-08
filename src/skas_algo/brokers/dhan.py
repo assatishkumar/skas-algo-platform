@@ -557,7 +557,14 @@ class DhanAdapter:
         }
         if cur.get("disclosedQuantity"):
             body["disclosedQuantity"] = int(cur["disclosedQuantity"])
-        self._http.put(f"/orders/{broker_order_id}", body)
+        resp = self._http.put(f"/orders/{broker_order_id}", body) or {}
+        # Dhan answers a modify with TRANSIT and applies (or refuses) it asynchronously. On
+        # 2026-09-08 a TCS re-price 2260.70 → 2283.35 was accepted here and never applied —
+        # the order expired at the old price — and nothing in our log said what Dhan had
+        # answered. Record the answer; LiveBroker reads the order's own OMS text when the
+        # price check finds the re-price missing.
+        logger.info("Dhan modify %s → %s %s: %s", broker_order_id, new_type, body["price"],
+                    {k: resp.get(k) for k in ("orderId", "orderStatus")} if isinstance(resp, dict) else resp)
 
     def order_status(self, broker_order_id: str) -> dict:
         """{status, average_price, filled_quantity, status_message, price} for one order,
@@ -574,6 +581,9 @@ class DhanAdapter:
             # the order's CURRENT limit price — lets the escalation verify its own modify
             # actually landed (the 2026-08-11 Zerodha lesson, same check applies here).
             "price": float(raw.get("price") or 0.0),
+            # Dhan's own words for the order's state, benign or not — what the escalation
+            # logs when a re-price did not land, BEFORE a cancel overwrites it with "CONFIRMED".
+            "oms_message": str(raw.get("omsErrorDescription") or ""),
         }
 
     #: Descriptions Dhan attaches to HEALTHY orders. They are not failure reasons, and

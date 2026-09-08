@@ -111,6 +111,13 @@ class LiveBroker:
         # An order above it is placed as consecutive children of at most that size — see
         # execute(). None/{} = never split (every pre-2026-09 caller and the tests).
         freeze_qty: dict[str, int] | None = None,
+        # ONE cancel-and-replace after the ladder is exhausted (owner call, 2026-09-08 —
+        # the TCS halt: our re-price never landed at Dhan, the order cancelled unfilled,
+        # and the run halted with the money and the signal both still good). Only fires
+        # when the broker CONFIRMED the cancel with nothing filled, re-checked once; the
+        # retry goes straight to the protected price, gets no ladder, and never retries
+        # itself. See _execute_one.
+        retry_after_cancel: bool = True,
         notifier=None,
         clock=None,                          # injectable for tests (datetime-like)
     ):
@@ -124,6 +131,7 @@ class LiveBroker:
         self.poll_interval_s = float(poll_interval_s)
         self.protect_pct = float(protect_pct)
         self.freeze_qty = {str(k).upper(): int(v) for k, v in (freeze_qty or {}).items()}
+        self.retry_after_cancel = bool(retry_after_cancel)
         # Escalation ladder. ONE 3% rung is far too thin for a near-the-money option on
         # expiry day: on 2026-08-11 the 24500 PE ran 31.30 → 41.75 (+33%) during the ~20s
         # run 10's square-off was resting, so a limit 3% through a touch read seconds
@@ -271,7 +279,18 @@ class LiveBroker:
         avg = sum(f.quantity * f.price for f in fills) / fq
         return Fill(order.symbol, order.side, fq, avg, broker_order_id=fills[0].broker_order_id)
 
-    def _execute_one(self, order: BrokerOrder) -> Fill:
+    def _execute_one(self, order: BrokerOrder, *, attempt: int = 1,
+                     parent_cid: str | None = None,
+                     price_hint: float | None = None) -> Fill:
+        """One order's whole life: place → wait → ladder → cancel → (one retry) → outcome.
+
+        ``attempt`` 1 is the ordinary path. ``attempt`` 2 is the cancel-and-replace retry
+        the first attempt makes for itself when the broker confirmed its cancel with
+        nothing filled: a NEW broker order (new cid, ``parent_cid`` = the first) placed
+        directly at ``price_hint`` — the protected price the first attempt could not get
+        applied — with NO ladder of its own and no further retry. Hard cap of one: two
+        confirmed-empty cancels in a row on the same decision is the market saying no,
+        and the halt is then the right answer."""
         touch = None
         if self.touch_fn is not None:
             try:
@@ -281,10 +300,11 @@ class LiveBroker:
         self._check_rails(order, touch)
 
         client_id = uuid.uuid4().hex[:16]
+        place_price = float(price_hint) if price_hint else (float(touch) if touch else None)
         req = BrokerOrder(
             symbol=order.symbol, side=order.side, quantity=order.quantity,
-            order_type=OrderType.LIMIT if touch else OrderType.MARKET,
-            price=float(touch) if touch else None,
+            order_type=OrderType.LIMIT if place_price else OrderType.MARKET,
+            price=place_price,
             client_order_id=client_id, tag=client_id,
         )
         started = _time.monotonic()
@@ -292,8 +312,12 @@ class LiveBroker:
         # which also disables the escalation below. That was invisible until 2026-08-24.
         self._trace(client_id, "place", symbol=order.symbol, side=order.side.value,
                     qty=order.quantity, type=req.order_type.value,
-                    price=f"{touch:.2f}" if touch else "none",
-                    touch="book" if touch else "MISSING",
+                    price=f"{place_price:.2f}" if place_price else "none",
+                    touch=f"{touch:.2f}" if (touch and price_hint) else
+                    ("book" if touch else "MISSING"),
+                    basis="retry-protected" if price_hint else None,
+                    attempt=f"{attempt}/2" if attempt > 1 else None,
+                    parent=parent_cid,
                     reduce_only=bool(getattr(order, "reduce_only", False)))
         self._governor.wait()
         try:
@@ -337,6 +361,12 @@ class LiveBroker:
             full = (self.protect_ladder if _is_opt(order.symbol)
                     else self.protect_ladder_equity)
             ladder = full if getattr(order, "reduce_only", False) else full[:1]
+            if attempt > 1:
+                # The retry was PLACED at the protected price; a rung on top of it would
+                # cross the owner's ceiling twice over. It gets the timeout and nothing else.
+                ladder = ()
+                self._trace(client_id, "noescal", reason="retry already placed at the "
+                            "protected price — no ladder on a retry")
             for i, pct in enumerate(ladder):
                 fresh = None
                 if self.touch_fn is not None:
@@ -374,23 +404,25 @@ class LiveBroker:
                 # the two apart after the fact. Say so in the log while the order is live.
                 got = float(st.get("price") or 0.0)
                 if want and got and abs(got - want) > 0.011:
+                    # Say WHY while the broker's own text is still about the modify — the
+                    # cancel a moment later rewrites it (TCS 2026-09-08 read "CONFIRMED" by
+                    # the time anyone looked).
                     logger.warning(
                         "escalation did NOT take effect on %s: asked %.2f, broker still "
-                        "shows %.2f — the re-price was ignored or rejected",
-                        broker_id, want, got)
+                        "shows %.2f — the re-price was ignored or rejected (broker says: %s)",
+                        broker_id, want, got,
+                        st.get("oms_message") or st.get("status_message") or "—")
+                    self._trace(client_id, "noreprice", asked=f"{want:.2f}",
+                                broker=f"{got:.2f}",
+                                says=str(st.get("oms_message")
+                                         or st.get("status_message") or "-")[:120])
                 if st["status"] in _TERMINAL:
                     break
                 if base <= 0:
                     break     # MARKET modify already sent; more rungs cannot add anything
 
         if st["status"] == "COMPLETE":
-            fill = Fill(order.symbol, order.side, st["filled_quantity"] or order.quantity,
-                        st["average_price"], broker_order_id=broker_id)
-            self._trace(client_id, "filled", qty=fill.quantity, avg=f"{fill.price:.2f}",
-                        elapsed=f"{_time.monotonic() - started:.1f}s")
-            self._notify(AlertLevel.INFO, "Filled",
-                         f"{order.side.value} {fill.quantity} {order.symbol} @ ₹{fill.price:.2f}")
-            return fill
+            return self._book_complete(order, st, broker_id, client_id, started)
 
         filled = int(st.get("filled_quantity") or 0)
         if st["status"] not in _TERMINAL:
@@ -407,6 +439,34 @@ class LiveBroker:
             st = self._await_terminal(broker_id, deadline_s=5.0,
                                       cid=client_id, phase="post-cancel")
             filled = int(st.get("filled_quantity") or filled)
+            if filled == 0 and st["status"] == "CANCELLED":
+                # ---- cancel-and-replace, ONCE (owner call 2026-09-08) ----------------
+                # Before this, a confirmed-empty cancel went straight to a halt. On
+                # 2026-09-08 TCS (run 28) sat at the touch for 10s, our re-price to +1%
+                # never landed at Dhan (JYOTHYLAB's did, the same minute), we cancelled,
+                # and the run halted with the cash and the signal both intact. The
+                # decision is still the strategy's; only the ORDER failed, so the order
+                # is what gets one more go. Preconditions are strict on purpose: the
+                # broker itself must say CANCELLED with 0 filled — a TIMEOUT/UNKNOWN
+                # post-cancel status means we do not know whether it filled, and a
+                # fresh order on top of an unknown one is how a position doubles.
+                if attempt > 1:
+                    self._trace(client_id, "exhausted", reason="the retry also "
+                                "cancelled unfilled — halting; no further attempt",
+                                parent=parent_cid)
+                elif not self.retry_after_cancel:
+                    self._trace(client_id, "noretry", reason="retry_after_cancel is off")
+                else:
+                    st = self._recheck_after_cancel(broker_id, client_id)
+                    filled = int(st.get("filled_quantity") or 0)
+                    if st["status"] == "CANCELLED" and filled == 0:
+                        return self._retry_once(order, client_id, touch, started)
+                    self._trace(client_id, "noretry", status=st["status"],
+                                filled=f"{filled}/{order.quantity}",
+                                reason="the re-check disagrees with the cancel — "
+                                "booking what the broker reports, not replacing it")
+                    if st["status"] == "COMPLETE":
+                        return self._book_complete(order, st, broker_id, client_id, started)
         if filled > 0:
             self._trace(client_id, "partial", qty=f"{filled}/{order.quantity}",
                         avg=f"{st['average_price']:.2f}",
@@ -419,11 +479,86 @@ class LiveBroker:
         detail = st.get("status_message") or st["status"]
         self._trace(client_id, "failed", broker_id=broker_id, status=st["status"],
                     detail=detail, filled=f"{filled}/{order.quantity}",
+                    attempt=f"{attempt}/2" if attempt > 1 else None, parent=parent_cid,
                     elapsed=f"{_time.monotonic() - started:.1f}s")
         self._notify(AlertLevel.ERROR, "Order failed",
                      f"{order.side.value} {order.quantity} {order.symbol}: {detail}")
         raise OrderExecutionError(
             f"{order.side.value} {order.quantity} {order.symbol} → {detail}")
+
+    def _book_complete(self, order: BrokerOrder, st: dict, broker_id: str, cid: str,
+                       started: float) -> Fill:
+        fill = Fill(order.symbol, order.side, st["filled_quantity"] or order.quantity,
+                    st["average_price"], broker_order_id=broker_id)
+        self._trace(cid, "filled", qty=fill.quantity, avg=f"{fill.price:.2f}",
+                    elapsed=f"{_time.monotonic() - started:.1f}s")
+        self._notify(AlertLevel.INFO, "Filled",
+                     f"{order.side.value} {fill.quantity} {order.symbol} @ ₹{fill.price:.2f}")
+        return fill
+
+    def _recheck_after_cancel(self, broker_id: str, cid: str) -> dict:
+        """One more status read, a beat after the broker confirmed the cancel.
+
+        A fill can land in the gap between our cancel request and its confirmation, and
+        the exchange's own trade confirmation can arrive AFTER the broker's CANCELLED
+        row is first read. The retry must never be placed on top of that late fill, so
+        the precondition is read twice, not once. A read that raises leaves the status
+        UNKNOWN, which is a no-retry answer by construction."""
+        _time.sleep(min(1.0, max(self.poll_interval_s, 0.25)))
+        try:
+            st = dict(self.adapter.order_status(broker_id))
+        except Exception as exc:  # pragma: no cover - transient status hiccup
+            self._trace(cid, "statuserr", phase="recheck", error=str(exc)[:200])
+            return {"status": "UNKNOWN", "average_price": 0.0, "filled_quantity": 0,
+                    "status_message": None}
+        self._trace(cid, "recheck", status=st.get("status"),
+                    filled=st.get("filled_quantity"),
+                    says=str(st.get("oms_message") or st.get("status_message") or "-")[:120])
+        return st
+
+    def _retry_once(self, order: BrokerOrder, cid: str, touch: float | None,
+                    started: float) -> Fill:
+        """The single cancel-and-replace: a fresh order at the PROTECTED price.
+
+        The first attempt tried the touch, then one rung through it; the retry does not
+        repeat the touch (that already failed) — it starts where the rung should have
+        been, off a FRESH touch, and stays there. Everything the retry does is traced
+        under its own cid with ``parent=`` the first, so a day's grep of either id finds
+        the pair."""
+        from skas_algo.engine.options.instrument import is_option_symbol as _is_opt
+
+        fresh = None
+        if self.touch_fn is not None:
+            try:
+                fresh = self.touch_fn(order.symbol, order.side)
+            except Exception:  # pragma: no cover - no book → the retry re-reads itself
+                fresh = None
+        base = float(fresh or touch or 0.0)
+        rungs = (self.protect_ladder if _is_opt(order.symbol)
+                 else self.protect_ladder_equity)
+        pct = float(rungs[0]) if rungs else 0.0
+        want = self._protected_price(base, order.side, pct=pct) if base > 0 else None
+        self._trace(cid, "retry", attempt="2/2",
+                    reason="broker confirmed the cancel with nothing filled",
+                    touch=f"{base:.2f}" if base > 0 else "MISSING",
+                    pct=f"{pct:.1f}%", limit=f"{want:.2f}" if want else "none",
+                    elapsed=f"{_time.monotonic() - started:.1f}s")
+        logger.warning(
+            "cancel-and-replace: %s %s %s cancelled unfilled after the ladder — placing ONE fresh "
+            "order at the protected price %s (touch %s, +%.1f%%); no further retry after this",
+            order.side.value, order.quantity, order.symbol,
+            f"{want:.2f}" if want else "MARKET", f"{base:.2f}" if base > 0 else "?", pct)
+        self._notify(AlertLevel.WARNING, "Order retry",
+                     f"{order.side.value} {order.quantity} {order.symbol}: cancelled unfilled, "
+                     f"retrying once at ₹{want:.2f}" if want else
+                     f"{order.side.value} {order.quantity} {order.symbol}: cancelled unfilled, "
+                     f"retrying once (no price basis)")
+        try:
+            return self._execute_one(order, attempt=2, parent_cid=cid, price_hint=want)
+        except OrderExecutionError as exc:
+            self._trace(cid, "retryfail", error=str(exc)[:200],
+                        elapsed=f"{_time.monotonic() - started:.1f}s")
+            raise
 
     def _protected_price(self, touch: float, side, pct: float | None = None) -> float:
         """The escalation limit: cross the touch by ``pct`` (default ``protect_pct``) —
@@ -452,7 +587,7 @@ class LiveBroker:
             except Exception as exc:  # pragma: no cover - transient status hiccup
                 self._trace(cid, "statuserr", phase=phase, error=str(exc)[:200])
             if st["status"] != seen:
-                seen = st["status"]
+                seen = str(st["status"])
                 self._trace(cid, "status", phase=phase, value=seen,
                             filled=st.get("filled_quantity"),
                             msg=st.get("status_message"))

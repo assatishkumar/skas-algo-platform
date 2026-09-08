@@ -186,7 +186,7 @@ def test_order_status_translates_every_field_live_broker_reads():
         "price": 123.45, "omsErrorDescription": None}})
     st = _adapter(http).order_status("9")
     assert st == {"status": "COMPLETE", "average_price": 124.6, "filled_quantity": 65,
-                  "status_message": None, "price": 123.45}
+                  "status_message": None, "price": 123.45, "oms_message": ""}
 
 
 def test_a_rejection_reason_reaches_the_halt_message():

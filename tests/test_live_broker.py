@@ -573,7 +573,7 @@ class LadderAdapter(FakeAdapter):
         if self.filled:
             return {"status": "COMPLETE", "average_price": self.fills_at,
                     "filled_quantity": self.qty, "status_message": None}
-        if self.cancelled:
+        if broker_order_id in self.cancelled:      # per ORDER — a retry starts fresh
             return {"status": "CANCELLED", "average_price": 0.0, "filled_quantity": 0,
                     "status_message": None}
         return dict(PENDING)
@@ -624,7 +624,9 @@ def test_ladder_still_raises_when_nothing_fills():
     lb = make(a, touch_fn=lambda s, side: 34.0)
     with pytest.raises(OrderExecutionError, match="CANCELLED"):
         lb.execute(BrokerOrder("NIFTY|2026-08-11|24500|PE", OrderSide.BUY, 195))
-    assert a.cancelled == ["KITE-1"]
+    # …after the ONE cancel-and-replace (2026-09-08): a second order, also cancelled
+    assert a.cancelled == ["KITE-1", "KITE-2"]
+    assert len(a.placed) == 2
 
 
 def test_protect_pct_zero_still_means_no_crossing():
@@ -842,9 +844,17 @@ def test_the_order_trace_reconstructs_a_cancel_without_reading_the_code():
     assert "ORDER cancel" in log and "unfilled after escalation" in log
     # 4. and the outcome, with the id you would quote to the broker
     assert "ORDER failed" in log and "status=CANCELLED" in log
-    # every line is greppable by one correlation id
+    # 5. the one cancel-and-replace (2026-09-08) is its own order under its own id,
+    #    and BOTH ids name each other, so a grep of either finds the pair
+    assert "ORDER retry" in log and "broker confirmed the cancel" in log
     cids = {ln.split("cid=")[1].split()[0] for ln in seen if ln.startswith("ORDER ")}
-    assert len(cids) == 1, cids
+    assert len(cids) == 2, cids
+    first = next(ln for ln in seen if ln.startswith("ORDER place")).split("cid=")[1].split()[0]
+    second = (cids - {first}).pop()
+    assert f"parent={first}" in log
+    assert any(ln.startswith("ORDER place") and f"cid={second}" in ln and "attempt=2/2" in ln
+               for ln in seen)
+    assert "ORDER retryfail" in log                     # and the halt names the retry
 
 
 # ---------------------------------------- segment-aware crossing (owner call 2026-08-24)
@@ -859,7 +869,11 @@ def test_an_equity_entry_crosses_one_percent_once_then_gives_up():
     with pytest.raises(OrderExecutionError):
         lb.execute(BrokerOrder("ITC", OrderSide.BUY, 1))
     assert [p for (_, t, p) in a.modified if t is OrderType.LIMIT] == [101.0]
-    assert a.cancelled == ["KITE-1"]                     # …then out, and the run halts
+    # …then out — and ONE fresh order straight at the same 1% ceiling (2026-09-08), which
+    # gets no rung of its own; when that cancels too the run halts.
+    assert a.cancelled == ["KITE-1", "KITE-2"]
+    assert [o.price for o in a.placed] == [100.0, 101.0]
+    assert [b for (b, _, _) in a.modified] == ["KITE-1"]  # the retry was never re-priced
 
 
 def test_an_option_entry_still_crosses_three_percent():
@@ -870,6 +884,7 @@ def test_an_option_entry_still_crosses_three_percent():
     with pytest.raises(OrderExecutionError):
         lb.execute(BrokerOrder("NIFTY|2026-07-07|24500|CE", OrderSide.BUY, 65))
     assert [p for (_, t, p) in a.modified if t is OrderType.LIMIT] == [103.0]
+    assert a.placed[1].price == 103.0                    # the retry sits at the same 3%
 
 
 def test_an_equity_exit_still_walks_a_full_ladder_just_a_tighter_one():
@@ -988,3 +1003,164 @@ def test_injection_reads_the_strategys_crossing_and_the_freeze_table(monkeypatch
     sess2 = _Sess()
     manager._maybe_inject_live_broker(sess2, _cfg("LIVE"), _QS(_ExecAdapter(armed=True)))
     assert sess2.broker.protect_ladder[0] == settings.live_order_protect_pct
+
+
+# ---------------------------------------- cancel-and-replace, once (owner call 2026-09-08)
+
+def _grab_order_log():
+    """Attach a handler to the order-trace logger; returns (lines, detach)."""
+    import logging
+
+    logger = logging.getLogger("skas_algo.live")
+    seen: list[str] = []
+
+    class Grab(logging.Handler):
+        def emit(self, record):
+            seen.append(record.getMessage())
+
+    h = Grab()
+    logger.addHandler(h)
+    prev = logger.level
+    logger.setLevel(logging.INFO)
+
+    def detach():
+        logger.removeHandler(h)
+        logger.setLevel(prev)
+
+    return seen, detach
+
+
+class PerOrderAdapter(FakeAdapter):
+    """Statuses keyed by broker order id: ``scripts[oid]`` is a list of status dicts
+    played in order on successive reads (the last repeats); a cancel appends
+    ``on_cancel[oid]`` (or a plain CANCELLED) to that order's script. Lets a test
+    say exactly what the broker reports for the FIRST order and the RETRY."""
+
+    def __init__(self, scripts, on_cancel=None):
+        super().__init__(initial=PENDING)
+        self.scripts = {k: list(v) for k, v in scripts.items()}
+        self.on_cancel = on_cancel or {}
+        self.reads: dict[str, int] = {}
+
+    def order_status(self, broker_order_id):
+        seq = self.scripts[broker_order_id]
+        i = self.reads.get(broker_order_id, 0)
+        self.reads[broker_order_id] = i + 1
+        return dict(seq[min(i, len(seq) - 1)])
+
+    def cancel_order(self, broker_order_id):
+        self.cancelled.append(broker_order_id)
+        self.reads[broker_order_id] = 0                    # the post-cancel script restarts
+        self.scripts[broker_order_id] = [self.on_cancel.get(broker_order_id, {
+            "status": "CANCELLED", "average_price": 0.0, "filled_quantity": 0,
+            "status_message": None})]
+
+
+def test_a_confirmed_empty_cancel_is_replaced_once_at_the_protected_price():
+    """The TCS halt of 2026-09-08 (run 28): limit at the touch → 10s → re-price → the
+    broker never applied it → we cancelled → CANCELLED, 0 filled → HALT, with the cash and
+    the signal both still good. Now: the broker confirmed the cancel with nothing filled,
+    so ONE fresh order goes out — straight at the protected price, off a fresh touch —
+    and the fill it gets is the fill the strategy books."""
+    a = PerOrderAdapter({"KITE-1": [PENDING], "KITE-2": [COMPLETE]})
+    lb = make(a)
+    seen, detach = _grab_order_log()
+    try:
+        fill = lb.execute(BrokerOrder("TCS", OrderSide.BUY, 1))
+    finally:
+        detach()
+    assert fill.quantity == 65 and fill.broker_order_id == "KITE-2"
+    assert a.cancelled == ["KITE-1"]
+    assert [o.price for o in a.placed] == [100.0, 101.0]     # touch, then touch +1% (equity)
+    assert a.placed[1].order_type is OrderType.LIMIT
+    log = "\n".join(seen)
+    assert "ORDER recheck" in log                              # the precondition read twice
+    assert "ORDER retry" in log and "limit=101.00" in log
+    assert "basis=retry-protected" in log and "attempt=2/2" in log
+    assert "ORDER filled" in log
+    assert any(al.title.endswith("Order retry") for al in lb.notifier.alerts)
+    assert not any(al.level.name == "ERROR" for al in lb.notifier.alerts)   # no halt
+
+
+def test_the_retry_happens_exactly_once_then_halts():
+    """Two confirmed-empty cancels on one decision is the market saying no. The retry
+    gets no ladder of its own and never retries itself — the run halts as before, and the
+    log says the retry was exhausted rather than leaving a second silent hole."""
+    a = PerOrderAdapter({"KITE-1": [PENDING], "KITE-2": [PENDING]})
+    lb = make(a)
+    seen, detach = _grab_order_log()
+    try:
+        with pytest.raises(OrderExecutionError, match="CANCELLED"):
+            lb.execute(BrokerOrder("TCS", OrderSide.BUY, 1))
+    finally:
+        detach()
+    assert len(a.placed) == 2 and a.cancelled == ["KITE-1", "KITE-2"]
+    assert [b for (b, _, _) in a.modified] == ["KITE-1"]    # no rung on the retry
+    log = "\n".join(seen)
+    assert "no ladder on a retry" in log
+    assert "ORDER exhausted" in log and "ORDER retryfail" in log
+    assert any(al.level.name == "ERROR" for al in lb.notifier.alerts)
+
+
+def test_no_retry_unless_the_broker_itself_confirms_an_empty_cancel():
+    """Three ways the precondition fails, none of which may place a second order:
+    the post-cancel status never turns CANCELLED (we do not know whether it filled);
+    something DID fill on the cancel (book the partial, as before); the re-check a beat
+    later reports a late fill (book it — a retry on top of it would double the position)."""
+    # (a) cancel sent, broker still says OPEN when we stop waiting → UNKNOWN outcome
+    a = PerOrderAdapter({"KITE-1": [PENDING]}, on_cancel={"KITE-1": PENDING})
+    lb = make(a)
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("TCS", OrderSide.BUY, 1))
+    assert len(a.placed) == 1
+
+    # (b) partial on the cancel → the partial is the answer
+    part = {"status": "CANCELLED", "average_price": 99.0, "filled_quantity": 1,
+            "status_message": None}
+    a = PerOrderAdapter({"KITE-1": [PENDING]}, on_cancel={"KITE-1": part})
+    lb = make(a)
+    fill = lb.execute(BrokerOrder("TCS", OrderSide.BUY, 3))
+    assert fill.quantity == 1 and len(a.placed) == 1
+
+    # (c) CANCELLED/0 on the first read, COMPLETE on the re-check → booked, not doubled
+    class LateFill(PerOrderAdapter):
+        def cancel_order(self, broker_order_id):
+            self.cancelled.append(broker_order_id)
+            self.reads[broker_order_id] = 0
+            self.scripts[broker_order_id] = [
+                {"status": "CANCELLED", "average_price": 0.0, "filled_quantity": 0,
+                 "status_message": None},
+                dict(COMPLETE),
+            ]
+
+    a = LateFill({"KITE-1": [PENDING]})
+    lb = make(a)
+    seen, detach = _grab_order_log()
+    try:
+        fill = lb.execute(BrokerOrder("TCS", OrderSide.BUY, 65))
+    finally:
+        detach()
+    assert fill.quantity == 65 and fill.broker_order_id == "KITE-1"
+    assert len(a.placed) == 1
+    log = "\n".join(seen)
+    assert "ORDER noretry" in log and "ORDER filled" in log   # a full fill, not a "partial"
+
+
+def test_the_retry_can_be_switched_off():
+    a = PerOrderAdapter({"KITE-1": [PENDING], "KITE-2": [COMPLETE]})
+    lb = make(a, retry_after_cancel=False)
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("TCS", OrderSide.BUY, 1))
+    assert len(a.placed) == 1
+
+
+def test_the_retry_re_reads_the_touch_and_an_exit_retries_too():
+    """The retry prices off a FRESH touch (the book moved while the first order rested),
+    and it is not entry-only: an unfilled EXIT is the more expensive hole."""
+    quotes = iter([100.0, 100.0, 104.0])                  # place, rung, retry
+    a = PerOrderAdapter({"KITE-1": [PENDING], "KITE-2": [COMPLETE]})
+    lb = make(a, touch_fn=lambda s, side: next(quotes, 104.0))
+    fill = lb.execute(BrokerOrder("NIFTY|2026-07-07|24500|CE", OrderSide.BUY, 65,
+                                  reduce_only=True))
+    assert fill.broker_order_id == "KITE-2"
+    assert a.placed[1].price == pytest.approx(107.15)     # 104 × 1.03, tick-snapped up

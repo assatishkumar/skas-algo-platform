@@ -93,6 +93,10 @@ class Settings(BaseSettings):
     live_order_protect_pct: float = 3.0  # SKAS_LIVE_ORDER_PROTECT_PCT (options)
     # Equity spreads are basis points, not percents — see LiveBroker.protect_pct_equity.
     live_order_protect_pct_equity: float = 1.0  # SKAS_LIVE_ORDER_PROTECT_PCT_EQUITY
+    # ONE cancel-and-replace after a confirmed-empty cancel (LiveBroker._execute_one;
+    # owner call 2026-09-08 after the TCS halt). SKAS_LIVE_RETRY_AFTER_CANCEL=0 restores
+    # the cancel-then-halt behaviour.
+    live_retry_after_cancel: bool = True  # SKAS_LIVE_RETRY_AFTER_CANCEL
     # NSE's per-ORDER quantity freeze, units per underlying — an EXCHANGE control every
     # broker enforces, per order not per account. It is re-derived several times a year
     # (Nov-25, Dec-25, Feb-26, Apr-26, Jul-26, Sep-26 …) and the Kite instruments dump does
