@@ -73,6 +73,7 @@ class SuperTrendMomentumStrategy(EntryFundingMixin):
         self._init_funding(funding, fund_source, float_parts, settlement_days,
                            funding_buffer_pct, fund_seed, fund_size=initial_capital,
                            fund_size_cap=fund_size_cap)
+        self.strategy_alert: str | None = None
         self.capital_parts = int(capital_parts)
         self.allocation_mode = allocation_mode
         self.allocation_amount = initial_capital / capital_parts
@@ -160,6 +161,19 @@ class SuperTrendMomentumStrategy(EntryFundingMixin):
                 return seed
         else:
             running_cash = ctx.cash
+
+        # A held name with NO direction cannot exit on a red flip — the loop below skips it.
+        # That used to be silent (a cache with no history for the name, e.g. a fresh box).
+        # Say so on the tile; the manager's backfill is what clears it.
+        blind = sorted(s for s in held if s in present and ctx.supertrend_dir(s) is None)
+        base_alert = self.strategy_alert if managed else None
+        if blind:
+            msg = (f"{len(blind)} held name{'s' if len(blind) != 1 else ''} have no SuperTrend "
+                   f"direction (no price history in the cache) and cannot exit on a red flip: "
+                   f"{', '.join(blind[:6])}{' …' if len(blind) > 6 else ''}")
+            self.strategy_alert = msg if not base_alert else f"{base_alert} · {msg}"
+        elif not managed:
+            self.strategy_alert = None
 
         # --- Step 1: exits (held names) — RED flip exits the remainder; % target books a share ---
         for sym in held:

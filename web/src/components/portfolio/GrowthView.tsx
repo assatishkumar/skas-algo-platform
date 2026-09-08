@@ -13,6 +13,9 @@ const H = 320; // svg user units — the chart's own coordinate space
 const W = 1000;
 const MARKER_MAX = 60; // draw a dot on every recorded day up to this many — the history is DAILY
 const TICK_MAX = 14; // label every day up to this many, else ~8 spaced ticks
+const PLOT_LEFT = 64;      // the y-axis gutter (left-16)
+const LABEL_GUTTER = 150;  // room on the right for "Name +2.5%" labels beside each line
+const LABEL_GAP_PCT = 5.5; // min vertical spacing between end labels, % of plot height
 
 interface Series {
   key: string;
@@ -51,6 +54,10 @@ export default function GrowthView({
   const [basis, setBasis] = useState<Basis>("pct");
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
   const [hover, setHover] = useState<number | null>(null);
+  // where the cursor is inside the plot, in px — the tooltip is placed from this, not from a
+  // CSS calc that multiplied two percentages (invalid CSS: the browser dropped `left`, the
+  // right half's tooltip flipped to −108% of nothing and left the viewport; owner 2026-09-08)
+  const [hoverPx, setHoverPx] = useState<{ x: number; w: number }>({ x: 0, w: 1 });
   const wrap = useRef<HTMLDivElement>(null);
 
   const g = payload.growth;
@@ -172,6 +179,25 @@ export default function GrowthView({
     for (let k = 0; k < count; k += 1) out.add(Math.round((k / (count - 1)) * (n - 1)));
     return [...out].sort((a, b) => a - b);
   }, [n]);
+
+  // right-end labels: name + latest value, sorted by height and spread at least LABEL_GAP_PCT apart
+  const endLabels = useMemo(() => {
+    if (scope === "total") return [] as { key: string; label: string; text: string; color: string; topPct: number }[];
+    const raw = plotted.flatMap((s) => {
+      const last = [...s.plot].reverse().find((v) => v !== null);
+      if (last == null) return [];
+      return [{ key: s.key, label: s.label, text: pctMode ? pct(last) : money(s.end),
+                color: s.key === "invested" ? "#9aa8a4" : s.color, topPct: (y(last) / H) * 100 }];
+    }).sort((a, b) => a.topPct - b.topPct);
+    for (let k = 1; k < raw.length; k++) {
+      if (raw[k].topPct - raw[k - 1].topPct < LABEL_GAP_PCT) raw[k].topPct = raw[k - 1].topPct + LABEL_GAP_PCT;
+    }
+    // if the stack ran off the bottom, slide it back up as a block
+    const over = raw.length ? raw[raw.length - 1].topPct - 98 : 0;
+    if (over > 0) for (const l of raw) l.topPct -= over;
+    return raw;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plotted, pctMode, scope, bounds]);
 
   // ---- KPIs, from what was actually recorded. No history, no number.
   const kpis = useMemo(() => {
@@ -304,7 +330,15 @@ export default function GrowthView({
         </div>
 
         {scope !== "total" && (
-          <div className="mb-3 flex flex-wrap gap-[7px]">
+          <div className="mb-3 flex flex-wrap items-center gap-[7px]">
+            <button
+              onClick={() => setHidden({})}
+              className="rounded-full border-[1.5px] border-[var(--border)] px-2.5 py-1 text-[11.5px] font-bold text-[var(--muted)] hover:text-[var(--strong)]"
+              title="Show every series">All</button>
+            <button
+              onClick={() => setHidden(Object.fromEntries(series.map((s) => [s.key, true])))}
+              className="rounded-full border-[1.5px] border-[var(--border)] px-2.5 py-1 text-[11.5px] font-bold text-[var(--muted)] hover:text-[var(--strong)]"
+              title="Hide every series, then pick the ones to compare">None</button>
             {series.map((s) => {
               const on = !hidden[s.key];
               return (
@@ -340,7 +374,7 @@ export default function GrowthView({
           </div>
         ) : (
           <div className="relative h-[340px]" ref={wrap}>
-            <div className="absolute bottom-[26px] left-16 right-2 top-0">
+            <div className="absolute bottom-[26px] left-16 top-0" style={{ right: scope === "total" ? 8 : LABEL_GUTTER }}>
               <svg
                 viewBox={`0 0 ${W} ${H}`}
                 preserveAspectRatio="none"
@@ -348,6 +382,7 @@ export default function GrowthView({
                 onMouseMove={(e) => {
                   const box = e.currentTarget.getBoundingClientRect();
                   const frac = (e.clientX - box.left) / box.width;
+                  setHoverPx({ x: e.clientX - box.left, w: box.width });
                   setHover(Math.max(0, Math.min(n - 1, Math.round(frac * (n - 1)))));
                 }}
                 onMouseLeave={() => setHover(null)}
@@ -434,28 +469,28 @@ export default function GrowthView({
                 </span>
               ))}
 
-              {scope !== "total" && plotted.map((s) => {
-                const last = [...s.plot].reverse().find((v) => v !== null);
-                if (last == null) return null;
-                return (
-                  <span
-                    key={s.key}
-                    className="absolute right-0.5 -translate-y-full rounded px-[3px] text-[11px] font-extrabold"
-                    style={{ top: `${(y(last) / H) * 100}%`, color: s.color, background: "var(--card)" }}
-                  >
-                    {pctMode ? pct(last) : money(s.end)}
-                  </span>
-                );
-              })}
+              {/* Each line is NAMED at its right end, in the gutter beside the plot, and the
+                  labels are pushed apart so two lines that finish together both stay legible
+                  (owner 2026-09-08: the +0.0% / −0.2% pair used to print on top of each other). */}
+              {scope !== "total" && endLabels.map((l) => (
+                <span
+                  key={l.key}
+                  className="absolute left-full ml-1.5 -translate-y-1/2 whitespace-nowrap text-[11px] font-extrabold leading-none"
+                  style={{ top: `${l.topPct}%`, color: l.color }}
+                >
+                  <span className="mr-1 text-[var(--muted)]">{l.label}</span>{l.text}
+                </span>
+              ))}
             </div>
 
             {hover !== null && (
               <div
                 className="pointer-events-none absolute top-1 z-10 min-w-[190px] rounded-[10px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-[11.5px] shadow-lg"
-                style={{
-                  left: `calc(64px + ${(x(hover) / W) * 100}% * (100% - 72px) / 100%)`,
-                  transform: hover > n / 2 ? "translateX(-108%)" : "translateX(8px)",
-                }}
+                style={
+                  hoverPx.x > hoverPx.w / 2
+                    ? { left: `${PLOT_LEFT + (x(hover) / W) * hoverPx.w - 10}px`, transform: "translateX(-100%)" }
+                    : { left: `${PLOT_LEFT + (x(hover) / W) * hoverPx.w + 10}px` }
+                }
               >
                 <div className="mb-1 font-extrabold text-[var(--strong)]">
                   {dayLabel(g.dates[hover])}

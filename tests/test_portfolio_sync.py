@@ -726,3 +726,16 @@ def test_a_broker_without_the_day_book_seam_is_untouched(fake_broker):
         with session_scope() as db:
             db.delete(db.get(PortfolioHolding, rid))
             db.commit()
+
+
+def test_skip_sources_leaves_that_source_untouched(amfi_cache):
+    """The 16:00 IST pass skips "global": a US holding's close is the one the 09:30 pass wrote,
+    and repricing it at 16:00 IST would stamp a half-session print as the day's close."""
+    with session_scope() as db:
+        hid = _make_fund(db, "INF879O01027")
+        db.commit()
+        report = sync_portfolio(db, holding_ids=[hid], skip_sources=("amfi",))
+        row = db.get(PortfolioHolding, hid)
+        assert report.updated == [] and row.last_price is None
+        report = sync_portfolio(db, holding_ids=[hid])
+        assert len(report.updated) == 1

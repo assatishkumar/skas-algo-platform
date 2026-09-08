@@ -214,17 +214,30 @@ def _adoptable_units(strategy, portfolio, symbol: str, missing: float, price: fl
     return float(min(int(missing), int(wanted)))
 
 
-def _seed_supertrend(session, strategy, loader, symbols) -> None:
+# A SuperTrend seeded from fewer bars than this is not the backtest's: the band carry-over
+# depends on history, and a 30-bar seed (what a plain daily refresh leaves for a new symbol)
+# can read the opposite direction. Below it the symbol is reported as MISSING so the run
+# backfills the cache before it trusts the direction.
+SUPERTREND_MIN_BARS = 250
+
+
+def _seed_supertrend(session, strategy, loader, symbols) -> list[str]:
     """For a SuperTrend strategy, compute each symbol's latest completed-bar direction from the
     cached OHLC and set it on the live view (live quotes carry no high/low, so ATR comes from the
-    cache). Refreshed daily by the run loop. No-op for other strategies."""
+    cache). Refreshed daily by the run loop. No-op for other strategies.
+
+    Returns the symbols whose cached history is too thin to trust (none / < SUPERTREND_MIN_BARS
+    bars), also stamped on ``session.supertrend_missing`` for the run's backfill step. A thin
+    symbol still gets whatever direction the bars give — better than None for an EXIT — but
+    the run treats the list as work to do, not as a signal to act on."""
     if not getattr(strategy, "needs_supertrend", False) or not hasattr(
         strategy, "supertrend_config"
     ):
-        return
+        return []
     market = getattr(session, "market", None)
     if market is None or not hasattr(market, "set_supertrend_dir"):
-        return
+        return []
+    missing: list[str] = []
     from datetime import timedelta
 
     import pandas as pd
@@ -241,7 +254,10 @@ def _seed_supertrend(session, strategy, loader, symbols) -> None:
             df = None
         if df is None or getattr(df, "empty", True):
             market.set_supertrend_dir(sym, None)
+            missing.append(sym)
             continue
+        if len(df) < SUPERTREND_MIN_BARS:
+            missing.append(sym)
         # Latest completed bar's direction (+1/−1) AND the trailing SuperTrend line — the line
         # lets the watchlist show each name's trend + distance-to-flip.
         bands = supertrend_bands(
@@ -257,6 +273,14 @@ def _seed_supertrend(session, strategy, loader, symbols) -> None:
             )
         else:
             market.set_supertrend_dir(sym, None)
+    try:
+        session.supertrend_missing = list(missing)
+    except Exception:  # pragma: no cover - a session that refuses attributes
+        pass
+    if missing:
+        logger.warning("supertrend seed: %s of %s symbols have thin/no cached history (%s…)",
+                       len(missing), len(symbols), ", ".join(missing[:5]))
+    return missing
 
 
 def _broker_daily_df(adapter, u: str, start, end):
@@ -487,6 +511,7 @@ class LiveRun:
         self._margin_via_label: str | None = None
         self._margin_dhan_sum: float | None = None
         self._last_funds_at: datetime | None = None
+        self._history_backfill_day: date | None = None   # SuperTrend cache backfill latch
         self._wire_quote_source()
 
     def _wire_quote_source(self) -> None:
@@ -1090,12 +1115,53 @@ class LiveRun:
         strategy = getattr(self.session, "strategy", None)
         if not getattr(strategy, "needs_supertrend", False):
             return
+        self._maybe_backfill_history()
         try:
             from skas_algo.data.provider import get_price_loader
 
             _seed_supertrend(self.session, strategy, get_price_loader(), self.config.symbols)
         except Exception:  # pragma: no cover - never break the decision loop on a cache hiccup
             logger.exception("supertrend refresh failed for run %s", self.run_id)
+
+    def _maybe_backfill_history(self) -> None:
+        """Fill the cache for the SuperTrend symbols the seed found thin, then re-seed — once
+        per day per run, on the box the run happens to be on.
+
+        The VPS cache is 17 symbols deep (2026-09-08); the Mac's holds the Nifty 500. A run
+        deployed on the VPS read no direction for any name (no entries — and no EXITS for a
+        held name, silently), then after the morning refresh a direction from 30 bars that
+        need not match the backtest's. This makes the seed independent of the box: one Kite
+        historical call per thin symbol through the read-only data session."""
+        missing = list(getattr(self.session, "supertrend_missing", None) or [])
+        if not missing:
+            return
+        today = datetime.now(IST).date()
+        if self._history_backfill_day == today:
+            return
+        self._history_backfill_day = today
+        from skas_algo.services.market_data import refresh_cache
+
+        try:
+            with session_scope() as db:
+                account = manager._data_account(db)
+                if account is None:
+                    logger.warning("run %s: %s SuperTrend symbols have thin history and no "
+                                   "Zerodha session is available to backfill", self.run_id, len(missing))
+                    self._history_backfill_day = None    # try again next tick
+                    return
+                result = refresh_cache(account, missing)
+            ok = sum(1 for r in result.values() if "error" not in r)
+            logger.info("run %s: backfilled %s/%s SuperTrend symbols (%s)", self.run_id, ok,
+                        len(missing), ", ".join(missing[:5]))
+            from skas_algo.data.provider import get_price_loader
+
+            still = _seed_supertrend(self.session, self.session.strategy, get_price_loader(),
+                                     self.config.symbols)
+            if still:
+                logger.warning("run %s: %s symbols still thin after backfill: %s", self.run_id,
+                               len(still), ", ".join(still[:8]))
+        except Exception:  # pragma: no cover - never break the decision loop
+            logger.exception("SuperTrend history backfill failed for run %s", self.run_id)
 
     def _tag_underlying_spot(self, events: list[dict]) -> None:
         """Stamp each option trade event with the underlying's live spot at execution, so the
@@ -1548,6 +1614,7 @@ class LiveRunManager:
         self._last_backup_day: date | None = None
         self._last_cache_refresh_day: date | None = None
         self._last_portfolio_snapshot_day: date | None = None
+        self._last_portfolio_morning_day: date | None = None
         # Last successful daily cache refresh, surfaced to the UI (quiet "Data ✓ HH:MM" chip).
         self.last_cache_refresh: dict | None = None
         self._last_option_capture_day: date | None = None
@@ -1640,6 +1707,7 @@ class LiveRunManager:
             protect_pct=(float(own) if own is not None else settings.live_order_protect_pct),
             protect_pct_equity=settings.live_order_protect_pct_equity,
             freeze_qty=settings.freeze_quantities(),
+            retry_after_cancel=settings.live_retry_after_cancel,
         )
         logger.warning(
             "REAL-ORDER broker injected for %s (account %s)", config.name, config.broker_account_id
@@ -2195,6 +2263,7 @@ class LiveRunManager:
                 self._rebind_order_sweep()
                 await self._maybe_daily_cache_refresh()
                 await self._maybe_daily_option_capture()
+                await self._maybe_morning_portfolio_sync()
                 await self._maybe_daily_portfolio_snapshot()
                 await self._maybe_daily_backup()
             except asyncio.CancelledError:  # pragma: no cover
@@ -2232,6 +2301,30 @@ class LiveRunManager:
             )
         except Exception:  # pragma: no cover - alert is best-effort
             logger.exception("watchdog notification failed")
+
+    async def _maybe_morning_portfolio_sync(self) -> None:
+        """Reprice the /portfolio at ~09:30 IST every weekday (owner 2026-09-08). This is the
+        read that carries the US close and the overnight NAVs; the 16:00 pass below is the
+        Indian close. Not a snapshot — history gets one point per day, at 16:00."""
+        now = datetime.now(IST)
+        if self._last_portfolio_morning_day == now.date() or now.weekday() >= 5:
+            return
+        if now.time() < time(9, 30):
+            return
+        self._last_portfolio_morning_day = now.date()
+        try:
+            await asyncio.to_thread(self._run_portfolio_sync, ())
+        except Exception:  # pragma: no cover - never break maintenance
+            logger.exception("morning portfolio sync failed")
+
+    def _run_portfolio_sync(self, skip_sources: tuple[str, ...]) -> None:
+        from skas_algo.services.portfolio_sync import sync_portfolio
+
+        with session_scope() as db:
+            report = sync_portfolio(db, skip_sources=skip_sources)
+            logger.info("portfolio sync (%s): %s issue(s)",
+                        "all sources" if not skip_sources else f"skipping {','.join(skip_sources)}",
+                        len(report.issues))
 
     async def _maybe_daily_portfolio_snapshot(self) -> None:
         """Refresh the /portfolio auto holdings and stamp one history point per day.
@@ -2271,7 +2364,11 @@ class LiveRunManager:
 
         with session_scope() as db:
             try:
-                report = sync_portfolio(db)
+                # The 16:00 pass is the INDIAN close. US-listed and other global holdings keep
+                # the price the 09:30 pass wrote — their own market closed overnight, and
+                # repricing them at 16:00 IST would stamp a half-session US print as the day's
+                # close (owner 2026-09-08). One snapshot, two closes, each from its own market.
+                report = sync_portfolio(db, skip_sources=("global",))
                 if report.issues:
                     logger.info("portfolio sync: %s issue(s)", len(report.issues))
             except Exception:

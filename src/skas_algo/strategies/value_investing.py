@@ -679,6 +679,73 @@ class ValueInvestingStrategy:
                         f"{', '.join(missing[:6])}{' …' if len(missing) > 6 else ''} — they "
                         f"are not in this run's symbol list (stop + redeploy to add them)")
 
+    # ------------------------------------------------------------------ preview
+    def preview_plan(self, market, today: date) -> dict:
+        """What TODAY's decision would buy, without making it — for the tile (owner ask,
+        2026-09-08: "an indication of which stocks will be invested today").
+
+        Runs the real ranking and the real planner over COPIES of the pots so nothing is
+        credited or debited: the same walk on_slice will take at 15:05, against the same
+        spendable figure. Returns {ranked: [(symbol, change_pct, price)], plan: [(symbol,
+        price, units, cost)], spendable, projected}. An unpriced name is simply absent."""
+        names = self.watchlist or [s for s in self.universe if s != self.fund_source]
+        ranked: list[tuple[float, int, str, float]] = []
+        for i, sym in enumerate(names):
+            if sym == self.fund_source:
+                continue
+            try:
+                prev = market.prev_close(sym)
+                px = market.last_close(sym) if hasattr(market, "last_close") else market.close(sym)
+            except Exception:  # pragma: no cover - a name the view cannot price
+                continue
+            if prev is None or px is None or prev <= 0 or px <= 0:
+                continue
+            ranked.append((float(px) / float(prev) - 1.0, i, sym, float(px)))
+        ranked.sort(key=lambda r: (r[0], r[1]))
+        projected = self.settled_cash is None
+        cap = (self.settled_cash if not projected
+               else min(self.initial_capital,
+                        self._broker_funds if self._broker_funds is not None
+                        else self.initial_capital))
+        if self._broker_funds is not None and cap is not None:
+            cap = min(cap, self._broker_funds)
+        cap = max(0.0, float(cap or 0.0))
+        # the planner mutates pots / epoch state — run it on a copy and put everything back
+        saved = (dict(self.pot), self.pot_day, dict(self.invested),
+                 dict(self.epoch_base), list(self.epoch_names))
+        try:
+            plan = self._shopping_list(ranked, cap if self.settlement_days else None,
+                                       today.isoformat())
+            pots_after = dict(self.pot)
+        finally:
+            self.pot, self.pot_day, self.invested, self.epoch_base, self.epoch_names = saved
+        # pots AS THEY WILL BE credited today (before the walk spends them)
+        pots_today = dict(self.pot)
+        if self.sizing == "equal_value" and names and self.pot_day != today.isoformat():
+            slice_ = self.daily_budget / len(names)
+            for n in names:
+                pots_today[n] = pots_today.get(n, 0.0) + slice_
+        # What the pots could buy with NO cash cap — the same walk unconstrained. When the
+        # capped plan is empty this is what separates "nothing to buy" from "nothing to
+        # pay with" (owner, 2026-09-08: ₹0 settled read as "no pot affords a share").
+        if self.sizing == "equal_value":
+            affordable = []
+            for _chg, _i, sym, px in ranked:
+                units = int(pots_today.get(sym, 0.0) // px) if px > 0 else 0
+                if units > 0:
+                    affordable.append((sym, px, units, round(px * units, 2)))
+        else:
+            affordable = [(sym, px, 1, round(px, 2)) for _chg, _i, sym, px in ranked if px > 0]
+        return {
+            "ranked": [(sym, round(chg * 100.0, 2), px) for chg, _i, sym, px in ranked],
+            "plan": [(sym, px, units, round(px * units, 2)) for sym, px, units in plan],
+            "affordable": affordable,
+            "pots": {n: round(pots_today.get(n, 0.0), 2) for n in names},
+            "pots_after": {n: round(pots_after.get(n, 0.0), 2) for n in names},
+            "spendable": round(cap, 2),
+            "projected": projected,
+        }
+
     # ------------------------------------------------------------------ status
     def exit_rules(self) -> list[str]:
         return [

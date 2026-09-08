@@ -366,21 +366,23 @@ def _sync_broker(
             })
 
 
-def sync_portfolio(db: Session, *, holding_ids: list[int] | None = None) -> SyncReport:
+def sync_portfolio(db: Session, *, holding_ids: list[int] | None = None,
+                   skip_sources: tuple[str, ...] = ()) -> SyncReport:
     """Refresh every auto holding (or just ``holding_ids``). One call per source, never per
     holding — Dhan's market-data endpoints are rate-gated per account and a 20-symbol loop
-    would trip the throttle for everything else running on the box."""
+    would trip the throttle for everything else running on the box. ``skip_sources`` leaves a
+    price source untouched (the 16:00 IST pass skips "global": a US close is the morning's)."""
     report = SyncReport(synced_at=datetime.now(UTC).isoformat())
     stmt = select(PortfolioHolding).where(PortfolioHolding.sync == "auto")
     if holding_ids:
         stmt = stmt.where(PortfolioHolding.id.in_(holding_ids))
     rows = db.execute(stmt).scalars().all()
 
-    by_amfi = [h for h in rows if (h.sync_source or "") == "amfi"]
-    by_global = [h for h in rows if (h.sync_source or "") == "global"]
+    by_amfi = [h for h in rows if (h.sync_source or "") == "amfi" and "amfi" not in skip_sources]
+    by_global = [h for h in rows if (h.sync_source or "") == "global" and "global" not in skip_sources]
     by_broker: dict[int, list[PortfolioHolding]] = {}
     for h in rows:
-        if (h.sync_source or "") == "broker":
+        if (h.sync_source or "") == "broker" and "broker" not in skip_sources:
             # A holding is visited by its QUOTE account and by every account holding a slice
             # of its units — those are different roles and often different accounts.
             for account_id in ({h.broker_account_id} | _slice_accounts(h)) - {None}:

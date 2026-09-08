@@ -103,9 +103,13 @@ function ClassCard({
       <div className="mt-[5px] text-[17px] font-bold [font-family:'Space_Grotesk',system-ui,sans-serif] text-[var(--strong)]">
         {money(agg.value)}
       </div>
-      <div className="mt-[3px] flex justify-between text-[11.5px] font-bold">
-        <span className="text-[var(--faint)]">{agg.share.toFixed(1)}%</span>
-        <span style={{ color: agg.xirr >= 0 ? "var(--pos)" : "var(--danger)" }}>
+      <div className="mt-[3px] flex items-baseline justify-between gap-2 text-[11.5px] font-bold tabular-nums">
+        <span className="text-[var(--faint)]" title="share of the portfolio">{agg.share.toFixed(1)}%</span>
+        <span title="change since the previous close, over the holdings that priced today"
+          style={{ color: agg.dayPct == null ? "var(--faint)" : agg.dayPct >= 0 ? "var(--pos)" : "var(--danger)" }}>
+          {agg.dayPct == null ? "— today" : `${pct(agg.dayPct, 2)} today`}
+        </span>
+        <span title="annualised return, value-weighted" style={{ color: agg.xirr >= 0 ? "var(--pos)" : "var(--danger)" }}>
           {pct(agg.xirr)}
         </span>
       </div>

@@ -117,6 +117,35 @@ export interface Holdings {
   };
 }
 
+/** value_investing's live holdings view (GET /live/{id}/holdings, services/vi_live). */
+export interface LiveHoldingRow extends HoldingRow {
+  in_watchlist: boolean;
+  status: "held" | "exited" | "pending";
+  change_pct: number | null;          // today's change — the ranking key
+  rank: number | null;                // 1 = biggest faller
+  pot: number;                        // rupees this name has saved up
+  buys_today: { units: number; price: number; cost: number } | null;
+  affordable: { units: number; price: number; cost: number } | null;  // what its pot could buy, cash aside
+}
+export interface LiveHoldings {
+  run_id: number;
+  as_of: string;
+  rows: LiveHoldingRow[];
+  totals: Holdings["totals"];
+  fund: { symbol: string; units: number; value: number; runway_days?: number | null; checked?: boolean | null } | null;
+  today: {
+    spendable: number | null; projected: boolean | null; settling: number;
+    daily_budget: number | null; pots_total: number;
+    plan: { symbol: string; price: number; units: number; cost: number }[];
+    plan_total: number;
+    affordable: { symbol: string; price: number; units: number; cost: number }[];
+    affordable_total: number;
+    blocked_by: "cash" | "pots" | null;   // why an empty plan is empty
+    shopped_today: boolean; sizing: string | null;
+  };
+  cash: number;
+}
+
 export interface Report {
   metrics: Metrics;
   yearly?: Record<string, YearlyRow>;

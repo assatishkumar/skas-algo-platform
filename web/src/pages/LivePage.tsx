@@ -14,6 +14,8 @@ import OptionMetricsPanel from "../components/OptionMetricsPanel";
 // full-greeks positions table, and a 3-panel history — for single-underlying option books.
 import OptionKpiBand from "../components/OptionKpiBand";
 import LiveOverallPnlCard from "../components/LiveOverallPnlCard";
+import ValueInvestingPanel, { useLiveHoldings } from "../components/ValueInvestingPanel";
+import { LiveStockChart } from "../components/analysis/SuperTrendChart";
 import ExitCriteriaCallout from "../components/ExitCriteriaCallout";
 import PositionsGreeksTable from "../components/PositionsGreeksTable";
 import GreeksHistoryCard from "../components/GreeksHistoryCard";
@@ -696,6 +698,10 @@ function RunCard({
   // A donchian basket shows ONE combined per-name table (DonchianBasketPanel) instead of the raw
   // per-leg positions table — the basket view clubs CE+PE and carries the same leg economics.
   const isDonchian = run.strategy_id === "donchian_strangle_monthly";
+  const isVI = run.strategy_id === "value_investing";
+  // An equity row opens the stock's chart (candles + SuperTrend + this run's trades, with the
+  // reasons) right under the table — the Analyze page's chart, without leaving the tile.
+  const [chartSym, setChartSym] = useState<string | null>(null);
   // The redesigned deployment detail (KPI band + greeks table + payoff + history) is for a
   // SINGLE-underlying option book — every options strategy except the multi-underlying donchian
   // basket, which keeps its dedicated basket monitor. Equity keeps the plain positions table.
@@ -832,6 +838,8 @@ function RunCard({
           Equity: deployed capital / parts / positions / unrealized P&L. */}
       {isOptions ? (
         <OptionMetricsPanel run={run} />
+      ) : isVI ? (
+        <ValueInvestingPanel runId={run.run_id} version={version} />
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
           <div className="rounded-md bg-slate-800/40 px-3 py-2">
@@ -853,7 +861,7 @@ function RunCard({
         </div>
       )}
 
-      {isDonchian ? null : run.positions?.length ? (
+      {isDonchian || isVI ? null : run.positions?.length ? (
         <div className="overflow-x-auto mt-3">
           <table className="w-full text-sm">
             <thead className="text-slate-400 text-left">
@@ -892,7 +900,7 @@ function RunCard({
                 // size is unknown (or equity, where there's no lot concept — just show units).
                 const clots = p.lot_size && p.lot_size > 0 ? Math.round(p.units / p.lot_size) : null;
                 return (
-                <tr key={p.symbol} className="border-t border-slate-800">
+                <tr onClick={() => { if (!isOptions) setChartSym(chartSym === p.symbol ? null : p.symbol); }} title={!isOptions ? "Click to chart this stock and its trades" : undefined} key={p.symbol} className={`border-t border-slate-800 ${!isOptions ? "cursor-pointer hover:bg-[var(--row-hover)]" : ""} ${chartSym === p.symbol ? "bg-brand/10" : ""}`}>
                   <td className="py-1 pr-4 whitespace-nowrap">{isOptions && <SideTag dir={p.direction} />}{formatOptionSymbol(p.symbol)}{clots != null && <span className="text-slate-500"> ({clots} lot{clots === 1 ? "" : "s"})</span>}</td>
                   <td className="py-1 pr-4">{p.entry_date ?? "—"}</td>
                   <td className="py-1 pr-4 text-right">{p.units}</td>
@@ -936,6 +944,10 @@ function RunCard({
           <EntrySkipNote skip={run.entry_skip} />
         </div>
       )}
+      {!isOptions && !isVI && chartSym && (
+        <LiveStockChart runId={run.run_id} symbol={chartSym} strategyId={run.strategy_id}
+          params={run.params} version={version} />
+      )}
 
       {/* The FUNDING LEDGER. This strategy's whole behaviour is "buy from settled cash, sell
           to pre-fund tomorrow", and none of those numbers were visible anywhere — so a quiet
@@ -943,9 +955,7 @@ function RunCard({
       {/* basket_status() is a per-strategy shape keyed by `kind`; the typed field models
           donchian's, so narrow here rather than widening the type and costing that page
           its narrowing. */}
-      {(run.basket as unknown as { kind?: string } | null)?.kind === "value_investing" && (
-        <FundingLedger b={run.basket as unknown as Record<string, unknown>} />
-      )}
+      {/* the funding ledger now lives inside ValueInvestingPanel (spendable / settling / fund) */}
 
       {/* A basket spans many underlyings → its rich per-name monitor lives on a dedicated page
           (the single-spot payoff is meaningless for a basket). */}
@@ -1121,65 +1131,6 @@ function LivePulse({ flash, label }: { flash: boolean; label: string }) {
   );
 }
 
-/** value_investing's funding ledger — settled vs in-flight cash, and how much fund source is
- *  left. `runway_days` is what turns "FUND DRY" from a surprise into a countdown. */
-function FundingLedger({ b }: { b: Record<string, unknown> }) {
-  const n = (k: string) => Number(b[k] ?? 0);
-  const inr = (v: number) => `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-  const pending = (b.pending_credits as { lands: string; amount: number }[] | undefined) ?? [];
-  const runway = n("runway_days");
-  // Adoption of the broker holding is MARKET-HOURS gated, so before the first open tick
-  // the platform ledger is empty while the broker may hold lakhs. Calling that "empty"
-  // told the owner to top up an ETF holding ~90k (2026-08-31). Only claim dry once the
-  // manager has actually read the holding.
-  const checked = b.fund_checked === true;
-  const dry = checked && n("fund_units") <= 0;
-  const low = checked && !dry && runway <= 2;
-  return (
-    <div className="mt-3 rounded-[12px] border border-[var(--border)] bg-[var(--field)] px-3 py-2.5">
-      <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[12.5px] md:grid-cols-4">
-        <div>
-          <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Spendable today</div>
-          <div className="font-medium tabular-nums">{inr(n("settled_cash"))}</div>
-          {b.settled_projected === true && (
-            <div className="text-[11px] text-[var(--faint)]">projected · set at first decision</div>
-          )}
-        </div>
-        <div>
-          <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Settling (T+{n("settlement_days")})</div>
-          <div className="font-medium tabular-nums">{inr(n("pending_total"))}</div>
-          {pending[0] && (
-            <div className="text-[11px] text-[var(--faint)]">lands {pending[0].lands}</div>
-          )}
-        </div>
-        <div>
-          <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">{String(b.fund_source)}</div>
-          <div className="font-medium tabular-nums">{inr(n("fund_value"))}</div>
-          <div className="text-[11px] text-[var(--faint)]">
-            {checked ? `${n("fund_units").toLocaleString("en-IN")} units` : "awaiting broker read"}
-          </div>
-        </div>
-        <div>
-          <div className="text-[10.5px] uppercase tracking-wide text-[var(--faint)]">Runway</div>
-          <div className={`font-medium tabular-nums ${
-            dry || low ? "text-amber-600 dark:text-amber-400" : ""}`}>
-            {!checked ? "—" : dry ? "empty" : `${runway} day${runway === 1 ? "" : "s"}`}
-          </div>
-          <div className="text-[11px] text-[var(--faint)]">
-            {checked ? `at ${inr(n("daily_budget"))}/day` : "not read yet — checked in market hours"}
-          </div>
-        </div>
-      </div>
-      {(dry || low) && (
-        <div className="mt-2 text-[11.5px] text-amber-600 dark:text-amber-400">
-          Top up {String(b.fund_source)} in the broker — the strategy adopts it automatically.
-          Buying continues on settled cash meanwhile, so the drip thins rather than stopping.
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** Quote-source / broker-connection chip: green when live & connected, rose when the
  *  zerodha session is down (or it has fallen back to cache), plain badge for cache runs. */
 function BrokerChip({ dep }: { dep: Deployment }) {
@@ -1292,6 +1243,11 @@ function DeploymentTile({
   }
 
   const m = dep.metrics ?? {};
+  // value_investing: the tile's headline is what the run has INVESTED and what that is
+  // worth — never the run's equity, which counts the fund-source ETF as if it were a
+  // position (owner, 2026-09-08: "₹97k equity is not right").
+  const isVI = dep.strategy_id === "value_investing";
+  const { data: vi } = useLiveHoldings(dep.run_id, version, isVI && dep.status === "active");
   // Prefer the live snapshot for active tiles (WS-fresh), fall back to tile metrics.
   const equity = snapshot?.equity ?? m.equity ?? null;
   const upnl =
@@ -1476,13 +1432,15 @@ function DeploymentTile({
         </div>
         <div className="flex items-start gap-2 shrink-0">
           <div className="text-right text-sm">
-            <div className="text-[var(--muted)] text-[11px]" title={isOptions ? (mdisp.note ?? mdisp.label ?? undefined) : undefined}>
-              {isOptions ? `Margin${mdisp.short ? ` · ${mdisp.short}` : ""}` : "Equity"}
+            <div className="text-[var(--muted)] text-[11px]" title={isOptions ? (mdisp.note ?? mdisp.label ?? undefined) : isVI ? "Market value of the stocks bought — the fund-source ETF is not counted" : undefined}>
+              {isOptions ? `Margin${mdisp.short ? ` · ${mdisp.short}` : ""}` : isVI ? "Stocks · market value" : "Equity"}
             </div>
             <div className="font-semibold tabular-nums text-[var(--strong)]">
               {isOptions
                 ? marginUsed != null ? formatInr(marginUsed) : "—"
-                : equity != null ? formatInr(equity) : "—"}
+                : isVI
+                  ? vi ? formatInr(vi.totals.value) : "—"
+                  : equity != null ? formatInr(equity) : "—"}
             </div>
           </div>
           {expanded && dep.status === "active" && (
@@ -1527,7 +1485,30 @@ function DeploymentTile({
         </div>
       ) : null}
 
-      {/* Stat tiles */}
+      {/* Stat tiles — value_investing reads invested vs market value, never realized/unrealized
+          (nothing is ever realized, and the ETF sweep's "P&L" describes cash management). */}
+      {isVI ? (
+        <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
+          <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2">
+            <div className="text-[var(--muted)] text-[11px] mb-0.5">Invested</div>
+            <div className="font-semibold tabular-nums text-[var(--strong)]">{vi ? formatInr(vi.totals.invested) : "—"}</div>
+          </div>
+          <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2">
+            <div className="text-[var(--muted)] text-[11px] mb-0.5">Market value</div>
+            <div className="font-semibold tabular-nums text-[var(--strong)]">{vi ? formatInr(vi.totals.value) : "—"}</div>
+          </div>
+          <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2">
+            <div className="text-[var(--muted)] text-[11px] mb-0.5">Gain{vi?.fund ? ` · ${vi.fund.symbol} ${formatInr(vi.fund.value)}` : ""}</div>
+            <div className="font-semibold tabular-nums">
+              {vi ? (
+                <span className={vi.totals.pnl >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}>
+                  {formatInr(vi.totals.pnl)}{vi.totals.pnl_pct != null ? ` (${vi.totals.pnl_pct >= 0 ? "+" : ""}${vi.totals.pnl_pct.toFixed(1)}%)` : ""}
+                </span>
+              ) : <span className="text-[var(--strong)]">—</span>}
+            </div>
+          </div>
+        </div>
+      ) : (
       <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
         <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2">
           <div className="text-[var(--muted)] text-[11px] mb-0.5">Realized</div>
@@ -1556,6 +1537,7 @@ function DeploymentTile({
           </div>
         </div>
       </div>
+      )}
 
       {/* Cycle-P&L sparkline. Colour tracks the SIGN of the series' latest value — the cycle's
           P&L now — not a window trend (last≥first), which would paint a still-deep loss green

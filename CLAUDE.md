@@ -58,9 +58,23 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   still overrides BOTH. Unchanged: an ENTRY takes one rung (`[:1]`) and an EXIT walks all
   three. The crossing is a CEILING, not a price — a marketable limit fills at the ask, so 1%
   binds only when the book ran away since the decision, which is an entry the owner would
-  rather MISS than chase. **An unfilled entry still HALTS the run** (owner call: intervention
-  is wanted; do not quietly retry). Coverage: `test_an_equity_entry_crosses_one_percent_*`,
-  `test_an_option_entry_still_crosses_three_percent` in tests/test_live_broker.py.
+  rather MISS than chase. **An unfilled order gets ONE cancel-and-replace, then HALTS**
+  (owner call 2026-09-08, replacing the August "never quietly retry"): after the ladder
+  is exhausted and our cancel is CONFIRMED by the broker as `CANCELLED` with **0 filled** —
+  re-read once more a beat later (`_recheck_after_cancel`), because a fill can land
+  between the cancel and its confirmation and a fresh order on top of it doubles the
+  position — `_retry_once` places ONE new broker order (new cid, `parent=` the first)
+  straight at the protected price off a FRESH touch (same first-rung %, so the owner's
+  crossing ceiling is unchanged), with NO ladder of its own and no second retry; if that
+  cancels too the run halts as before (`ORDER exhausted` + `retryfail` trace lines). NOT a
+  retry: a post-cancel status that never turns CANCELLED (we do not know whether it
+  filled), a partial (booked as before), or a re-check that shows a late fill (booked as a
+  fill, `noretry`). Entries AND exits. `SKAS_LIVE_RETRY_AFTER_CANCEL=0` restores
+  cancel-then-halt. Why: 2026-09-08 TCS (run 28, Dhan) sat at the touch for 10s, our +1%
+  re-price never landed at the broker (JYOTHYLAB's did, the same minute — reason unknown,
+  asked Dhan), we cancelled, and the run halted with the cash and the signal both intact.
+  Coverage: the "cancel-and-replace" block in tests/test_live_broker.py (+
+  `test_an_equity_entry_crosses_one_percent_*` for the ceiling).
 - **A refused entry must say why (`SkipReasonMixin`, 2026-09-04).** Every option
   strategy's entry path is a chain of silent `return []`s — entry day, entry window, a
   chain that did not price, a credit outside its window, a premium hunt that missed. All
@@ -531,6 +545,18 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   yesterday's completed bar — entries and exits run one session behind the backtest
   until today's forming bar is fed in (the ema21 precedent). Coverage:
   `tests/test_supertrend_funding.py`.
+  **The cache is per BOX, and the VPS's was 17 symbols deep (2026-09-08).** A SuperTrend run
+  deployed there read no direction for any name — no entries, and, worse, NO EXITS for a held
+  name, silently — then after the morning refresh a direction from 30 bars that need not match
+  the backtest's (the band carry-over depends on history). Three rails now: `_seed_supertrend`
+  returns/stamps `session.supertrend_missing` (no bars or < `SUPERTREND_MIN_BARS`=250);
+  `LiveRun._maybe_backfill_history` (once/day, before the pre-decision reseed) pulls those
+  symbols through `refresh_cache` on the read-only data session and reseeds; and
+  `refresh_cache` itself backfills any THIN symbol `DEEP_HISTORY_DAYS`=1500 back instead of 30
+  (`thin_symbols`: < `MIN_HISTORY_DAYS`=900 of cached history, read via the cache-only loader;
+  a failed depth check falls back to the 30-day window, never fails the refresh). The strategy
+  raises `strategy_alert` when a HELD name has no direction ("cannot exit on a red flip").
+  Coverage: `tests/test_history_backfill.py`.
 - **21_ema_momentum** (`strategies/ema21_momentum.py`, NIFTY): daily EMA(21)-on-high/low
   channel; fresh close beyond the band at 15:20 → OTM 100-pt credit spread (bull put /
   bear call), width 300-500, credit ₹80-140 (ideal 90-130 preferred; miss → SKIP and
@@ -1040,6 +1066,16 @@ that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` ma
   must be STRIPPED (the exchange has no `GOLDBEES-E`); `-RR`/`-IV` are the NSE SERIES for a
   REIT and an InvIT and are PART of the tradingsymbol (`EMBASSY-RR` prices, `EMBASSY` does
   not). Strip the wrong set and those holdings silently never get a price.
+- **Prices refresh on a SCHEDULE: ~09:30 IST every weekday (all sources) and ~16:00 IST on
+  trading days (everything but `global`), and the 16:00 pass is the day's snapshot (owner
+  2026-09-08).** The morning pass carries the US close and the overnight NAVs; the afternoon
+  pass is the Indian close. A US-listed holding is NOT repriced at 16:00 IST — that would
+  stamp a half-session US print as its close — so one snapshot holds two closes, each from
+  its own market (`sync_portfolio(skip_sources=("global",))`,
+  `manager._maybe_morning_portfolio_sync` / `_maybe_daily_portfolio_snapshot`). The
+  maintenance loop ticks every 5 min, so "09:30" lands by 09:35. `last_synced_at` is UTC and
+  SQLite drops the offset: `stampLabel` treats an offset-less stamp as UTC and prints IST
+  (it used to print the UTC clock as if local — "08:07 am" for 13:37).
 - **Growth history is recorded FORWARD and never back-filled.** `PortfolioSnapshot`, one row per
   trading day from `manager._maybe_daily_portfolio_snapshot` (≥16:00 IST). A holding reads
   **null**, not zero, before it was tracked — zero draws a line rising off the floor. Do not add
@@ -1225,6 +1261,32 @@ weekly / monthly / positional), a summary panel, and only that strategy's own kn
   the tile reads. `GET /live/indices` (declared ABOVE `/{run_id}` — FastAPI would 422
   "indices" as an int) is the header strip: one Kite `day_quotes` per 10s off any logged-in
   Zerodha account, falling back to the running deployments' own spots.
+- **value_investing has its OWN tile view (2026-09-08, owner ask).** The generic tile
+  described it by realized/unrealized over "positions" and counted the fund-source ETF as
+  one (₹97k "equity" on ₹89k invested). `GET /live/{id}/holdings` (`services/vi_live.py`,
+  `ValueInvestingPanel.tsx`) builds the backtest's `holdings_report` from the RUNNING
+  session's own transactions + marks — invested vs market value per WATCHLIST name
+  (held / exited / not-yet-bought), the fund kept beside the totals never inside them,
+  each name's pooled rupees, and TODAY'S BUYS via `ValueInvestingStrategy.preview_plan`:
+  the real ranking and the real planner run over COPIES of the pots (credited as they
+  will be at 15:05, then restored), so nothing is credited or spent by looking. The tile
+  header reads "Stocks · market value", the collapsed tiles Invested / Market value /
+  Gain, the expanded body the panel (which absorbed the old FundingLedger). Money-weighted
+  CAGR is BLANK under 90 days of holding — annualised over eight days a −2% dip read
+  −72%. The Analysis page shows the same panel for a value_investing deployment above
+  its fills. Coverage: `tests/test_vi_live.py`.
+- **The equity trade chart is lightweight-charts (TradingView's library, `SuperTrendChart.tsx`,
+  2026-09-08).** The recharts one drew ~30 bars whatever range was picked, sat a log axis
+  from 40 to 300 under a ₹170 stock and could not be moved. Now: candles + the SuperTrend
+  line, wheel-zoom / drag-pan, a crosshair legend, markers that say what happened
+  ("BUY 347 @174.25", "ST↑", "SELL … +₹x"), the indicator on any timeframe (the run's
+  preselected; the series endpoint recomputes it), and per trade a plain-language reason
+  computed from the same bars — the green flip that armed it, the pullback and breakout in
+  pullback mode, the red flip or target that closed it. Two things the library taught:
+  **whitespace does NOT break a line series** (it bridged the gap with a slant), so the
+  SuperTrend is one LineSeries per run of one direction; and the toolbar must use the app's
+  CSS vars — tailwind `dark:` variants are active here and slate greys vanish. `recharts`
+  stays for the other charts.
 - **Option tickers are `UNDERLYING|YYYY-MM-DD|STRIKE|RIGHT`** — never render the raw form: the `|`
   reads as an `I` (`NIFTYI2026-07-07I24500ICE`). Display option symbols through
   `formatOptionSymbol()` (`lib/symbol.ts`) → `NIFTY 24500 CE · 7 Jul '26`; it passes equity tickers

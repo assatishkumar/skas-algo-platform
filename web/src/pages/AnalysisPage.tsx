@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { Card } from "../components/ui";
 import { formatParamValue, orderedParamKeys, paramLabel } from "../lib/params";
 import EquityTradeAnalysis from "../components/analysis/EquityTradeAnalysis";
+import ValueInvestingPanel from "../components/ValueInvestingPanel";
 import AnalyzeWorkbench from "../components/analyze/AnalyzeWorkbench";
 
 function RunParams({ params, capital }: { params: Record<string, unknown>; capital: number | null }) {
@@ -120,6 +121,19 @@ export default function AnalysisPage() {
           // The analytics workbench (design_handoff_analyze) — DERIV runs only; equity
           // runs keep the candle-chart trade analysis below (owner decision 2026-07-28).
           <AnalyzeWorkbench runId={analysis.run_id} />
+        ) : analysis.strategy_id === "value_investing" ? (
+          // An accumulation run has no round trips to analyze: the only SELLs are ETF
+          // funding sales. Show what it OWNS — per name, invested vs value, XIRR — and
+          // what today's decision would buy. Needs the deployment in memory (a stopped
+          // run answers 404 and the panel says so).
+          <Card>
+            <div className="font-medium text-slate-800 dark:text-slate-200">Portfolio — what this deployment owns</div>
+            <ValueInvestingPanel runId={analysis.run_id} version={0} />
+            <div className="mt-4 border-t border-slate-200 dark:border-slate-800 pt-4">
+              <div className="text-xs text-slate-500 mb-2">Fills, for the record — the SELL rows are the ETF funding sales, not exits.</div>
+              <EquityTradeAnalysis analysis={analysis} />
+            </div>
+          </Card>
         ) : (
           <EquityTradeAnalysis analysis={analysis} />
         )

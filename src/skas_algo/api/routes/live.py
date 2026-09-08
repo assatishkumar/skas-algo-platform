@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from datetime import UTC
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
@@ -273,12 +273,13 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             except Exception:
                 logger.exception("cycle read failed for run %s", run.id)
                 tile["cycle"] = None
-            upnl = sum(p["unrealized_pnl"] for p in snap.get("positions", []))
+            pos, n_open = _tile_positions(snap, getattr(live.session, "strategy", None))
+            upnl = sum(p["unrealized_pnl"] for p in pos)
             tile["metrics"] = {
                 "equity": snap.get("equity"),
                 "cash": snap.get("cash"),
                 "invested": snap.get("invested", 0),
-                "open_positions": snap.get("open_positions", 0),
+                "open_positions": n_open,
                 "open_lots": snap.get("open_lots", 0),
                 "parts_total": snap.get("parts_total"),
                 "unrealized_pnl": upnl,
@@ -304,6 +305,21 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             }
         out.append(tile)
     return out
+
+
+def _tile_positions(snap: dict, strategy) -> tuple[list[dict], int]:
+    """The positions a tile's Unrealized / open count describe. A strategy that funds itself
+    from an ETF (``fund_source``: value_investing, supertrend's park mode) holds that ETF as
+    the money WAITING to be invested, not as a position — counting it put ₹5,19,945 of
+    GOLDBEES "unrealized" on value_investing's group row beside ₹1,000 of stocks (owner,
+    2026-09-08). Unrealized and the open count are stocks only; realized is left alone, the
+    ETF's own gains and losses on its sales are real money and stay in it."""
+    positions = list(snap.get("positions", []))
+    fund = str(getattr(strategy, "fund_source", "") or "").upper()
+    if not fund:
+        return positions, int(snap.get("open_positions", 0))
+    kept = [p for p in positions if str(p.get("symbol", "")).upper() != fund]
+    return kept, len({p["symbol"] for p in kept})
 
 
 @router.get("/summary")
@@ -710,6 +726,21 @@ def _orders_to_trades(orders: list[Order]) -> list[dict]:
                         "units": units, "price": px, "profit": 0.0, "pnl_pct": 0.0,
                         "lots": 1, "tag": o.tag or ""})
     return out
+
+
+@router.get("/{run_id}/holdings")
+async def live_holdings(run_id: int) -> dict:
+    """value_investing's own view of a deployment: what it OWNS per watchlist name (invested
+    vs market value, money-weighted return), the fund source kept separate, the pooled
+    rupees each name is saving, and the buys today's decision would make — a dry run of the
+    real planner. 404 for a run that is not in memory; 422 for any other strategy."""
+    from skas_algo.services.live_cycles import IST
+    from skas_algo.services.vi_live import value_investing_report
+
+    live = _get(run_id)
+    if live.config.strategy_id != "value_investing":
+        raise HTTPException(status_code=422, detail="holdings view is for value_investing runs")
+    return value_investing_report(live, datetime.now(IST).date())
 
 
 @router.get("/{run_id}/trades")

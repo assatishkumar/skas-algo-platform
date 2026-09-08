@@ -635,6 +635,13 @@ disarmed account paper-fills.
   entries keep the single 3% rung (a bad fill is worse than no fill). Partial fills ≥1 unit
   are booked at the actual quantity, and legs that DID fill before a mid-basket failure are
   booked into the session's own trade log before the halt (the 2026-08-11 lesson).
+  **One cancel-and-replace (2026-09-08):** when the ladder is exhausted and the broker
+  confirms our cancel as CANCELLED with nothing filled — re-checked once a beat later so a
+  late fill is booked rather than doubled — ONE fresh order goes out at the protected
+  price off a fresh touch (no ladder of its own, no second retry); if that cancels too the
+  run halts. Every step is in the `ORDER` trace (`recheck` / `retry` / `noretry` /
+  `exhausted` / `retryfail`), the retry under its own id with `parent=` the first.
+  `SKAS_LIVE_RETRY_AFTER_CANCEL=0` restores cancel-then-halt.
 - **Session close is per-segment** since SEBI's CAS (2026-08-03): index F&O trades to
   **15:40**, equity cash to 15:30 (`SKAS_SESSION_CLOSE_DERIV`/`_EQUITY`). One definition
   (`live/quotes.is_market_open(segment=)`) gates decisions, reconciliation AND the order rail —
@@ -1118,6 +1125,7 @@ the shared deployment path: **M** `POST /options/deploy` (custom_options), `/opt
 | `SKAS_LIVE_MAX_ORDER_NOTIONAL` | `500000` | Per-order notional cap (rail). |
 | `SKAS_LIVE_MAX_ORDERS_PER_DAY` | `20` | Per-run daily order cap (rail). |
 | `SKAS_LIVE_ORDER_TIMEOUT_S` | `10` | LIMIT→MARKET escalation timeout. |
+| `SKAS_LIVE_RETRY_AFTER_CANCEL` | `true` | One cancel-and-replace after a confirmed-empty cancel, then halt. |
 | `SKAS_LIVE_RESUME_ORDERS_ON_RECOVERY` | `false` | Resume real orders after a restart (else paper). |
 | `SKAS_WS_FEED_ENABLED` | `true` | Use the KiteTicker WebSocket price feed (REST fallback). |
 | `SKAS_WS_FEED_STALE_S` | `10` | In-market staleness before a mark falls back to REST. |

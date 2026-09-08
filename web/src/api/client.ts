@@ -66,7 +66,7 @@ import type {
   LossStudyProgress,
   SmokeTestDeploy,
   WatchRow,
-  WeeklyIntradayStraddleDeploy,
+  WeeklyIntradayStraddleDeploy, LiveHoldings
 } from "../types";
 
 import { clearToken, getToken } from "../lib/auth";
@@ -439,6 +439,7 @@ export const api = {
   liveIndices: () => request<LiveIndices>("/live/indices"),
   livePnlHistory: (id: number) => request<LivePnlHistory>(`/live/${id}/pnl-history`),
   liveTrades: (id: number) => request<{ run_id: number; trades: Trade[] }>(`/live/${id}/trades`),
+  liveHoldings: (id: number) => request<LiveHoldings>(`/live/${id}/holdings`),
   liveDeployments: (status?: string) =>
     request<Deployment[]>(`/live/deployments${status ? `?status=${status}` : ""}`),
   liveSummary: () => request<LiveSummary>("/live/summary"),

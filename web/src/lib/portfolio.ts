@@ -259,9 +259,15 @@ export function ageLabel(months: number): string {
 /** A date the source gives with a time — always shown with HH:MM (house rule). */
 export function stampLabel(iso: string | null): string {
   if (!iso) return "never";
-  const d = new Date(iso);
-  return `${d.toLocaleDateString("en-IN", { day: "numeric", month: "short" })} · ${d
-    .toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}`;
+  // The backend stamps UTC but SQLite drops the offset, so the string arrives naked and
+  // `new Date` read it as LOCAL time — "08:07 am" for a price written at 13:37 IST (owner,
+  // 2026-09-08). An offset-less stamp IS UTC; and the label is always shown in IST, the
+  // market's clock, whatever the browser's zone.
+  const hasZone = /(?:Z|[+-]\d\d:?\d\d)$/.test(iso);
+  const d = new Date(hasZone ? iso : `${iso}Z`);
+  const tz = { timeZone: "Asia/Kolkata" } as const;
+  return `${d.toLocaleDateString("en-IN", { ...tz, day: "numeric", month: "short" })} · ${d
+    .toLocaleTimeString("en-IN", { ...tz, hour: "2-digit", minute: "2-digit" })} IST`;
 }
 
 /** A DAILY figure — a NAV date, a trade date. No clock exists in the source, so none is shown. */
@@ -292,6 +298,8 @@ export interface ClassAgg {
   drift: number;
   xirr: number;
   count: number;
+  dayChange: number;          // ₹ since the previous close, over the members that priced
+  dayPct: number | null;      // …as a % of their previous value; null when nothing priced
 }
 
 export interface Totals {
@@ -355,6 +363,10 @@ export function byClass(
   return keys.map((key) => {
     const members = rows.filter((h) => h.asset_class === key);
     const value = members.reduce((a, h) => a + h.value, 0);
+    // same denominator rule as the header's TODAY tile: units × previous close, over the
+    // holdings that actually printed today
+    const dayChange = members.reduce((a, h) => a + h.day_change, 0);
+    const priorDay = members.filter((h) => h.day_change !== 0).reduce((a, h) => a + (h.value - h.day_change), 0);
     const shareOf = total > 0 ? (value / total) * 100 : 0;
     const target = targets[key] ?? 0;
     return {
@@ -369,6 +381,8 @@ export function byClass(
       drift: shareOf - target,
       xirr: valueWeighted(members, (h) => h.xirr_pct),
       count: members.length,
+      dayChange,
+      dayPct: priorDay > 0 ? (dayChange / priorDay) * 100 : null,
     };
   });
 }
