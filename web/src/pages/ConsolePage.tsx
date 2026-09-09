@@ -49,6 +49,18 @@ const JOGS_FWD: typeof JOGS = [
 // shrink-0 is load-bearing: the expiry row scrolls horizontally, and without it flexbox
 // compresses the chips until "28 Apr 27d" reads as "28" — the month and the DTE are the
 // two things the chip exists to say.
+/** The transport ladder, declared ONCE. The popover and the footer both render this, and
+ *  the keydown handler below implements exactly these rows — three copies of a keymap is
+ *  how a shortcut quietly stops matching what the screen claims it does. */
+const KEYS: { keys: string; does: string }[] = [
+  { keys: ", .", does: "back / forward 1 minute" },
+  { keys: "Shift + , .", does: "15 minutes" },
+  { keys: "Alt + , .", does: "1 hour" },
+  { keys: "[  ]", does: "previous / next trading day (keeps the time)" },
+  { keys: "Home / End", does: "session open / close" },
+  { keys: "?", does: "show or hide this list" },
+];
+
 const chipBase = "h-[22px] px-2 rounded-[5px] text-[10.5px] font-semibold leading-[22px] "
   + "border transition select-none shrink-0 whitespace-nowrap "
   + "disabled:opacity-40 disabled:cursor-not-allowed";
@@ -67,6 +79,42 @@ function Chip({ children, onClick, active, title, disabled }: {
       }}>
       {children}
     </button>
+  );
+}
+
+/** Shortcuts, hidden until asked for. A dense screen should not spend permanent space on a
+ *  reference you need twice, but a transport nobody can find is a transport nobody uses —
+ *  so: a ? chip, the ? key, click-outside and Esc to dismiss. */
+function KeyHelp({ onClose }: { onClose: () => void }) {
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="absolute right-2 top-9 z-50 rounded-[10px] p-3 shadow-lg"
+        style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)",
+          minWidth: 290 }}>
+        <div className="mb-2 text-[9.5px] font-semibold uppercase tracking-[.07em]"
+          style={{ color: "var(--oc-faint)" }}>Keyboard · transport</div>
+        <table className="w-full text-[11.5px]">
+          <tbody>
+            {KEYS.map((k) => (
+              <tr key={k.keys}>
+                <td className="py-[3px] pr-3 whitespace-nowrap">
+                  <span className="rounded-[4px] px-1.5 py-[1px] font-semibold"
+                    style={{ background: "var(--oc-chip)", color: "var(--oc-ink)" }}>
+                    {k.keys}
+                  </span>
+                </td>
+                <td className="py-[3px]" style={{ color: "var(--oc-muted)" }}>{k.does}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="mt-2 pt-2 text-[10.5px]"
+          style={{ borderTop: "1px solid var(--oc-hair)", color: "var(--oc-faint)" }}>
+          Click the page once after loading it — the keys need the page to have focus.
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -221,6 +269,7 @@ export default function ConsolePage() {
   const [day, setDay] = useState<string>(params.get("day") ?? "");
   const [state, setState] = useState<ConsoleState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showKeys, setShowKeys] = useState(false);
   const opened = useRef(false);
 
   const { data: days } = useQuery({
@@ -271,6 +320,10 @@ export default function ConsolePage() {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) return;
+      if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+        e.preventDefault(); setShowKeys((v) => !v); return;
+      }
+      if (e.key === "Escape") { setShowKeys(false); return; }
       if (!state || e.metaKey || e.ctrlKey) return;
       // Match on code OR key. e.key changes under Shift ("." becomes ">"), which is why the
       // Shift ladder did nothing when this keyed on e.key alone; e.code is stable but is not
@@ -323,8 +376,9 @@ export default function ConsolePage() {
       style={{ background: "var(--oc-ground)", color: "var(--oc-ink)" }}>
 
       {/* session bar */}
-      <div className="h-10 flex items-center gap-2 px-3"
+      <div className="relative h-10 flex items-center gap-2 px-3"
         style={{ background: "var(--oc-surface)", borderBottom: "1px solid var(--oc-line)" }}>
+        {showKeys && <KeyHelp onClose={() => setShowKeys(false)} />}
         <span className="px-2 h-[22px] leading-[22px] rounded-[5px] text-[10px] font-bold tracking-wide"
           style={{ border: "1px solid var(--oc-accent)", color: "var(--oc-accent)" }}>
           REPLAY
@@ -366,6 +420,11 @@ export default function ConsolePage() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <button type="button" onClick={() => setShowKeys((v) => !v)}
+            title="Keyboard shortcuts (?)"
+            className="w-[22px] h-[22px] rounded-[5px] text-[11px] font-bold"
+            style={{ background: showKeys ? "var(--oc-accent-dim)" : "var(--oc-chip)",
+              color: showKeys ? "var(--oc-accent)" : "var(--oc-muted)" }}>?</button>
           <span className="text-[10px] font-bold px-2 h-[22px] leading-[22px] rounded-[4px]"
             style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
             {busy ? "…" : state?.session.status ?? "READY"}
@@ -499,13 +558,17 @@ export default function ConsolePage() {
           color: "var(--oc-faint)" }}>
         <span>REALISED <b style={{ color: "var(--oc-ink)" }}>₹0</b></span>
         <span>UNREALISED <b style={{ color: "var(--oc-ink)" }}>₹0</b></span>
-        <span className="ml-auto">
-          <b style={{ color: "var(--oc-muted)" }}>, .</b> 1 min ·
-          <b style={{ color: "var(--oc-muted)" }}> shift</b> 15 min ·
-          <b style={{ color: "var(--oc-muted)" }}> alt</b> 1 hour ·
-          <b style={{ color: "var(--oc-muted)" }}> [ ]</b> 1 day ·
-          <b style={{ color: "var(--oc-muted)" }}> home/end</b> open/close
-        </span>
+        <button type="button" onClick={() => setShowKeys(true)}
+          className="ml-auto hover:underline" title="Keyboard shortcuts (?)">
+          {KEYS.slice(0, 4).map((k) => (
+            <span key={k.keys}>
+              <b style={{ color: "var(--oc-muted)" }}>{k.keys}</b>{" "}
+              {k.does.replace("back / forward ", "").replace(
+                "previous / next trading day (keeps the time)", "day")} ·{" "}
+            </span>
+          ))}
+          <b style={{ color: "var(--oc-accent)" }}>?</b> all keys
+        </button>
       </div>
     </div>
   );
