@@ -524,3 +524,68 @@ def test_undo_leaves_the_clock_where_it_was():
     s.undo_last()
     assert s.clock.strftime("%H:%M") == "11:00"
     assert len(s.legs) == 1 and int(s.legs[0].strike) == 24000
+
+
+def test_adding_to_a_position_grows_it_instead_of_stacking_rows():
+    """Buying more of a contract you hold is ONE position at an average price — what a
+    broker's book does, and what a table with a row per contract implies.
+
+    Appending instead meant the size stepper produced a second ×1 row every time it was
+    pressed: "×1" never changed and three presses read as three legs at one strike (owner,
+    2026-09-09, on a 23500 PE)."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    first = s.legs[0].entry
+
+    s.stage(kind="resize", leg_id=s.legs[0].id, lots=2)
+    s.stage(kind="resize", leg_id=s.legs[0].id, lots=3)
+    assert len(s.legs) == 1 and s.legs[0].lots == 3
+
+    # clicking the chain again on the same strike and side merges too
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    assert len(s.legs) == 1 and s.legs[0].lots == 5
+
+    # …at a weighted average, not the first price and not the last
+    s.seek("11:00")
+    px_later = {r["strike"]: r for r in s.chain_rows()}[24000.0]["ce"]["ltp"]
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=5)
+    leg = s.legs[0]
+    assert leg.lots == 10
+    assert leg.entry == pytest.approx((first * 5 + px_later * 5) / 10, abs=0.01)
+    assert min(first, px_later) < leg.entry < max(first, px_later)
+
+
+def test_the_two_sides_of_one_strike_stay_separate():
+    """Merging is per contract AND side — a long and a short of the same option are not one
+    position, they are a spread that happens to share a strike."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.stage(kind="add", right="CE", strike=24000, side="B", lots=1)
+    assert len(s.legs) == 2
+    assert {(x.side, x.lots) for x in s.legs} == {("S", 2), ("B", 1)}
+
+
+def test_the_rebuilt_book_merges_exactly_as_the_live_one_did():
+    """The journal replay must take the same path, or rewinding would silently produce a
+    different book from the one you were just looking at."""
+    store.write_day(DAY, _day())
+    s = _open(at="09:30")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=3)
+    live = [(x.side, x.strike, x.lots, round(x.entry, 4)) for x in s.legs]
+    s.seek("09:20")
+    s.seek("11:00")
+    assert [(x.side, x.strike, x.lots, round(x.entry, 4)) for x in s.legs] == live
+
+
+def test_rolling_moves_the_leg_rather_than_adding_one():
+    """The strike stepper is a ROLL. It caught the eye as "adding an additional leg" only
+    because the size stepper beside it was, so pin the behaviour explicitly."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=3)
+    s.stage(kind="roll", leg_id=s.legs[0].id, strike=24100)
+    assert len(s.legs) == 1
+    assert int(s.legs[0].strike) == 24100 and s.legs[0].lots == 3

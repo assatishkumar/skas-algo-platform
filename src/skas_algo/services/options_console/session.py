@@ -290,14 +290,10 @@ class ConsoleSession:
         _u, expiry, strike_s, right = fill["symbol"].split("|")
         strike, lot = float(strike_s), self._lot_size() or 1
         if fill["action"] in ("BUY", "SHORT"):
-            self._leg_seq += 1
-            self.legs.append(ConsoleLeg(
-                id=f"L{self._leg_seq}", symbol=fill["symbol"], right=right, strike=strike,
-                expiry=expiry, side="S" if fill["action"] == "SHORT" else "B",
-                lots=max(1, int(fill["units"] // lot)), lot_size=lot,
-                entry=fill["price"], entered_at=fill["at"]))
-            self._charge(fill["action"], fill["units"], fill["price"], fill["at"],
-                         fill["symbol"])
+            # through _open, so a rebuilt book merges exactly as the live one did
+            self._open(right, strike, "S" if fill["action"] == "SHORT" else "B",
+                       max(1, int(fill["units"] // lot)), fill["price"], fill["at"],
+                       expiry=expiry)
         else:
             for leg in self.legs:
                 if leg.symbol == fill["symbol"]:
@@ -539,17 +535,36 @@ class ConsoleSession:
                     self._close(leg, leg.lots, px, minute)
 
     def _open(self, right: str, strike: float, side: str, lots: int, price: float,
-              minute: str) -> None:
+              minute: str, *, expiry: str | None = None) -> None:
+        """Buy or sell ``lots``, MERGING into the same contract on the same side.
+
+        Adding to a position you already hold is one position at an average price — that is
+        what a broker's book does, and what the positions table implies by showing a row per
+        contract. Appending instead produced a second ×1 row every time the size stepper was
+        pressed, so "×1" never changed and three clicks read as three legs at one strike
+        (owner, 2026-09-09). The rare case this forecloses — holding two tranches of the same
+        contract separately — is not what this screen is for, and the fills journal still has
+        every entry if the history is ever wanted."""
         if lots <= 0:
             return
-        self._leg_seq += 1
-        leg = ConsoleLeg(
-            id=f"L{self._leg_seq}",
-            symbol=f"{self.underlying}|{self.expiry}|{int(strike)}|{right}",
-            right=right, strike=float(strike), expiry=str(self.expiry), side=side,
-            lots=lots, lot_size=self._lot_size(), entry=price, entered_at=minute)
-        self.legs.append(leg)
-        self._charge("SHORT" if side == "S" else "BUY", leg.units, price, minute, leg.symbol)
+        exp = expiry or str(self.expiry)
+        symbol = f"{self.underlying}|{exp}|{int(strike)}|{right}"
+        existing = next((x for x in self.legs
+                         if x.symbol == symbol and x.side == side and x.enabled), None)
+        if existing is not None:
+            added = lots * existing.lot_size
+            total = existing.units + added
+            existing.entry = (existing.entry * existing.units + price * added) / total
+            existing.lots += lots
+        else:
+            self._leg_seq += 1
+            existing = ConsoleLeg(
+                id=f"L{self._leg_seq}", symbol=symbol, right=right, strike=float(strike),
+                expiry=exp, side=side, lots=lots, lot_size=self._lot_size(),
+                entry=price, entered_at=minute)
+            self.legs.append(existing)
+        self._charge("SHORT" if side == "S" else "BUY", lots * existing.lot_size, price,
+                     minute, symbol)
 
     def _leg(self, leg_id: str | None) -> ConsoleLeg:
         for leg in self.legs:
