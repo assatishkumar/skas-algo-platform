@@ -17,6 +17,8 @@ import { buildLivePayoff, computeMetrics, type LiveLeg } from "../../lib/payoff"
 import type { ConsoleAlert, ConsoleLeg } from "../../types";
 
 const MINUS = "−";
+const ZOOM_ROW = 20;   // the zoom-chip row above the plot, taken out of the measured height
+const ZOOMS: [number | null, string][] = [[null, "fit"], [0.02, "±2%"], [0.05, "±5%"], [0.1, "±10%"]];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /** "2026-04-28" → "28 Apr". A bare "28" in a tooltip reads as a quantity. */
@@ -57,11 +59,16 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   // The spot the pointer is over. A payoff chart is read by asking "and if it closes
   // THERE?", which is a question the picture can only answer with a number attached.
   const [hover, setHover] = useState<number | null>(null);
+  // The x-window. "fit" spans spot and every strike, padded a little — NOT the breakevens:
+  // a deep-ITM short's breakeven sits thousands of points away and the library's auto
+  // range chased it out to 2,508 on a 24,580 spot, flattening the whole tent (owner,
+  // 2026-09-09). The percent chips are spot-centred.
+  const [zoom, setZoom] = useState<number | null>(null);
   useEffect(() => {
     if (!box.current) return;
     const ro = new ResizeObserver(([e]) => {
       setW(Math.max(320, e.contentRect.width));
-      setH(Math.max(minHeight, e.contentRect.height));
+      setH(Math.max(minHeight, e.contentRect.height - ZOOM_ROW));
     });
     ro.observe(box.current);
     return () => ro.disconnect();
@@ -71,12 +78,22 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   const live = useMemo(() => toPayoffLegs(legs), [legs]);
   const ghost = useMemo(() => (staged ? toPayoffLegs(staged) : null), [staged]);
 
+  const range = useMemo<[number, number] | null>(() => {
+    if (!spot) return null;
+    if (zoom) return [spot * (1 - zoom), spot * (1 + zoom)];
+    const refs = [spot, ...live.map((l) => l.strike), ...(ghost ?? []).map((l) => l.strike)];
+    const lo = Math.min(...refs), hi = Math.max(...refs);
+    const pad = Math.max((hi - lo) * 0.25, spot * 0.02);
+    return [lo - pad, hi + pad];
+  }, [spot, zoom, live, ghost]);
   const data = useMemo(
-    () => (spot && expiry && live.length ? buildLivePayoff(live, spot, expiry, today) : null),
-    [live, spot, expiry, today]);
+    () => (spot && expiry && live.length && range
+      ? buildLivePayoff(live, spot, expiry, today, null, undefined, { range }) : null),
+    [live, spot, expiry, today, range]);
   const ghostData = useMemo(
-    () => (spot && expiry && ghost?.length ? buildLivePayoff(ghost, spot, expiry, today) : null),
-    [ghost, spot, expiry, today]);
+    () => (spot && expiry && ghost?.length && range
+      ? buildLivePayoff(ghost, spot, expiry, today, null, undefined, { range }) : null),
+    [ghost, spot, expiry, today, range]);
   const metrics = useMemo(
     () => (spot && expiry && live.length ? computeMetrics(live, spot, expiry, today) : null),
     [live, spot, expiry, today]);
@@ -107,12 +124,19 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
 
   const line = (get: (p: { spot: number; expiry: number; now: number }) => number,
                 src = pts) => src.map((p, i) => `${i ? "L" : "M"}${px(p.spot)},${py(get(p))}`).join(" ");
-  const be = metrics?.breakevens ?? [];
-  // The expiry line is drawn as two paths so the colour can change at the breakeven — the
-  // handoff's "green up to breakeven, red after" is the fastest read on the whole chart.
-  const split = be.length ? be[0] : null;
-  const upTo = split == null ? pts : pts.filter((p) => p.spot <= split);
-  const after = split == null ? [] : pts.filter((p) => p.spot >= split);
+  const be = (metrics?.breakevens ?? []).filter((b) => b >= x0 && b <= x1);
+  // The expiry line is drawn as one path per SIGN RUN — green where the structure makes
+  // money at expiry, red where it loses — so a straddle reads green between its two
+  // breakevens and a spread green up to its one. (A split at the first breakeven alone
+  // coloured a straddle's whole right half red.) Each run includes its neighbour so the
+  // colour changes at the crossing, not a sample early.
+  const runs: { pos: boolean; pts: typeof pts }[] = [];
+  pts.forEach((p, i) => {
+    const pos = p.expiry >= 0;
+    const last = runs[runs.length - 1];
+    if (!last || last.pos !== pos) runs.push({ pos, pts: i ? [pts[i - 1], p] : [p] });
+    else last.pts.push(p);
+  });
   const zero = py(0);
   const area = (src: typeof pts, sign: 1 | -1) => {
     const seg = src.filter((p) => (sign > 0 ? p.expiry >= 0 : p.expiry <= 0));
@@ -134,6 +158,17 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   return (
     <div ref={box} className="h-full" style={{ width: "100%", position: "relative",
       minHeight }}>
+      <div className="flex justify-end gap-1" style={{ height: ZOOM_ROW }}>
+        {ZOOMS.map(([z, label]) => (
+          <button key={label} type="button" onClick={() => setZoom(z)}
+            title={z ? `spot ${label}` : "span spot and every strike"}
+            className="h-[18px] px-1.5 rounded-[4px] text-[9.5px] font-semibold"
+            style={{ background: zoom === z ? "var(--oc-accent-dim)" : "var(--oc-chip)",
+              color: zoom === z ? "var(--oc-accent)" : "var(--oc-muted)" }}>
+            {label}
+          </button>
+        ))}
+      </div>
       <svg width={w} height={height} style={{ display: "block" }}
         onMouseLeave={() => setHover(null)}
         onMouseMove={(e) => {
@@ -151,11 +186,11 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
         <path d={area(pts, -1)} fill="var(--oc-neg-fill)" />
         <line x1={L} x2={w - R} y1={zero} y2={zero} stroke="var(--oc-muted)" strokeWidth={1} />
 
-        {/* expiry payoff — green to the breakeven, red past it */}
-        <path d={line((p) => p.expiry, upTo)} fill="none" stroke="var(--oc-pos)" strokeWidth={1.6} />
-        {after.length > 1 && (
-          <path d={line((p) => p.expiry, after)} fill="none" stroke="var(--oc-neg)" strokeWidth={1.6} />
-        )}
+        {/* expiry payoff — green where it pays, red where it loses */}
+        {runs.filter((r) => r.pts.length > 1).map((r, i) => (
+          <path key={i} d={line((p) => p.expiry, r.pts)} fill="none"
+            stroke={r.pos ? "var(--oc-pos)" : "var(--oc-neg)"} strokeWidth={1.6} />
+        ))}
         {/* T+0: what the book is worth NOW across spot */}
         {data && (
           <path d={line((p) => p.now)} fill="none" stroke="var(--oc-accent)" strokeWidth={1.6}
@@ -221,7 +256,8 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
         )}
         {[0, 0.5, 1].map((f) => {
           const v = x0 + (x1 - x0) * f;
-          return <text key={f} x={px(v)} y={height - 6} fontSize={9} textAnchor="middle"
+          return <text key={f} x={px(v)} y={height - 6} fontSize={9}
+            textAnchor={f === 0 ? "start" : f === 1 ? "end" : "middle"}
             fill="var(--oc-faint)">{Math.round(v).toLocaleString("en-IN")}</text>;
         })}
       </svg>
@@ -229,7 +265,7 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
         <div className="absolute pointer-events-none rounded-[8px] px-2.5 py-1.5 text-[11px]"
           style={{
             left: Math.min(Math.max(px(at.spot) + 10, 4), Math.max(4, w - 190)),
-            top: 8, background: "var(--oc-ink)", color: "var(--oc-surface)", minWidth: 168,
+            top: ZOOM_ROW + 6, background: "var(--oc-ink)", color: "var(--oc-surface)", minWidth: 168,
           }}>
           <div className="font-semibold">
             If spot is {Math.round(at.spot).toLocaleString("en-IN")}

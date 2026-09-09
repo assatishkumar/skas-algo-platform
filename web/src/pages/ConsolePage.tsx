@@ -210,8 +210,8 @@ function ScenarioCell({ label, v, base }: {
   return (
     <div className="rounded-[6px] px-2 py-1"
       style={{ background: "var(--oc-panel2)", borderLeft: "2px solid var(--oc-accent-dim)" }}>
-      <div className="text-[9px] font-semibold uppercase tracking-[.06em]"
-        style={{ color: "var(--oc-faint)" }}>T+0 at {label}</div>
+      <div className="text-[9px] font-semibold uppercase tracking-[.06em] whitespace-nowrap"
+        style={{ color: "var(--oc-faint)" }}>T+0 {label}</div>
       <div className="text-[12px] font-semibold tabular-nums whitespace-nowrap"
         style={{ color: v == null ? "var(--oc-faint)"
           : v >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
@@ -346,9 +346,9 @@ function LegRow({ leg, grid, onStage }: {
           </span>
         </Stepper>
       </td>
-      <td className="text-right">{num(leg.entry)}</td>
-      <td className="text-right">{leg.ltp == null ? "—" : num(leg.ltp)}</td>
-      <td className="text-right whitespace-nowrap" style={{ color: "var(--oc-muted)" }}
+      <td className="text-right pl-3">{num(leg.entry)}</td>
+      <td className="text-right pl-3">{leg.ltp == null ? "—" : num(leg.ltp)}</td>
+      <td className="text-right pl-3 whitespace-nowrap" style={{ color: "var(--oc-muted)" }}
         title={leg.delta == null ? "no solvable print"
           : `Γ ${leg.gamma} · Θ ${leg.theta}/day · V ${leg.vega}/1% (per share)`}>
         {leg.delta == null ? "—" : signed(leg.delta, 2)}
@@ -356,7 +356,7 @@ function LegRow({ leg, grid, onStage }: {
           {leg.iv == null ? "" : ` ${leg.iv.toFixed(1)}`}
         </span>
       </td>
-      <td className="text-right font-semibold"
+      <td className="text-right pl-3 font-semibold"
         style={{ color: (leg.pnl ?? 0) >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
         {leg.pnl == null ? "—" : inr0(leg.pnl)}
       </td>
@@ -1010,7 +1010,7 @@ export default function ConsolePage() {
               {/* NET GREEKS: Σ per-share greek × units over the enabled legs, the same
                   convention as the Live tile. Beside them, the T+0 book at ±1% of spot —
                   the question the greeks approximate, answered directly. */}
-              <div className="mt-2 pt-2 grid grid-cols-7 gap-1.5"
+              <div className="mt-2 pt-2 flex flex-wrap gap-1.5 [&>*]:flex-1 [&>*]:min-w-[92px]"
                 style={{ borderTop: "1px solid var(--oc-hair)" }}>
                 <GreekCell label="Δ net" v={risk?.greeks.delta} dp={1} unit="units" />
                 <GreekCell label="Γ net" v={risk?.greeks.gamma} dp={3} />
@@ -1163,13 +1163,17 @@ export default function ConsolePage() {
             No position. Click B or S on any strike to stage a leg.
           </div>
         ) : (
-          <table className="w-full text-[12px] tabular-nums table-fixed">
-            {/* Fixed widths, so a row cannot re-flow as its numbers change length. */}
+          <div className="overflow-x-auto">
+          {/* Auto layout with nowrap cells and a scrolling container: fixed column widths
+              summed past the panel at a laptop width and the Entry/LTP figures printed
+              on top of each other (owner, 2026-09-09). The stepper columns keep a floor
+              so a row does not re-flow as its numbers change length. */}
+          <table className="w-full text-[12px] tabular-nums whitespace-nowrap">
             <colgroup>
               <col style={{ width: 52 }} /><col style={{ width: 40 }} />
-              <col style={{ width: 190 }} /><col style={{ width: 150 }} />
-              <col /><col /><col style={{ width: 64 }} /><col /><col />
-              <col style={{ width: 215 }} />
+              <col style={{ minWidth: 150 }} /><col style={{ minWidth: 120 }} />
+              <col /><col /><col /><col /><col />
+              <col style={{ minWidth: 185 }} />
             </colgroup>
             <thead>
               <tr className="text-[9px] uppercase tracking-[.06em]"
@@ -1193,6 +1197,7 @@ export default function ConsolePage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Panel>
         </div>
