@@ -1204,8 +1204,7 @@ export default function ConsolePage() {
     </>
   );
 
-  const railColumn = (
-    <>
+  const mtmPanel = (
                 <Panel className={breach ? "border-l-4" : ""}
                   style={breach ? { borderLeftColor: "var(--oc-neg)" } : undefined}>
                   {breach && (
@@ -1284,10 +1283,60 @@ export default function ConsolePage() {
                     </div>
                   )}
                 </Panel>
+  );
+
+  const alertsCard = (
                 <AlertsCard alerts={state?.alerts ?? []} disabled={!state}
                   onArm={(b) => armAlert.mutate(b)} onClear={(id) => clearAlert.mutate(id)} />
+  );
+
+  const railColumn = (
+    <>
+      {mtmPanel}
+      {alertsCard}
     </>
   );
+
+  /* the rail's numbers as one strip under the chart, for when the chain is hidden and
+     the left column belongs to Positions (owner, 2026-09-09) */
+  const riskStrip = (
+    <Panel className={breach ? "border-l-4" : ""}
+      style={breach ? { borderLeftColor: "var(--oc-neg)" } : undefined}>
+      {breach && (
+        <div className="mb-2 px-2 py-1 rounded-[6px] text-[11px] font-semibold"
+          style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>
+          STOP FIRED {breach.fired_at?.slice(11)} · MTM {inr0(breach.fired_value ?? 0)} crossed {inr0(-Math.abs(breach.value))}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-1.5 [&>*]:flex-1 [&>*]:min-w-[110px]">
+        <Tile label={`Total MTM · ${!risk?.legs_open ? "no position" : mNow && !mNow.maxLossUnlimited ? "defined risk" : "undefined risk"}`}
+          tone={!risk?.mtm ? undefined : risk.mtm > 0 ? "pos" : "neg"}
+          value={`${inr0(risk?.mtm ?? 0)}${risk?.margin ? ` · ${pctOf(risk.mtm, risk.margin)}` : ""}`}
+          sub={risk?.realised ? `banked ${inr0(risk.realised)}` : `${risk?.legs_open ?? 0} legs open`} />
+        <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
+          sub={risk?.margin_detail
+            ? `est · scan ${inr0(risk.margin_detail.span)} + exp ${inr0(risk.margin_detail.exposure)}`
+            : `${risk?.margin_source ?? "model"}`} />
+        <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
+          sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
+        <Tile label="Max profit" tone="pos"
+          value={mNow ? (mNow.maxProfitUnlimited ? "unlimited" : inr0(mNow.maxProfit)) : "—"}
+          sub={pctOf(mNow?.maxProfit, risk?.margin) + " of margin"} />
+        <Tile label="Max loss" tone="neg"
+          value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss)) : "—"}
+          sub={pctOf(mNow?.maxLoss, risk?.margin) + " of margin"} />
+        <Tile label="Breakeven"
+          value={mNow?.breakevens.length
+            ? mNow.breakevens.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ") : "—"}
+          sub={mNow?.breakevens.length && state?.market.spot
+            ? `${signed(100 * (mNow.breakevens[0] / state.market.spot - 1))}% from spot` : "—"} />
+        <Tile label="Open P&L" tone={(risk?.unrealised ?? 0) >= 0 ? "pos" : "neg"}
+          value={`${inr0(risk?.unrealised ?? 0)}${risk?.margin ? ` · ${pctOf(risk.unrealised, risk.margin)}` : ""}`}
+          sub={`${inr0(-(risk?.charges ?? 0))} costs`} />
+      </div>
+    </Panel>
+  );
+
 
   const positionsPanel = (
               <Panel>
@@ -1653,11 +1702,12 @@ export default function ConsolePage() {
           /* chain hidden: risk + positions on the left, the chart on the right */
           <div className="flex-1 min-w-0 flex gap-2.5 items-start">
             <div className="w-[46%] min-w-[420px] space-y-2.5">
-              {railColumn}
               {positionsPanel}
+              {alertsCard}
             </div>
             <div className="flex-1 min-w-0 space-y-2.5 flex flex-col">
               {payoffPanel}
+              {riskStrip}
               {stagedBar}
             </div>
           </div>

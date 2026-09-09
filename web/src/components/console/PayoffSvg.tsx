@@ -65,6 +65,11 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   // range chased it out to 2,508 on a 24,580 spot, flattening the whole tent (owner,
   // 2026-09-09). The percent chips are spot-centred.
   const [zoom, setZoom] = useState<number | null>(null);
+  // Drag-to-zoom: press, drag across the spots you care about, release. A wheel zoom was
+  // too sensitive to be useful (owner, 2026-09-09). Double-click, or "fit", resets.
+  const [sel, setSel] = useState<[number, number] | null>(null);    // drag in progress (px)
+  const selRef = useRef<[number, number] | null>(null);              // same, readable mid-tick
+  const [custom, setCustom] = useState<[number, number] | null>(null);
   useEffect(() => {
     if (!box.current) return;
     const ro = new ResizeObserver(([e]) => {
@@ -88,6 +93,7 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   // peak and hid the left breakeven (owner, three times, 2026-09-09).
   const range = useMemo<[number, number] | null>(() => {
     if (!spot) return null;
+    if (custom) return custom;
     if (zoom) return [spot * (1 - zoom), spot * (1 + zoom)];
     const bes = metrics?.breakevens ?? [];
     const refs = [spot, ...live.map((l) => l.strike), ...(ghost ?? []).map((l) => l.strike),
@@ -100,7 +106,7 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
     lo = Math.min(lo, spot - 0.12 * w0);
     hi = Math.max(hi, spot + 0.12 * w0);
     return [lo, hi];
-  }, [spot, zoom, live, ghost, metrics]);
+  }, [spot, zoom, custom, live, ghost, metrics]);
   const data = useMemo(
     () => (spot && expiry && live.length && range
       ? buildLivePayoff(live, spot, expiry, today, null, undefined, { range }) : null),
@@ -171,36 +177,57 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
     <div ref={box} className="h-full" style={{ width: "100%", position: "relative",
       minHeight }}>
       <div className="flex justify-end gap-1" style={{ height: ZOOM_ROW }}>
-        {zoom != null && !ZOOMS.some(([z]) => z === zoom) && (
+        <span className="text-[9.5px] mr-1 self-center" style={{ color: "var(--oc-faint)" }}>
+          drag to zoom · double-click resets
+        </span>
+        {custom && (
           <span className="h-[18px] px-1.5 rounded-[4px] text-[9.5px] font-semibold"
             style={{ background: "var(--oc-accent-dim)", color: "var(--oc-accent)" }}>
-            ±{(zoom * 100).toFixed(1)}%
+            {Math.round(custom[0]).toLocaleString("en-IN")}–{Math.round(custom[1]).toLocaleString("en-IN")}
           </span>
         )}
         {ZOOMS.map(([z, label]) => (
-          <button key={label} type="button" onClick={() => setZoom(z)}
-            title={z ? `spot ${label}` : "the whole structure — wheel over the chart to zoom"}
+          <button key={label} type="button" onClick={() => { setZoom(z); setCustom(null); }}
+            title={z ? `spot ${label}` : "the whole structure"}
             className="h-[18px] px-1.5 rounded-[4px] text-[9.5px] font-semibold"
-            style={{ background: zoom === z ? "var(--oc-accent-dim)" : "var(--oc-chip)",
-              color: zoom === z ? "var(--oc-accent)" : "var(--oc-muted)" }}>
+            style={{ background: zoom === z && !custom ? "var(--oc-accent-dim)" : "var(--oc-chip)",
+              color: zoom === z && !custom ? "var(--oc-accent)" : "var(--oc-muted)" }}>
             {label}
           </button>
         ))}
       </div>
-      <svg width={w} height={height} style={{ display: "block" }}
-        onWheel={(e) => {
-          // wheel = zoom around spot; the fit's own half-width is the starting point
-          e.preventDefault();
-          const cur = zoom ?? (range && spot ? (range[1] - range[0]) / 2 / spot : 0.05);
-          setZoom(Math.max(0.005, Math.min(0.4, cur * (e.deltaY > 0 ? 1.15 : 0.87))));
+      <svg width={w} height={height}
+        style={{ display: "block", cursor: sel ? "col-resize" : "crosshair" }}
+        onMouseLeave={() => { setHover(null); setSel(null); selRef.current = null; }}
+        onMouseDown={(e) => {
+          const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+          const x = Math.max(L, Math.min(w - R, e.clientX - r.left));
+          selRef.current = [x, x]; setSel([x, x]);
         }}
-        onMouseLeave={() => setHover(null)}
+        onMouseUp={() => {
+          const cur = selRef.current;
+          if (!cur) return;
+          const [a, b] = [Math.min(...cur), Math.max(...cur)];
+          selRef.current = null; setSel(null);
+          if (b - a < 12) return;                       // a click, not a drag
+          const toSpot = (x: number) => x0 + ((x - L) / (w - L - R)) * (x1 - x0);
+          setCustom([toSpot(a), toSpot(b)]); setZoom(null);
+        }}
+        onDoubleClick={() => { setCustom(null); setZoom(null); }}
         onMouseMove={(e) => {
           const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
           const x = e.clientX - r.left;
+          if (selRef.current) {
+            selRef.current = [selRef.current[0], Math.max(L, Math.min(w - R, x))];
+            setSel(selRef.current);
+          }
           if (x < L || x > w - R) { setHover(null); return; }
           setHover(x0 + ((x - L) / (w - L - R)) * (x1 - x0));
         }}>
+        {sel && Math.abs(sel[1] - sel[0]) > 2 && (
+          <rect x={Math.min(...sel)} y={T} width={Math.abs(sel[1] - sel[0])} height={height - T - B}
+            fill="var(--oc-accent-dim)" stroke="var(--oc-accent)" strokeWidth={1} />
+        )}
         {[0.25, 0.5, 0.75].map((f) => {
           const v = x0 + (x1 - x0) * f;
           return <line key={f} x1={px(v)} x2={px(v)} y1={T} y2={height - B}
