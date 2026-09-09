@@ -12,7 +12,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { ConsoleChainLeg, ConsoleChainRow, ConsoleProbe, ConsoleState } from "../types";
+import type {
+  ConsoleChainLeg, ConsoleChainRow, ConsoleProbe, ConsoleState,
+} from "../types";
+import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
+import { computeMetrics } from "../lib/payoff";
 
 /* ------------------------------------------------------------------ formatting
  * The handoff mandates U+2212 for minus and Indian digit grouping. lib/format.ts emits an
@@ -115,6 +119,61 @@ function KeyHelp({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </>
+  );
+}
+
+const inr0 = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v) ? "—"
+    : (v < 0 ? MINUS : "") + "₹" + Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+
+/** "% of X", or an em dash when X is zero — a percentage of nothing is not a number. */
+const pctOf = (a: number | null | undefined, b: number | null | undefined) =>
+  a == null || !b || !Number.isFinite(a) ? "—" : `${((a / b) * 100).toFixed(2)}%`;
+
+function Panel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-[10px] p-3"
+      style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)" }}>
+      {children}
+    </div>
+  );
+}
+
+function Tile({ label, value, sub, tone }: {
+  label: string; value: string; sub?: string; tone?: "pos" | "neg";
+}) {
+  return (
+    <div className="rounded-[8px] px-2 py-1.5" style={{ background: "var(--oc-panel2)" }}>
+      <div className="text-[9px] font-semibold uppercase tracking-[.06em]"
+        style={{ color: "var(--oc-faint)" }}>{label}</div>
+      <div className="text-[13px] font-semibold tabular-nums"
+        style={{ color: tone === "pos" ? "var(--oc-pos)"
+          : tone === "neg" ? "var(--oc-neg)" : "var(--oc-ink)" }}>{value}</div>
+      {sub && <div className="text-[10px]" style={{ color: "var(--oc-faint)" }}>{sub}</div>}
+    </div>
+  );
+}
+
+/** before → after for one risk number, the staged bar's whole job.
+ *
+ *  "unlimited" is a VALUE here, not a missing one. An em dash where the answer is "this
+ *  tail is open" would read as "no data", and the difference between those two on a naked
+ *  short is the entire point of adding the wing. */
+function Delta({ label, a, b, unlimitedA, unlimitedB, good }: {
+  label: string; a?: number; b?: number;
+  unlimitedA?: boolean; unlimitedB?: boolean; good?: boolean;
+}) {
+  const col = good ? "var(--oc-pos)" : "var(--oc-neg)";
+  const show = (v?: number, un?: boolean) =>
+    un ? "unlimited" : v == null ? "—" : inr0(v);
+  return (
+    <span>
+      <span style={{ color: "var(--oc-faint)" }}>{label}</span>{" "}
+      <span style={{ color: col }}>{show(a, unlimitedA)}</span>
+      {(b != null || unlimitedB) && (
+        <> → <b style={{ color: col }}>{show(b, unlimitedB)}</b></>
+      )}
+    </span>
   );
 }
 
@@ -270,6 +329,7 @@ export default function ConsolePage() {
   const [state, setState] = useState<ConsoleState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showKeys, setShowKeys] = useState(false);
+  const [lots, setLots] = useState(1);
   const opened = useRef(false);
 
   const { data: days } = useQuery({
@@ -300,6 +360,22 @@ export default function ConsolePage() {
     onError: (e: Error) => setError(e.message),
   });
 
+  const stage = useMutation({
+    mutationFn: (body: Parameters<typeof api.consoleStage>[1]) =>
+      api.consoleStage(state!.session.id, body),
+    onSuccess: (s) => { setState(s); setError(null); },
+    onError: (e: Error) => setError(e.message),
+  });
+  const commit = useMutation({
+    mutationFn: () => api.consoleCommit(state!.session.id),
+    onSuccess: (s) => { setState(s); setError(null); },
+    onError: (e: Error) => setError(e.message),
+  });
+  const discard = useMutation({
+    mutationFn: () => api.consoleDiscard(state!.session.id),
+    onSuccess: setState,
+  });
+
   const pickExpiry = useMutation({
     mutationFn: (expiry: string) => api.consoleChain(state!.session.id, { expiry }),
     onSuccess: setState,
@@ -323,7 +399,12 @@ export default function ConsolePage() {
       if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
         e.preventDefault(); setShowKeys((v) => !v); return;
       }
-      if (e.key === "Escape") { setShowKeys(false); return; }
+      if (e.key === "Escape") {
+        setShowKeys(false);
+        if (state?.staged) discard.mutate();
+        return;
+      }
+      if (e.key === "Enter" && state?.staged) { e.preventDefault(); commit.mutate(); return; }
       if (!state || e.metaKey || e.ctrlKey) return;
       // Match on code OR key. e.key changes under Shift ("." becomes ">"), which is why the
       // Shift ladder did nothing when this keyed on e.key alone; e.code is stable but is not
@@ -347,7 +428,7 @@ export default function ConsolePage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state, move]);
+  }, [state, move, commit, discard]);
 
   // Probed reference prices, keyed "CE24000". Cleared whenever the cursor or the ladder
   // moves — a price fetched at 09:30 is not an answer about 11:00.
@@ -368,6 +449,22 @@ export default function ConsolePage() {
   // §9: this page renders BEFORE the query resolves, so every read below must survive a
   // null state. Nothing here dot-accesses into a derived map without a guard.
   const rows = state?.chain.rows ?? [];
+  const risk = state?.risk;
+  // The rail, the staged bar and the chart all read ONE calculator (lib/payoff.ts), so they
+  // cannot disagree about what the same book is worth. §9: this runs on the first render
+  // with no state at all, so every input is guarded.
+  const spotNow = state?.market.spot ?? null;
+  const expNow = state?.chain.expiry ?? null;
+  const mNow = useMemo(() => {
+    const legs = toPayoffLegs(state?.legs ?? []);
+    return spotNow && expNow && legs.length
+      ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
+  }, [state?.legs, spotNow, expNow, state?.session.date]);
+  const mStaged = useMemo(() => {
+    const legs = toPayoffLegs(state?.staged?.after_legs ?? []);
+    return spotNow && expNow && legs.length
+      ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
+  }, [state?.staged, spotNow, expNow, state?.session.date]);
   const atmIndex = useMemo(() => rows.findIndex((r) => r.atm), [rows]);
   const busy = open.isPending || move.isPending;
 
@@ -486,6 +583,19 @@ export default function ConsolePage() {
             style={{ borderBottom: "1px solid var(--oc-hair)" }}>
             <span className="text-[9.5px] font-semibold uppercase tracking-[.07em] pr-1"
               style={{ color: "var(--oc-faint)" }}>Expiry</span>
+            {/* the size a B/S click stages — kept beside the ladder because it is part of
+                the click, not a property of the position */}
+            <span className="flex items-center gap-1 mr-1.5 shrink-0"
+              title="lots staged by a B/S click">
+              <button type="button" onClick={() => setLots((n) => Math.max(1, n - 1))}
+                className="w-[16px] h-[16px] rounded-[3px] text-[11px] leading-[15px]"
+                style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>−</button>
+              <b className="text-[11px] tabular-nums" style={{ minWidth: 22, textAlign: "center" }}>
+                ×{lots}</b>
+              <button type="button" onClick={() => setLots((n) => Math.min(99, n + 1))}
+                className="w-[16px] h-[16px] rounded-[3px] text-[11px] leading-[15px]"
+                style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>+</button>
+            </span>
             {(state?.chain.expiries ?? []).slice(0, 8).map((e) => (
               <Chip key={e.iso} active={e.iso === state?.chain.expiry}
                 onClick={() => pickExpiry.mutate(e.iso)}
@@ -512,42 +622,188 @@ export default function ConsolePage() {
             )}
             {rows.map((r) => (
               <ChainRow key={r.strike} row={r} probed={probed} onProbe={probe}
-                onPick={() => { /* P3: stages a leg */ }} />
+                onPick={(side, right, strike) =>
+                  stage.mutate({ kind: "add", side, right, strike, lots })} />
             ))}
           </div>
         </div>
 
-        <div className="flex-1 min-w-0 rounded-[10px] p-4"
-          style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)",
-            minHeight: 320 }}>
-          <div className="text-[13px] font-semibold mb-1">Payoff · positions · staging</div>
-          <div className="text-[12px]" style={{ color: "var(--oc-muted)" }}>
-            Phase 3. The chain is live above — clicking B/S will stage a leg here, previewed
-            on the payoff before it is committed.
-          </div>
-          <ul className="mt-4 space-y-1 text-[11px]" style={{ color: "var(--oc-faint)" }}>
-            {(state?.notes ?? []).map((n) => <li key={n}>· {n}</li>)}
-          </ul>
+        <div className="flex-1 min-w-0 space-y-2.5">
+          <Panel>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[13px] font-semibold">Payoff</span>
+              <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+                expiry · T+0 dashed · staged dotted
+              </span>
+            </div>
+            <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
+              spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
+              today={state?.session.date ?? ""} />
+          </Panel>
+
+          {state?.staged && (
+            <div className="rounded-[10px] p-3"
+              style={{ border: "1px dashed var(--oc-accent)",
+                background: "var(--oc-accent-tint)" }}>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
+                  style={{ background: "var(--oc-accent)", color: "#fff" }}>STAGED</span>
+                <b className="text-[12.5px]">{state.staged.label}</b>
+                <span className="text-[11px]" style={{ color: "var(--oc-muted)" }}>
+                  previewed on the chart before commit
+                </span>
+                <span className="ml-auto flex gap-2">
+                  <button type="button" onClick={() => commit.mutate()}
+                    className="px-2.5 h-[24px] rounded-[5px] text-[11.5px] font-semibold"
+                    style={{ background: "var(--oc-accent)", color: "#fff" }}>Apply ⏎</button>
+                  <button type="button" onClick={() => discard.mutate()}
+                    className="px-2.5 h-[24px] rounded-[5px] text-[11.5px]"
+                    style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
+                    Discard esc</button>
+                </span>
+              </div>
+              <div className="mt-1.5 flex gap-5 text-[11.5px] flex-wrap tabular-nums">
+                <Delta label="max profit" good
+                  a={mNow?.maxProfit} unlimitedA={mNow?.maxProfitUnlimited}
+                  b={mStaged?.maxProfit} unlimitedB={mStaged?.maxProfitUnlimited} />
+                <Delta label="max loss"
+                  a={mNow?.maxLoss} unlimitedA={mNow?.maxLossUnlimited}
+                  b={mStaged?.maxLoss} unlimitedB={mStaged?.maxLossUnlimited} />
+                <span><span style={{ color: "var(--oc-faint)" }}>margin</span>{" "}
+                  {inr0(state.staged.margin_before)} → <b>{inr0(state.staged.margin_after)}</b>
+                  <span style={{ color: "var(--oc-faint)" }}> · {state.staged.margin_source}</span>
+                </span>
+              </div>
+            </div>
+          )}
+
+          <Panel>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[13px] font-semibold">Positions</span>
+              <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+                {state?.legs.length ?? 0} legs · lot {state?.session.lot_size ?? "—"}
+                {state?.legs.length ? (
+                  <button type="button" className="ml-3 underline"
+                    onClick={() => stage.mutate({ kind: "flatten" })}
+                    style={{ color: "var(--oc-neg)" }}>Exit all</button>
+                ) : null}
+              </span>
+            </div>
+            {!state?.legs.length ? (
+              <div className="py-4 text-center text-[12px]" style={{ color: "var(--oc-faint)" }}>
+                No position. Click B or S on any strike to stage a leg.
+              </div>
+            ) : (
+              <table className="w-full text-[12px] tabular-nums">
+                <thead>
+                  <tr className="text-[9px] uppercase tracking-[.06em]"
+                    style={{ color: "var(--oc-faint)" }}>
+                    <th className="text-left font-semibold py-1">Leg</th>
+                    <th className="text-right font-semibold">Entry</th>
+                    <th className="text-right font-semibold">LTP</th>
+                    <th className="text-right font-semibold">P&amp;L</th>
+                    <th className="text-right font-semibold">Exit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.legs.map((l) => (
+                    <tr key={l.id} style={{ opacity: l.enabled ? 1 : 0.45 }}>
+                      <td className="py-1">
+                        <button type="button" title={l.enabled ? "exclude from the payoff" : "include"}
+                          onClick={() => stage.mutate({ kind: "toggle", leg_id: l.id })}
+                          className="w-[26px] h-[15px] rounded-full mr-2 align-middle"
+                          style={{ background: l.enabled ? "var(--oc-accent)" : "var(--oc-chip)" }}>
+                          <span className="block w-[11px] h-[11px] rounded-full bg-white"
+                            style={{ marginLeft: l.enabled ? 13 : 2 }} />
+                        </button>
+                        <span className="px-1 rounded-[3px] text-[10px] font-bold"
+                          style={{ color: l.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)",
+                            background: l.side === "S" ? "var(--oc-neg-fill)" : "var(--oc-pos-fill)" }}>
+                          {l.side}</span>{" "}
+                        <b>{Math.round(l.strike).toLocaleString("en-IN")} {l.right}</b>{" "}
+                        <span style={{ color: "var(--oc-faint)" }}>×{l.lots}</span>
+                      </td>
+                      <td className="text-right">{num(l.entry)}</td>
+                      <td className="text-right">{l.ltp == null ? "—" : num(l.ltp)}</td>
+                      <td className="text-right font-semibold"
+                        style={{ color: (l.pnl ?? 0) >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
+                        {l.pnl == null ? "—" : inr0(l.pnl)}
+                      </td>
+                      <td className="text-right">
+                        <button type="button"
+                          onClick={() => stage.mutate({ kind: "exit", leg_id: l.id, lots: l.lots })}
+                          className="px-1.5 h-[18px] rounded-[3px] text-[10.5px]"
+                          style={{ border: "1px solid var(--oc-line)", color: "var(--oc-accent)" }}>
+                          Exit</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Panel>
         </div>
 
-        <div className="w-[348px] shrink-0 rounded-[10px] p-4"
-          style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)",
-            minHeight: 320 }}>
-          <div className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
-            style={{ color: "var(--oc-faint)" }}>Total MTM · realised + open</div>
-          <div className="text-[21px] font-semibold mt-1">₹0</div>
-          <div className="text-[11px] mt-0.5" style={{ color: "var(--oc-muted)" }}>
-            no open position · paused {state?.session.clock ?? "—"}
-          </div>
-          <div className="mt-4 text-[11px]" style={{ color: "var(--oc-faint)" }}>
-            Risk tiles, alerts and presets arrive in Phase 3. Margin will be labelled by
-            source — the model estimate reads several times a broker basket on a hedged
-            spread, so the percentages are only real against a measured anchor.
-          </div>
-          <div className="mt-3 text-[11px]" style={{ color: "var(--oc-muted)" }}>
-            ATM row {atmIndex >= 0 ? `#${atmIndex + 1}` : "—"} · strikes {rows.length} ·
-            grid {state?.chain.listing_grid ? "listing (50s)" : "100s"}
-          </div>
+        <div className="w-[348px] shrink-0 space-y-2.5">
+          <Panel>
+            <div className="flex items-start justify-between">
+              <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
+                style={{ color: "var(--oc-faint)" }}>Total MTM · realised + open</span>
+              <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
+                style={{ background: risk && risk.legs_open ? "var(--oc-chip)" : "transparent",
+                  color: "var(--oc-muted)" }}>
+                {!risk?.legs_open ? "NO POSITION"
+                  : mNow && !mNow.maxLossUnlimited ? "DEFINED RISK" : "UNDEFINED RISK"}
+              </span>
+            </div>
+            <div className="text-[21px] font-semibold mt-1"
+              style={{ color: !risk?.mtm ? "var(--oc-ink)"
+                : risk.mtm > 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
+              {inr0(risk?.mtm ?? 0)}
+            </div>
+            <div className="text-[11px] mt-0.5" style={{ color: "var(--oc-muted)" }}>
+              {risk?.legs_open ? `${risk.legs_open} legs open` : "no open position"} · paused{" "}
+              {state?.session.clock ?? "—"}
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
+                sub={`${risk?.margin_source ?? "model"} · ${pctOf(risk?.margin, risk?.capital)} of capital`} />
+              <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
+                sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
+              <Tile label="Max profit" tone="pos"
+                value={mNow ? (mNow.maxProfitUnlimited ? "unlimited" : inr0(mNow.maxProfit)) : "—"}
+                sub={pctOf(mNow?.maxProfit, risk?.margin) + " of margin"} />
+              <Tile label="Max loss" tone="neg"
+                value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss)) : "—"}
+                sub={pctOf(mNow?.maxLoss, risk?.margin) + " of margin"} />
+              <Tile label="Breakeven"
+                value={mNow?.breakevens.length
+                  ? mNow.breakevens.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ")
+                  : "—"}
+                sub={mNow?.breakevens.length && state?.market.spot
+                  ? `${signed(100 * (mNow.breakevens[0] / state.market.spot - 1))}% from spot` : "—"} />
+              <Tile label="Realised / charges"
+                value={inr0(risk?.realised ?? 0)} sub={`${inr0(-(risk?.charges ?? 0))} costs`} />
+            </div>
+            {risk?.margin_source === "model" && (
+              <div className="mt-2 text-[10.5px]" style={{ color: "var(--oc-caution)" }}>
+                Model margin: span+exposure on the shorts, blind to long hedges — it reads
+                several times a broker basket on a spread. Set a measured anchor to make the
+                percentages real.
+              </div>
+            )}
+          </Panel>
+          <Panel>
+            <div className="text-[9.5px] font-semibold uppercase tracking-[.07em] mb-1"
+              style={{ color: "var(--oc-faint)" }}>Session</div>
+            <div className="text-[11px]" style={{ color: "var(--oc-muted)" }}>
+              ATM row {atmIndex >= 0 ? `#${atmIndex + 1}` : "—"} · strikes {rows.length} ·
+              grid {state?.chain.listing_grid ? "listing (50s)" : "100s"}
+            </div>
+            <ul className="mt-2 space-y-1 text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+              {(state?.notes ?? []).map((n) => <li key={n}>· {n}</li>)}
+            </ul>
+          </Panel>
         </div>
       </div>
 
@@ -556,8 +812,10 @@ export default function ConsolePage() {
       <div className="h-7 flex items-center gap-4 px-3 text-[10.5px]"
         style={{ background: "var(--oc-panel2)", borderTop: "1px solid var(--oc-line)",
           color: "var(--oc-faint)" }}>
-        <span>REALISED <b style={{ color: "var(--oc-ink)" }}>₹0</b></span>
-        <span>UNREALISED <b style={{ color: "var(--oc-ink)" }}>₹0</b></span>
+        <span>REALISED <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.realised ?? 0)}</b></span>
+        <span>UNREALISED <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.unrealised ?? 0)}</b></span>
+        <span>TOTAL <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.mtm ?? 0)}</b>
+          <span> ({pctOf(risk?.mtm, risk?.margin)} of margin)</span></span>
         <button type="button" onClick={() => setShowKeys(true)}
           className="ml-auto hover:underline" title="Keyboard shortcuts (?)">
           {KEYS.slice(0, 4).map((k) => (

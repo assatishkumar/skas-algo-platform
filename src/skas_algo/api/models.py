@@ -104,6 +104,18 @@ class ConsoleTransport(BaseModel):
     at: str | None = None
 
 
+class ConsoleStage(BaseModel):
+    """Describe a change to the console's book. Nothing is applied until /commit."""
+
+    kind: Literal["add", "exit", "toggle", "flatten"]
+    right: Literal["CE", "PE"] | None = None
+    strike: float | None = None
+    side: Literal["B", "S"] | None = None
+    lots: int = 1
+    leg_id: str | None = None
+    enabled: bool | None = None
+
+
 class UniverseOut(BaseModel):
     name: str
     label: str

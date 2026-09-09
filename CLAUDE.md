@@ -1047,6 +1047,44 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   NOT clear an `order_error` halt; that stays a separate, explicit ack.
   Coverage: `test_adopt_broker_close_*` in tests/test_live_options.py.
 
+## 8d. The Options Console (`/console`) — replay first, orders never (yet)
+A single screen for trading a PAST session by hand: an option chain you click, a payoff, a
+risk rail, and a minute cursor. `services/options_console/` is deliberately outside `live/`
+and imports no order path (pinned by `tests/test_options_console.py`); live mode, when it
+lands, will drive an EXISTING `LiveRun` through the already-gated `manual_order`, never a
+second order path (§1).
+- **The market is IMPORTED, never forked.** `services/replay_market.py` holds
+  `ReplayMarket`/`ReplayChain`/`ReplayCtx`, moved verbatim out of `intraday_replay` so the
+  console and the batch replay answer "what was this leg worth at 09:30" identically. Two
+  pins guard it forever: a sha256 of the whole replay report and identity assertions.
+- **Seeking is rewind-and-replay-forward, never a checkpoint.** A whole session rebuilds in
+  ~17 ms, so `seek()` replays the day from its open and re-derives the book from an
+  APPEND-ONLY fill journal. That is the only construction that reproduces forward-fill and
+  the stale window exactly, and it makes determinism an identity a test asserts (45 steps ==
+  one seek). Consequence, by design: **rewinding past a trade unwinds it; stepping forward
+  brings it back.** An earlier version truncated the journal on rewind and the book never
+  came back.
+- **Three things the data cannot supply, said on screen instead of faked.** Spot is a
+  de-carried put-call-parity forward (no index series in the store), and the strip and the
+  ladder must read the SAME one — they briefly did not, and at an expiry-day close the two
+  expiries diverged enough to print a "basis" of −110. The day range is the FORMING bar
+  (`note_spot`), because a replayed day's settled bar contains the future. A strike that has
+  not printed stays unquoted; the ⟲ probe fetches its last real trade from an earlier
+  session, LABELLED with its age, and that reference price can never fill a leg.
+- **Margin is labelled by source, always.** `margin_per_lot_set` (the `margin_per_set`
+  precedent) is the only accurate answer; the fallback is the platform's model, which is
+  span+exposure on the SHORTS and blind to long hedges — ₹19.4L against a Kite basket's
+  ₹3.64L on the design's own bear call spread. Every "% of margin" carries
+  `margin_source`, and the rail says so in words when it is the model.
+- The chain solves IV/Δ SERVER-side (0.16 ms for 44 strikes) so the ladder and the payoff
+  share one calculator; the frontend reuses `lib/payoff.ts::computeMetrics` for max P/L,
+  breakevens, POP and the staged before→after, so the rail and the chart cannot disagree.
+  `pricing {r,q,t_floor_s,expiry_time}` ships in the DTO so nothing hardcodes a second `r`.
+- NIFTY 100-strike coarsening is ON by default here even though this is a manual surface
+  (§8): the console exists to rehearse what the automated strategies would do, and they can
+  never place a 50. `allow_fifty_strikes` is the explicit opt-out.
+- Full plan + phases: `docs/PLAN-options-console.md`.
+
 ## 8a. The /portfolio tracker is NOT part of the trading system
 **The VPS is the authoritative portfolio.** It holds the owner's real book (56 holdings)
 and is the only box with both broker sessions and an always-on maintenance loop for the

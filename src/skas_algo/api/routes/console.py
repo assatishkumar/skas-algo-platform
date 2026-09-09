@@ -16,7 +16,7 @@ from datetime import date
 
 from fastapi import APIRouter, HTTPException
 
-from skas_algo.api.models import ConsoleOpen, ConsoleTransport
+from skas_algo.api.models import ConsoleOpen, ConsoleStage, ConsoleTransport
 from skas_algo.data.option_intraday_store import captured_days
 from skas_algo.services.options_console import registry
 from skas_algo.services.options_console.session import UNDERLYINGS, ConsoleSession
@@ -100,6 +100,35 @@ async def transport(session_id: str, body: ConsoleTransport) -> dict:
         return await asyncio.to_thread(_move)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sessions/{session_id}/stage")
+async def stage(session_id: str, body: ConsoleStage) -> dict:
+    """Preview a change. The response carries the book it WOULD produce, so the chart can
+    draw the staged curve beside the live one before anything is real."""
+    session = _get(session_id)
+    try:
+        await asyncio.to_thread(lambda: session.stage(**body.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
+
+
+@router.post("/sessions/{session_id}/commit")
+async def commit(session_id: str) -> dict:
+    session = _get(session_id)
+    try:
+        await asyncio.to_thread(session.commit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
+
+
+@router.post("/sessions/{session_id}/discard")
+def discard(session_id: str) -> dict:
+    session = _get(session_id)
+    session.discard()
+    return session.state()
 
 
 @router.get("/sessions/{session_id}/probe")

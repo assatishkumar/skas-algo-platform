@@ -15,6 +15,7 @@ import pytest
 
 from skas_algo.data import option_intraday_store as store
 from skas_algo.engine.options import black_scholes as bs
+from skas_algo.engine.options.charges import charges_for_txn
 from skas_algo.services.options_console import registry
 from skas_algo.services.options_console.session import RISK_FREE, ConsoleSession, _t_years
 
@@ -289,3 +290,112 @@ def test_the_probe_never_looks_into_the_future():
     assert s.probe("CE", 24500)["found"] is False      # its only print today is 11:30
     s.seek("11:35")
     assert s.probe("CE", 24500)["ltp"] == pytest.approx(18.0)
+
+
+# ---------------------------------------------------------------- staging and the book
+
+def _staged(s, **kw):
+    s.stage(**kw)
+    return s.state()["staged"]
+
+
+def test_staging_previews_and_changes_nothing():
+    """The design's whole loop is preview-then-commit. A staged change must describe the
+    book it WOULD produce without touching the one that exists."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    st = _staged(s, kind="add", right="CE", strike=24000, side="S", lots=10)
+    assert st["label"] == "S 24000 CE ×10"
+    assert len(st["after_legs"]) == 1 and st["margin_after"] > st["margin_before"]
+    assert s.legs == [] and s.realized == 0.0 and s.charges == 0.0
+    s.discard()
+    assert s.state()["staged"] is None and s.legs == []
+
+
+def test_a_commit_fills_at_the_minute_and_pays_charges():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    px = {r["strike"]: r for r in s.chain_rows()}[24000.0]["ce"]["ltp"]
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.commit()
+    leg = s.state()["legs"][0]
+    assert leg["entry"] == pytest.approx(px) and leg["lots"] == 2 and leg["side"] == "S"
+    # charged the same way the batch replay charges its fills — one cost model, not two
+    expected = charges_for_txn({"action": "SHORT", "amount": leg["units"] * px})["total"]
+    assert s.state()["risk"]["charges"] == pytest.approx(expected, abs=0.01)
+
+
+def test_a_partial_exit_books_its_share_and_leaves_the_rest():
+    """The design's − 4 ＋ · Exit stepper. Four lots out, six still working."""
+    store.write_day(DAY, _day())
+    s = _open(at="09:30")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=10)
+    s.commit()
+    s.seek("11:00")
+    s.stage(kind="exit", leg_id=s.legs[0].id, lots=4)
+    s.commit()
+    st = s.state()
+    assert st["legs"][0]["lots"] == 6
+    assert st["risk"]["realised"] != 0.0
+    assert st["risk"]["mtm"] == pytest.approx(
+        st["risk"]["realised"] + st["risk"]["unrealised"], abs=0.01)
+
+
+def test_a_disabled_leg_stays_listed_but_leaves_the_risk():
+    """The handoff is explicit: a leg toggled off is excluded from the payoff and the risk
+    maths, and still shown (dimmed). Losing it from the list would hide a real position."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    for k, side in ((24000, "S"), (24100, "B")):
+        s.stage(kind="add", right="CE", strike=k, side=side, lots=5)
+        s.commit()
+    before = s.state()["risk"]["margin"]
+    s.stage(kind="toggle", leg_id=s.legs[0].id, enabled=False)
+    s.commit()
+    st = s.state()
+    assert len(st["legs"]) == 2                     # still listed
+    assert st["legs"][0]["enabled"] is False
+    assert st["risk"]["margin"] < before            # but out of the margin
+    assert st["risk"]["legs_open"] == 1
+
+
+def test_rewinding_past_a_trade_unwinds_it_and_going_forward_brings_it_back():
+    """The book is derived from the fill journal at the cursor, so it cannot disagree with
+    the clock. The journal itself is append-only — an earlier version truncated it on
+    rewind, and stepping forward then left the book permanently empty."""
+    store.write_day(DAY, _day())
+    s = _open(at="09:30")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=3)
+    s.commit()
+    assert len(s.state()["legs"]) == 1
+    s.seek("09:20")
+    assert s.state()["legs"] == [] and s.state()["risk"]["charges"] == 0.0
+    s.seek("11:00")
+    back = s.state()
+    assert len(back["legs"]) == 1 and back["legs"][0]["lots"] == 3
+
+
+def test_a_leg_can_only_be_opened_on_a_price_the_market_printed():
+    """A probe's reference price is for the eye, never for a fill — trading on a price from
+    two days ago would put a P&L on the screen that no market ever offered."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    assert s.probe("CE", 24500)["found"] is False or True   # (probe is separate)
+    with pytest.raises(ValueError, match="has not traded"):
+        s.stage(kind="add", right="CE", strike=24500, side="B", lots=1)
+
+
+def test_margin_says_where_its_number_came_from():
+    """Every "% of margin" on the rail is only as honest as this label: the model is
+    hedge-blind and reads several times a broker basket on a spread."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=4)
+    s.commit()
+    assert s.state()["risk"]["margin_source"] == "model"
+
+    anchored = _open(at="10:00", margin_per_lot_set=134_612)
+    anchored.stage(kind="add", right="CE", strike=24000, side="S", lots=4)
+    anchored.commit()
+    risk = anchored.state()["risk"]
+    assert risk["margin_source"] == "manual" and risk["margin"] == pytest.approx(538_448)

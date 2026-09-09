@@ -40,6 +40,8 @@ from skas_algo.data.option_intraday_store import (
     load_day,
 )
 from skas_algo.engine.options import black_scholes as bs
+from skas_algo.engine.options.charges import charges_for_txn
+from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.services.replay_market import ReplayChain, ReplayMarket
 
 # The session window the store is filtered to. 15:40 is the post-CAS close the store itself
@@ -65,11 +67,44 @@ _YEAR_S = 365.0 * 24 * 3600
 UNDERLYINGS = ("NIFTY", "BANKNIFTY", "SENSEX")
 
 logger = logging.getLogger("skas_algo.console")
+_MARGIN = MarginParams()
 
 
 def _t_years(expiry_iso: str, now: datetime) -> float:
     exp = datetime.combine(date.fromisoformat(expiry_iso[:10]), EXPIRY_TIME)
     return max(T_FLOOR_S, (exp - now).total_seconds()) / _YEAR_S
+
+
+@dataclass
+class ConsoleLeg:
+    """One leg of the console's own book.
+
+    The batch replay keys its book by SYMBOL with {units, dir, entry}, which cannot express
+    what this screen needs: two entries at the same strike bought minutes apart, a partial
+    exit of 4 of 10 lots, or a leg switched off to see the payoff without it. So the console
+    owns a leg list instead — ids are stable, and everything the UI does refers to one."""
+
+    id: str
+    symbol: str
+    right: str
+    strike: float
+    expiry: str
+    side: str                 # "B" | "S"
+    lots: int
+    lot_size: int
+    entry: float
+    entered_at: str
+    enabled: bool = True
+    realized: float = 0.0     # banked by partial exits of THIS leg
+    exited_lots: int = 0
+
+    @property
+    def units(self) -> float:
+        return float(self.lots * self.lot_size)
+
+    @property
+    def direction(self) -> int:
+        return 1 if self.side == "B" else -1
 
 
 @dataclass
@@ -135,6 +170,18 @@ class ConsoleSession:
         if self.day not in self.days:
             raise ValueError(f"{self.day.isoformat()} is not in the store for {u}")
 
+        self.legs: list[ConsoleLeg] = []
+        self.staged: dict | None = None
+        self.realized = 0.0
+        self.charges = 0.0
+        self._leg_seq = 0
+        # The MASTER journal: every fill ever made, stamped with its minute, append-only and
+        # never truncated by moving the cursor. The book is derived from the slice of it at
+        # or before the clock, which is what makes rewinding past a trade unwind it AND
+        # stepping forward again bring it back.
+        self.journal: list[dict] = []
+        self.fills: list[dict] = []      # the derived slice, ≤ cursor
+        self._replaying = False
         self.market = ReplayMarket(u, allow_fifty_strikes=self.allow_fifty_strikes)
         self.chain_view = ReplayChain(self.market)
         self.tape = _Tape(day=self.day)
@@ -205,6 +252,47 @@ class ConsoleSession:
         m._spot_dirty = True
         m.now = target
         self.clock = target
+        self._replay_book(target)
+
+    def _replay_book(self, target: datetime) -> None:
+        """Rebuild the book from the fill journal at the cursor.
+
+        Rewinding past a trade UNWINDS it. That falls straight out of seeking being a
+        replay-forward rather than a checkpoint restore, and it is the only answer that
+        stays consistent: a fill at 09:21 cannot be in the book at 09:16 and then reappear
+        at 09:22 unless the journal, not the object graph, is the source of truth."""
+        key = target.strftime("%Y-%m-%dT%H:%M")
+        if not self.journal:
+            return
+        kept = [f for f in self.journal if f["at"] <= key]
+        if len(kept) == len(self.fills) and self.legs:
+            return                       # already the right slice — nothing to rebuild
+        self.legs, self.realized, self.charges, self.fills = [], 0.0, 0.0, []
+        self._leg_seq = 0
+        self._replaying = True
+        try:
+            for f in kept:
+                self._reapply(f)
+        finally:
+            self._replaying = False
+
+    def _reapply(self, fill: dict) -> None:
+        _u, expiry, strike_s, right = fill["symbol"].split("|")
+        strike, lot = float(strike_s), self._lot_size() or 1
+        if fill["action"] in ("BUY", "SHORT"):
+            self._leg_seq += 1
+            self.legs.append(ConsoleLeg(
+                id=f"L{self._leg_seq}", symbol=fill["symbol"], right=right, strike=strike,
+                expiry=expiry, side="S" if fill["action"] == "SHORT" else "B",
+                lots=max(1, int(fill["units"] // lot)), lot_size=lot,
+                entry=fill["price"], entered_at=fill["at"]))
+            self._charge(fill["action"], fill["units"], fill["price"], fill["at"],
+                         fill["symbol"])
+        else:
+            for leg in self.legs:
+                if leg.symbol == fill["symbol"]:
+                    self._close(leg, int(fill["units"] // lot), fill["price"], fill["at"])
+                    break
 
     def seek(self, at: str | datetime) -> ConsoleSession:
         if isinstance(at, str):
@@ -281,6 +369,210 @@ class ConsoleSession:
         ks = sorted({float(r["strike"]) for r in rows})
         gaps = [b - a for a, b in zip(ks, ks[1:], strict=False) if b > a]
         return min(gaps) if gaps else 100.0
+
+    # ----------------------------------------------------------------- the book
+    def _price(self, right: str, strike: float) -> float | None:
+        """What this contract is worth at the cursor. A leg can only be traded on a price
+        the market actually printed — the probe's reference prices never reach this."""
+        sym = f"{self.underlying}|{self.expiry}|{int(strike)}|{right}"
+        q = self.market.quotes.get(sym)
+        return float(q[0]) if q else None
+
+    def _lot_size(self) -> int:
+        snap = self.market.live_chain(self.underlying, self.expiry) if self.expiry else None
+        return int((snap or {}).get("lot_size") or 0)
+
+    def stage(self, *, kind: str, right: str | None = None, strike: float | None = None,
+              side: str | None = None, lots: int = 1, leg_id: str | None = None,
+              enabled: bool | None = None) -> dict:
+        """Describe a change WITHOUT making it. The design's whole loop is preview-then-commit:
+        nothing touches the book until Apply, and the chart draws the staged curve beside the
+        live one so the difference is visible before it is real."""
+        if kind == "add":
+            if not (right and side and strike is not None):
+                raise ValueError("an added leg needs a right, a side and a strike")
+            px = self._price(right.upper(), strike)
+            if px is None:
+                raise ValueError(
+                    f"{int(strike)} {right.upper()} has not traded at {self.clock:%H:%M} — "
+                    "there is no price to fill against")
+            lot = self._lot_size()
+            self.staged = {"kind": "add", "right": right.upper(), "strike": float(strike),
+                           "side": side.upper(), "lots": max(1, int(lots)),
+                           "price": px, "lot_size": lot,
+                           "label": f"{side.upper()} {int(strike)} {right.upper()} ×{lots}"}
+        elif kind == "exit":
+            leg = self._leg(leg_id)
+            n = max(1, min(int(lots), leg.lots))
+            px = self._price(leg.right, leg.strike)
+            if px is None:
+                raise ValueError(f"{leg.symbol} has no price at {self.clock:%H:%M}")
+            self.staged = {"kind": "exit", "leg_id": leg.id, "lots": n, "price": px,
+                           "label": f"Exit {n} of {leg.lots} lots · {int(leg.strike)} {leg.right}"}
+        elif kind == "toggle":
+            leg = self._leg(leg_id)
+            want = (not leg.enabled) if enabled is None else bool(enabled)
+            verb = "Include" if want else "Exclude"
+            self.staged = {"kind": "toggle", "leg_id": leg.id, "enabled": want,
+                           "label": f"{verb} {int(leg.strike)} {leg.right}"}
+        elif kind == "flatten":
+            if not self.legs:
+                raise ValueError("nothing to flatten")
+            self.staged = {"kind": "flatten", "label": f"Close all {len(self.legs)} legs"}
+        else:
+            raise ValueError(f"unknown staged change {kind!r}")
+        return self.staged
+
+    def discard(self) -> None:
+        self.staged = None
+
+    def commit(self) -> dict:
+        """Apply the staged change at the cursor's price, with charges."""
+        if not self.staged:
+            raise ValueError("nothing staged")
+        st, kind = self.staged, self.staged["kind"]
+        minute = self.clock.strftime("%Y-%m-%dT%H:%M")
+        if kind == "add":
+            self._leg_seq += 1
+            leg = ConsoleLeg(
+                id=f"L{self._leg_seq}",
+                symbol=f"{self.underlying}|{self.expiry}|{int(st['strike'])}|{st['right']}",
+                right=st["right"], strike=st["strike"], expiry=str(self.expiry),
+                side=st["side"], lots=st["lots"], lot_size=st["lot_size"],
+                entry=st["price"], entered_at=minute)
+            self.legs.append(leg)
+            self._charge("SHORT" if leg.side == "S" else "BUY", leg.units, leg.entry, minute,
+                         leg.symbol)
+        elif kind == "exit":
+            self._close(self._leg(st["leg_id"]), st["lots"], st["price"], minute)
+        elif kind == "toggle":
+            self._leg(st["leg_id"]).enabled = st["enabled"]
+        elif kind == "flatten":
+            for leg in list(self.legs):
+                px = self._price(leg.right, leg.strike)
+                if px is not None:
+                    self._close(leg, leg.lots, px, minute)
+        self.staged = None
+        return {"committed": kind, "at": minute}
+
+    def _leg(self, leg_id: str | None) -> ConsoleLeg:
+        for leg in self.legs:
+            if leg.id == leg_id:
+                return leg
+        raise ValueError(f"no leg {leg_id!r}")
+
+    def _close(self, leg: ConsoleLeg, lots: int, price: float, minute: str) -> None:
+        n = max(0, min(int(lots), leg.lots))
+        if not n:
+            return
+        units = n * leg.lot_size
+        pnl = (price - leg.entry) * units * leg.direction
+        pnl -= self._charge("COVER" if leg.side == "S" else "SELL", units, price, minute,
+                            leg.symbol)
+        leg.realized += pnl
+        leg.exited_lots += n
+        self.realized += pnl
+        leg.lots -= n
+        if leg.lots <= 0:
+            self.legs.remove(leg)
+
+    def _charge(self, action: str, units: float, price: float, minute: str,
+                symbol: str) -> float:
+        c = charges_for_txn({"action": action, "amount": units * price})
+        self.charges += c["total"]
+        row = {"at": minute, "symbol": symbol, "action": action,
+               "units": units, "price": price, "charges": round(c["total"], 2)}
+        self.fills.append(row)
+        if not self._replaying:          # a replay re-derives the book; it does not re-trade
+            self.journal.append(row)
+        return c["total"]
+
+    # ----------------------------------------------------------------- risk
+    def _leg_out(self, leg: ConsoleLeg) -> dict:
+        ltp = self._price(leg.right, leg.strike)
+        pnl = ((ltp - leg.entry) * leg.units * leg.direction) if ltp is not None else None
+        return {"id": leg.id, "symbol": leg.symbol, "right": leg.right, "strike": leg.strike,
+                "expiry": leg.expiry, "side": leg.side, "lots": leg.lots,
+                "lot_size": leg.lot_size, "units": leg.units, "direction": leg.direction,
+                "entry": round(leg.entry, 2), "ltp": ltp,
+                "pnl": round(pnl, 2) if pnl is not None else None,
+                "enabled": leg.enabled, "realized": round(leg.realized, 2)}
+
+    def margin(self, legs: list[ConsoleLeg] | None = None) -> tuple[float, str]:
+        """Margin, and — just as important — WHERE THE NUMBER CAME FROM.
+
+        A manual anchor (the real broker figure for one lot-set, the `margin_per_set`
+        precedent) is the only accurate answer here. The fallback is the platform's model,
+        which is span+exposure on the SHORTS and blind to long hedges: on the design's own
+        bear call spread it reads ₹19.4L against a Kite basket's ₹3.64L. That is 5.3x, and in
+        the direction that makes a hedged structure look unaffordable — so every percentage
+        measured against it is labelled with its source rather than presented as fact."""
+        book = [leg for leg in (self.legs if legs is None else legs) if leg.enabled]
+        if self.margin_per_lot_set:
+            sets = max((leg.lots for leg in book if leg.side == "S"), default=0)
+            return round(self.margin_per_lot_set * sets, 2), "manual"
+        spot = self.market.index_spot(self.underlying) or 0.0
+        total = sum(short_option_margin(spot, int(leg.units), 1, _MARGIN)
+                    for leg in book if leg.side == "S")
+        return round(total, 2), "model"
+
+    def _staged_out(self) -> dict | None:
+        """The staged change, plus the book it WOULD produce. The frontend draws the dotted
+        curve and the before→after risk from `after_legs` using the same payoff maths it uses
+        for the live book, so the preview and the commit cannot disagree."""
+        if not self.staged:
+            return None
+        after = self._project()
+        margin_after, _src = self.margin(after)
+        margin_now, src = self.margin()
+        return {**self.staged,
+                "after_legs": [self._leg_out(leg) for leg in after if leg.enabled],
+                "margin_before": margin_now, "margin_after": margin_after,
+                "margin_source": src}
+
+    def _project(self) -> list[ConsoleLeg]:
+        """The book as the staged change would leave it — a COPY; nothing here is applied."""
+        import copy
+
+        book = [copy.copy(leg) for leg in self.legs]
+        st = self.staged or {}
+        kind = st.get("kind")
+        if kind == "add":
+            book.append(ConsoleLeg(
+                id="STAGED", symbol=f"{self.underlying}|{self.expiry}|"
+                                    f"{int(st['strike'])}|{st['right']}",
+                right=st["right"], strike=st["strike"], expiry=str(self.expiry),
+                side=st["side"], lots=st["lots"], lot_size=st["lot_size"],
+                entry=st["price"], entered_at=self.clock.strftime("%Y-%m-%dT%H:%M")))
+        elif kind == "exit":
+            for leg in book:
+                if leg.id == st["leg_id"]:
+                    leg.lots = max(0, leg.lots - int(st["lots"]))
+            book = [leg for leg in book if leg.lots > 0]
+        elif kind == "toggle":
+            for leg in book:
+                if leg.id == st["leg_id"]:
+                    leg.enabled = bool(st["enabled"])
+        elif kind == "flatten":
+            book = []
+        return book
+
+    def _risk_out(self) -> dict:
+        margin, source = self.margin()
+        open_pnl = sum(x["pnl"] or 0.0 for x in (self._leg_out(leg) for leg in self.legs
+                                                 if leg.enabled))
+        return {
+            "realised": round(self.realized, 2),
+            "unrealised": round(open_pnl, 2),
+            "mtm": round(self.realized + open_pnl, 2),
+            "charges": round(self.charges, 2),
+            "margin": margin,
+            # NEVER just a number: the model reads several times a broker basket on a hedged
+            # spread, so a "% of margin" against it is only as honest as this label.
+            "margin_source": source,
+            "capital": self.capital,
+            "legs_open": len([leg for leg in self.legs if leg.enabled]),
+        }
 
     # ----------------------------------------------------------------- probe
     def probe(self, right: str, strike: float, *, look_back_days: int = 10) -> dict:
@@ -377,8 +669,10 @@ class ConsoleSession:
                 "quoted": quoted, "total": 2 * len(rows),
                 "rows": rows,
             },
-            "legs": [], "staged": None,
-            "risk": {"margin_source": "manual" if self.margin_per_lot_set else "model"},
+            "legs": [self._leg_out(leg) for leg in self.legs],
+            "staged": self._staged_out(),
+            "risk": self._risk_out(),
+            "fills": self.fills[-40:],
             "alerts": [],
             "pricing": {"r": RISK_FREE, "q": 0.0, "t_floor_s": T_FLOOR_S,
                         "expiry_time": EXPIRY_TIME.strftime("%H:%M")},

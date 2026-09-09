@@ -1987,12 +1987,35 @@ export interface ConsoleState {
     quoted: number; total: number;
     rows: ConsoleChainRow[];
   };
-  legs: unknown[];
-  staged: unknown | null;
-  risk: { margin_source: string };
+  legs: ConsoleLeg[];
+  staged: ConsoleStaged | null;
+  risk: ConsoleRisk;
+  fills: { at: string; symbol: string; action: string; units: number; price: number; charges: number }[];
   alerts: unknown[];
   pricing: { r: number; q: number; t_floor_s: number; expiry_time: string };
   notes: string[];
+}
+
+export interface ConsoleLeg {
+  id: string; symbol: string; right: "CE" | "PE"; strike: number; expiry: string;
+  side: "B" | "S"; lots: number; lot_size: number; units: number; direction: number;
+  entry: number; ltp: number | null; pnl: number | null;
+  enabled: boolean; realized: number;
+}
+
+export interface ConsoleStaged {
+  kind: "add" | "exit" | "toggle" | "flatten";
+  label: string;
+  after_legs: ConsoleLeg[];
+  margin_before: number; margin_after: number; margin_source: string;
+  leg_id?: string; lots?: number; price?: number;
+}
+
+export interface ConsoleRisk {
+  realised: number; unrealised: number; mtm: number; charges: number;
+  margin: number;
+  margin_source: string;   // "manual" = a measured anchor, "model" = hedge-blind estimate
+  capital: number; legs_open: number;
 }
 
 export interface ConsoleProbe {

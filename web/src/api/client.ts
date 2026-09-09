@@ -177,6 +177,16 @@ export const api = {
     op: "step" | "seek" | "sod" | "eod" | "day"; minutes?: number; days?: number; at?: string;
   }) => request<ConsoleState>(`/console/sessions/${id}/transport`,
     { method: "POST", body: JSON.stringify(body) }),
+  consoleStage: (id: string, body: {
+    kind: "add" | "exit" | "toggle" | "flatten";
+    right?: "CE" | "PE"; strike?: number; side?: "B" | "S"; lots?: number;
+    leg_id?: string; enabled?: boolean;
+  }) => request<ConsoleState>(`/console/sessions/${id}/stage`,
+    { method: "POST", body: JSON.stringify(body) }),
+  consoleCommit: (id: string) =>
+    request<ConsoleState>(`/console/sessions/${id}/commit`, { method: "POST" }),
+  consoleDiscard: (id: string) =>
+    request<ConsoleState>(`/console/sessions/${id}/discard`, { method: "POST" }),
   consoleProbe: (id: string, right: "CE" | "PE", strike: number) =>
     request<ConsoleProbe>(`/console/sessions/${id}/probe?right=${right}&strike=${strike}`),
   consoleChain: (id: string, q: { expiry?: string; window?: number; allow_fifty_strikes?: boolean }) => {
