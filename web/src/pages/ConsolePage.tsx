@@ -601,6 +601,38 @@ export default function ConsolePage() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const firedSeen = useRef<string>("");
+  const [notice, setNotice] = useState<string | null>(null);
+  // The latest state, readable from inside a mutation without re-creating it.
+  const stateRef = useRef<ConsoleState | null>(null);
+  useEffect(() => { stateRef.current = state; }, [state]);
+
+  // A session lives in the backend's memory. A restart or an eviction drops it, and until
+  // 2026-09-09 every click after that failed with a 404 nobody read — "the lots stepper
+  // does nothing" was a dead session. Now any call that finds the session gone reopens
+  // one at the same day/minute/expiry, hands back the journal and alerts the page still
+  // holds, and retries ONCE against the new id. The book comes back exactly as a seek
+  // would rebuild it.
+  const lost = (e: unknown) =>
+    e instanceof Error && e.message.startsWith("404") && /session not found/.test(e.message);
+  const call = async <T,>(fn: (id: string) => Promise<T>): Promise<T> => {
+    const cur = stateRef.current;
+    if (!cur) throw new Error("no session");
+    try {
+      return await fn(cur.session.id);
+    } catch (e) {
+      if (!lost(e)) throw e;
+      const fresh = await api.consoleOpen({
+        underlying: cur.session.underlying, day: cur.session.date, at: cur.session.clock,
+        expiry: cur.chain.expiry ?? undefined, capital: cur.session.capital,
+        restore: { journal: cur.journal ?? [], alerts: cur.alerts ?? [] },
+      });
+      stateRef.current = fresh;
+      setState(fresh);
+      setNotice(`Session restored — the backend had dropped it. ${fresh.legs.length} leg${
+        fresh.legs.length === 1 ? "" : "s"} rebuilt from the journal.`);
+      return fn(fresh.session.id);
+    }
+  };
 
   const { data: days } = useQuery({
     queryKey: ["console-days", underlying],
@@ -621,9 +653,9 @@ export default function ConsolePage() {
 
   const move = useMutation({
     mutationFn: (body: Parameters<typeof api.consoleTransport>[1]) =>
-      api.consoleTransport(state!.session.id, body),
+      call((id) => api.consoleTransport(id, body)),
     onSuccess: (s) => {
-      setState(s); setDay(s.session.date);
+      setState(s); setDay(s.session.date); setError(null);
       setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock },
         { replace: true });
     },
@@ -632,12 +664,12 @@ export default function ConsolePage() {
 
   const armAlert = useMutation({
     mutationFn: (body: Parameters<typeof api.consoleArmAlert>[1]) =>
-      api.consoleArmAlert(state!.session.id, body),
+      call((id) => api.consoleArmAlert(id, body)),
     onSuccess: (s) => { setState(s); setError(null); },
     onError: (e: Error) => setError(e.message),
   });
   const clearAlert = useMutation({
-    mutationFn: (aid: string) => api.consoleClearAlert(state!.session.id, aid),
+    mutationFn: (aid: string) => call((id) => api.consoleClearAlert(id, aid)),
     onSuccess: setState,
   });
 
@@ -674,30 +706,30 @@ export default function ConsolePage() {
 
   const stage = useMutation({
     mutationFn: (body: Parameters<typeof api.consoleStage>[1]) =>
-      api.consoleStage(state!.session.id, body),
+      call((id) => api.consoleStage(id, body)),
     onSuccess: (s) => { setState(s); setError(null); },
     onError: (e: Error) => setError(e.message),
   });
   const commit = useMutation({
-    mutationFn: () => api.consoleCommit(state!.session.id),
+    mutationFn: () => call((id) => api.consoleCommit(id)),
     onSuccess: (s) => { setState(s); setError(null); },
     onError: (e: Error) => setError(e.message),
   });
   const undo = useMutation({
-    mutationFn: () => api.consoleUndo(state!.session.id),
+    mutationFn: () => call((id) => api.consoleUndo(id)),
     onSuccess: setState,
   });
   const reset = useMutation({
-    mutationFn: () => api.consoleReset(state!.session.id),
+    mutationFn: () => call((id) => api.consoleReset(id)),
     onSuccess: setState,
   });
   const discard = useMutation({
-    mutationFn: () => api.consoleDiscard(state!.session.id),
+    mutationFn: () => call((id) => api.consoleDiscard(id)),
     onSuccess: setState,
   });
 
   const pickExpiry = useMutation({
-    mutationFn: (expiry: string) => api.consoleChain(state!.session.id, { expiry }),
+    mutationFn: (expiry: string) => call((id) => api.consoleChain(id, { expiry })),
     onSuccess: setState,
   });
 
@@ -763,7 +795,7 @@ export default function ConsolePage() {
     if (!state) return;
     const key = `${right}${strike}`;
     try {
-      const r = await api.consoleProbe(state.session.id, right, strike);
+      const r = await call((id) => api.consoleProbe(id, right, strike));
       setProbed((p) => ({ ...p, [key]: r }));
     } catch {
       setProbed((p) => ({ ...p, [key]: { symbol: key, found: false } }));
@@ -933,6 +965,14 @@ export default function ConsolePage() {
       {error && (
         <div className="px-3 py-2 text-[12px]"
           style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>{error}</div>
+      )}
+      {notice && (
+        <div className="px-3 py-1.5 text-[12px] flex items-center gap-3"
+          style={{ background: "var(--oc-caution-dim)", color: "var(--oc-caution)" }}>
+          {notice}
+          <button type="button" className="ml-auto underline" onClick={() => setNotice(null)}>
+            dismiss</button>
+        </div>
       )}
 
       {/* body: chain 560 · analysis flex · rail 348 */}

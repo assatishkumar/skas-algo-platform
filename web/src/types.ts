@@ -1994,6 +1994,10 @@ export interface ConsoleState {
   staged: ConsoleStaged | null;
   risk: ConsoleRisk;
   fills: { at: string; symbol: string; action: string; units: number; price: number; charges: number }[];
+  // The whole tape of the owner's actions (not just the slice ≤ cursor). The page hands
+  // it back when the backend has lost the session, so the book survives a restart.
+  journal: { at: string; symbol: string; action: string; group: number | null;
+    units: number; price: number; charges: number }[];
   alerts: ConsoleAlert[];
   pricing: { r: number; q: number; t_floor_s: number; expiry_time: string };
   notes: string[];

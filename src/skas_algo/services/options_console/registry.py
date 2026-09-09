@@ -6,8 +6,12 @@ Module-level and lock-guarded, the shape every other shared-state holder here us
 long-lived, interactive, and there can be a few at once.
 
 Capped and swept, because a day's tape is ~150k prints held as parallel lists (~20 MB) and
-the VPS is a 911 MB swapless box already running the live loop. Three sessions, LRU, with
-anything idle past the TTL dropped on touch.
+the VPS is a 911 MB swapless box already running the live loop. LRU, with anything idle
+past the TTL dropped on touch. The cap was THREE until 2026-09-09: a second browser on the
+same backend (a Chrome test tab beside the owner's) evicted the owner's session mid-trade,
+and every click after that 404'd with the book gone — "the lots stepper does nothing".
+Eight sessions and a three-hour idle window; and a lost session is now RESTORABLE from the
+journal the page holds (`ConsoleOpen.restore`), so eviction costs a reopen, not the book.
 """
 
 from __future__ import annotations
@@ -20,8 +24,8 @@ from .session import ConsoleSession
 
 logger = logging.getLogger("skas_algo.console")
 
-MAX_SESSIONS = 3
-IDLE_TTL = timedelta(minutes=30)
+MAX_SESSIONS = 8
+IDLE_TTL = timedelta(hours=3)
 
 _LOCK = threading.Lock()
 _SESSIONS: dict[str, ConsoleSession] = {}

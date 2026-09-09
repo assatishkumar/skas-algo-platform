@@ -171,6 +171,7 @@ export const api = {
   consoleOpen: (body: {
     underlying: string; day?: string | null; at?: string | null; expiry?: string | null;
     capital?: number; strike_window?: number; allow_fifty_strikes?: boolean;
+    restore?: { journal: ConsoleState["journal"]; alerts: ConsoleState["alerts"] };
   }) => request<ConsoleState>("/console/sessions", { method: "POST", body: JSON.stringify(body) }),
   consoleGet: (id: string) => request<ConsoleState>(`/console/sessions/${id}`),
   consoleTransport: (id: string, body: {

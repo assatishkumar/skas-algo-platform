@@ -685,6 +685,35 @@ class ConsoleSession:
             self.journal.append(row)
         return c["total"]
 
+    def restore(self, journal: list[dict], alerts: list[dict] | None = None) -> None:
+        """Rebuild a LOST session from the journal the page kept.
+
+        The registry is in-process: a backend restart or an eviction drops the object, and
+        before this every click after that was a 404 with the book gone. The page holds the
+        full journal in its last state, so a new session on the same day can take it back
+        and re-derive the book at the cursor exactly as a seek does. SETTLE rows are dropped
+        and re-derived (the market's action, not the owner's); alerts come back armed and are
+        re-evaluated at the cursor, so one that had fired fires again at the same minute."""
+        rows = []
+        for f in journal:
+            if f.get("action") == "SETTLE":
+                continue
+            rows.append({"at": str(f["at"]), "symbol": str(f["symbol"]),
+                         "action": str(f["action"]), "group": f.get("group"),
+                         "units": float(f["units"]), "price": float(f["price"]),
+                         "charges": float(f.get("charges") or 0.0)})
+        rows.sort(key=lambda f: f["at"])
+        self.journal = rows
+        self._group = max([int(f["group"]) for f in rows if f.get("group")] or [0])
+        self.alerts = []
+        for a in alerts or []:
+            try:
+                self.arm_alert(str(a["kind"]), float(a["value"]), note=a.get("note"))
+            except (KeyError, ValueError, TypeError):
+                continue
+        self._settle_expired()
+        self._replay_book(self.clock, force=True)
+
     def reset_book(self) -> None:
         """Start again: no legs, no journal, no realised, no charges.
 
@@ -1002,6 +1031,7 @@ class ConsoleSession:
             "staged": self._staged_out(),
             "risk": {**risk, "greeks": greeks},
             "fills": self.fills[-40:],
+            "journal": self.journal,          # the whole tape of actions — what a restore needs
             "alerts": self._alerts_out(),
             "pricing": {"r": RISK_FREE, "q": 0.0, "t_floor_s": T_FLOOR_S,
                         "expiry_time": EXPIRY_TIME.strftime("%H:%M")},

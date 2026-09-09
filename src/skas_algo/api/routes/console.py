@@ -59,6 +59,12 @@ async def open_session(body: ConsoleOpen) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if body.restore and (body.restore.journal or body.restore.alerts):
+        try:
+            await asyncio.to_thread(session.restore, body.restore.journal, body.restore.alerts)
+        except (KeyError, ValueError, TypeError) as exc:
+            registry.drop(session.id)
+            raise HTTPException(status_code=422, detail=f"restore failed: {exc}") from exc
     return session.state()
 
 

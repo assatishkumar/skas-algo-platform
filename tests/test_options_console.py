@@ -727,3 +727,37 @@ def test_a_spot_alert_reads_the_parity_spot():
     assert [a["state"] for a in st["alerts"]] == ["fired", "armed"]
     with pytest.raises(ValueError):
         s.arm_alert("sideways", 1.0)
+
+
+def test_a_lost_session_is_rebuilt_from_the_journal_the_page_kept():
+    """The registry is in-process; a restart or an eviction drops the object. Before this
+    every click after that was a 404 with the book gone ("the lots stepper does nothing",
+    owner 2026-09-09). A new session on the same day takes the page's journal + alerts
+    back and re-derives the book at the cursor exactly as a seek would."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.seek("10:30")
+    s.stage(kind="add", right="PE", strike=24000, side="S", lots=1)
+    s.stage(kind="exit", leg_id=s.legs[0].id, lots=1)
+    s.arm_alert("target", 50.0)
+    s.seek("11:00")
+    before = s.state()
+
+    fresh = _open(at="11:00")
+    fresh.restore(before["journal"], before["alerts"])
+    after = fresh.state()
+    assert [(l["strike"], l["right"], l["side"], l["lots"], l["entry"]) for l in after["legs"]] == \
+        [(l["strike"], l["right"], l["side"], l["lots"], l["entry"]) for l in before["legs"]]
+    assert after["risk"]["mtm"] == pytest.approx(before["risk"]["mtm"])
+    assert after["risk"]["charges"] == pytest.approx(before["risk"]["charges"])
+    assert [a["kind"] for a in after["alerts"]] == ["target"]
+    # and it is a working session: the lots stepper now changes the size
+    fresh.stage(kind="resize", leg_id=fresh.legs[0].id, lots=fresh.legs[0].lots + 1)
+    assert fresh.legs[0].lots == before["legs"][0]["lots"] + 1
+    assert fresh.undo_last() is True          # undo reaches the restored groups too
+
+
+def test_registry_holds_more_than_a_handful():
+    """Three was enough for one browser and not for two on the same backend."""
+    assert registry.MAX_SESSIONS >= 8

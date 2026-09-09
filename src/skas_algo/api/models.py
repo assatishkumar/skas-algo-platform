@@ -95,6 +95,14 @@ class ConsoleOpen(BaseModel):
     strike_window: int = 20           # rows either side of ATM
     allow_fifty_strikes: bool = False  # §8 escape hatch, off by default
     margin_per_lot_set: float = 0.0   # the accurate %-of-margin anchor; 0 = model margin
+    # A lost session's journal + alerts, handed back by the page so the book survives a
+    # backend restart or a registry eviction. Applied after the open, at `at`.
+    restore: "ConsoleRestore | None" = None
+
+
+class ConsoleRestore(BaseModel):
+    journal: list[dict] = []
+    alerts: list[dict] = []
 
 
 class ConsoleTransport(BaseModel):
