@@ -17,6 +17,7 @@ from .routes import (
     auth,
     backtest,
     brokers,
+    console,
     data,
     health,
     live,
@@ -108,6 +109,7 @@ def create_app() -> FastAPI:
     app.include_router(alerts.router, prefix="/api/v1", dependencies=protected)
     app.include_router(backtest.router, prefix="/api/v1", dependencies=protected)
     app.include_router(brokers.router, prefix="/api/v1", dependencies=protected)
+    app.include_router(console.router, prefix="/api/v1", dependencies=protected)
     app.include_router(data.router, prefix="/api/v1", dependencies=protected)
     app.include_router(live.router, prefix="/api/v1", dependencies=protected)
     app.include_router(portfolio.router, prefix="/api/v1", dependencies=protected)

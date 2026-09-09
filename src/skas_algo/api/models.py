@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -80,6 +81,27 @@ class RunSummary(BaseModel):
     batch_id: str | None = None
     started_at: str | None
     metrics: dict
+
+
+class ConsoleOpen(BaseModel):
+    """Open an Options Console session (replay). ``day``/``at`` default to the newest
+    captured day at the session open."""
+
+    underlying: str = "NIFTY"
+    day: str | None = None            # ISO; None = the latest captured day
+    at: str | None = None             # "09:16"
+    expiry: str | None = None         # None = the nearest expiry that has not settled
+    capital: float = 500_000
+    strike_window: int = 20           # rows either side of ATM
+    allow_fifty_strikes: bool = False  # §8 escape hatch, off by default
+    margin_per_lot_set: float = 0.0   # the accurate %-of-margin anchor; 0 = model margin
+
+
+class ConsoleTransport(BaseModel):
+    op: Literal["step", "seek", "sod", "eod", "day"]
+    minutes: int = 0
+    days: int = 0
+    at: str | None = None
 
 
 class UniverseOut(BaseModel):

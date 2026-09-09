@@ -9,6 +9,7 @@ import AnalysisPage from "./pages/AnalysisPage";
 import BacktestPage from "./pages/BacktestPage";
 import BrokersPage from "./pages/BrokersPage";
 import ComparePage from "./pages/ComparePage";
+import ConsolePage from "./pages/ConsolePage";
 import DataPage from "./pages/DataPage";
 import DonchianLivePage from "./pages/DonchianLivePage";
 import HomePage from "./pages/HomePage";
@@ -58,7 +59,7 @@ function ThemeToggle() {
 /** Mobile-only bottom tab bar (md:hidden) — the installed-PWA navigation. Home indicator
  * safe-area padded; "More" opens a small sheet with the secondary destinations. Desktop
  * keeps the top nav untouched. */
-const MORE_PATHS = ["/trade", "/portfolio", "/data", "/brokers", "/docs"];
+const MORE_PATHS = ["/trade", "/console", "/portfolio", "/data", "/brokers", "/docs"];
 
 function TabIcon({ d }: { d: string }) {
   return (
@@ -121,7 +122,8 @@ function MobileTabBar() {
   );
 }
 
-const FULL_BLEED = new Set(["/", "/backtest", "/live", "/trade", "/brokers", "/portfolio"]);
+const FULL_BLEED = new Set(["/", "/backtest", "/live", "/trade", "/console", "/brokers",
+                            "/portfolio"]);
 
 function LogoutButton() {
   // Only meaningful when a token exists (auth-enabled host). Hard redirect so all state resets.
@@ -183,6 +185,7 @@ export default function App() {
             <NavItem to="/backtest" label="Backtest" />
             <NavItem to="/trade" label="Trade" />
             <NavItem to="/live" label="Live" />
+            <NavItem to="/console" label="Console" />
             <NavItem to="/analyze" label="Analyze" />
             <NavItem to="/portfolio" label="Portfolio" />
             <NavItem to="/docs" label="Docs" />
@@ -199,6 +202,7 @@ export default function App() {
           <Route path="/backtest" element={<BacktestPage />} />
           <Route path="/trade" element={<TradePage />} />
           <Route path="/live" element={<LivePage />} />
+          <Route path="/console" element={<ConsolePage />} />
           {/* Legacy path — renders the SAME registry-driven page so old links and
               the forward-test router state keep working (a <Navigate> would drop state). */}
           <Route path="/live/new" element={<TradePage />} />

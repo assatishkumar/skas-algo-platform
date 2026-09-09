@@ -51,6 +51,8 @@ import type {
   StartLiveRequest,
   StrategyTemplate,
   Trade,
+  ConsoleDays,
+  ConsoleState,
   Universe,
   CpRatioExpiryDeploy,
   FairValueCalendarDeploy,
@@ -161,6 +163,26 @@ export const api = {
     request<{ job_id: string }>("/backtest/intraday", { method: "POST", body: JSON.stringify(body) }),
   backtestIntradayProgress: () => request<ReplayJobSnapshot>("/backtest/intraday/progress"),
   universes: () => request<Universe[]>("/universes"),
+
+  // Options Console (replay). Every mutating call answers with the whole ConsoleState.
+  consoleDays: (underlying: string) =>
+    request<ConsoleDays>(`/console/days?underlying=${encodeURIComponent(underlying)}`),
+  consoleOpen: (body: {
+    underlying: string; day?: string | null; at?: string | null; expiry?: string | null;
+    capital?: number; strike_window?: number; allow_fifty_strikes?: boolean;
+  }) => request<ConsoleState>("/console/sessions", { method: "POST", body: JSON.stringify(body) }),
+  consoleGet: (id: string) => request<ConsoleState>(`/console/sessions/${id}`),
+  consoleTransport: (id: string, body: {
+    op: "step" | "seek" | "sod" | "eod" | "day"; minutes?: number; days?: number; at?: string;
+  }) => request<ConsoleState>(`/console/sessions/${id}/transport`,
+    { method: "POST", body: JSON.stringify(body) }),
+  consoleChain: (id: string, q: { expiry?: string; window?: number; allow_fifty_strikes?: boolean }) => {
+    const p = new URLSearchParams();
+    if (q.expiry) p.set("expiry", q.expiry);
+    if (q.window != null) p.set("window", String(q.window));
+    if (q.allow_fifty_strikes != null) p.set("allow_fifty_strikes", String(q.allow_fifty_strikes));
+    return request<ConsoleState>(`/console/sessions/${id}/chain?${p}`, { method: "POST" });
+  },
   // cachedOnly=false → the FULL static list (the cache-refresh flow: an empty cache must
   // not 404 the button that populates it).
   universeSymbols: (name: string, cachedOnly = true) =>

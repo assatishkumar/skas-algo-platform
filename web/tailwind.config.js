@@ -16,6 +16,9 @@ export default {
   darkMode: "class",
   theme: {
     extend: {
+      // The Options Console ships its own type from its design handoff; scoped to the
+      // console via `font-plex` on .oc-root, so no other page changes.
+      fontFamily: { plex: ['"IBM Plex Sans"', "system-ui", "sans-serif"] },
       colors: {
         brand: {
           DEFAULT: "#0f766e",

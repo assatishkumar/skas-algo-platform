@@ -1935,3 +1935,62 @@ export interface LoginResponse {
   access_token: string;
   token_type: string;
 }
+
+
+// ---------------------------------------------------------------- Options Console
+// Mirrors services/options_console/session.py::ConsoleSession.state() exactly. Every
+// mutating console call returns the WHOLE state, so this is the one shape the page
+// renders — see tests/test_options_console_contract.py, which parses this file and the
+// Python model and refuses to let the two drift.
+
+export interface ConsoleChainLeg {
+  ltp: number | null;
+  oi: number | null;
+  iv: number | null;      // whole percent, e.g. 25.34
+  delta: number | null;
+  quoted: boolean;        // false = never printed / outside the stale window
+  stale_min: number | null;
+}
+
+export interface ConsoleChainRow {
+  strike: number;
+  atm: boolean;
+  itm_ce: boolean;
+  itm_pe: boolean;
+  ce: ConsoleChainLeg;
+  pe: ConsoleChainLeg;
+}
+
+export interface ConsoleState {
+  session: {
+    id: string; mode: string; underlying: string; lot_size: number;
+    date: string; clock: string; range: [string, string]; played_pct: number;
+    capital: number; status: string;
+    has_prev_day: boolean; has_next_day: boolean;
+  };
+  market: {
+    spot: number | null; fut: number | null; basis: number | null;
+    prev_close: number | null;
+    day_open: number | null; day_high: number | null; day_low: number | null;
+    expiry: string | null; dte: number | null;
+  };
+  chain: {
+    expiry: string | null;
+    expiries: { iso: string; dte: number }[];
+    atm_strike: number | null; lot_size: number;
+    listing_grid: boolean; window: number;
+    quoted: number; total: number;
+    rows: ConsoleChainRow[];
+  };
+  legs: unknown[];
+  staged: unknown | null;
+  risk: { margin_source: string };
+  alerts: unknown[];
+  pricing: { r: number; q: number; t_floor_s: number; expiry_time: string };
+  notes: string[];
+}
+
+export interface ConsoleDays {
+  underlying: string; underlyings: string[];
+  days: string[]; first: string | null; last: string | null;
+}

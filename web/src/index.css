@@ -118,3 +118,38 @@ input[type="number"] {
 
 /* Donchian detail drawer slide-in (transform only — resting state fully opaque). */
 @keyframes drawerIn { from { transform: translateX(34px); } to { transform: translateX(0); } }
+
+/* ---------------------------------------------------------------- Options Console
+   The console ships its OWN palette from its design handoff (indigo #3A44C8, not the
+   app's teal), so every token is --oc-* and scoped to .oc-root. Nothing outside the
+   console can see these, and nothing inside reads the app's tokens — the two accents
+   would otherwise fight on the same screen.
+
+   The handoff defines a dark set but ships no dark artboard; it is filled in here so the
+   app's existing theme toggle drives the console for free (.dark sits on <html>, an
+   ancestor of .oc-root). Numerals are tabular at the root rather than per element. */
+.oc-root {
+  --oc-ground: #F1F4F5;  --oc-surface: #FFFFFF;  --oc-panel2: #F7F9FA;
+  --oc-strike: #F2F5F6;  --oc-chip: #EDF1F3;
+  --oc-line: #D5DEE2;    --oc-hair: #E7EDF0;
+  --oc-ink: #0F171C;     --oc-muted: #697A83;    --oc-faint: #93A1A8;
+  --oc-accent: #3A44C8;
+  --oc-accent-dim: rgba(58, 68, 200, .09);
+  --oc-accent-tint: rgba(58, 68, 200, .045);
+  --oc-pos: #10784F;     --oc-pos-fill: rgba(16, 120, 79, .09);
+  --oc-neg: #BE3026;     --oc-neg-fill: rgba(190, 48, 38, .06);
+  --oc-caution: #96650C; --oc-caution-dim: rgba(150, 101, 12, .12);
+  font-feature-settings: 'tnum' 1;
+}
+.dark .oc-root {
+  --oc-ground: #0C1114;  --oc-surface: #141B20;  --oc-panel2: #101820;
+  --oc-strike: #101820;  --oc-chip: #1B242B;
+  --oc-line: #26323A;    --oc-hair: #1D272E;
+  --oc-ink: #E7EDF0;     --oc-muted: #8496A0;    --oc-faint: #6C7C86;
+  --oc-accent: #949BFF;
+  --oc-accent-dim: rgba(148, 155, 255, .14);
+  --oc-accent-tint: rgba(148, 155, 255, .07);
+  --oc-pos: #4FC08D;     --oc-pos-fill: rgba(79, 192, 141, .10);
+  --oc-neg: #F0736A;     --oc-neg-fill: rgba(240, 115, 106, .08);
+  --oc-caution: #D9A93E; --oc-caution-dim: rgba(217, 169, 62, .16);
+}
