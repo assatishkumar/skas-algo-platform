@@ -363,19 +363,30 @@ function LegRow({ leg, grid, onStage }: {
       <td className="text-right" style={{ color: "var(--oc-muted)" }}>
         {value == null ? "—" : inr0(value)}
       </td>
+      {/* HOW MANY of the held lots to exit — not the position size (that is the Lots
+          column). With one lot held there is nothing to choose, and a − 1 + that could not
+          move read as a broken size stepper (owner, 2026-09-09): the selector only appears
+          for a multi-lot leg, and its buttons grey out at the ends. */}
       <td className="text-right whitespace-nowrap">
-        <span className="inline-flex items-center gap-[3px] mr-1.5">
-          <MiniBtn onClick={() => setExitLots((n) => Math.max(1, n - 1))}>−</MiniBtn>
-          <span className="text-[10.5px] tabular-nums"
-            style={{ minWidth: 16, display: "inline-block", textAlign: "center" }}>
-            {exitLots}</span>
-          <MiniBtn onClick={() => setExitLots((n) => Math.min(leg.lots, n + 1))}>+</MiniBtn>
-        </span>
+        {leg.lots > 1 && (
+          <span className="inline-flex items-center gap-[3px] mr-1.5"
+            title={`how many of the ${leg.lots} lots to exit`}>
+            <MiniBtn disabled={exitLots <= 1}
+              onClick={() => setExitLots((n) => Math.max(1, n - 1))}>−</MiniBtn>
+            <span className="text-[10.5px] tabular-nums"
+              style={{ minWidth: 16, display: "inline-block", textAlign: "center" }}>
+              {exitLots}</span>
+            <MiniBtn disabled={exitLots >= leg.lots}
+              onClick={() => setExitLots((n) => Math.min(leg.lots, n + 1))}>+</MiniBtn>
+          </span>
+        )}
         <button type="button"
           onClick={() => onStage({ kind: "exit", leg_id: leg.id, lots: exitLots })}
+          title={leg.lots > 1 ? `close ${exitLots} of ${leg.lots} lots at the cursor's price`
+            : "close this leg at the cursor's price"}
           className="px-2 h-[20px] rounded-[4px] text-[10.5px]"
           style={{ border: "1px solid var(--oc-line)", color: "var(--oc-accent)" }}>
-          Exit {exitLots === leg.lots ? "all" : exitLots}</button>
+          Exit {exitLots === leg.lots ? "all" : `${exitLots} of ${leg.lots}`}</button>
       </td>
     </tr>
   );
@@ -396,10 +407,12 @@ function Stepper({ children, onDown, onUp, title }: {
   );
 }
 
-function MiniBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+function MiniBtn({ children, onClick, disabled }: {
+  children: React.ReactNode; onClick: () => void; disabled?: boolean;
+}) {
   return (
-    <button type="button" onClick={onClick}
-      className="w-[18px] h-[18px] rounded-[4px] text-[11px] leading-[17px] shrink-0"
+    <button type="button" onClick={onClick} disabled={disabled}
+      className="w-[18px] h-[18px] rounded-[4px] text-[11px] leading-[17px] shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
       style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>{children}</button>
   );
 }
@@ -1221,13 +1234,13 @@ export default function ConsolePage() {
                 <th className="text-left font-semibold py-1">On</th>
                 <th className="text-left font-semibold">Side</th>
                 <th className="text-left font-semibold">Strike</th>
-                <th className="text-left font-semibold">Lots</th>
+                <th className="text-left font-semibold" title="add to or trim the position">Lots (− +)</th>
                 <th className="text-right font-semibold">Entry</th>
                 <th className="text-right font-semibold">LTP</th>
                 <th className="text-right font-semibold" title="per share, position-signed · IV">Δ · IV</th>
                 <th className="text-right font-semibold">P&amp;L</th>
                 <th className="text-right font-semibold">Value</th>
-                <th className="text-right font-semibold">Exit</th>
+                <th className="text-right font-semibold" title="close some or all lots">Exit</th>
               </tr>
             </thead>
             <tbody>
