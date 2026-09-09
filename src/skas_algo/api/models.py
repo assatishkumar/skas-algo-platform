@@ -117,6 +117,12 @@ class ConsoleStage(BaseModel):
     replace: bool = False     # True = start a fresh basket instead of adding to it
 
 
+class ConsoleAlert(BaseModel):
+    kind: Literal["target", "stop", "delta", "above", "below"]
+    value: float
+    note: str | None = None
+
+
 class UniverseOut(BaseModel):
     name: str
     label: str

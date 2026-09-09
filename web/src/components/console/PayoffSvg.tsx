@@ -14,7 +14,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { buildLivePayoff, computeMetrics, type LiveLeg } from "../../lib/payoff";
-import type { ConsoleLeg } from "../../types";
+import type { ConsoleAlert, ConsoleLeg } from "../../types";
 
 const MINUS = "−";
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -34,13 +34,19 @@ export function toPayoffLegs(legs: ConsoleLeg[]): LiveLeg[] {
   }));
 }
 
-export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight = 220 }: {
+export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight = 220,
+  alerts = [], realised = 0 }: {
   legs: ConsoleLeg[];
   staged: ConsoleLeg[] | null;
   spot: number | null;
   expiry: string | null;
   today: string;
   minHeight?: number;
+  // Armed levels, drawn amber. A target/stop is a level of TOTAL MTM, and the chart's y is
+  // the open book's P&L, so the line sits at (level − realised): the chart shows where the
+  // book has to get to, not where the number is.
+  alerts?: ConsoleAlert[];
+  realised?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(462);
@@ -87,8 +93,12 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   const pts = (data ?? ghostData)!.data;
   const gpts = ghostData?.data ?? [];
   const xs = pts.map((p) => p.spot);
+  const hLines = alerts.flatMap((a) =>
+    a.kind === "target" ? [{ a, y: a.value - realised }]
+    : a.kind === "stop" ? [{ a, y: -Math.abs(a.value) - realised }] : []);
+  const vLines = alerts.filter((a) => a.kind === "above" || a.kind === "below");
   const ys = [...pts.map((p) => p.expiry), ...pts.map((p) => p.now),
-              ...gpts.map((p) => p.expiry)];
+              ...gpts.map((p) => p.expiry), ...hLines.map((h) => h.y)];
   const x0 = Math.min(...xs), x1 = Math.max(...xs);
   const yLo = Math.min(0, ...ys) * 1.08, yHi = Math.max(0, ...ys) * 1.08;
   const L = 8, R = 62, T = 12, B = 20;
@@ -162,6 +172,27 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
             <circle cx={px(b)} cy={zero} r={3.5} fill="none" stroke="var(--oc-accent)" strokeWidth={1.4} />
             <text x={px(b)} y={zero - 7} textAnchor="middle" fontSize={9}
               fill="var(--oc-accent)">BE {Math.round(b).toLocaleString("en-IN")}</text>
+          </g>
+        ))}
+        {/* alert levels — amber, dashed while armed, solid once fired */}
+        {hLines.map(({ a, y }) => (
+          <g key={a.id}>
+            <line x1={L} x2={w - R} y1={py(y)} y2={py(y)} stroke="var(--oc-caution)"
+              strokeWidth={1.2} strokeDasharray={a.state === "fired" ? undefined : "6 3"} />
+            <text x={L + 3} y={py(y) - 3} fontSize={9} fill="var(--oc-caution)">
+              {a.kind} {inr(a.kind === "stop" ? -Math.abs(a.value) : a.value)}
+              {a.state === "fired" ? ` · fired ${a.fired_at?.slice(11) ?? ""}` : ""}
+            </text>
+          </g>
+        ))}
+        {vLines.filter((a) => a.value >= x0 && a.value <= x1).map((a) => (
+          <g key={a.id}>
+            <line x1={px(a.value)} x2={px(a.value)} y1={T} y2={height - B}
+              stroke="var(--oc-caution)" strokeWidth={1.2}
+              strokeDasharray={a.state === "fired" ? undefined : "6 3"} />
+            <text x={px(a.value) + 3} y={height - B - 4} fontSize={9} fill="var(--oc-caution)">
+              {a.kind} {Math.round(a.value).toLocaleString("en-IN")}
+            </text>
           </g>
         ))}
         <line x1={px(spot)} x2={px(spot)} y1={T} y2={height - B} stroke="var(--oc-accent)"

@@ -16,7 +16,7 @@ from datetime import date
 
 from fastapi import APIRouter, HTTPException
 
-from skas_algo.api.models import ConsoleOpen, ConsoleStage, ConsoleTransport
+from skas_algo.api.models import ConsoleAlert, ConsoleOpen, ConsoleStage, ConsoleTransport
 from skas_algo.data.option_intraday_store import captured_days
 from skas_algo.services.options_console import registry
 from skas_algo.services.options_console.session import UNDERLYINGS, ConsoleSession
@@ -113,6 +113,26 @@ async def stage(session_id: str, body: ConsoleStage) -> dict:
         await asyncio.to_thread(lambda: session.stage(**body.model_dump()))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
+
+
+@router.post("/sessions/{session_id}/alerts")
+def arm_alert(session_id: str, body: ConsoleAlert) -> dict:
+    """Arm a level. It trips ONCE at the cursor's minute, draws on the chart and the rail,
+    and the page pauses autoplay on it — the "would I have caught that" moment a replay
+    exists for. A rewind past the minute re-arms it."""
+    session = _get(session_id)
+    try:
+        session.arm_alert(body.kind, body.value, note=body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
+
+
+@router.delete("/sessions/{session_id}/alerts/{alert_id}")
+def clear_alert(session_id: str, alert_id: str) -> dict:
+    session = _get(session_id)
+    session.clear_alert(alert_id)
     return session.state()
 
 

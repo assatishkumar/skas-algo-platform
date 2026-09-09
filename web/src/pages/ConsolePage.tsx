@@ -12,10 +12,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type {
+import type { ConsoleAlert,
   ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleProbe, ConsoleState,
 } from "../types";
 import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
+import { buildLivePayoff } from "../lib/payoff";
 import { computeMetrics } from "../lib/payoff";
 
 /* ------------------------------------------------------------------ formatting
@@ -63,7 +64,24 @@ const KEYS: { keys: string; does: string }[] = [
   { keys: "[  ]", does: "previous / next trading day (keeps the time)" },
   { keys: "Home / End", does: "session open / close" },
   { keys: "U", does: "undo the last action" },
+  { keys: "Space", does: "play / pause the replay at the chosen speed" },
   { keys: "?", does: "show or hide this list" },
+];
+
+/** Autoplay speeds — replay-minutes per wall-second. Labelled the way the handoff labels
+ *  them ("1m/2s" = one minute every two seconds) so the chip says what it does. */
+const SPEEDS: { label: string; minutes: number; ms: number }[] = [
+  { label: "1m/2s", minutes: 1, ms: 2000 },
+  { label: "1m/1s", minutes: 1, ms: 1000 },
+  { label: "5m/1s", minutes: 5, ms: 1000 },
+  { label: "15m/1s", minutes: 15, ms: 1000 },
+];
+const ALERT_KINDS: { kind: ConsoleAlert["kind"]; label: string; hint: string }[] = [
+  { kind: "target", label: "Target", hint: "₹ total MTM at or above" },
+  { kind: "stop", label: "Stop", hint: "₹ loss at or beyond (enter a positive number)" },
+  { kind: "delta", label: "|Δ|", hint: "net position delta in units, at or above" },
+  { kind: "above", label: "Spot ≥", hint: "spot at or above" },
+  { kind: "below", label: "Spot ≤", hint: "spot at or below" },
 ];
 
 const chipBase = "h-[22px] px-2 rounded-[5px] text-[10.5px] font-semibold leading-[22px] "
@@ -166,6 +184,117 @@ function Tile({ label, value, sub, tone }: {
   );
 }
 
+function GreekCell({ label, v, dp, unit, inr }: {
+  label: string; v: number | null | undefined; dp: number; unit?: string; inr?: boolean;
+}) {
+  return (
+    <div className="rounded-[6px] px-2 py-1" style={{ background: "var(--oc-panel2)" }}>
+      <div className="text-[9px] font-semibold uppercase tracking-[.06em]"
+        style={{ color: "var(--oc-faint)" }}>{label}</div>
+      <div className="text-[12px] font-semibold tabular-nums whitespace-nowrap"
+        style={{ color: v == null ? "var(--oc-faint)" : "var(--oc-ink)" }}>
+        {v == null ? "—" : inr ? inr0(v) : signed(v, dp)}
+        {v != null && unit ? <span className="text-[9.5px] font-normal"
+          style={{ color: "var(--oc-faint)" }}> {unit}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+/** T+0 value of the book if spot were HERE, right now — and the change against the
+ *  current mark, which is the number a hedger actually reads. */
+function ScenarioCell({ label, v, base }: {
+  label: string; v: number | null | undefined; base: number | null | undefined;
+}) {
+  const d = v != null && base != null ? v - base : null;
+  return (
+    <div className="rounded-[6px] px-2 py-1"
+      style={{ background: "var(--oc-panel2)", borderLeft: "2px solid var(--oc-accent-dim)" }}>
+      <div className="text-[9px] font-semibold uppercase tracking-[.06em]"
+        style={{ color: "var(--oc-faint)" }}>T+0 at {label}</div>
+      <div className="text-[12px] font-semibold tabular-nums whitespace-nowrap"
+        style={{ color: v == null ? "var(--oc-faint)"
+          : v >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
+        {v == null ? "—" : inr0(v)}
+        {d != null && Math.abs(d) >= 1 ? <span className="text-[9.5px] font-normal"
+          style={{ color: "var(--oc-faint)" }}> {signed(d, 0)}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+/** Armed levels. An alert fires ONCE at the cursor's minute, draws amber on the chart,
+ *  and pauses autoplay so the minute stays on screen; step back before it and it is
+ *  armed again — in a replay, what has not happened yet has not happened. */
+function AlertsCard({ alerts, disabled, onArm, onClear }: {
+  alerts: ConsoleAlert[]; disabled: boolean;
+  onArm: (b: { kind: ConsoleAlert["kind"]; value: number }) => void;
+  onClear: (id: string) => void;
+}) {
+  const [kind, setKind] = useState<ConsoleAlert["kind"]>("target");
+  const [value, setValue] = useState("");
+  const meta = ALERT_KINDS.find((k) => k.kind === kind)!;
+  const arm = () => {
+    const v = Number(value);
+    if (!Number.isFinite(v) || !value.trim()) return;
+    onArm({ kind, value: v }); setValue("");
+  };
+  const fmt = (a: ConsoleAlert) =>
+    a.kind === "target" ? inr0(a.value) : a.kind === "stop" ? inr0(-Math.abs(a.value))
+    : a.kind === "delta" ? `${a.value} units` : Math.round(a.value).toLocaleString("en-IN");
+  return (
+    <Panel>
+      <div className="flex items-center justify-between">
+        <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
+          style={{ color: "var(--oc-faint)" }}>Alerts · fire once, pause the replay</span>
+        <span className="text-[10px]" style={{ color: "var(--oc-faint)" }}>
+          {alerts.length ? `${alerts.filter((a) => a.state === "fired").length}/${alerts.length} fired` : ""}
+        </span>
+      </div>
+      {alerts.length ? (
+        <div className="mt-1.5 space-y-1">
+          {alerts.map((a) => (
+            <div key={a.id} className="flex items-center gap-2 text-[11.5px] tabular-nums rounded-[6px] px-2 py-1"
+              style={{ background: a.state === "fired" ? "var(--oc-caution-dim)" : "var(--oc-panel2)" }}>
+              <span className="font-semibold w-[52px]">
+                {ALERT_KINDS.find((k) => k.kind === a.kind)?.label ?? a.kind}
+              </span>
+              <span>{fmt(a)}</span>
+              <span className="ml-auto text-[10px] font-bold px-1.5 rounded-[3px]"
+                style={{ color: a.state === "fired" ? "var(--oc-caution)" : "var(--oc-muted)",
+                  border: `1px solid ${a.state === "fired" ? "var(--oc-caution)" : "var(--oc-line)"}` }}>
+                {a.state === "fired" ? `FIRED ${a.fired_at?.slice(11) ?? ""}` : "ARMED"}
+              </span>
+              <button type="button" onClick={() => onClear(a.id)} title="remove"
+                className="text-[12px] leading-none" style={{ color: "var(--oc-faint)" }}>×</button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-1.5 text-[11px]" style={{ color: "var(--oc-faint)" }}>
+          None armed. A target or stop is rupees of total MTM; |Δ| is net delta in units.
+        </div>
+      )}
+      <div className="mt-2 flex items-center gap-1.5">
+        <select value={kind} onChange={(e) => setKind(e.target.value as ConsoleAlert["kind"])}
+          disabled={disabled}
+          className="h-[24px] rounded-[5px] px-1 text-[11px] font-semibold"
+          style={{ background: "var(--oc-chip)", color: "var(--oc-ink)", border: "none" }}>
+          {ALERT_KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
+        </select>
+        <input value={value} onChange={(e) => setValue(e.target.value)} disabled={disabled}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); arm(); } }}
+          placeholder={meta.hint} inputMode="decimal"
+          className="h-[24px] flex-1 min-w-0 rounded-[5px] px-2 text-[11px] tabular-nums"
+          style={{ background: "var(--oc-chip)", color: "var(--oc-ink)", border: "none" }} />
+        <button type="button" onClick={arm} disabled={disabled || !value.trim()}
+          className="h-[24px] px-2.5 rounded-[5px] text-[11px] font-semibold disabled:opacity-40"
+          style={{ background: "var(--oc-accent)", color: "#fff" }}>Arm</button>
+      </div>
+    </Panel>
+  );
+}
+
 /** One position row. Strike and size are EDITABLE here, because "I want that leg one
  *  strike higher" is a normal adjustment and re-typing the whole leg is not how anyone
  *  thinks about it. Both go through staging like everything else: a strike change is a
@@ -219,6 +348,14 @@ function LegRow({ leg, grid, onStage }: {
       </td>
       <td className="text-right">{num(leg.entry)}</td>
       <td className="text-right">{leg.ltp == null ? "—" : num(leg.ltp)}</td>
+      <td className="text-right whitespace-nowrap" style={{ color: "var(--oc-muted)" }}
+        title={leg.delta == null ? "no solvable print"
+          : `Γ ${leg.gamma} · Θ ${leg.theta}/day · V ${leg.vega}/1% (per share)`}>
+        {leg.delta == null ? "—" : signed(leg.delta, 2)}
+        <span className="text-[10px]" style={{ color: "var(--oc-faint)" }}>
+          {leg.iv == null ? "" : ` ${leg.iv.toFixed(1)}`}
+        </span>
+      </td>
       <td className="text-right font-semibold"
         style={{ color: (leg.pnl ?? 0) >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
         {leg.pnl == null ? "—" : inr0(leg.pnl)}
@@ -459,6 +596,11 @@ export default function ConsolePage() {
   const [showKeys, setShowKeys] = useState(false);
   const [lots, setLots] = useState(1);
   const opened = useRef(false);
+  // Autoplay. The interval only fires a step when the previous one has answered, so a slow
+  // backend cannot queue a backlog of steps that keep landing after Pause.
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const firedSeen = useRef<string>("");
 
   const { data: days } = useQuery({
     queryKey: ["console-days", underlying],
@@ -485,8 +627,50 @@ export default function ConsolePage() {
       setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock },
         { replace: true });
     },
+    onError: (e: Error) => { setError(e.message); setPlaying(false); },
+  });
+
+  const armAlert = useMutation({
+    mutationFn: (body: Parameters<typeof api.consoleArmAlert>[1]) =>
+      api.consoleArmAlert(state!.session.id, body),
+    onSuccess: (s) => { setState(s); setError(null); },
     onError: (e: Error) => setError(e.message),
   });
+  const clearAlert = useMutation({
+    mutationFn: (aid: string) => api.consoleClearAlert(state!.session.id, aid),
+    onSuccess: setState,
+  });
+
+  // Autoplay ticks. Stops itself at the session close, on an error, and the moment an
+  // alert FIRES — that is the minute the replay exists to look at, so it stays on screen
+  // instead of scrolling past at 15 minutes a second. Hidden tab → pause (a replay that
+  // ran on unwatched is a replay nobody saw).
+  useEffect(() => {
+    if (!playing || !state) return;
+    const sp = SPEEDS[speed] ?? SPEEDS[1];
+    const t = window.setInterval(() => {
+      if (move.isPending) return;
+      move.mutate({ op: "step", minutes: sp.minutes });
+    }, sp.ms);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, speed, state?.session.id]);
+  useEffect(() => {
+    if (!state) return;
+    if (state.session.played_pct >= 100) setPlaying(false);
+    // An alert that was NOT fired at the previous cursor and is now: pause. Compared as
+    // sets, so the very first fire counts too (a "was anything fired before" guard
+    // silently let the first target scroll past at 15 minutes a second).
+    const fired = state.alerts.filter((a) => a.state === "fired").map((a) => a.id);
+    const seen = firedSeen.current ? firedSeen.current.split(",") : [];
+    if (playing && fired.some((id) => !seen.includes(id))) setPlaying(false);
+    firedSeen.current = fired.join(",");
+  }, [state, playing]);
+  useEffect(() => {
+    const onVis = () => { if (document.hidden) setPlaying(false); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
 
   const stage = useMutation({
     mutationFn: (body: Parameters<typeof api.consoleStage>[1]) =>
@@ -543,6 +727,9 @@ export default function ConsolePage() {
       if (e.key === "Enter" && state?.staged) { e.preventDefault(); commit.mutate(); return; }
       if ((e.key === "u" || e.key === "U") && state?.session.can_undo) {
         e.preventDefault(); undo.mutate(); return;
+      }
+      if ((e.code === "Space" || e.key === " ") && state) {
+        e.preventDefault(); setPlaying((v) => !v); return;
       }
       if (!state || e.metaKey || e.ctrlKey) return;
       // Match on code OR key. e.key changes under Shift ("." becomes ">"), which is why the
@@ -611,6 +798,17 @@ export default function ConsolePage() {
     return spotNow && expNow && legs.length
       ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
   }, [state?.staged, spotNow, expNow, state?.session.date]);
+  // T+0 at −1% / spot / +1%: the open book's model value across a narrow window, read at
+  // its three ends. The same curve the chart draws dashed, so the tiles and the chart agree.
+  const scen = useMemo(() => {
+    const legs = toPayoffLegs(state?.legs ?? []);
+    if (!spotNow || !expNow || !legs.length) return null;
+    const d = buildLivePayoff(legs, spotNow, expNow, state?.session.date, null, undefined,
+      { range: [spotNow * 0.99, spotNow * 1.01] });
+    if (!d?.data.length) return null;
+    const n = d.data.length;
+    return [d.data[0].now, d.data[Math.floor(n / 2)].now, d.data[n - 1].now];
+  }, [state?.legs, spotNow, expNow, state?.session.date]);
   const busy = open.isPending || move.isPending;
 
   return (
@@ -660,6 +858,24 @@ export default function ConsolePage() {
             </Chip>
           ))}
         </div>
+        <div className="w-px h-5" style={{ background: "var(--oc-line)" }} />
+        <div className="flex items-center gap-1">
+          <button type="button" disabled={!state}
+            onClick={() => setPlaying((v) => !v)}
+            title={playing ? "pause (Space)" : "play (Space)"}
+            className="h-[22px] w-[26px] rounded-[5px] text-[11px] font-bold disabled:opacity-40"
+            style={{ background: playing ? "var(--oc-accent)" : "var(--oc-chip)",
+              color: playing ? "#fff" : "var(--oc-accent)" }}>
+            {playing ? "❚❚" : "▶"}
+          </button>
+          {SPEEDS.map((sp, i) => (
+            <Chip key={sp.label} active={i === speed} disabled={!state}
+              title={`${sp.minutes} replay minute${sp.minutes > 1 ? "s" : ""} every ${sp.ms / 1000}s`}
+              onClick={() => { setSpeed(i); if (!playing) setPlaying(true); }}>
+              {sp.label}
+            </Chip>
+          ))}
+        </div>
 
         <div className="ml-auto flex items-center gap-2">
           <button type="button" onClick={() => setShowKeys((v) => !v)}
@@ -669,7 +885,7 @@ export default function ConsolePage() {
               color: showKeys ? "var(--oc-accent)" : "var(--oc-muted)" }}>?</button>
           <span className="text-[10px] font-bold px-2 h-[22px] leading-[22px] rounded-[4px]"
             style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
-            {busy ? "…" : state?.session.status ?? "READY"}
+            {playing ? "PLAYING" : busy ? "…" : state?.session.status ?? "READY"}
           </span>
         </div>
       </div>
@@ -788,7 +1004,21 @@ export default function ConsolePage() {
               <div className="flex-1 min-h-0">
                 <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
                   spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
-                  today={state?.session.date ?? ""} />
+                  today={state?.session.date ?? ""} alerts={state?.alerts ?? []}
+                  realised={risk?.realised ?? 0} />
+              </div>
+              {/* NET GREEKS: Σ per-share greek × units over the enabled legs, the same
+                  convention as the Live tile. Beside them, the T+0 book at ±1% of spot —
+                  the question the greeks approximate, answered directly. */}
+              <div className="mt-2 pt-2 grid grid-cols-7 gap-1.5"
+                style={{ borderTop: "1px solid var(--oc-hair)" }}>
+                <GreekCell label="Δ net" v={risk?.greeks.delta} dp={1} unit="units" />
+                <GreekCell label="Γ net" v={risk?.greeks.gamma} dp={3} />
+                <GreekCell label="Θ /day" v={risk?.greeks.theta} dp={0} inr />
+                <GreekCell label="Vega /1%" v={risk?.greeks.vega} dp={0} inr />
+                <ScenarioCell label={`${MINUS}1%`} v={scen?.[0]} base={scen?.[1]} />
+                <ScenarioCell label="spot" v={scen?.[1]} base={scen?.[1]} />
+                <ScenarioCell label="+1%" v={scen?.[2]} base={scen?.[1]} />
               </div>
             </Panel>
 
@@ -896,6 +1126,8 @@ export default function ConsolePage() {
                 </div>
               )}
             </Panel>
+            <AlertsCard alerts={state?.alerts ?? []} disabled={!state}
+              onArm={(b) => armAlert.mutate(b)} onClear={(id) => clearAlert.mutate(id)} />
             </div>
           </div>
 
@@ -936,7 +1168,8 @@ export default function ConsolePage() {
             <colgroup>
               <col style={{ width: 52 }} /><col style={{ width: 40 }} />
               <col style={{ width: 190 }} /><col style={{ width: 150 }} />
-              <col /><col /><col /><col /><col style={{ width: 215 }} />
+              <col /><col /><col style={{ width: 64 }} /><col /><col />
+              <col style={{ width: 215 }} />
             </colgroup>
             <thead>
               <tr className="text-[9px] uppercase tracking-[.06em]"
@@ -947,6 +1180,7 @@ export default function ConsolePage() {
                 <th className="text-left font-semibold">Lots</th>
                 <th className="text-right font-semibold">Entry</th>
                 <th className="text-right font-semibold">LTP</th>
+                <th className="text-right font-semibold" title="per share, position-signed · IV">Δ · IV</th>
                 <th className="text-right font-semibold">P&amp;L</th>
                 <th className="text-right font-semibold">Value</th>
                 <th className="text-right font-semibold">Exit</th>

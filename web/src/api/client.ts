@@ -191,6 +191,12 @@ export const api = {
     request<ConsoleState>(`/console/sessions/${id}/reset`, { method: "POST" }),
   consoleDiscard: (id: string) =>
     request<ConsoleState>(`/console/sessions/${id}/discard`, { method: "POST" }),
+  consoleArmAlert: (id: string, body: {
+    kind: "target" | "stop" | "delta" | "above" | "below"; value: number; note?: string | null;
+  }) => request<ConsoleState>(`/console/sessions/${id}/alerts`,
+    { method: "POST", body: JSON.stringify(body) }),
+  consoleClearAlert: (id: string, alertId: string) =>
+    request<ConsoleState>(`/console/sessions/${id}/alerts/${alertId}`, { method: "DELETE" }),
   consoleProbe: (id: string, right: "CE" | "PE", strike: number) =>
     request<ConsoleProbe>(`/console/sessions/${id}/probe?right=${right}&strike=${strike}`),
   consoleChain: (id: string, q: { expiry?: string; window?: number; allow_fifty_strikes?: boolean }) => {

@@ -648,3 +648,82 @@ def test_settlement_is_not_undoable():
     assert s.legs == [] and any(f["action"] == "SETTLE" for f in s.journal)
     assert s.undo_last() is True                    # undoes the ENTRY, not the settlement
     assert s.journal == [] or all(f["action"] != "SHORT" for f in s.journal)
+
+
+# ------------------------------------------------------------------ greeks + alerts (P3)
+
+
+def test_a_legs_greeks_carry_the_live_pages_convention():
+    """Per-share and position-signed, exactly as `_enrich_greeks` reports a live leg: a
+    SHORT call reads Δ < 0, Θ > 0 (it earns the decay), Γ and Vega < 0. And the net line
+    is Σ greek × units over the ENABLED legs, so a toggled-off leg leaves it."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.stage(kind="add", right="CE", strike=24100, side="B", lots=1)
+    st = s.state()
+    short, long_ = st["legs"]
+    assert short["iv"] and short["delta"] < 0 < short["theta"]
+    assert short["gamma"] < 0 and short["vega"] < 0
+    assert long_["delta"] > 0 > long_["theta"] and long_["gamma"] > 0
+    g = st["risk"]["greeks"]
+    expect = short["delta"] * short["units"] + long_["delta"] * long_["units"]
+    assert g["delta"] == pytest.approx(expect, abs=0.05)
+    # the solved IV reprices the mark — the same pin the chain cells carry
+    spot = s.market.index_spot("NIFTY")
+    t = _t_years(EXP, s.clock)
+    assert bs.price(spot, 24000.0, t, RISK_FREE, short["iv"] / 100, "CE") == pytest.approx(
+        short["ltp"], abs=0.05)
+    s.stage(kind="toggle", leg_id=long_["id"], enabled=False)
+    g2 = s.state()["risk"]["greeks"]
+    assert g2["delta"] == pytest.approx(short["delta"] * short["units"], abs=0.05)
+
+
+def test_an_alert_fires_once_at_the_cursor_and_rearms_on_rewind():
+    """A target of ₹X fires at the first minute the TOTAL MTM reaches it, records that
+    minute, and stays fired while the cursor is at or past it. Step back before it and it
+    is armed again: in a replay what has not happened yet has not happened."""
+    store.write_day(DAY, _day())
+    s = _open(at="09:20")
+    s.stage(kind="add", right="CE", strike=24000, side="B", lots=1)   # drifts up ₹1.5/5min
+    a = s.arm_alert("target", 200.0)
+    assert s.state()["alerts"][0]["state"] == "armed"
+    fired_at = None
+    for hh, mm in [(9, 40), (10, 0), (10, 30), (11, 0), (11, 30)]:
+        s.seek(f"{hh:02d}:{mm:02d}")
+        st = s.state()
+        if st["alerts"][0]["state"] == "fired":
+            fired_at = st["alerts"][0]["fired_at"]
+            assert st["risk"]["mtm"] >= 200.0
+            break
+    assert fired_at is not None, "the drift never reached the target"
+    # later cursor: still fired, at the SAME minute (once, not every minute)
+    s.seek("11:40")
+    assert s.state()["alerts"][0]["fired_at"] == fired_at
+    # rewind before it: armed again
+    s.seek("09:25")
+    assert s.state()["alerts"][0]["state"] == "armed"
+    assert s.clear_alert(a["id"]) is True and s.state()["alerts"] == []
+
+
+def test_a_stop_is_a_loss_whichever_sign_it_is_typed_with():
+    store.write_day(DAY, _day())
+    s = _open(at="09:20")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)   # loses as it drifts
+    s.arm_alert("stop", 150.0)
+    s.arm_alert("stop", -150.0)
+    s.seek("11:30")
+    states = [a["state"] for a in s.state()["alerts"]]
+    assert states == ["fired", "fired"] and s.state()["risk"]["mtm"] <= -150.0
+
+
+def test_a_spot_alert_reads_the_parity_spot():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    spot = s.state()["market"]["spot"]
+    s.arm_alert("above", spot - 1)
+    s.arm_alert("below", spot - 1000)
+    st = s.state()
+    assert [a["state"] for a in st["alerts"]] == ["fired", "armed"]
+    with pytest.raises(ValueError):
+        s.arm_alert("sideways", 1.0)

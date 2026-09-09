@@ -1093,6 +1093,18 @@ second order path (§1).
 - NIFTY 100-strike coarsening is ON by default here even though this is a manual surface
   (§8): the console exists to rehearse what the automated strategies would do, and they can
   never place a 50. `allow_fifty_strikes` is the explicit opt-out.
+- **Greeks on a console leg are the LIVE page's greeks** (2026-09-09): per share,
+  position-signed, solved off the leg's OWN contract at the cursor — the exact convention
+  of `engine/live.py::_enrich_greeks` (short Θ > 0, Γ/Vega < 0, Θ per calendar day, Vega
+  per 1% IV). `risk.greeks` is Σ greek × units over ENABLED legs. Mirror, don't reinvent:
+  the same book must read the same Δ on the Live tile and in the console.
+- **An alert fires ONCE at the cursor's minute — and a rewind re-arms it.** `fired_at`
+  is a minute; `_evaluate_alerts` runs inside `state()` after every rebuild and clears it
+  whenever the cursor is before it, because in a replay what has not happened yet has not
+  happened. Autoplay pauses the moment an alert fires (compared as SETS of fired ids — a
+  "was anything fired before" guard let the very first target scroll past at 15 min/s).
+  Target/stop are rupees of TOTAL MTM (realised + open); the chart draws them at
+  `level − realised` because its y-axis is the open book alone. Stop accepts either sign.
 - Full plan + phases: `docs/PLAN-options-console.md`.
 
 ## 8a. The /portfolio tracker is NOT part of the trading system

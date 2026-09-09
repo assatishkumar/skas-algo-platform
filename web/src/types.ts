@@ -1994,7 +1994,7 @@ export interface ConsoleState {
   staged: ConsoleStaged | null;
   risk: ConsoleRisk;
   fills: { at: string; symbol: string; action: string; units: number; price: number; charges: number }[];
-  alerts: unknown[];
+  alerts: ConsoleAlert[];
   pricing: { r: number; q: number; t_floor_s: number; expiry_time: string };
   notes: string[];
 }
@@ -2004,6 +2004,27 @@ export interface ConsoleLeg {
   side: "B" | "S"; lots: number; lot_size: number; units: number; direction: number;
   entry: number; ltp: number | null; pnl: number | null;
   enabled: boolean; realized: number;
+  // Per-SHARE, position-signed greeks off the leg's own contract — the convention of the
+  // Live page (`_enrich_greeks`): a short leg reads Θ > 0, Γ and Vega < 0. Θ per calendar
+  // day, Vega per 1% of IV. null when the leg has no solvable print.
+  iv: number | null; delta: number | null; gamma: number | null;
+  theta: number | null; vega: number | null;
+}
+
+export interface ConsoleGreeks {
+  delta: number | null; gamma: number | null; theta: number | null; vega: number | null;
+}
+
+/** An armed level. `fired_at` is a minute; the CURSOR decides whether that is the past
+ *  (fired) or not yet (armed) — a rewind re-arms it. */
+export interface ConsoleAlert {
+  id: string;
+  kind: "target" | "stop" | "delta" | "above" | "below";
+  value: number;
+  note: string | null;
+  fired_at: string | null;
+  fired_value: number | null;
+  state: "armed" | "fired";
 }
 
 export interface ConsoleStagedItem {
@@ -2024,6 +2045,7 @@ export interface ConsoleRisk {
   margin: number;
   margin_source: string;   // "manual" = a measured anchor, "model" = hedge-blind estimate
   capital: number; legs_open: number;
+  greeks: ConsoleGreeks;   // Σ per-share greek × units over ENABLED legs
 }
 
 export interface ConsoleProbe {

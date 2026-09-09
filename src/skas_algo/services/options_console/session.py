@@ -189,6 +189,11 @@ class ConsoleSession:
         self.journal: list[dict] = []
         self.fills: list[dict] = []      # the derived slice, ≤ cursor
         self._replaying = False
+        # Armed levels. Each carries `fired_at` (a minute) once it trips; the cursor decides
+        # what that means — before it the alert is armed, at or after it, fired — so a
+        # rewind re-arms and stepping forward re-fires, like every other fact in a replay.
+        self.alerts: list[dict] = []
+        self._alert_seq = 0
         self.market = ReplayMarket(u, allow_fifty_strikes=self.allow_fifty_strikes)
         self.chain_view = ReplayChain(self.market)
         self.tape = _Tape(day=self.day)
@@ -691,17 +696,21 @@ class ConsoleSession:
         self.realized = self.charges = 0.0
         self._leg_seq = 0
         self.staged = None
+        for a in self.alerts:
+            a["fired_at"], a["fired_value"] = None, None
 
     # ----------------------------------------------------------------- risk
     def _leg_out(self, leg: ConsoleLeg) -> dict:
         ltp = self._price(leg.right, leg.strike, leg.expiry)
         pnl = ((ltp - leg.entry) * leg.units * leg.direction) if ltp is not None else None
-        return {"id": leg.id, "symbol": leg.symbol, "right": leg.right, "strike": leg.strike,
-                "expiry": leg.expiry, "side": leg.side, "lots": leg.lots,
-                "lot_size": leg.lot_size, "units": leg.units, "direction": leg.direction,
-                "entry": round(leg.entry, 2), "ltp": ltp,
-                "pnl": round(pnl, 2) if pnl is not None else None,
-                "enabled": leg.enabled, "realized": round(leg.realized, 2)}
+        out = {"id": leg.id, "symbol": leg.symbol, "right": leg.right, "strike": leg.strike,
+               "expiry": leg.expiry, "side": leg.side, "lots": leg.lots,
+               "lot_size": leg.lot_size, "units": leg.units, "direction": leg.direction,
+               "entry": round(leg.entry, 2), "ltp": ltp,
+               "pnl": round(pnl, 2) if pnl is not None else None,
+               "enabled": leg.enabled, "realized": round(leg.realized, 2)}
+        out.update(self._leg_greeks(leg, out))
+        return out
 
     def margin(self, legs: list[ConsoleLeg] | None = None) -> tuple[float, str]:
         """Margin, and — just as important — WHERE THE NUMBER CAME FROM.
@@ -791,6 +800,86 @@ class ConsoleSession:
                 book = []
         return book
 
+    def _leg_greeks(self, leg: ConsoleLeg, out: dict) -> dict:
+        """Per-SHARE, position-signed greeks, the exact convention of
+        engine/live.py::_enrich_greeks (a short leg reads Θ positive, Γ and Vega negative,
+        Θ per calendar day, Vega per 1% of IV) so a console leg and a live leg read alike.
+        Solved off the leg's OWN contract at the cursor."""
+        ltp = out.get("ltp")
+        spot = self.market.index_spot(self.underlying)
+        if ltp is None or not spot:
+            return {"iv": None, "delta": None, "gamma": None, "theta": None, "vega": None}
+        t = _t_years(leg.expiry, self.clock)
+        iv = bs.implied_vol(float(ltp), spot, leg.strike, t, RISK_FREE, leg.right)
+        if iv is None:
+            return {"iv": None, "delta": None, "gamma": None, "theta": None, "vega": None}
+        dr = leg.direction
+        return {
+            "iv": round(iv * 100, 2),
+            "delta": round(dr * bs.delta(spot, leg.strike, t, RISK_FREE, iv, leg.right), 4),
+            "gamma": round(dr * bs.gamma(spot, leg.strike, t, RISK_FREE, iv), 6),
+            "theta": round(dr * bs.theta(spot, leg.strike, t, RISK_FREE, iv, leg.right) / 365.0, 2),
+            "vega": round(dr * bs.vega(spot, leg.strike, t, RISK_FREE, iv) / 100.0, 2),
+        }
+
+    def _net_greeks(self, legs_out: list[dict]) -> dict:
+        """Position totals: per-share greek × units, summed over ENABLED legs — the design's
+        "× LOT SIZE ON" reading, which is the one that answers "how much delta am I
+        actually carrying". None when no leg could be solved."""
+        tot = {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+        have = False
+        for x in legs_out:
+            if not x["enabled"] or x.get("delta") is None:
+                continue
+            have = True
+            for k in tot:
+                tot[k] += float(x[k]) * float(x["units"])
+        if not have:
+            return {"delta": None, "gamma": None, "theta": None, "vega": None}
+        return {"delta": round(tot["delta"], 2), "gamma": round(tot["gamma"], 4),
+                "theta": round(tot["theta"], 0), "vega": round(tot["vega"], 0)}
+
+    # ----------------------------------------------------------------- alerts
+    def arm_alert(self, kind: str, value: float, *, note: str | None = None) -> dict:
+        """Arm a level. ``target``/``stop`` are rupees of TOTAL MTM (stop is a loss, given as
+        a positive number); ``delta`` is |net Δ| in units; ``above``/``below`` are spot."""
+        if kind not in ("target", "stop", "delta", "above", "below"):
+            raise ValueError(f"unknown alert kind {kind!r}")
+        self._alert_seq += 1
+        a = {"id": f"A{self._alert_seq}", "kind": kind, "value": float(value),
+             "note": note, "fired_at": None, "fired_value": None}
+        self.alerts.append(a)
+        return a
+
+    def clear_alert(self, alert_id: str) -> bool:
+        before = len(self.alerts)
+        self.alerts = [a for a in self.alerts if a["id"] != alert_id]
+        return len(self.alerts) < before
+
+    def _evaluate_alerts(self, mtm: float, net_delta: float | None, spot: float | None) -> None:
+        """Trip armed alerts against the book AT THE CURSOR, once each. A fired alert
+        holds its minute; if the cursor is ever before that minute it is armed again,
+        because in a replay what has not happened yet has not happened."""
+        now = self.clock.strftime("%Y-%m-%dT%H:%M")
+        for a in self.alerts:
+            if a["fired_at"] and a["fired_at"] > now:
+                a["fired_at"], a["fired_value"] = None, None     # rewound past it
+            if a["fired_at"]:
+                continue
+            k, v = a["kind"], a["value"]
+            hit = ((k == "target" and mtm >= v)
+                   or (k == "stop" and mtm <= -abs(v))
+                   or (k == "delta" and net_delta is not None and abs(net_delta) >= v)
+                   or (k == "above" and spot is not None and spot >= v)
+                   or (k == "below" and spot is not None and spot <= v))
+            if hit:
+                a["fired_at"] = now
+                a["fired_value"] = round(mtm if k in ("target", "stop")
+                                         else (net_delta if k == "delta" else spot) or 0.0, 2)
+
+    def _alerts_out(self) -> list[dict]:
+        return [{**a, "state": "fired" if a["fired_at"] else "armed"} for a in self.alerts]
+
     def _risk_out(self) -> dict:
         margin, source = self.margin()
         open_pnl = sum(x["pnl"] or 0.0 for x in (self._leg_out(leg) for leg in self.legs
@@ -865,6 +954,10 @@ class ConsoleSession:
         spot = snap.get("spot") or self.market.index_spot(self.underlying)
         rows = self.chain_rows()
         quoted = sum(1 for r in rows for s in ("ce", "pe") if r[s]["quoted"])
+        legs_out = [self._leg_out(leg) for leg in self.legs]
+        greeks = self._net_greeks(legs_out)
+        risk = self._risk_out()
+        self._evaluate_alerts(risk["mtm"], greeks["delta"], spot)
         day_i = self.days.index(self.day)
         prev_close = None      # P2: the prior settled close for the change figures
         open_dt = datetime.combine(self.day, SESSION_OPEN)
@@ -905,11 +998,11 @@ class ConsoleSession:
                 "quoted": quoted, "total": 2 * len(rows),
                 "rows": rows,
             },
-            "legs": [self._leg_out(leg) for leg in self.legs],
+            "legs": legs_out,
             "staged": self._staged_out(),
-            "risk": self._risk_out(),
+            "risk": {**risk, "greeks": greeks},
             "fills": self.fills[-40:],
-            "alerts": [],
+            "alerts": self._alerts_out(),
             "pricing": {"r": RISK_FREE, "q": 0.0, "t_floor_s": T_FLOOR_S,
                         "expiry_time": EXPIRY_TIME.strftime("%H:%M")},
             "notes": _notes(),
