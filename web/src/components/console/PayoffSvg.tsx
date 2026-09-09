@@ -18,7 +18,8 @@ import type { ConsoleAlert, ConsoleLeg } from "../../types";
 
 const MINUS = "−";
 const ZOOM_ROW = 20;   // the zoom-chip row above the plot, taken out of the measured height
-const ZOOMS: [number | null, string][] = [[null, "fit"], [0.02, "±2%"], [0.05, "±5%"], [0.1, "±10%"]];
+const ZOOMS: [number | null, string][] = [[null, "fit"], [0.03, "±3%"], [0.06, "±6%"],
+                                           [0.1, "±10%"], [0.15, "±15%"]];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /** "2026-04-28" → "28 Apr". A bare "28" in a tooltip reads as a quantity. */
@@ -78,14 +79,28 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   const live = useMemo(() => toPayoffLegs(legs), [legs]);
   const ghost = useMemo(() => (staged ? toPayoffLegs(staged) : null), [staged]);
 
+  const metrics = useMemo(
+    () => (spot && expiry && live.length ? computeMetrics(live, spot, expiry, today) : null),
+    [live, spot, expiry, today]);
+  // "fit" = the WHOLE structure: spot, every strike AND every breakeven, with room past
+  // each so both zero-crossings and the loss beyond them are on screen, and spot never
+  // pinned to an edge. A window of spot+strikes alone cut a short straddle off at its
+  // peak and hid the left breakeven (owner, three times, 2026-09-09).
   const range = useMemo<[number, number] | null>(() => {
     if (!spot) return null;
     if (zoom) return [spot * (1 - zoom), spot * (1 + zoom)];
-    const refs = [spot, ...live.map((l) => l.strike), ...(ghost ?? []).map((l) => l.strike)];
-    const lo = Math.min(...refs), hi = Math.max(...refs);
-    const pad = Math.max((hi - lo) * 0.25, spot * 0.02);
-    return [lo - pad, hi + pad];
-  }, [spot, zoom, live, ghost]);
+    const bes = metrics?.breakevens ?? [];
+    const refs = [spot, ...live.map((l) => l.strike), ...(ghost ?? []).map((l) => l.strike),
+                  ...bes];
+    let lo = Math.min(...refs), hi = Math.max(...refs);
+    const pad = Math.max((hi - lo) * 0.15, spot * 0.03);
+    lo -= pad; hi += pad;
+    // spot at least 12% of the window from either edge
+    const w0 = hi - lo;
+    lo = Math.min(lo, spot - 0.12 * w0);
+    hi = Math.max(hi, spot + 0.12 * w0);
+    return [lo, hi];
+  }, [spot, zoom, live, ghost, metrics]);
   const data = useMemo(
     () => (spot && expiry && live.length && range
       ? buildLivePayoff(live, spot, expiry, today, null, undefined, { range }) : null),
@@ -94,9 +109,6 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
     () => (spot && expiry && ghost?.length && range
       ? buildLivePayoff(ghost, spot, expiry, today, null, undefined, { range }) : null),
     [ghost, spot, expiry, today, range]);
-  const metrics = useMemo(
-    () => (spot && expiry && live.length ? computeMetrics(live, spot, expiry, today) : null),
-    [live, spot, expiry, today]);
 
   if (!spot || !expiry || (!data && !ghostData)) {
     return (
