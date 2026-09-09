@@ -691,3 +691,43 @@ def test_an_unprinted_deep_itm_leg_is_marked_at_its_floor_not_its_entry():
     m.feed(f"BANKNIFTY|{exp}|36700|CE", 1010.0, 1)     # …unless the index ran through it
     m.feed(f"BANKNIFTY|{exp}|36700|PE", 10.0, 1)       # F = 37,700 → floor ≈ 5,000
     assert m.mark_or_floor(f"BANKNIFTY|{exp}|32700|CE") > 4900
+
+
+# --------------------------------------------- the replay market is a shared reference now
+
+REPLAY_REPORT_SHA = "b7667d2c996b6e72b1ab0145e721449fb9b8f113d4f2743fbc5bc3d311d838b5"
+
+
+def test_the_replay_report_is_byte_stable():
+    """The minute-clock market (`_Market`/`_Chain`/`_Ctx`) moved to `services/replay_market`
+    on 2026-09-09 so the Options Console could drive the SAME market instead of forking it.
+    That gives those classes a second consumer, and a second consumer is how a "harmless"
+    tweak for one caller silently re-prices every backtest ever run.
+
+    So: a hash of the whole report over a fixed synthetic store. It is not testing any one
+    number — it is testing that nobody moved one. A failure here is either a real behaviour
+    change (fix it, or re-pin DELIBERATELY and say why in the commit) or the console reaching
+    into the market and bending it. Both are exactly what this catches, and unlike a
+    move-time review it keeps catching them forever."""
+    import hashlib
+    import json
+
+    store.write_day(D1, _flat_day(D1))
+    store.write_day(D2, _flat_day(D2))
+    out = run_intraday_backtest("intraday_straddle", "NIFTY", D1, D2, 1_000_000, {})
+    got = hashlib.sha256(json.dumps(out, sort_keys=True, default=str).encode()).hexdigest()
+    assert got == REPLAY_REPORT_SHA, (
+        "the intraday replay's output changed. If that was intended, re-pin "
+        f"REPLAY_REPORT_SHA to {got} and say why in the commit message.")
+
+
+def test_the_console_and_the_replay_read_one_market():
+    """`intraday_replay` must keep using the moved classes, not a private copy — the whole
+    point of the extraction. Pinned by identity, so a future re-fork fails loudly."""
+    from skas_algo.services import intraday_replay as ir
+    from skas_algo.services import replay_market as rm
+
+    assert ir._Market is rm.ReplayMarket
+    assert ir._Chain is rm.ReplayChain
+    assert ir._Ctx is rm.ReplayCtx
+    assert rm.ReplayChainRow is rm._ChainRow
