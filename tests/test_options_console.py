@@ -399,3 +399,82 @@ def test_margin_says_where_its_number_came_from():
     anchored.commit()
     risk = anchored.state()["risk"]
     assert risk["margin_source"] == "manual" and risk["margin"] == pytest.approx(538_448)
+
+
+# ---------------------------------------------------------------- the basket (2026-09-09)
+
+def test_staging_accumulates_a_basket_and_commits_it_together():
+    """A structure is several legs, and committing them one at a time means you cannot see
+    the condor's payoff until the fourth leg lands — the preview is useless for exactly the
+    positions that need it. Clicking B/S adds to a basket; Apply commits the lot."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.stage(kind="add", right="CE", strike=24100, side="B", lots=2)
+    st = s.state()["staged"]
+    assert len(st["items"]) == 2 and "·" in st["label"]
+    assert len(st["after_legs"]) == 2      # the basket previews as one book
+    assert s.legs == []                    # …and still nothing has happened
+    s.commit()
+    assert len(s.state()["legs"]) == 2
+
+
+def test_the_chain_marks_the_strikes_you_are_holding():
+    """Reading a ladder against a position held in your head is how the wrong strike gets
+    clicked. The row carries the side and the lots."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=3)
+    s.commit()
+    row = {r["strike"]: r for r in s.chain_rows()}[24000.0]
+    assert row["ce"]["held"] == {"lots": 3, "side": "S", "enabled": True}
+    assert row["pe"]["held"] is None       # only the leg you actually hold
+
+
+def test_a_leg_can_be_rolled_to_another_strike_in_one_action():
+    """"Move that leg a strike up" is one hand movement, not an exit plus a re-entry typed
+    out. It still books both fills and both sets of charges."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.commit()
+    charges_before = s.charges
+    s.stage(kind="roll", leg_id=s.legs[0].id, strike=24100)
+    s.commit()
+    legs = s.state()["legs"]
+    assert len(legs) == 1 and legs[0]["strike"] == 24100.0 and legs[0]["lots"] == 2
+    assert legs[0]["side"] == "S"
+    assert s.charges > charges_before      # a roll is two real fills, not a relabel
+
+
+def test_resizing_a_leg_trims_it_or_adds_to_it():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=5)
+    s.commit()
+    s.stage(kind="resize", leg_id=s.legs[0].id, lots=2)
+    s.commit()
+    assert s.state()["legs"][0]["lots"] == 2
+    s.stage(kind="resize", leg_id=s.legs[0].id, lots=6)
+    s.commit()
+    assert sum(x["lots"] for x in s.state()["legs"]) == 6
+
+
+def test_reset_clears_the_book_and_the_session_pnl():
+    """Realised P&L survives closing a position — it is money you made — so a NEW structure
+    would otherwise open with the previous one's profit on its rail. Reset is the way back
+    to a clean slate at the same minute."""
+    store.write_day(DAY, _day())
+    s = _open(at="09:30")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.commit()
+    s.seek("11:00")
+    s.stage(kind="flatten", replace=True)
+    s.commit()
+    flat = s.state()
+    assert flat["legs"] == [] and flat["risk"]["realised"] != 0.0
+    assert flat["risk"]["mtm"] == flat["risk"]["realised"]   # banked, not open
+    s.reset_book()
+    clean = s.state()
+    assert clean["risk"]["mtm"] == 0.0 and clean["risk"]["charges"] == 0.0
+    assert clean["legs"] == [] and clean["staged"] is None

@@ -345,10 +345,13 @@ class ConsoleSession:
                     "delta": round(d, 4) if d is not None else None,
                     "quoted": True, "stale_min": stale}
 
+        held = self.held_by_strike()
         out = []
         for r in keep:
             k = r["strike"]
             ce, pe = leg(r.get("ce"), "CE", k), leg(r.get("pe"), "PE", k)
+            ce["held"] = held.get(f"{int(k)}|CE")
+            pe["held"] = held.get(f"{int(k)}|PE")
             # The ladder shows ONE IV per strike, and it should be the OTM side's. An ITM
             # option is nearly all intrinsic, so its vol is inferred from a sliver of time
             # value and swings wildly on a stale print or a tick of rounding; the OTM side
@@ -384,10 +387,25 @@ class ConsoleSession:
 
     def stage(self, *, kind: str, right: str | None = None, strike: float | None = None,
               side: str | None = None, lots: int = 1, leg_id: str | None = None,
-              enabled: bool | None = None) -> dict:
-        """Describe a change WITHOUT making it. The design's whole loop is preview-then-commit:
-        nothing touches the book until Apply, and the chart draws the staged curve beside the
-        live one so the difference is visible before it is real."""
+              enabled: bool | None = None, replace: bool = False) -> dict:
+        """Describe a change WITHOUT making it, ACCUMULATING into a basket.
+
+        A structure is several legs, and committing them one at a time is both tedious and
+        wrong: you cannot see the condor's payoff until the fourth leg lands, so the
+        preview — the entire point of staging — is useless for exactly the positions that
+        need it most. Clicking B/S adds to the basket; Apply commits the lot.
+        ``replace=True`` starts a fresh basket (used by flatten)."""
+        item = self._stage_item(kind=kind, right=right, strike=strike, side=side, lots=lots,
+                                leg_id=leg_id, enabled=enabled)
+        items = [] if (replace or not self.staged) else list(self.staged["items"])
+        items.append(item)
+        self.staged = {"items": items,
+                       "label": " · ".join(i["label"] for i in items)}
+        return self.staged
+
+    def _stage_item(self, *, kind: str, right: str | None = None, strike: float | None = None,
+                    side: str | None = None, lots: int = 1, leg_id: str | None = None,
+                    enabled: bool | None = None) -> dict:
         if kind == "add":
             if not (right and side and strike is not None):
                 raise ValueError("an added leg needs a right, a side and a strike")
@@ -397,63 +415,107 @@ class ConsoleSession:
                     f"{int(strike)} {right.upper()} has not traded at {self.clock:%H:%M} — "
                     "there is no price to fill against")
             lot = self._lot_size()
-            self.staged = {"kind": "add", "right": right.upper(), "strike": float(strike),
-                           "side": side.upper(), "lots": max(1, int(lots)),
-                           "price": px, "lot_size": lot,
-                           "label": f"{side.upper()} {int(strike)} {right.upper()} ×{lots}"}
+            return {"kind": "add", "right": right.upper(), "strike": float(strike),
+                    "side": side.upper(), "lots": max(1, int(lots)),
+                    "price": px, "lot_size": lot,
+                    "label": f"{side.upper()} {int(strike)} {right.upper()} ×{lots}"}
         elif kind == "exit":
             leg = self._leg(leg_id)
             n = max(1, min(int(lots), leg.lots))
             px = self._price(leg.right, leg.strike)
             if px is None:
                 raise ValueError(f"{leg.symbol} has no price at {self.clock:%H:%M}")
-            self.staged = {"kind": "exit", "leg_id": leg.id, "lots": n, "price": px,
-                           "label": f"Exit {n} of {leg.lots} lots · {int(leg.strike)} {leg.right}"}
+            return {"kind": "exit", "leg_id": leg.id, "lots": n, "price": px,
+                    "label": f"Exit {n} of {leg.lots} lots · {int(leg.strike)} {leg.right}"}
         elif kind == "toggle":
             leg = self._leg(leg_id)
             want = (not leg.enabled) if enabled is None else bool(enabled)
             verb = "Include" if want else "Exclude"
-            self.staged = {"kind": "toggle", "leg_id": leg.id, "enabled": want,
-                           "label": f"{verb} {int(leg.strike)} {leg.right}"}
+            return {"kind": "toggle", "leg_id": leg.id, "enabled": want,
+                    "label": f"{verb} {int(leg.strike)} {leg.right}"}
+        elif kind == "roll":
+            # Move a leg to another strike: close it here, open the same size there. One
+            # action, because "change the strike" is what the hand is doing.
+            leg = self._leg(leg_id)
+            if strike is None:
+                raise ValueError("a roll needs a target strike")
+            new_px = self._price(leg.right, float(strike))
+            old_px = self._price(leg.right, leg.strike)
+            if new_px is None or old_px is None:
+                raise ValueError(f"{int(strike)} {leg.right} has no price at "
+                                 f"{self.clock:%H:%M} to roll into")
+            return {"kind": "roll", "leg_id": leg.id, "strike": float(strike),
+                    "price": new_px, "exit_price": old_px, "lots": leg.lots,
+                    "label": f"Roll {int(leg.strike)} → {int(strike)} {leg.right} ×{leg.lots}"}
+        elif kind == "resize":
+            leg = self._leg(leg_id)
+            n = max(0, int(lots))
+            if n == leg.lots:
+                raise ValueError("that is the size it already is")
+            px = self._price(leg.right, leg.strike)
+            if px is None:
+                raise ValueError(f"{leg.symbol} has no price at {self.clock:%H:%M}")
+            return {"kind": "resize", "leg_id": leg.id, "lots": n, "price": px,
+                    "label": f"Resize {int(leg.strike)} {leg.right} ×{leg.lots} → ×{n}"}
         elif kind == "flatten":
             if not self.legs:
                 raise ValueError("nothing to flatten")
-            self.staged = {"kind": "flatten", "label": f"Close all {len(self.legs)} legs"}
-        else:
-            raise ValueError(f"unknown staged change {kind!r}")
-        return self.staged
+            return {"kind": "flatten", "label": f"Close all {len(self.legs)} legs"}
+        raise ValueError(f"unknown staged change {kind!r}")
 
     def discard(self) -> None:
         self.staged = None
 
     def commit(self) -> dict:
-        """Apply the staged change at the cursor's price, with charges."""
+        """Apply every staged change at the cursor's price, with charges."""
         if not self.staged:
             raise ValueError("nothing staged")
-        st, kind = self.staged, self.staged["kind"]
+        items = self.staged["items"]
         minute = self.clock.strftime("%Y-%m-%dT%H:%M")
+        for st in items:
+            self._apply(st, minute)
+        self.staged = None
+        return {"committed": len(items), "at": minute}
+
+    def _apply(self, st: dict, minute: str) -> None:
+        kind = st["kind"]
         if kind == "add":
-            self._leg_seq += 1
-            leg = ConsoleLeg(
-                id=f"L{self._leg_seq}",
-                symbol=f"{self.underlying}|{self.expiry}|{int(st['strike'])}|{st['right']}",
-                right=st["right"], strike=st["strike"], expiry=str(self.expiry),
-                side=st["side"], lots=st["lots"], lot_size=st["lot_size"],
-                entry=st["price"], entered_at=minute)
-            self.legs.append(leg)
-            self._charge("SHORT" if leg.side == "S" else "BUY", leg.units, leg.entry, minute,
-                         leg.symbol)
+            self._open(st["right"], st["strike"], st["side"], st["lots"], st["price"], minute)
         elif kind == "exit":
             self._close(self._leg(st["leg_id"]), st["lots"], st["price"], minute)
         elif kind == "toggle":
             self._leg(st["leg_id"]).enabled = st["enabled"]
+        elif kind == "roll":
+            leg = self._leg(st["leg_id"])
+            side, lots, right = leg.side, leg.lots, leg.right
+            self._close(leg, lots, st["exit_price"], minute)
+            self._open(right, st["strike"], side, lots, st["price"], minute)
+        elif kind == "resize":
+            leg = self._leg(st["leg_id"])
+            want = int(st["lots"])
+            if want < leg.lots:
+                self._close(leg, leg.lots - want, st["price"], minute)
+            else:
+                self._open(leg.right, leg.strike, leg.side, want - leg.lots,
+                           st["price"], minute)
         elif kind == "flatten":
             for leg in list(self.legs):
                 px = self._price(leg.right, leg.strike)
                 if px is not None:
                     self._close(leg, leg.lots, px, minute)
-        self.staged = None
-        return {"committed": kind, "at": minute}
+
+    def _open(self, right: str, strike: float, side: str, lots: int, price: float,
+              minute: str) -> None:
+        if lots <= 0:
+            return
+        self._leg_seq += 1
+        leg = ConsoleLeg(
+            id=f"L{self._leg_seq}",
+            symbol=f"{self.underlying}|{self.expiry}|{int(strike)}|{right}",
+            right=right, strike=float(strike), expiry=str(self.expiry), side=side,
+            lots=lots, lot_size=self._lot_size(), entry=price, entered_at=minute)
+        self.legs.append(leg)
+        self._charge("SHORT" if side == "S" else "BUY", leg.units, price, minute, leg.symbol)
 
     def _leg(self, leg_id: str | None) -> ConsoleLeg:
         for leg in self.legs:
@@ -486,6 +548,18 @@ class ConsoleSession:
         if not self._replaying:          # a replay re-derives the book; it does not re-trade
             self.journal.append(row)
         return c["total"]
+
+    def reset_book(self) -> None:
+        """Start again: no legs, no journal, no realised, no charges.
+
+        The console accumulates a SESSION's P&L, so after closing a structure the banked
+        number stays on the rail — correct, and confusing when you then build something new
+        and its "realised" is money the previous position made. This is the way back to a
+        clean slate without reopening the day."""
+        self.legs, self.journal, self.fills = [], [], []
+        self.realized = self.charges = 0.0
+        self._leg_seq = 0
+        self.staged = None
 
     # ----------------------------------------------------------------- risk
     def _leg_out(self, leg: ConsoleLeg) -> dict:
@@ -530,31 +604,60 @@ class ConsoleSession:
                 "margin_before": margin_now, "margin_after": margin_after,
                 "margin_source": src}
 
+    def held_by_strike(self) -> dict:
+        """Net lots per strike+right, so the LADDER can show where the position sits.
+
+        Reading a chain with a position on it and no marks means holding the strikes in your
+        head — the design puts an S×10 / B×10 badge on the row for exactly that reason."""
+        out: dict[str, dict] = {}
+        for leg in self.legs:
+            key = f"{int(leg.strike)}|{leg.right}"
+            row = out.setdefault(key, {"lots": 0, "side": leg.side, "enabled": False})
+            row["lots"] += leg.lots * leg.direction
+            row["enabled"] = row["enabled"] or leg.enabled
+        return {k: {"lots": abs(v["lots"]), "side": "B" if v["lots"] > 0 else "S",
+                    "enabled": v["enabled"]}
+                for k, v in out.items() if v["lots"]}
+
     def _project(self) -> list[ConsoleLeg]:
         """The book as the staged change would leave it — a COPY; nothing here is applied."""
         import copy
 
         book = [copy.copy(leg) for leg in self.legs]
-        st = self.staged or {}
-        kind = st.get("kind")
-        if kind == "add":
-            book.append(ConsoleLeg(
-                id="STAGED", symbol=f"{self.underlying}|{self.expiry}|"
-                                    f"{int(st['strike'])}|{st['right']}",
-                right=st["right"], strike=st["strike"], expiry=str(self.expiry),
-                side=st["side"], lots=st["lots"], lot_size=st["lot_size"],
-                entry=st["price"], entered_at=self.clock.strftime("%Y-%m-%dT%H:%M")))
-        elif kind == "exit":
-            for leg in book:
-                if leg.id == st["leg_id"]:
-                    leg.lots = max(0, leg.lots - int(st["lots"]))
-            book = [leg for leg in book if leg.lots > 0]
-        elif kind == "toggle":
-            for leg in book:
-                if leg.id == st["leg_id"]:
-                    leg.enabled = bool(st["enabled"])
-        elif kind == "flatten":
-            book = []
+        now = self.clock.strftime("%Y-%m-%dT%H:%M")
+        for i, st in enumerate((self.staged or {}).get("items", [])):
+            kind = st["kind"]
+            if kind in ("add", "roll"):
+                if kind == "roll":
+                    src = next((x for x in book if x.id == st["leg_id"]), None)
+                    if src is None:
+                        continue
+                    side, lots, right = src.side, src.lots, src.right
+                    book = [x for x in book if x.id != st["leg_id"]]
+                else:
+                    side, lots, right = st["side"], st["lots"], st["right"]
+                book.append(ConsoleLeg(
+                    id=f"STAGED{i}",
+                    symbol=f"{self.underlying}|{self.expiry}|{int(st['strike'])}|{right}",
+                    right=right, strike=st["strike"], expiry=str(self.expiry), side=side,
+                    lots=lots, lot_size=st.get("lot_size") or self._lot_size(),
+                    entry=st["price"], entered_at=now))
+            elif kind == "exit":
+                for leg in book:
+                    if leg.id == st["leg_id"]:
+                        leg.lots = max(0, leg.lots - int(st["lots"]))
+                book = [leg for leg in book if leg.lots > 0]
+            elif kind == "resize":
+                for leg in book:
+                    if leg.id == st["leg_id"]:
+                        leg.lots = int(st["lots"])
+                book = [leg for leg in book if leg.lots > 0]
+            elif kind == "toggle":
+                for leg in book:
+                    if leg.id == st["leg_id"]:
+                        leg.enabled = bool(st["enabled"])
+            elif kind == "flatten":
+                book = []
         return book
 
     def _risk_out(self) -> dict:

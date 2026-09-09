@@ -178,13 +178,15 @@ export const api = {
   }) => request<ConsoleState>(`/console/sessions/${id}/transport`,
     { method: "POST", body: JSON.stringify(body) }),
   consoleStage: (id: string, body: {
-    kind: "add" | "exit" | "toggle" | "flatten";
+    kind: "add" | "exit" | "toggle" | "flatten" | "roll" | "resize";
     right?: "CE" | "PE"; strike?: number; side?: "B" | "S"; lots?: number;
-    leg_id?: string; enabled?: boolean;
+    leg_id?: string; enabled?: boolean; replace?: boolean;
   }) => request<ConsoleState>(`/console/sessions/${id}/stage`,
     { method: "POST", body: JSON.stringify(body) }),
   consoleCommit: (id: string) =>
     request<ConsoleState>(`/console/sessions/${id}/commit`, { method: "POST" }),
+  consoleReset: (id: string) =>
+    request<ConsoleState>(`/console/sessions/${id}/reset`, { method: "POST" }),
   consoleDiscard: (id: string) =>
     request<ConsoleState>(`/console/sessions/${id}/discard`, { method: "POST" }),
   consoleProbe: (id: string, right: "CE" | "PE", strike: number) =>

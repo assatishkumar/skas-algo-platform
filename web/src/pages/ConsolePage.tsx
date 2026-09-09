@@ -13,7 +13,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  ConsoleChainLeg, ConsoleChainRow, ConsoleProbe, ConsoleState,
+  ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleProbe, ConsoleState,
 } from "../types";
 import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
 import { computeMetrics } from "../lib/payoff";
@@ -154,6 +154,89 @@ function Tile({ label, value, sub, tone }: {
   );
 }
 
+/** One position row. Strike and size are EDITABLE here, because "I want that leg one
+ *  strike higher" is a normal adjustment and re-typing the whole leg is not how anyone
+ *  thinks about it. Both go through staging like everything else: a strike change is a
+ *  roll (close here, open there) and a size change is a partial exit or a top-up, so the
+ *  payoff previews it and the charges are real. */
+function LegRow({ leg, grid, onStage }: {
+  leg: ConsoleLeg; grid: number;
+  onStage: (b: Parameters<typeof api.consoleStage>[1]) => void;
+}) {
+  const [exitLots, setExitLots] = useState(leg.lots);
+  useEffect(() => { setExitLots((n) => Math.min(Math.max(1, n), leg.lots)); }, [leg.lots]);
+  return (
+    <tr style={{ opacity: leg.enabled ? 1 : 0.45 }}>
+      <td className="py-1">
+        <button type="button" title={leg.enabled ? "exclude from the payoff" : "include"}
+          onClick={() => onStage({ kind: "toggle", leg_id: leg.id })}
+          className="w-[26px] h-[15px] rounded-full mr-2 align-middle"
+          style={{ background: leg.enabled ? "var(--oc-accent)" : "var(--oc-chip)" }}>
+          <span className="block w-[11px] h-[11px] rounded-full bg-white"
+            style={{ marginLeft: leg.enabled ? 13 : 2 }} />
+        </button>
+        <span className="px-1 rounded-[3px] text-[10px] font-bold"
+          style={{ color: leg.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)",
+            background: leg.side === "S" ? "var(--oc-neg-fill)" : "var(--oc-pos-fill)" }}>
+          {leg.side}</span>{" "}
+        <Nudge title="roll this leg a strike"
+          onDown={() => onStage({ kind: "roll", leg_id: leg.id, strike: leg.strike - grid })}
+          onUp={() => onStage({ kind: "roll", leg_id: leg.id, strike: leg.strike + grid })}>
+          <b>{Math.round(leg.strike).toLocaleString("en-IN")} {leg.right}</b>
+        </Nudge>{" "}
+        <Nudge title="resize this leg"
+          onDown={() => onStage({ kind: "resize", leg_id: leg.id, lots: leg.lots - 1 })}
+          onUp={() => onStage({ kind: "resize", leg_id: leg.id, lots: leg.lots + 1 })}>
+          <span style={{ color: "var(--oc-faint)" }}>×{leg.lots}</span>
+        </Nudge>
+      </td>
+      <td className="text-right">{num(leg.entry)}</td>
+      <td className="text-right">{leg.ltp == null ? "—" : num(leg.ltp)}</td>
+      <td className="text-right font-semibold"
+        style={{ color: (leg.pnl ?? 0) >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
+        {leg.pnl == null ? "—" : inr0(leg.pnl)}
+      </td>
+      <td className="text-right whitespace-nowrap">
+        {/* how many lots leave — the design's − 4 ＋ · Exit */}
+        <span className="inline-flex items-center gap-[3px] mr-1">
+          <MiniBtn onClick={() => setExitLots((n) => Math.max(1, n - 1))}>−</MiniBtn>
+          <span className="text-[10.5px] tabular-nums" style={{ minWidth: 14, display: "inline-block" }}>
+            {exitLots}</span>
+          <MiniBtn onClick={() => setExitLots((n) => Math.min(leg.lots, n + 1))}>+</MiniBtn>
+        </span>
+        <button type="button"
+          onClick={() => onStage({ kind: "exit", leg_id: leg.id, lots: exitLots })}
+          className="px-1.5 h-[18px] rounded-[3px] text-[10.5px]"
+          style={{ border: "1px solid var(--oc-line)", color: "var(--oc-accent)" }}>
+          Exit</button>
+      </td>
+    </tr>
+  );
+}
+
+function MiniBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick}
+      className="w-[14px] h-[14px] rounded-[3px] text-[10px] leading-[13px]"
+      style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>{children}</button>
+  );
+}
+
+/** A value with − / + on either side, revealed on hover so the row stays quiet at rest. */
+function Nudge({ children, onDown, onUp, title }: {
+  children: React.ReactNode; onDown: () => void; onUp: () => void; title: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-[3px] group/n" title={title}>
+      <span className="opacity-0 group-hover/n:opacity-100 transition">
+        <MiniBtn onClick={onDown}>−</MiniBtn></span>
+      {children}
+      <span className="opacity-0 group-hover/n:opacity-100 transition">
+        <MiniBtn onClick={onUp}>+</MiniBtn></span>
+    </span>
+  );
+}
+
 /** before → after for one risk number, the staged bar's whole job.
  *
  *  "unlimited" is a VALUE here, not a missing one. An em dash where the answer is "this
@@ -209,12 +292,15 @@ function ChainRow({ row, onPick, onProbe, probed }: {
         gridTemplateColumns: COLS, height: 32,
         opacity: dead ? 0.45 : 1,
         borderBottom: "1px solid var(--oc-hair)",
-        background: row.atm ? "var(--oc-accent-tint)" : undefined,
+        background: (row.ce.held || row.pe.held) ? "var(--oc-accent-dim)"
+          : row.atm ? "var(--oc-accent-tint)" : undefined,
+        boxShadow: (row.ce.held || row.pe.held)
+          ? "inset 2px 0 0 var(--oc-accent)" : undefined,
       }}>
       <Cell align="right" faint>{row.ce.delta == null ? "—" : num(row.ce.delta, 2)}</Cell>
       <PriceCell leg={row.ce} tint={row.itm_ce} right="CE" strike={row.strike} onProbe={onProbe}
         probed={probed[`CE${row.strike}`]} />
-      <BsCell tint={row.itm_ce} onB={() => onPick("B", "CE", row.strike)}
+      <BsCell tint={row.itm_ce} onB={() => onPick("B", "CE", row.strike)} held={row.ce.held}
         onS={() => onPick("S", "CE", row.strike)} disabled={!row.ce.quoted} />
       <div className="h-full flex items-center justify-center font-semibold"
         style={{
@@ -229,7 +315,7 @@ function ChainRow({ row, onPick, onProbe, probed }: {
           color: "var(--oc-muted)" }}>
         {row.iv == null ? "—" : num(row.iv, 2)}
       </div>
-      <BsCell tint={row.itm_pe} onB={() => onPick("B", "PE", row.strike)}
+      <BsCell tint={row.itm_pe} onB={() => onPick("B", "PE", row.strike)} held={row.pe.held}
         onS={() => onPick("S", "PE", row.strike)} disabled={!row.pe.quoted} left />
       <PriceCell leg={row.pe} tint={row.itm_pe} right="PE" strike={row.strike} onProbe={onProbe}
         probed={probed[`PE${row.strike}`]} />
@@ -294,8 +380,9 @@ function Cell({ children, align = "left", faint, strong, tint }: {
   );
 }
 
-function BsCell({ onB, onS, disabled, tint, left }: {
+function BsCell({ onB, onS, disabled, tint, left, held }: {
   onB: () => void; onS: () => void; disabled?: boolean; tint?: boolean; left?: boolean;
+  held?: { lots: number; side: "B" | "S"; enabled: boolean } | null;
 }) {
   const btn = (label: "B" | "S", fn: () => void) => (
     <button type="button" onClick={fn} disabled={disabled}
@@ -313,6 +400,17 @@ function BsCell({ onB, onS, disabled, tint, left }: {
     <div className="h-full flex items-center gap-1"
       style={{ justifyContent: left ? "flex-start" : "flex-end", paddingInline: 6,
         background: tint ? "var(--oc-itm)" : undefined }}>
+      {/* where the position IS. Reading a ladder against a position you are holding in your
+          head is how the wrong strike gets clicked. */}
+      {held && (
+        <span className="px-1 rounded-[3px] text-[9px] font-bold leading-[15px]"
+          title={`you hold ${held.lots} lot(s) here`}
+          style={{ opacity: held.enabled ? 1 : 0.45,
+            color: held.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)",
+            border: `1px solid ${held.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)"}` }}>
+          {held.side}×{held.lots}
+        </span>
+      )}
       {btn("B", onB)}{btn("S", onS)}
     </div>
   );
@@ -370,6 +468,10 @@ export default function ConsolePage() {
     mutationFn: () => api.consoleCommit(state!.session.id),
     onSuccess: (s) => { setState(s); setError(null); },
     onError: (e: Error) => setError(e.message),
+  });
+  const reset = useMutation({
+    mutationFn: () => api.consoleReset(state!.session.id),
+    onSuccess: setState,
   });
   const discard = useMutation({
     mutationFn: () => api.consoleDiscard(state!.session.id),
@@ -450,6 +552,13 @@ export default function ConsolePage() {
   // null state. Nothing here dot-accesses into a derived map without a guard.
   const rows = state?.chain.rows ?? [];
   const risk = state?.risk;
+  // The ladder's own strike step, so "roll a strike" moves exactly one row rather than a
+  // guessed 100 — SENSEX and BANKNIFTY do not share NIFTY's grid.
+  const gridStep = useMemo(() => {
+    const ks = (state?.chain.rows ?? []).map((r) => r.strike).sort((a, b) => a - b);
+    const gaps = ks.slice(1).map((k, i) => k - ks[i]).filter((g) => g > 0);
+    return gaps.length ? Math.min(...gaps) : 100;
+  }, [state?.chain.rows]);
   // The rail, the staged bar and the chart all read ONE calculator (lib/payoff.ts), so they
   // cannot disagree about what the same book is worth. §9: this runs on the first render
   // with no state at all, so every input is guarded.
@@ -684,8 +793,14 @@ export default function ConsolePage() {
                 {state?.legs.length ?? 0} legs · lot {state?.session.lot_size ?? "—"}
                 {state?.legs.length ? (
                   <button type="button" className="ml-3 underline"
-                    onClick={() => stage.mutate({ kind: "flatten" })}
+                    onClick={() => stage.mutate({ kind: "flatten", replace: true })}
                     style={{ color: "var(--oc-neg)" }}>Exit all</button>
+                ) : null}
+                {(state?.legs.length || risk?.realised) ? (
+                  <button type="button" className="ml-3 underline"
+                    title="clear the book AND this session's realised P&L — a clean slate"
+                    onClick={() => reset.mutate()}
+                    style={{ color: "var(--oc-muted)" }}>Reset</button>
                 ) : null}
               </span>
             </div>
@@ -707,36 +822,8 @@ export default function ConsolePage() {
                 </thead>
                 <tbody>
                   {state.legs.map((l) => (
-                    <tr key={l.id} style={{ opacity: l.enabled ? 1 : 0.45 }}>
-                      <td className="py-1">
-                        <button type="button" title={l.enabled ? "exclude from the payoff" : "include"}
-                          onClick={() => stage.mutate({ kind: "toggle", leg_id: l.id })}
-                          className="w-[26px] h-[15px] rounded-full mr-2 align-middle"
-                          style={{ background: l.enabled ? "var(--oc-accent)" : "var(--oc-chip)" }}>
-                          <span className="block w-[11px] h-[11px] rounded-full bg-white"
-                            style={{ marginLeft: l.enabled ? 13 : 2 }} />
-                        </button>
-                        <span className="px-1 rounded-[3px] text-[10px] font-bold"
-                          style={{ color: l.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)",
-                            background: l.side === "S" ? "var(--oc-neg-fill)" : "var(--oc-pos-fill)" }}>
-                          {l.side}</span>{" "}
-                        <b>{Math.round(l.strike).toLocaleString("en-IN")} {l.right}</b>{" "}
-                        <span style={{ color: "var(--oc-faint)" }}>×{l.lots}</span>
-                      </td>
-                      <td className="text-right">{num(l.entry)}</td>
-                      <td className="text-right">{l.ltp == null ? "—" : num(l.ltp)}</td>
-                      <td className="text-right font-semibold"
-                        style={{ color: (l.pnl ?? 0) >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
-                        {l.pnl == null ? "—" : inr0(l.pnl)}
-                      </td>
-                      <td className="text-right">
-                        <button type="button"
-                          onClick={() => stage.mutate({ kind: "exit", leg_id: l.id, lots: l.lots })}
-                          className="px-1.5 h-[18px] rounded-[3px] text-[10.5px]"
-                          style={{ border: "1px solid var(--oc-line)", color: "var(--oc-accent)" }}>
-                          Exit</button>
-                      </td>
-                    </tr>
+                    <LegRow key={l.id} leg={l} grid={gridStep}
+                      onStage={(b) => stage.mutate(b)} />
                   ))}
                 </tbody>
               </table>
@@ -765,6 +852,21 @@ export default function ConsolePage() {
               {risk?.legs_open ? `${risk.legs_open} legs open` : "no open position"} · paused{" "}
               {state?.session.clock ?? "—"}
             </div>
+            {/* A session's realised P&L survives closing the position — it is money you
+                made. Said plainly, because "MTM ₹5,487 · NO POSITION" reads as a bug, and
+                a later structure's rail would otherwise show the previous one's profit as
+                if it were its own. Reset clears it. */}
+            {!!risk?.realised && (
+              <div className="text-[11px] mt-1 flex items-center gap-2">
+                <span style={{ color: "var(--oc-faint)" }}>
+                  {risk.legs_open
+                    ? `includes ${inr0(risk.realised)} banked from closed legs`
+                    : `${inr0(risk.realised)} banked this session · nothing open`}
+                </span>
+                <button type="button" onClick={() => reset.mutate()}
+                  className="underline" style={{ color: "var(--oc-muted)" }}>reset</button>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2 mt-3">
               <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
                 sub={`${risk?.margin_source ?? "model"} · ${pctOf(risk?.margin, risk?.capital)} of capital`} />
@@ -782,8 +884,9 @@ export default function ConsolePage() {
                   : "—"}
                 sub={mNow?.breakevens.length && state?.market.spot
                   ? `${signed(100 * (mNow.breakevens[0] / state.market.spot - 1))}% from spot` : "—"} />
-              <Tile label="Realised / charges"
-                value={inr0(risk?.realised ?? 0)} sub={`${inr0(-(risk?.charges ?? 0))} costs`} />
+              <Tile label="Open P&L" tone={(risk?.unrealised ?? 0) >= 0 ? "pos" : "neg"}
+                value={inr0(risk?.unrealised ?? 0)}
+                sub={`banked ${inr0(risk?.realised ?? 0)} · ${inr0(-(risk?.charges ?? 0))} costs`} />
             </div>
             {risk?.margin_source === "model" && (
               <div className="mt-2 text-[10.5px]" style={{ color: "var(--oc-caution)" }}>

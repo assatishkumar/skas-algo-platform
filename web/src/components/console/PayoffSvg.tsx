@@ -17,6 +17,11 @@ import { buildLivePayoff, computeMetrics, type LiveLeg } from "../../lib/payoff"
 import type { ConsoleLeg } from "../../types";
 
 const MINUS = "−";
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "2026-04-28" → "28 Apr". A bare "28" in a tooltip reads as a quantity. */
+const prettyExpiry = (iso: string | null) =>
+  !iso ? "" : `${iso.slice(8, 10)} ${MONTHS[Number(iso.slice(5, 7)) - 1] ?? ""}`;
 const inr = (v: number, dp = 0) =>
   (v < 0 ? MINUS : "+") + "₹" + Math.abs(v).toLocaleString("en-IN",
     { minimumFractionDigits: dp, maximumFractionDigits: dp });
@@ -39,6 +44,9 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, height = 
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(462);
+  // The spot the pointer is over. A payoff chart is read by asking "and if it closes
+  // THERE?", which is a question the picture can only answer with a number attached.
+  const [hover, setHover] = useState<number | null>(null);
   useEffect(() => {
     if (!box.current) return;
     const ro = new ResizeObserver(([e]) => setW(Math.max(320, e.contentRect.width)));
@@ -96,9 +104,25 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, height = 
       ` L${px(seg[seg.length - 1].spot)},${zero} Z`;
   };
 
+  // nearest computed point to the pointer — the curve is sampled, so snap rather than
+  // interpolate, and the tooltip then quotes a value the chart actually drew.
+  const at = hover == null ? null
+    : pts.reduce((best, p) =>
+        Math.abs(p.spot - hover) < Math.abs(best.spot - hover) ? p : best, pts[0]);
+  const atGhost = hover == null || !gpts.length ? null
+    : gpts.reduce((best, p) =>
+        Math.abs(p.spot - hover) < Math.abs(best.spot - hover) ? p : best, gpts[0]);
+
   return (
-    <div ref={box} style={{ width: "100%" }}>
-      <svg width={w} height={height} style={{ display: "block" }}>
+    <div ref={box} style={{ width: "100%", position: "relative" }}>
+      <svg width={w} height={height} style={{ display: "block" }}
+        onMouseLeave={() => setHover(null)}
+        onMouseMove={(e) => {
+          const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+          const x = e.clientX - r.left;
+          if (x < L || x > w - R) { setHover(null); return; }
+          setHover(x0 + ((x - L) / (w - L - R)) * (x1 - x0));
+        }}>
         {[0.25, 0.5, 0.75].map((f) => {
           const v = x0 + (x1 - x0) * f;
           return <line key={f} x1={px(v)} x2={px(v)} y1={T} y2={height - B}
@@ -147,12 +171,50 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, height = 
             {inr(metrics.maxLoss)}
           </text>
         )}
+        {at && (
+          <>
+            <line x1={px(at.spot)} x2={px(at.spot)} y1={T} y2={height - B}
+              stroke="var(--oc-muted)" strokeWidth={1} strokeDasharray="2 2" />
+            <circle cx={px(at.spot)} cy={py(at.expiry)} r={3} fill="var(--oc-pos)" />
+            <circle cx={px(at.spot)} cy={py(at.now)} r={3} fill="var(--oc-accent)" />
+          </>
+        )}
         {[0, 0.5, 1].map((f) => {
           const v = x0 + (x1 - x0) * f;
           return <text key={f} x={px(v)} y={height - 6} fontSize={9} textAnchor="middle"
             fill="var(--oc-faint)">{Math.round(v).toLocaleString("en-IN")}</text>;
         })}
       </svg>
+      {at && (
+        <div className="absolute pointer-events-none rounded-[8px] px-2.5 py-1.5 text-[11px]"
+          style={{
+            left: Math.min(Math.max(px(at.spot) + 10, 4), Math.max(4, w - 190)),
+            top: 8, background: "var(--oc-ink)", color: "var(--oc-surface)", minWidth: 168,
+          }}>
+          <div className="font-semibold">
+            If spot is {Math.round(at.spot).toLocaleString("en-IN")}
+            {spot ? (
+              <span style={{ opacity: 0.65 }}>
+                {" "}({at.spot >= spot ? "+" : MINUS}
+                {Math.abs(100 * (at.spot / spot - 1)).toFixed(2)}%)
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-1" style={{ opacity: 0.75 }}>P&amp;L</div>
+          <Row label={`at expiry ${prettyExpiry(expiry)}`} v={at.expiry} />
+          <Row label="now (T+0)" v={at.now} />
+          {atGhost && <Row label="staged, at expiry" v={atGhost.expiry} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Row({ label, v }: { label: string; v: number }) {
+  return (
+    <div className="flex justify-between gap-4 tabular-nums">
+      <span style={{ opacity: 0.7 }}>{label}</span>
+      <b style={{ color: v >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>{inr(v)}</b>
     </div>
   );
 }

@@ -1953,6 +1953,7 @@ export interface ConsoleChainLeg {
   delta: number | null;
   quoted: boolean;        // false = never printed / outside the stale window
   stale_min: number | null;
+  held?: { lots: number; side: "B" | "S"; enabled: boolean } | null;
 }
 
 export interface ConsoleChainRow {
@@ -2003,12 +2004,17 @@ export interface ConsoleLeg {
   enabled: boolean; realized: number;
 }
 
+export interface ConsoleStagedItem {
+  kind: "add" | "exit" | "toggle" | "flatten" | "roll" | "resize";
+  label: string;
+  leg_id?: string; lots?: number; price?: number; strike?: number;
+}
+
 export interface ConsoleStaged {
-  kind: "add" | "exit" | "toggle" | "flatten";
+  items: ConsoleStagedItem[];
   label: string;
   after_legs: ConsoleLeg[];
   margin_before: number; margin_after: number; margin_source: string;
-  leg_id?: string; lots?: number; price?: number;
 }
 
 export interface ConsoleRisk {

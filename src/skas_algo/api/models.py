@@ -107,13 +107,14 @@ class ConsoleTransport(BaseModel):
 class ConsoleStage(BaseModel):
     """Describe a change to the console's book. Nothing is applied until /commit."""
 
-    kind: Literal["add", "exit", "toggle", "flatten"]
+    kind: Literal["add", "exit", "toggle", "flatten", "roll", "resize"]
     right: Literal["CE", "PE"] | None = None
     strike: float | None = None
     side: Literal["B", "S"] | None = None
     lots: int = 1
     leg_id: str | None = None
     enabled: bool | None = None
+    replace: bool = False     # True = start a fresh basket instead of adding to it
 
 
 class UniverseOut(BaseModel):

@@ -124,6 +124,15 @@ async def commit(session_id: str) -> dict:
     return session.state()
 
 
+@router.post("/sessions/{session_id}/reset")
+def reset_book(session_id: str) -> dict:
+    """Clear the book, the journal and the session's realised P&L — a clean slate at the
+    same minute, without reopening the day."""
+    session = _get(session_id)
+    session.reset_book()
+    return session.state()
+
+
 @router.post("/sessions/{session_id}/discard")
 def discard(session_id: str) -> dict:
     session = _get(session_id)
