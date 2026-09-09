@@ -265,6 +265,9 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             tile["order_broker"] = snap.get("order_broker")
             tile["resume_orders_pending"] = snap.get("resume_orders_pending")
             tile["strategy_alert"] = snap.get("strategy_alert")
+            # SuperTrend runs: thin-history count → the tile's chip + "Backfill history now"
+            tile["history_thin"] = snap.get("history_thin")
+            tile["history_prepared_at"] = snap.get("history_prepared_at")
             tile["underlying_spot"] = snap.get("underlying_spot")  # live spot for the tile subline
             # The open cycle's entry stamp + the index level it was entered at, read off the
             # transaction log (services/live_cycles) — the tile shows "entered 57,515" next to
