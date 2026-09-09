@@ -2031,6 +2031,7 @@ export interface ConsoleLeg {
   side: "B" | "S"; lots: number; lot_size: number; units: number; direction: number;
   entry: number; ltp: number | null; pnl: number | null;
   enabled: boolean; realized: number;
+  dte: number | null;
   // Per-SHARE, position-signed greeks off the leg's own contract — the convention of the
   // Live page (`_enrich_greeks`): a short leg reads Θ > 0, Γ and Vega < 0. Θ per calendar
   // day, Vega per 1% of IV. null when the leg has no solvable print.
@@ -2070,7 +2071,8 @@ export interface ConsoleStaged {
 export interface ConsoleRisk {
   realised: number; unrealised: number; mtm: number; charges: number;
   margin: number;
-  margin_source: string;   // "manual" = a measured anchor, "model" = hedge-blind estimate
+  margin_source: string;   // "manual" = a measured anchor, "model" = SPAN-shaped estimate
+  margin_detail: { span: number; exposure: number; total: number; worst_move_pct: number } | null;
   capital: number; legs_open: number;
   greeks: ConsoleGreeks;   // Σ per-share greek × units over ENABLED legs
 }

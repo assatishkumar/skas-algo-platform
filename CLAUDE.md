@@ -1081,11 +1081,23 @@ second order path (§1).
   and a better one than a confirm, because it also covers the leg you decide against a
   minute later: fills carry a `group`, so an undo takes back the WHOLE action — a roll's
   two fills, a basket's four legs — and rebuilds the book at the same minute.
-- **Margin is labelled by source, always.** `margin_per_lot_set` (the `margin_per_set`
-  precedent) is the only accurate answer; the fallback is the platform's model, which is
-  span+exposure on the SHORTS and blind to long hedges — ₹19.4L against a Kite basket's
-  ₹3.64L on the design's own bear call spread. Every "% of margin" carries
-  `margin_source`, and the rail says so in words when it is the model.
+- **Margin is labelled by source, always — and the model is SPAN-SHAPED since
+  2026-09-09** (`options_console/margin.py::span_like`): the book's worst loss over a ±6%
+  price scan × ±25% vol scan (hedges OFFSET, every leg BS-repriced at its own expiry) plus
+  2% exposure on every SHORT unit (nothing offsets — this is why Kite asks ₹3.6L for a
+  spread whose max loss is ₹49k). Calibrated on the one broker figure the design carries:
+  bear call ×10, Kite ₹3.64L → ₹3.4L; a 1-lot straddle ≈ ₹1.3–1.5L; a long-only book 0.
+  The platform's `short_option_margin` (per-short-leg span+exposure, no offset) read
+  ₹4.1L for that straddle and ₹19.4L for the spread — the owner's "margin is wrong".
+  Still an estimate: `margin_source` stays "model", `margin_detail{span,exposure}` is in
+  the DTO, and `margin_per_lot_set` (the `margin_per_set` precedent) outranks it. Do NOT
+  reuse this for strategy sizing — that path is deliberately the deterministic
+  `short_option_margin` (§8 ratio sizing).
+- **A leg's expiry is shown ON the leg, flagged when it is not the ladder's.** A 1-DTE
+  straddle built under one chip and viewed under the next settled at 15:30 and read as
+  "pressing +1d made my position vanish"; the Positions row now carries the leg's own
+  expiry + DTE (amber ⚠ when ≠ the chain's), and the empty state names what SETTLED, at
+  what, and when.
 - The chain solves IV/Δ SERVER-side (0.16 ms for 44 strikes) so the ladder and the payoff
   share one calculator; the frontend reuses `lib/payoff.ts::computeMetrics` for max P/L,
   breakevens, POP and the staged before→after, so the rail and the chart cannot disagree.

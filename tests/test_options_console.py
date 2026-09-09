@@ -853,3 +853,43 @@ def test_a_saved_session_reloads_with_its_book_alerts_and_bookmarks():
     assert cstore.load.__name__ == "load"
     with pytest.raises(OSError):
         cstore.load("../../etc/passwd")          # the name is basename'd, never a path
+
+
+# ------------------------------------------------------------------ margin (SPAN-shaped)
+
+
+def test_margin_offsets_hedges_and_charges_exposure_on_every_short():
+    """The order a broker's basket puts structures in: a hedged spread costs less than a
+    straddle, which costs less than the same shorts naked; a long-only book blocks
+    nothing; and the design's own bear call spread lands within ~10% of Kite's ₹3,63,826
+    (the old per-leg sum read ₹19.4L for it)."""
+    from skas_algo.services.options_console.margin import MarginLeg, span_like
+    t = 27 / 365
+    spread = span_like([MarginLeg("CE", 24000, -1, 650, 0.2246, t),
+                        MarginLeg("CE", 24100, +1, 650, 0.2232, t)], 22905)
+    assert 3.2e5 < spread["total"] < 4.0e5
+    assert spread["exposure"] == pytest.approx(0.02 * 22905 * 650, rel=1e-6)
+    naked = span_like([MarginLeg("CE", 22900, -1, 65, 0.25, t)], 22905)["total"]
+    straddle = span_like([MarginLeg("CE", 22900, -1, 65, 0.25, t),
+                          MarginLeg("PE", 22900, -1, 65, 0.25, t)], 22905)["total"]
+    fly = span_like([MarginLeg("CE", 22900, -1, 65, 0.25, t), MarginLeg("PE", 22900, -1, 65, 0.25, t),
+                     MarginLeg("CE", 23300, 1, 65, 0.24, t), MarginLeg("PE", 22500, 1, 65, 0.27, t)],
+                    22905)["total"]
+    assert fly < straddle < 2 * naked
+    assert 0.7e5 < naked < 1.3e5
+    long_only = span_like([MarginLeg("CE", 22900, 1, 65, 0.25, t)], 22905)
+    assert long_only["total"] == 0
+
+
+def test_the_session_margin_is_the_span_shaped_one_and_says_so():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    s.stage(kind="add", right="PE", strike=24000, side="S", lots=1)
+    r = s.state()["risk"]
+    assert r["margin_source"] == "model" and r["margin_detail"]["exposure"] > 0
+    assert r["margin"] == pytest.approx(r["margin_detail"]["total"])
+    # the manual anchor still outranks it
+    s.margin_per_lot_set = 130000
+    r2 = s.state()["risk"]
+    assert r2["margin"] == 130000 and r2["margin_source"] == "manual" and r2["margin_detail"] is None

@@ -171,9 +171,15 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
     <div ref={box} className="h-full" style={{ width: "100%", position: "relative",
       minHeight }}>
       <div className="flex justify-end gap-1" style={{ height: ZOOM_ROW }}>
+        {zoom != null && !ZOOMS.some(([z]) => z === zoom) && (
+          <span className="h-[18px] px-1.5 rounded-[4px] text-[9.5px] font-semibold"
+            style={{ background: "var(--oc-accent-dim)", color: "var(--oc-accent)" }}>
+            ±{(zoom * 100).toFixed(1)}%
+          </span>
+        )}
         {ZOOMS.map(([z, label]) => (
           <button key={label} type="button" onClick={() => setZoom(z)}
-            title={z ? `spot ${label}` : "span spot and every strike"}
+            title={z ? `spot ${label}` : "the whole structure — wheel over the chart to zoom"}
             className="h-[18px] px-1.5 rounded-[4px] text-[9.5px] font-semibold"
             style={{ background: zoom === z ? "var(--oc-accent-dim)" : "var(--oc-chip)",
               color: zoom === z ? "var(--oc-accent)" : "var(--oc-muted)" }}>
@@ -182,6 +188,12 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
         ))}
       </div>
       <svg width={w} height={height} style={{ display: "block" }}
+        onWheel={(e) => {
+          // wheel = zoom around spot; the fit's own half-width is the starting point
+          e.preventDefault();
+          const cur = zoom ?? (range && spot ? (range[1] - range[0]) / 2 / spot : 0.05);
+          setZoom(Math.max(0.005, Math.min(0.4, cur * (e.deltaY > 0 ? 1.15 : 0.87))));
+        }}
         onMouseLeave={() => setHover(null)}
         onMouseMove={(e) => {
           const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect();

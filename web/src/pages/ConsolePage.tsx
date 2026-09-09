@@ -18,6 +18,7 @@ import type {
 } from "../types";
 import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
 import { buildLivePayoff } from "../lib/payoff";
+import { formatOptionSymbol } from "../lib/symbol";
 import { computeMetrics } from "../lib/payoff";
 
 /* ------------------------------------------------------------------ formatting
@@ -257,67 +258,39 @@ function PresetGallery({ presets, state, lots, onApply }: {
     return <div className="h-full flex items-center justify-center text-[12px]"
       style={{ color: "var(--oc-faint)" }}>Opening the session…</div>;
   }
+  // Design D4 at its quietest (owner: "just go with payoff charts"): name, badge, the
+  // rule, the payoff glyph, and the card itself is the Trade button. The strikes and the
+  // numbers live on the rail once the structure is on the book — the picture picks it.
   return (
     <div className="h-full overflow-auto">
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {presets.map((p) => {
           const legs = toPayoffLegs(p.legs);
-          const m = p.ok && spot && expiry && legs.length
-            ? computeMetrics(legs, spot, expiry, state.session.date) : null;
+          const d = p.ok && spot && expiry && legs.length
+            ? buildLivePayoff(legs, spot, expiry, state.session.date) : null;
+          const legsText = p.legs.map((l) =>
+            `${l.side} ${Math.round(l.strike)} ${l.right}${l.lots > 1 ? ` ×${l.lots}` : ""}`).join(" · ");
           return (
-            <div key={p.id} className="rounded-[8px] p-2.5 flex flex-col gap-1"
-              style={{ background: "var(--oc-panel2)", opacity: p.ok ? 1 : 0.7 }}>
-              <div className="flex items-center justify-between gap-2">
-                <b className="text-[12.5px]">{p.name}</b>
-                <span className="px-1.5 py-[1px] rounded-[3px] text-[8.5px] font-bold whitespace-nowrap"
+            <button key={p.id} type="button" disabled={!p.ok} onClick={() => onApply(p.id)}
+              title={p.ok ? `${p.rule} — ${legsText} · click to trade ×${lots}`
+                : `${p.rule} — cannot build here: ${p.reason}`}
+              className="rounded-[8px] p-2 text-left flex flex-col gap-1 disabled:opacity-50"
+              style={{ background: "var(--oc-panel2)", border: "1px solid transparent" }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--oc-accent)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = "transparent"; }}>
+              <div className="flex items-center justify-between gap-1">
+                <b className="text-[11.5px] leading-tight">{p.name}</b>
+                <span className="px-1 py-[1px] rounded-[3px] text-[8px] font-bold whitespace-nowrap"
                   style={{ color: p.defined ? "var(--oc-pos)" : "var(--oc-neg)",
                     border: `1px solid ${p.defined ? "var(--oc-pos)" : "var(--oc-neg)"}` }}>
                   {p.defined ? "DEFINED" : "UNDEFINED"}
                 </span>
               </div>
-              <div className="text-[10.5px]" style={{ color: "var(--oc-muted)" }}>{p.rule}</div>
-              {p.ok ? (
-                <>
-                  <div className="text-[11px] tabular-nums leading-snug">
-                    {p.legs.map((l) => (
-                      <div key={l.id} className="flex justify-between">
-                        <span>
-                          <span className="font-bold" style={{ color: l.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)" }}>
-                            {l.side}</span>{" "}
-                          {Math.round(l.strike).toLocaleString("en-IN")} {l.right}
-                          {l.lots > 1 ? ` ×${l.lots}` : ""}
-                        </span>
-                        <span style={{ color: "var(--oc-muted)" }}>{num(l.entry)}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-2 gap-x-2 text-[10px] tabular-nums mt-0.5"
-                    style={{ color: "var(--oc-muted)" }}>
-                    <span>{p.net_credit != null && p.net_credit >= 0 ? "credit" : "debit"}{" "}
-                      <b style={{ color: "var(--oc-ink)" }}>{inr0(Math.abs(p.net_credit ?? 0))}</b></span>
-                    <span>margin <b style={{ color: "var(--oc-ink)" }}>{inr0(p.margin)}</b>
-                      <span style={{ color: "var(--oc-faint)" }}> {p.margin_source}</span></span>
-                    <span>max P <b style={{ color: "var(--oc-pos)" }}>
-                      {m ? (m.maxProfitUnlimited ? "∞" : inr0(m.maxProfit)) : "—"}</b></span>
-                    <span>max L <b style={{ color: "var(--oc-neg)" }}>
-                      {m ? (m.maxLossUnlimited ? "∞" : inr0(m.maxLoss)) : "—"}</b></span>
-                    <span>POP <b style={{ color: "var(--oc-ink)" }}>
-                      {m?.pop == null ? "—" : `${(m.pop * 100).toFixed(0)}%`}</b></span>
-                    <span>BE <b style={{ color: "var(--oc-ink)" }}>
-                      {m?.breakevens.length ? m.breakevens.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ") : "—"}</b></span>
-                  </div>
-                </>
-              ) : (
-                <div className="text-[10.5px] py-1" style={{ color: "var(--oc-caution)" }}>
-                  Cannot build here: {p.reason}
-                </div>
-              )}
-              <button type="button" disabled={!p.ok} onClick={() => onApply(p.id)}
-                className="mt-auto h-[24px] rounded-[5px] text-[11px] font-semibold disabled:opacity-40"
-                style={{ background: "var(--oc-accent)", color: "#fff" }}>
-                {state.session.requires_confirm ? "Stage" : "Trade"} {p.legs.length || ""} leg{p.legs.length === 1 ? "" : "s"} ×{lots}
-              </button>
-            </div>
+              <PayoffGlyph data={d?.data ?? null} />
+              <div className="text-[9.5px] leading-tight" style={{ color: "var(--oc-faint)" }}>
+                {p.ok ? p.rule : `cannot build: ${p.reason}`}
+              </div>
+            </button>
           );
         })}
         {!presets.length && (
@@ -327,6 +300,46 @@ function PresetGallery({ presets, state, lots, onApply }: {
         )}
       </div>
     </div>
+  );
+}
+
+/** The design's payoff glyph: the expiry line green where it pays, red where it loses,
+ *  soft fills, a zero baseline. Shape only — no axes, no numbers. */
+function PayoffGlyph({ data }: { data: { spot: number; expiry: number }[] | null }) {
+  const W = 120, H = 44;
+  if (!data?.length) {
+    return <div style={{ height: H, background: "var(--oc-chip)", borderRadius: 4 }} />;
+  }
+  const xs = data.map((p) => p.spot), ys = data.map((p) => p.expiry);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const yLo = Math.min(0, ...ys), yHi = Math.max(0, ...ys);
+  const px = (v: number) => ((v - x0) / (x1 - x0 || 1)) * W;
+  const py = (v: number) => 3 + (1 - (v - yLo) / ((yHi - yLo) || 1)) * (H - 6);
+  const runs: { pos: boolean; pts: typeof data }[] = [];
+  data.forEach((p, i) => {
+    const pos = p.expiry >= 0;
+    const last = runs[runs.length - 1];
+    if (!last || last.pos !== pos) runs.push({ pos, pts: i ? [data[i - 1], p] : [p] });
+    else last.pts.push(p);
+  });
+  const zero = py(0);
+  const area = (sign: 1 | -1) => {
+    const seg = data.filter((p) => (sign > 0 ? p.expiry >= 0 : p.expiry <= 0));
+    if (seg.length < 2) return "";
+    return `M${px(seg[0].spot)},${zero} ` + seg.map((p) => `L${px(p.spot)},${py(p.expiry)}`).join(" ")
+      + ` L${px(seg[seg.length - 1].spot)},${zero} Z`;
+  };
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
+      <path d={area(1)} fill="var(--oc-pos-fill)" />
+      <path d={area(-1)} fill="var(--oc-neg-fill)" />
+      <line x1={0} x2={W} y1={zero} y2={zero} stroke="var(--oc-muted)" strokeWidth={0.6} />
+      {runs.filter((r) => r.pts.length > 1).map((r, i) => (
+        <path key={i} fill="none" strokeWidth={1.4} vectorEffect="non-scaling-stroke"
+          stroke={r.pos ? "var(--oc-pos)" : "var(--oc-neg)"}
+          d={r.pts.map((p, j) => `${j ? "L" : "M"}${px(p.spot)},${py(p.expiry)}`).join(" ")} />
+      ))}
+    </svg>
   );
 }
 
@@ -446,8 +459,8 @@ function AlertsCard({ alerts, disabled, onArm, onClear }: {
  *  thinks about it. Both go through staging like everything else: a strike change is a
  *  roll (close here, open there) and a size change is a partial exit or a top-up, so the
  *  payoff previews it and the charges are real. */
-function LegRow({ leg, grid, onStage }: {
-  leg: ConsoleLeg; grid: number;
+function LegRow({ leg, grid, onStage, chainExpiry }: {
+  leg: ConsoleLeg; grid: number; chainExpiry: string | null;
   onStage: (b: Parameters<typeof api.consoleStage>[1]) => void;
 }) {
   const [exitLots, setExitLots] = useState(leg.lots);
@@ -481,6 +494,17 @@ function LegRow({ leg, grid, onStage }: {
           <b className="whitespace-nowrap">
             {Math.round(leg.strike).toLocaleString("en-IN")} {leg.right}</b>
         </Stepper>
+      </td>
+      {/* the leg's OWN expiry, with its DTE — and flagged when it is not the ladder's,
+          because a 1-DTE leg under an 11 Aug chip settled overnight and read as "my
+          position vanished" (owner, 2026-09-09) */}
+      <td className="whitespace-nowrap text-[11px]"
+        title={leg.expiry !== chainExpiry ? "not the expiry the chain is showing" : undefined}
+        style={{ color: leg.expiry !== chainExpiry ? "var(--oc-caution)" : "var(--oc-muted)" }}>
+        {expiryChip(leg.expiry)}
+        <span className="text-[10px]" style={{ color: "var(--oc-faint)" }}>
+          {leg.dte == null ? "" : ` ${leg.dte}d`}</span>
+        {leg.expiry !== chainExpiry ? " ⚠" : ""}
       </td>
       <td>
         <Stepper title="add to or trim this position"
@@ -1084,6 +1108,262 @@ export default function ConsolePage() {
   }, [state?.legs, spotNow, expNow, state?.session.date]);
   const busy = open.isPending || move.isPending;
   const breach = state?.alerts.find((a) => a.kind === "stop" && a.state === "fired") ?? null;
+  // legs the MARKET closed (expiry settlement) that are in the cursor's past
+  const settled = useMemo(() => (state?.fills ?? []).filter((f) => f.action === "SETTLE"),
+    [state?.fills]);
+
+  const payoffPanel = (
+                <Panel className="flex flex-col min-h-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[13px] font-semibold">
+                      {showPresets || !state?.legs.length ? "Presets" : "Payoff"}
+                      {(showPresets || !state?.legs.length) && (
+                        <span className="ml-2 text-[10.5px] font-normal" style={{ color: "var(--oc-faint)" }}>
+                          resolved at {state?.session.clock ?? "—"} on {state?.chain.expiry ? expiryChip(state.chain.expiry) : "—"} · ×{lots}
+                        </span>
+                      )}
+                    </span>
+                    <span className="flex items-center gap-2 text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+                      {state?.legs.length ? (
+                        <Chip active={showPresets} onClick={() => setShowPresets((v) => !v)}
+                          title="prebuilt structures, resolved against the chain at the cursor">
+                          {showPresets ? "payoff" : "presets"}</Chip>
+                      ) : null}
+                      {!showPresets && state?.legs.length ? "expiry · T+0 dashed · staged dotted" : null}
+                    </span>
+                  </div>
+                  {/* a fixed chart height, so Positions sits right under it instead of at the
+                      bottom of a chart stretched to the rail's height (owner, 2026-09-09) */}
+                  <div style={{ height: chainOpen ? 300 : 420 }}>
+                    {(showPresets || !state?.legs.length) ? (
+                      <PresetGallery presets={presetData?.presets ?? []} state={state} lots={lots}
+                        onApply={(id) => applyPreset.mutate({ preset: id, lots })} />
+                    ) : (
+                      <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
+                        spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
+                        today={state?.session.date ?? ""} alerts={state?.alerts ?? []}
+                        realised={risk?.realised ?? 0} />
+                    )}
+                  </div>
+                  {/* NET GREEKS: Σ per-share greek × units over the enabled legs, the same
+                      convention as the Live tile. Beside them, the T+0 book at ±1% of spot —
+                      the question the greeks approximate, answered directly. */}
+                  <div className="mt-2 pt-2 flex flex-wrap gap-1.5 [&>*]:flex-1 [&>*]:min-w-[92px]"
+                    style={{ borderTop: "1px solid var(--oc-hair)" }}>
+                    <GreekCell label="Δ net" v={risk?.greeks.delta} dp={1} unit="units" />
+                    <GreekCell label="Γ net" v={risk?.greeks.gamma} dp={3} />
+                    <GreekCell label="Θ /day" v={risk?.greeks.theta} dp={0} inr />
+                    <GreekCell label="Vega /1%" v={risk?.greeks.vega} dp={0} inr />
+                    <ScenarioCell label={`${MINUS}1%`} v={scen?.[0]} base={scen?.[1]} />
+                    <ScenarioCell label="spot" v={scen?.[1]} base={scen?.[1]} />
+                    <ScenarioCell label="+1%" v={scen?.[2]} base={scen?.[1]} />
+                  </div>
+                </Panel>
+  );
+
+  const stagedBar = (
+    <>
+                {/* Only a book that can reach a broker gets an Apply between the click and the
+                    trade. In replay this block never renders — the click IS the trade, and Undo
+                    is the way back. */}
+                {state?.staged && state.session.requires_confirm && (
+                  <div className="rounded-[10px] p-3"
+                    style={{ border: "1px dashed var(--oc-accent)",
+                      background: "var(--oc-accent-tint)" }}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
+                        style={{ background: "var(--oc-accent)", color: "#fff" }}>STAGED</span>
+                      <b className="text-[12.5px]">{state.staged.label}</b>
+                      <span className="text-[11px]" style={{ color: "var(--oc-muted)" }}>
+                        previewed on the chart before commit
+                      </span>
+                      <span className="ml-auto flex gap-2">
+                        <button type="button" onClick={() => commit.mutate()}
+                          className="px-2.5 h-[24px] rounded-[5px] text-[11.5px] font-semibold"
+                          style={{ background: "var(--oc-accent)", color: "#fff" }}>Apply ⏎</button>
+                        <button type="button" onClick={() => discard.mutate()}
+                          className="px-2.5 h-[24px] rounded-[5px] text-[11.5px]"
+                          style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
+                          Discard esc</button>
+                      </span>
+                    </div>
+                    <div className="mt-1.5 flex gap-5 text-[11.5px] flex-wrap tabular-nums">
+                      <Delta label="max profit" good
+                        a={mNow?.maxProfit} unlimitedA={mNow?.maxProfitUnlimited}
+                        b={mStaged?.maxProfit} unlimitedB={mStaged?.maxProfitUnlimited} />
+                      <Delta label="max loss"
+                        a={mNow?.maxLoss} unlimitedA={mNow?.maxLossUnlimited}
+                        b={mStaged?.maxLoss} unlimitedB={mStaged?.maxLossUnlimited} />
+                      <span><span style={{ color: "var(--oc-faint)" }}>margin</span>{" "}
+                        {inr0(state.staged.margin_before)} → <b>{inr0(state.staged.margin_after)}</b>
+                        <span style={{ color: "var(--oc-faint)" }}> · {state.staged.margin_source}</span>
+                      </span>
+                    </div>
+                  </div>
+                )}
+    </>
+  );
+
+  const railColumn = (
+    <>
+                <Panel className={breach ? "border-l-4" : ""}
+                  style={breach ? { borderLeftColor: "var(--oc-neg)" } : undefined}>
+                  {breach && (
+                    <div className="mb-2 px-2 py-1 rounded-[6px] text-[11px] font-semibold"
+                      style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>
+                      STOP FIRED {breach.fired_at?.slice(11)} · MTM {inr0(breach.fired_value ?? 0)} crossed {inr0(-Math.abs(breach.value))}
+                    </div>
+                  )}
+                  <div className="flex items-start justify-between">
+                    <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
+                      style={{ color: "var(--oc-faint)" }}>Total MTM · realised + open</span>
+                    <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
+                      style={{ background: risk && risk.legs_open ? "var(--oc-chip)" : "transparent",
+                        color: "var(--oc-muted)" }}>
+                      {!risk?.legs_open ? "NO POSITION"
+                        : mNow && !mNow.maxLossUnlimited ? "DEFINED RISK" : "UNDEFINED RISK"}
+                    </span>
+                  </div>
+                  <div className="text-[21px] font-semibold mt-1 flex items-baseline gap-2"
+                    style={{ color: !risk?.mtm ? "var(--oc-ink)"
+                      : risk.mtm > 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
+                    {inr0(risk?.mtm ?? 0)}
+                    {!!risk?.margin && (
+                      <span className="text-[12px] font-semibold" title={`of ${risk.margin_source} margin`}>
+                        {pctOf(risk.mtm, risk.margin)} of margin
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] mt-0.5" style={{ color: "var(--oc-muted)" }}>
+                    {risk?.legs_open ? `${risk.legs_open} legs open` : "no open position"} · paused{" "}
+                    {state?.session.clock ?? "—"}
+                  </div>
+                  {/* A session's realised P&L survives closing the position — it is money you
+                      made. Said plainly, because "MTM ₹5,487 · NO POSITION" reads as a bug, and
+                      a later structure's rail would otherwise show the previous one's profit as
+                      if it were its own. Reset clears it. */}
+                  {!!risk?.realised && (
+                    <div className="text-[11px] mt-1 flex items-center gap-2">
+                      <span style={{ color: "var(--oc-faint)" }}>
+                        {risk.legs_open
+                          ? `includes ${inr0(risk.realised)} banked from closed legs`
+                          : `${inr0(risk.realised)} banked this session · nothing open`}
+                      </span>
+                      <button type="button" onClick={() => reset.mutate()}
+                        className="underline" style={{ color: "var(--oc-muted)" }}>reset</button>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 mt-3">
+                    <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
+                      sub={risk?.margin_detail
+                        ? `est · scan ${inr0(risk.margin_detail.span)} + exposure ${inr0(risk.margin_detail.exposure)}`
+                        : `${risk?.margin_source ?? "model"} · ${pctOf(risk?.margin, risk?.capital)} of capital`} />
+                    <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
+                      sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
+                    <Tile label="Max profit" tone="pos"
+                      value={mNow ? (mNow.maxProfitUnlimited ? "unlimited" : inr0(mNow.maxProfit)) : "—"}
+                      sub={pctOf(mNow?.maxProfit, risk?.margin) + " of margin"} />
+                    <Tile label="Max loss" tone="neg"
+                      value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss)) : "—"}
+                      sub={pctOf(mNow?.maxLoss, risk?.margin) + " of margin"} />
+                    <Tile label="Breakeven"
+                      value={mNow?.breakevens.length
+                        ? mNow.breakevens.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ")
+                        : "—"}
+                      sub={mNow?.breakevens.length && state?.market.spot
+                        ? `${signed(100 * (mNow.breakevens[0] / state.market.spot - 1))}% from spot` : "—"} />
+                    <Tile label="Open P&L" tone={(risk?.unrealised ?? 0) >= 0 ? "pos" : "neg"}
+                      value={`${inr0(risk?.unrealised ?? 0)}${risk?.margin ? ` · ${pctOf(risk.unrealised, risk.margin)}` : ""}`}
+                      sub={`banked ${inr0(risk?.realised ?? 0)} · ${inr0(-(risk?.charges ?? 0))} costs`} />
+                  </div>
+                  {risk?.margin_source === "model" && !!risk.margin && (
+                    <div className="mt-2 text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+                      Estimated the way SPAN is: worst loss over a ±6% move (hedges offset) plus 2%
+                      exposure on every short unit. Within ~10% of a Kite basket on a spread; still
+                      an estimate.
+                    </div>
+                  )}
+                </Panel>
+                <AlertsCard alerts={state?.alerts ?? []} disabled={!state}
+                  onArm={(b) => armAlert.mutate(b)} onClear={(id) => clearAlert.mutate(id)} />
+    </>
+  );
+
+  const positionsPanel = (
+              <Panel>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[13px] font-semibold">Positions</span>
+              <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+                {state?.legs.length ?? 0} legs · lot {state?.session.lot_size ?? "—"}
+                {state?.session.can_undo ? (
+                  <button type="button" className="ml-3 underline"
+                    title="undo the last action (U) — the whole action, roll and basket included"
+                    onClick={() => undo.mutate()}
+                    style={{ color: "var(--oc-accent)" }}>Undo</button>
+                ) : null}
+                {state?.legs.length ? (
+                  <button type="button" className="ml-3 underline"
+                    onClick={() => stage.mutate({ kind: "flatten", replace: true })}
+                    style={{ color: "var(--oc-neg)" }}>Exit all</button>
+                ) : null}
+                {(state?.legs.length || risk?.realised) ? (
+                  <button type="button" className="ml-3 underline"
+                    title="clear the book AND this session's realised P&L — a clean slate"
+                    onClick={() => reset.mutate()}
+                    style={{ color: "var(--oc-muted)" }}>Reset</button>
+                ) : null}
+              </span>
+            </div>
+            {!state?.legs.length ? (
+              <div className="py-4 text-center text-[12px]" style={{ color: "var(--oc-faint)" }}>
+                {settled.length ? (
+                  <div className="mb-1" style={{ color: "var(--oc-caution)" }}>
+                    Settled at expiry: {settled.map((f) => `${formatOptionSymbol(f.symbol)} @ ${num(f.price)}`).join(" · ")}
+                    {" "}· {settled[0].at.slice(0, 10)} 15:30. Banked P&L is in the rail; Undo does not reach a settlement.
+                  </div>
+                ) : null}
+                No position. Click B or S on any strike, or trade a preset.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+              {/* Auto layout with nowrap cells and a scrolling container: fixed column widths
+                  summed past the panel at a laptop width and the Entry/LTP figures printed
+                  on top of each other (owner, 2026-09-09). The stepper columns keep a floor
+                  so a row does not re-flow as its numbers change length. */}
+              <table className="w-full text-[12px] tabular-nums whitespace-nowrap">
+                <colgroup>
+                  <col style={{ width: 52 }} /><col style={{ width: 40 }} />
+                  <col style={{ minWidth: 150 }} /><col style={{ minWidth: 76 }} /><col style={{ minWidth: 120 }} />
+                  <col /><col /><col /><col /><col />
+                  <col style={{ minWidth: 185 }} />
+                </colgroup>
+                <thead>
+                  <tr className="text-[9px] uppercase tracking-[.06em]"
+                    style={{ color: "var(--oc-faint)" }}>
+                    <th className="text-left font-semibold py-1">On</th>
+                    <th className="text-left font-semibold">Side</th>
+                    <th className="text-left font-semibold">Strike</th>
+                    <th className="text-left font-semibold">Expiry</th>
+                    <th className="text-left font-semibold" title="add to or trim the position">Lots (− +)</th>
+                    <th className="text-right font-semibold">Entry</th>
+                    <th className="text-right font-semibold">LTP</th>
+                    <th className="text-right font-semibold" title="per share, position-signed · IV">Δ · IV</th>
+                    <th className="text-right font-semibold">P&amp;L</th>
+                    <th className="text-right font-semibold">Value</th>
+                    <th className="text-right font-semibold" title="close some or all lots">Exit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.legs.map((l) => (
+                    <LegRow key={l.id} leg={l} grid={gridStep} chainExpiry={state.chain.expiry}
+                      onStage={(b) => stage.mutate(b)} />
+                  ))}
+                </tbody>
+              </table>
+              </div>
+            )}
+          </Panel>
+  );
 
   return (
     <div className="oc-root font-plex min-h-[calc(100vh-3.5rem)] min-w-0 max-w-full"
@@ -1355,244 +1635,34 @@ export default function ConsolePage() {
           </div>
         </div>
 
-        <div className="flex-1 min-w-0 space-y-2.5">
-          {/* items-stretch: the payoff and the rail are the same height, so the two
-              columns line up at the bottom instead of leaving a ragged edge. */}
-          <div className="flex gap-2.5 items-stretch">
-            <div className="flex-1 min-w-0 space-y-2.5 flex flex-col">
-            <Panel className="flex-1 flex flex-col min-h-0">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[13px] font-semibold">
-                  {showPresets || !state?.legs.length ? "Presets" : "Payoff"}
-                  {(showPresets || !state?.legs.length) && (
-                    <span className="ml-2 text-[10.5px] font-normal" style={{ color: "var(--oc-faint)" }}>
-                      resolved at {state?.session.clock ?? "—"} on {state?.chain.expiry ? expiryChip(state.chain.expiry) : "—"} · ×{lots}
-                    </span>
-                  )}
-                </span>
-                <span className="flex items-center gap-2 text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
-                  {state?.legs.length ? (
-                    <Chip active={showPresets} onClick={() => setShowPresets((v) => !v)}
-                      title="prebuilt structures, resolved against the chain at the cursor">
-                      {showPresets ? "payoff" : "presets"}</Chip>
-                  ) : null}
-                  {!showPresets && state?.legs.length ? "expiry · T+0 dashed · staged dotted" : null}
-                </span>
+        {chainOpen ? (
+          /* chain · payoff+positions · rail */
+          <div className="flex-1 min-w-0 space-y-2.5">
+            <div className="flex gap-2.5 items-start">
+              <div className="flex-1 min-w-0 space-y-2.5 flex flex-col">
+                {payoffPanel}
+                {stagedBar}
+                {positionsPanel}
               </div>
-              <div className="flex-1 min-h-0">
-                {(showPresets || !state?.legs.length) ? (
-                  <PresetGallery presets={presetData?.presets ?? []} state={state} lots={lots}
-                    onApply={(id) => applyPreset.mutate({ preset: id, lots })} />
-                ) : (
-                  <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
-                    spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
-                    today={state?.session.date ?? ""} alerts={state?.alerts ?? []}
-                    realised={risk?.realised ?? 0} />
-                )}
+              <div className="w-[348px] shrink-0 space-y-2.5">
+                {railColumn}
               </div>
-              {/* NET GREEKS: Σ per-share greek × units over the enabled legs, the same
-                  convention as the Live tile. Beside them, the T+0 book at ±1% of spot —
-                  the question the greeks approximate, answered directly. */}
-              <div className="mt-2 pt-2 flex flex-wrap gap-1.5 [&>*]:flex-1 [&>*]:min-w-[92px]"
-                style={{ borderTop: "1px solid var(--oc-hair)" }}>
-                <GreekCell label="Δ net" v={risk?.greeks.delta} dp={1} unit="units" />
-                <GreekCell label="Γ net" v={risk?.greeks.gamma} dp={3} />
-                <GreekCell label="Θ /day" v={risk?.greeks.theta} dp={0} inr />
-                <GreekCell label="Vega /1%" v={risk?.greeks.vega} dp={0} inr />
-                <ScenarioCell label={`${MINUS}1%`} v={scen?.[0]} base={scen?.[1]} />
-                <ScenarioCell label="spot" v={scen?.[1]} base={scen?.[1]} />
-                <ScenarioCell label="+1%" v={scen?.[2]} base={scen?.[1]} />
-              </div>
-            </Panel>
-
-            {/* Only a book that can reach a broker gets an Apply between the click and the
-                trade. In replay this block never renders — the click IS the trade, and Undo
-                is the way back. */}
-            {state?.staged && state.session.requires_confirm && (
-              <div className="rounded-[10px] p-3"
-                style={{ border: "1px dashed var(--oc-accent)",
-                  background: "var(--oc-accent-tint)" }}>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
-                    style={{ background: "var(--oc-accent)", color: "#fff" }}>STAGED</span>
-                  <b className="text-[12.5px]">{state.staged.label}</b>
-                  <span className="text-[11px]" style={{ color: "var(--oc-muted)" }}>
-                    previewed on the chart before commit
-                  </span>
-                  <span className="ml-auto flex gap-2">
-                    <button type="button" onClick={() => commit.mutate()}
-                      className="px-2.5 h-[24px] rounded-[5px] text-[11.5px] font-semibold"
-                      style={{ background: "var(--oc-accent)", color: "#fff" }}>Apply ⏎</button>
-                    <button type="button" onClick={() => discard.mutate()}
-                      className="px-2.5 h-[24px] rounded-[5px] text-[11.5px]"
-                      style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
-                      Discard esc</button>
-                  </span>
-                </div>
-                <div className="mt-1.5 flex gap-5 text-[11.5px] flex-wrap tabular-nums">
-                  <Delta label="max profit" good
-                    a={mNow?.maxProfit} unlimitedA={mNow?.maxProfitUnlimited}
-                    b={mStaged?.maxProfit} unlimitedB={mStaged?.maxProfitUnlimited} />
-                  <Delta label="max loss"
-                    a={mNow?.maxLoss} unlimitedA={mNow?.maxLossUnlimited}
-                    b={mStaged?.maxLoss} unlimitedB={mStaged?.maxLossUnlimited} />
-                  <span><span style={{ color: "var(--oc-faint)" }}>margin</span>{" "}
-                    {inr0(state.staged.margin_before)} → <b>{inr0(state.staged.margin_after)}</b>
-                    <span style={{ color: "var(--oc-faint)" }}> · {state.staged.margin_source}</span>
-                  </span>
-                </div>
-              </div>
-            )}
             </div>
-            <div className="w-[348px] shrink-0 space-y-2.5">
-            <Panel className={breach ? "border-l-4" : ""}
-              style={breach ? { borderLeftColor: "var(--oc-neg)" } : undefined}>
-              {breach && (
-                <div className="mb-2 px-2 py-1 rounded-[6px] text-[11px] font-semibold"
-                  style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>
-                  STOP FIRED {breach.fired_at?.slice(11)} · MTM {inr0(breach.fired_value ?? 0)} crossed {inr0(-Math.abs(breach.value))}
-                </div>
-              )}
-              <div className="flex items-start justify-between">
-                <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
-                  style={{ color: "var(--oc-faint)" }}>Total MTM · realised + open</span>
-                <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
-                  style={{ background: risk && risk.legs_open ? "var(--oc-chip)" : "transparent",
-                    color: "var(--oc-muted)" }}>
-                  {!risk?.legs_open ? "NO POSITION"
-                    : mNow && !mNow.maxLossUnlimited ? "DEFINED RISK" : "UNDEFINED RISK"}
-                </span>
-              </div>
-              <div className="text-[21px] font-semibold mt-1"
-                style={{ color: !risk?.mtm ? "var(--oc-ink)"
-                  : risk.mtm > 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
-                {inr0(risk?.mtm ?? 0)}
-              </div>
-              <div className="text-[11px] mt-0.5" style={{ color: "var(--oc-muted)" }}>
-                {risk?.legs_open ? `${risk.legs_open} legs open` : "no open position"} · paused{" "}
-                {state?.session.clock ?? "—"}
-              </div>
-              {/* A session's realised P&L survives closing the position — it is money you
-                  made. Said plainly, because "MTM ₹5,487 · NO POSITION" reads as a bug, and
-                  a later structure's rail would otherwise show the previous one's profit as
-                  if it were its own. Reset clears it. */}
-              {!!risk?.realised && (
-                <div className="text-[11px] mt-1 flex items-center gap-2">
-                  <span style={{ color: "var(--oc-faint)" }}>
-                    {risk.legs_open
-                      ? `includes ${inr0(risk.realised)} banked from closed legs`
-                      : `${inr0(risk.realised)} banked this session · nothing open`}
-                  </span>
-                  <button type="button" onClick={() => reset.mutate()}
-                    className="underline" style={{ color: "var(--oc-muted)" }}>reset</button>
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-2 mt-3">
-                <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
-                  sub={`${risk?.margin_source ?? "model"} · ${pctOf(risk?.margin, risk?.capital)} of capital`} />
-                <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
-                  sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
-                <Tile label="Max profit" tone="pos"
-                  value={mNow ? (mNow.maxProfitUnlimited ? "unlimited" : inr0(mNow.maxProfit)) : "—"}
-                  sub={pctOf(mNow?.maxProfit, risk?.margin) + " of margin"} />
-                <Tile label="Max loss" tone="neg"
-                  value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss)) : "—"}
-                  sub={pctOf(mNow?.maxLoss, risk?.margin) + " of margin"} />
-                <Tile label="Breakeven"
-                  value={mNow?.breakevens.length
-                    ? mNow.breakevens.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ")
-                    : "—"}
-                  sub={mNow?.breakevens.length && state?.market.spot
-                    ? `${signed(100 * (mNow.breakevens[0] / state.market.spot - 1))}% from spot` : "—"} />
-                <Tile label="Open P&L" tone={(risk?.unrealised ?? 0) >= 0 ? "pos" : "neg"}
-                  value={inr0(risk?.unrealised ?? 0)}
-                  sub={`banked ${inr0(risk?.realised ?? 0)} · ${inr0(-(risk?.charges ?? 0))} costs`} />
-              </div>
-              {risk?.margin_source === "model" && (
-                <div className="mt-2 text-[10.5px]" style={{ color: "var(--oc-caution)" }}>
-                  Model margin: span+exposure on the shorts, blind to long hedges — it reads
-                  several times a broker basket on a spread. Set a measured anchor to make the
-                  percentages real.
-                </div>
-              )}
-            </Panel>
-            <AlertsCard alerts={state?.alerts ?? []} disabled={!state}
-              onArm={(b) => armAlert.mutate(b)} onClear={(id) => clearAlert.mutate(id)} />
-            </div>
-          </div>
-
-          {/* Positions spans the payoff AND the rail. A dense table of editable numbers
-              needs room: inside a ~400px middle column the leg cell wrapped onto a second
-              line, which is what made the row jump as values changed length. */}
-          <Panel>
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[13px] font-semibold">Positions</span>
-          <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
-            {state?.legs.length ?? 0} legs · lot {state?.session.lot_size ?? "—"}
-            {state?.session.can_undo ? (
-              <button type="button" className="ml-3 underline"
-                title="undo the last action (U) — the whole action, roll and basket included"
-                onClick={() => undo.mutate()}
-                style={{ color: "var(--oc-accent)" }}>Undo</button>
-            ) : null}
-            {state?.legs.length ? (
-              <button type="button" className="ml-3 underline"
-                onClick={() => stage.mutate({ kind: "flatten", replace: true })}
-                style={{ color: "var(--oc-neg)" }}>Exit all</button>
-            ) : null}
-            {(state?.legs.length || risk?.realised) ? (
-              <button type="button" className="ml-3 underline"
-                title="clear the book AND this session's realised P&L — a clean slate"
-                onClick={() => reset.mutate()}
-                style={{ color: "var(--oc-muted)" }}>Reset</button>
-            ) : null}
-          </span>
-        </div>
-        {!state?.legs.length ? (
-          <div className="py-4 text-center text-[12px]" style={{ color: "var(--oc-faint)" }}>
-            No position. Click B or S on any strike to stage a leg.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-          {/* Auto layout with nowrap cells and a scrolling container: fixed column widths
-              summed past the panel at a laptop width and the Entry/LTP figures printed
-              on top of each other (owner, 2026-09-09). The stepper columns keep a floor
-              so a row does not re-flow as its numbers change length. */}
-          <table className="w-full text-[12px] tabular-nums whitespace-nowrap">
-            <colgroup>
-              <col style={{ width: 52 }} /><col style={{ width: 40 }} />
-              <col style={{ minWidth: 150 }} /><col style={{ minWidth: 120 }} />
-              <col /><col /><col /><col /><col />
-              <col style={{ minWidth: 185 }} />
-            </colgroup>
-            <thead>
-              <tr className="text-[9px] uppercase tracking-[.06em]"
-                style={{ color: "var(--oc-faint)" }}>
-                <th className="text-left font-semibold py-1">On</th>
-                <th className="text-left font-semibold">Side</th>
-                <th className="text-left font-semibold">Strike</th>
-                <th className="text-left font-semibold" title="add to or trim the position">Lots (− +)</th>
-                <th className="text-right font-semibold">Entry</th>
-                <th className="text-right font-semibold">LTP</th>
-                <th className="text-right font-semibold" title="per share, position-signed · IV">Δ · IV</th>
-                <th className="text-right font-semibold">P&amp;L</th>
-                <th className="text-right font-semibold">Value</th>
-                <th className="text-right font-semibold" title="close some or all lots">Exit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.legs.map((l) => (
-                <LegRow key={l.id} leg={l} grid={gridStep}
-                  onStage={(b) => stage.mutate(b)} />
-              ))}
-            </tbody>
-          </table>
+          /* chain hidden: risk + positions on the left, the chart on the right */
+          <div className="flex-1 min-w-0 flex gap-2.5 items-start">
+            <div className="w-[46%] min-w-[420px] space-y-2.5">
+              {railColumn}
+              {positionsPanel}
+            </div>
+            <div className="flex-1 min-w-0 space-y-2.5 flex flex-col">
+              {payoffPanel}
+              {stagedBar}
+            </div>
           </div>
         )}
-      </Panel>
-        </div>
       </div>
-
 
       {/* footer — the design's P&L strip; for now it carries the keyboard ladder, because a
           transport nobody can find is a transport nobody uses. */}

@@ -41,10 +41,10 @@ from skas_algo.data.option_intraday_store import (
 )
 from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.charges import charges_for_txn
-from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.services.replay_market import ReplayChain, ReplayMarket
 
 from . import presets as _presets
+from .margin import MarginLeg, span_like
 
 # The session window the store is filtered to. 15:40 is the post-CAS close the store itself
 # measures (last minute-bar 15:39); before 2026-08-03 nothing trades past 15:29, so an
@@ -69,7 +69,6 @@ _YEAR_S = 365.0 * 24 * 3600
 UNDERLYINGS = ("NIFTY", "BANKNIFTY", "SENSEX")
 
 logger = logging.getLogger("skas_algo.console")
-_MARGIN = MarginParams()
 
 
 def _t_years(expiry_iso: str, now: datetime) -> float:
@@ -200,6 +199,7 @@ class ConsoleSession:
         # between them. The per-minute spot series backs "next 1% move" and is built once
         # per day, lazily, from a separate pass over the tape.
         self.bookmarks: list[str] = []
+        self._margin_detail: dict | None = None
         self._spot_series: dict[str, list[tuple[str, float]]] = {}
         self.market = ReplayMarket(u, allow_fifty_strikes=self.allow_fifty_strikes)
         self.chain_view = ReplayChain(self.market)
@@ -898,6 +898,7 @@ class ConsoleSession:
                "entry": round(leg.entry, 2), "ltp": ltp,
                "pnl": round(pnl, 2) if pnl is not None else None,
                "enabled": leg.enabled, "realized": round(leg.realized, 2)}
+        out["dte"] = (date.fromisoformat(leg.expiry) - self.day).days if leg.expiry else None
         out.update(self._leg_greeks(leg, out))
         return out
 
@@ -913,11 +914,22 @@ class ConsoleSession:
         book = [leg for leg in (self.legs if legs is None else legs) if leg.enabled]
         if self.margin_per_lot_set:
             sets = max((leg.lots for leg in book if leg.side == "S"), default=0)
+            self._margin_detail = None
             return round(self.margin_per_lot_set * sets, 2), "manual"
+        # SPAN-shaped: the book's worst scenario loss (hedges offset) + 2% exposure on
+        # every short unit (nothing offsets). See margin.py for the calibration. The old
+        # per-short-leg span+exposure sum read ₹4.1L for a 1-lot straddle.
         spot = self.market.index_spot(self.underlying) or 0.0
-        total = sum(short_option_margin(spot, int(leg.units), 1, _MARGIN)
-                    for leg in book if leg.side == "S")
-        return round(total, 2), "model"
+        mlegs = []
+        for leg in book:
+            px = self._price(leg.right, leg.strike, leg.expiry) or leg.entry
+            t = _t_years(leg.expiry, self.clock)
+            iv = bs.implied_vol(px, spot, leg.strike, t, RISK_FREE, leg.right) if spot else None
+            mlegs.append(MarginLeg(leg.right, leg.strike, leg.direction, leg.units,
+                                   iv or 0.0, t))
+        d = span_like(mlegs, spot, r=RISK_FREE)
+        self._margin_detail = d
+        return d["total"], "model"
 
     def _staged_out(self) -> dict | None:
         """The staged change, plus the book it WOULD produce. The frontend draws the dotted
@@ -1071,6 +1083,7 @@ class ConsoleSession:
 
     def _risk_out(self) -> dict:
         margin, source = self.margin()
+        detail = self._margin_detail
         open_pnl = sum(x["pnl"] or 0.0 for x in (self._leg_out(leg) for leg in self.legs
                                                  if leg.enabled))
         return {
@@ -1079,9 +1092,10 @@ class ConsoleSession:
             "mtm": round(self.realized + open_pnl, 2),
             "charges": round(self.charges, 2),
             "margin": margin,
-            # NEVER just a number: the model reads several times a broker basket on a hedged
-            # spread, so a "% of margin" against it is only as honest as this label.
+            # NEVER just a number: the model is an estimate (SPAN-shaped, calibrated to one
+            # Kite basket), so a "% of margin" against it is only as honest as this label.
             "margin_source": source,
+            "margin_detail": detail,          # {span, exposure, total, worst_move_pct} | None
             "capital": self.capital,
             "legs_open": len([leg for leg in self.legs if leg.enabled]),
         }
