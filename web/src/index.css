@@ -136,6 +136,10 @@ input[type="number"] {
   --oc-accent: #3A44C8;
   --oc-accent-dim: rgba(58, 68, 200, .09);
   --oc-accent-tint: rgba(58, 68, 200, .045);
+  /* The in-the-money band. The handoff's own tint is barely perceptible on a white
+     ladder, and the whole job of this shading is to let the eye find the money line
+     without reading a single strike (owner, 2026-09-09). */
+  --oc-itm: rgba(58, 68, 200, .10);
   --oc-pos: #10784F;     --oc-pos-fill: rgba(16, 120, 79, .09);
   --oc-neg: #BE3026;     --oc-neg-fill: rgba(190, 48, 38, .06);
   --oc-caution: #96650C; --oc-caution-dim: rgba(150, 101, 12, .12);
@@ -149,6 +153,7 @@ input[type="number"] {
   --oc-accent: #949BFF;
   --oc-accent-dim: rgba(148, 155, 255, .14);
   --oc-accent-tint: rgba(148, 155, 255, .07);
+  --oc-itm: rgba(148, 155, 255, .13);
   --oc-pos: #4FC08D;     --oc-pos-fill: rgba(79, 192, 141, .10);
   --oc-neg: #F0736A;     --oc-neg-fill: rgba(240, 115, 106, .08);
   --oc-caution: #D9A93E; --oc-caution-dim: rgba(217, 169, 62, .16);

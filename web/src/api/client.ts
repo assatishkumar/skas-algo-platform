@@ -52,6 +52,7 @@ import type {
   StrategyTemplate,
   Trade,
   ConsoleDays,
+  ConsoleProbe,
   ConsoleState,
   Universe,
   CpRatioExpiryDeploy,
@@ -176,6 +177,8 @@ export const api = {
     op: "step" | "seek" | "sod" | "eod" | "day"; minutes?: number; days?: number; at?: string;
   }) => request<ConsoleState>(`/console/sessions/${id}/transport`,
     { method: "POST", body: JSON.stringify(body) }),
+  consoleProbe: (id: string, right: "CE" | "PE", strike: number) =>
+    request<ConsoleProbe>(`/console/sessions/${id}/probe?right=${right}&strike=${strike}`),
   consoleChain: (id: string, q: { expiry?: string; window?: number; allow_fifty_strikes?: boolean }) => {
     const p = new URLSearchParams();
     if (q.expiry) p.set("expiry", q.expiry);

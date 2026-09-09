@@ -1995,6 +1995,15 @@ export interface ConsoleState {
   notes: string[];
 }
 
+export interface ConsoleProbe {
+  symbol: string;
+  found: boolean;
+  ltp?: number;
+  at?: string;        // when it printed
+  age_min?: number;
+  days_back?: number; // 0 = today, 1 = yesterday's session, …
+}
+
 export interface ConsoleDays {
   underlying: string; underlyings: string[];
   days: string[]; first: string | null; last: string | null;

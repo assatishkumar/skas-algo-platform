@@ -238,3 +238,54 @@ def test_the_strip_and_the_ladder_agree_on_spot():
     assert st["market"]["carry"] == pytest.approx(
         st["market"]["fut"] - st["market"]["spot"], abs=1e-6)
     assert st["market"]["carry"] > 0        # de-carrying only ever removes carry
+
+
+def test_a_day_jog_keeps_the_time_of_day():
+    """Comparing 09:30 on Tuesday with 09:30 on Wednesday is the whole reason to press +1d.
+    It used to reset to the session open every time (owner, 2026-09-09)."""
+    d2 = date(2026, 7, 15)
+    store.write_day(DAY, _day())
+    store.write_day(d2, _day(d2))
+    s = _open(at="10:35")
+    s.shift_day(1)
+    assert s.day == d2 and s.clock.strftime("%H:%M") == "10:35"
+    s.shift_day(-1)
+    assert s.day == DAY and s.clock.strftime("%H:%M") == "10:35"
+
+
+def test_a_fresh_day_opens_where_the_liquidity_is():
+    """09:15 shows a ladder nobody could have traded — widest spreads of the day and half
+    the strikes yet to print. 09:20 is the owner's call."""
+    store.write_day(DAY, _day())
+    assert ConsoleSession(underlying="NIFTY", day=DAY,
+                          expiry=EXP).clock.strftime("%H:%M") == "09:20"
+
+
+def test_the_probe_finds_an_earlier_session_and_says_how_old_it_is():
+    """A blank cell is honest but indistinguishable from "worthless". The probe answers
+    with the last price the contract actually traded at — possibly days ago — carrying its
+    age, so the caller can render it as a reference rather than a quote."""
+    d2 = date(2026, 7, 15)
+    store.write_day(DAY, _day())
+    store.write_day(d2, _day(d2))
+    s = ConsoleSession(underlying="NIFTY", day=d2, at="09:20", expiry=EXP)
+
+    # 24500 does not print until 11:30, so at 09:20 the ladder shows it blank…
+    assert {r["strike"]: r for r in s.chain_rows()}[24500.0]["ce"]["quoted"] is False
+    # …and the probe reaches back into the PREVIOUS session for its last real trade.
+    got = s.probe("CE", 24500)
+    assert got["found"] and got["ltp"] == pytest.approx(18.0)
+    assert got["days_back"] == 1 and got["age_min"] > 0
+
+    # A contract that has never traded at all stays honest: nothing found, nothing invented.
+    assert s.probe("CE", 99000)["found"] is False
+
+
+def test_the_probe_never_looks_into_the_future():
+    """It answers 'at or before the cursor'. A print later today must stay invisible, or
+    the console would leak the future into a replay."""
+    store.write_day(DAY, _day())
+    s = _open(at="09:20")
+    assert s.probe("CE", 24500)["found"] is False      # its only print today is 11:30
+    s.seek("11:35")
+    assert s.probe("CE", 24500)["ltp"] == pytest.approx(18.0)

@@ -102,6 +102,18 @@ async def transport(session_id: str, body: ConsoleTransport) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/sessions/{session_id}/probe")
+async def probe_price(session_id: str, right: str, strike: float) -> dict:
+    """The last price this contract printed at or before the cursor, looking back through
+    earlier sessions. On demand only, and the answer carries its own age — the ladder shows
+    it as a reference beside a blank cell, never as a live mark."""
+    session = _get(session_id)
+    try:
+        return await asyncio.to_thread(session.probe, right, strike)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/sessions/{session_id}/chain")
 async def set_chain(session_id: str, expiry: str | None = None,
                     window: int | None = None,

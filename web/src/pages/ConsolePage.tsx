@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { ConsoleChainRow, ConsoleState } from "../types";
+import type { ConsoleChainLeg, ConsoleChainRow, ConsoleProbe, ConsoleState } from "../types";
 
 /* ------------------------------------------------------------------ formatting
  * The handoff mandates U+2212 for minus and Indian digit grouping. lib/format.ts emits an
@@ -89,9 +89,11 @@ function StripItem({ label, children }: { label: string; children: React.ReactNo
  * out explicitly and it is the difference between a usable ladder and a jumpy one. */
 const COLS = "48px 78px 72px 72px 52px 72px 78px 48px";
 
-function ChainRow({ row, onPick }: {
+function ChainRow({ row, onPick, onProbe, probed }: {
   row: ConsoleChainRow;
   onPick: (side: "B" | "S", right: "CE" | "PE", strike: number) => void;
+  onProbe: (right: "CE" | "PE", strike: number) => void;
+  probed: Record<string, ConsoleProbe>;
 }) {
   const dead = !row.ce.quoted && !row.pe.quoted;
   return (
@@ -103,7 +105,8 @@ function ChainRow({ row, onPick }: {
         background: row.atm ? "var(--oc-accent-tint)" : undefined,
       }}>
       <Cell align="right" faint>{row.ce.delta == null ? "—" : num(row.ce.delta, 2)}</Cell>
-      <Cell align="right" tint={row.itm_ce} strong>{row.ce.quoted ? num(row.ce.ltp) : "—"}</Cell>
+      <PriceCell leg={row.ce} tint={row.itm_ce} right="CE" strike={row.strike} onProbe={onProbe}
+        probed={probed[`CE${row.strike}`]} />
       <BsCell tint={row.itm_ce} onB={() => onPick("B", "CE", row.strike)}
         onS={() => onPick("S", "CE", row.strike)} disabled={!row.ce.quoted} />
       <div className="h-full flex items-center justify-center font-semibold"
@@ -121,8 +124,47 @@ function ChainRow({ row, onPick }: {
       </div>
       <BsCell tint={row.itm_pe} onB={() => onPick("B", "PE", row.strike)}
         onS={() => onPick("S", "PE", row.strike)} disabled={!row.pe.quoted} left />
-      <Cell align="right" tint={row.itm_pe} strong>{row.pe.quoted ? num(row.pe.ltp) : "—"}</Cell>
+      <PriceCell leg={row.pe} tint={row.itm_pe} right="PE" strike={row.strike} onProbe={onProbe}
+        probed={probed[`PE${row.strike}`]} />
       <Cell align="right" faint>{row.pe.delta == null ? "—" : num(row.pe.delta, 2)}</Cell>
+    </div>
+  );
+}
+
+/** A price cell. When the strike has not printed the cell stays EMPTY — that is the honest
+ *  state — but it offers a ⟲ that fetches the last price this contract ever traded at,
+ *  which may be an earlier session. The answer renders in italics with its age, so a
+ *  reference price can never be mistaken for a live one (owner ask, 2026-09-09). */
+function PriceCell({ leg, tint, right, strike, onProbe, probed }: {
+  leg: ConsoleChainLeg; tint?: boolean; right: "CE" | "PE"; strike: number;
+  onProbe: (right: "CE" | "PE", strike: number) => void;
+  probed?: ConsoleProbe;
+}) {
+  if (leg.quoted) {
+    return <Cell align="right" tint={tint} strong>{num(leg.ltp)}</Cell>;
+  }
+  const ago = probed?.days_back
+    ? `${probed.days_back}d`
+    : probed?.age_min != null ? `${probed.age_min}m` : "";
+  return (
+    <div className="h-full flex items-center justify-end gap-1 px-2"
+      style={{ background: tint ? "var(--oc-itm)" : undefined }}>
+      {probed?.found ? (
+        // Italic + muted + an age suffix, on ONE line: the cell is 78px inside a 32px row,
+        // and a wrapped reference price pushes the ladder out of alignment.
+        <span className="italic whitespace-nowrap text-[11px]" style={{ color: "var(--oc-muted)" }}
+          title={`last traded ${probed.at} — a reference price, not a live quote`}>
+          {num(probed.ltp)}<span className="text-[8.5px] not-italic"> {ago}</span>
+        </span>
+      ) : probed ? (
+        <span className="text-[10px]" style={{ color: "var(--oc-faint)" }}>no print</span>
+      ) : (
+        <button type="button" onClick={() => onProbe(right, strike)}
+          title="show the last price this contract traded at, even if it was an earlier day"
+          className={"w-[17px] h-[16px] rounded-[3px] text-[10px] leading-[15px] opacity-40 "
+            + "hover:opacity-100 transition"}
+          style={{ color: "var(--oc-accent)", border: "1px solid var(--oc-line)" }}>⟲</button>
+      )}
     </div>
   );
 }
@@ -138,7 +180,7 @@ function Cell({ children, align = "left", faint, strong, tint }: {
         color: faint ? "var(--oc-faint)" : "var(--oc-ink)",
         fontWeight: strong ? 500 : 400,
         fontSize: faint ? 11 : undefined,
-        background: tint ? "var(--oc-accent-tint)" : undefined,
+        background: tint ? "var(--oc-itm)" : undefined,
       }}>
       {children}
     </div>
@@ -163,7 +205,7 @@ function BsCell({ onB, onS, disabled, tint, left }: {
   return (
     <div className="h-full flex items-center gap-1"
       style={{ justifyContent: left ? "flex-start" : "flex-end", paddingInline: 6,
-        background: tint ? "var(--oc-accent-tint)" : undefined }}>
+        background: tint ? "var(--oc-itm)" : undefined }}>
       {btn("B", onB)}{btn("S", onS)}
     </div>
   );
@@ -188,7 +230,7 @@ export default function ConsolePage() {
 
   const open = useMutation({
     mutationFn: (body: { underlying: string; day?: string | null }) =>
-      api.consoleOpen({ ...body, at: params.get("at") ?? "09:16",
+      api.consoleOpen({ ...body, at: params.get("at") ?? "09:20",
         expiry: params.get("expiry") ?? undefined }),
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
@@ -222,18 +264,53 @@ export default function ConsolePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days]);
 
-  // Space/,/. are the handoff's transport keys. Guarded on inputs so typing a date is safe.
+  // Transport keys. Keyed on e.CODE, not e.key: Shift+"." is ">" on every layout, so the
+  // Shift ladder silently did nothing while the unshifted keys worked (owner, 2026-09-09).
+  // The ladder is , . = 1m · Shift = 15m · Alt = 1h · [ ] = 1 day · Home/End = SOD/EOD.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) return;
-      if (!state) return;
-      if (e.key === ",") { e.preventDefault(); move.mutate({ op: "step", minutes: e.shiftKey ? -15 : -1 }); }
-      if (e.key === ".") { e.preventDefault(); move.mutate({ op: "step", minutes: e.shiftKey ? 15 : 1 }); }
+      if (!state || e.metaKey || e.ctrlKey) return;
+      // Match on code OR key. e.key changes under Shift ("." becomes ">"), which is why the
+      // Shift ladder did nothing when this keyed on e.key alone; e.code is stable but is not
+      // always populated (synthetic events, some layouts), so accept either.
+      const c = e.code, k = e.key;
+      const prevDay = c === "BracketLeft" || k === "[" || k === "{";
+      const nextDay = c === "BracketRight" || k === "]" || k === "}";
+      const back = c === "Comma" || k === "," || k === "<";
+      const fwd = c === "Period" || k === "." || k === ">";
+      const sod = c === "Home" || k === "Home";
+      const eod = c === "End" || k === "End";
+      if (!(prevDay || nextDay || back || fwd || sod || eod)) return;
+      e.preventDefault();
+      if (sod) move.mutate({ op: "sod" });
+      else if (eod) move.mutate({ op: "eod" });
+      else if (prevDay || nextDay) move.mutate({ op: "day", days: prevDay ? -1 : 1 });
+      else {
+        const step = e.altKey ? 60 : e.shiftKey ? 15 : 1;
+        move.mutate({ op: "step", minutes: (back ? -1 : 1) * step });
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [state, move]);
+
+  // Probed reference prices, keyed "CE24000". Cleared whenever the cursor or the ladder
+  // moves — a price fetched at 09:30 is not an answer about 11:00.
+  const [probed, setProbed] = useState<Record<string, ConsoleProbe>>({});
+  const probe = async (right: "CE" | "PE", strike: number) => {
+    if (!state) return;
+    const key = `${right}${strike}`;
+    try {
+      const r = await api.consoleProbe(state.session.id, right, strike);
+      setProbed((p) => ({ ...p, [key]: r }));
+    } catch {
+      setProbed((p) => ({ ...p, [key]: { symbol: key, found: false } }));
+    }
+  };
+  useEffect(() => { setProbed({}); },
+    [state?.session.clock, state?.session.date, state?.chain.expiry]);
 
   // §9: this page renders BEFORE the query resolves, so every read below must survive a
   // null state. Nothing here dot-accesses into a derived map without a guard.
@@ -375,7 +452,7 @@ export default function ConsolePage() {
               </div>
             )}
             {rows.map((r) => (
-              <ChainRow key={r.strike} row={r}
+              <ChainRow key={r.strike} row={r} probed={probed} onProbe={probe}
                 onPick={() => { /* P3: stages a leg */ }} />
             ))}
           </div>
@@ -413,6 +490,22 @@ export default function ConsolePage() {
             grid {state?.chain.listing_grid ? "listing (50s)" : "100s"}
           </div>
         </div>
+      </div>
+
+      {/* footer — the design's P&L strip; for now it carries the keyboard ladder, because a
+          transport nobody can find is a transport nobody uses. */}
+      <div className="h-7 flex items-center gap-4 px-3 text-[10.5px]"
+        style={{ background: "var(--oc-panel2)", borderTop: "1px solid var(--oc-line)",
+          color: "var(--oc-faint)" }}>
+        <span>REALISED <b style={{ color: "var(--oc-ink)" }}>₹0</b></span>
+        <span>UNREALISED <b style={{ color: "var(--oc-ink)" }}>₹0</b></span>
+        <span className="ml-auto">
+          <b style={{ color: "var(--oc-muted)" }}>, .</b> 1 min ·
+          <b style={{ color: "var(--oc-muted)" }}> shift</b> 15 min ·
+          <b style={{ color: "var(--oc-muted)" }}> alt</b> 1 hour ·
+          <b style={{ color: "var(--oc-muted)" }}> [ ]</b> 1 day ·
+          <b style={{ color: "var(--oc-muted)" }}> home/end</b> open/close
+        </span>
       </div>
     </div>
   );

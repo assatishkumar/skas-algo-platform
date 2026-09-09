@@ -26,6 +26,7 @@ replay track.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -33,7 +34,11 @@ from datetime import date, datetime, time, timedelta
 import numpy as np
 import pandas as pd
 
-from skas_algo.data.option_intraday_store import captured_days, load_day
+from skas_algo.data.option_intraday_store import (
+    captured_days,
+    load_contract_bars,
+    load_day,
+)
 from skas_algo.engine.options import black_scholes as bs
 from skas_algo.services.replay_market import ReplayChain, ReplayMarket
 
@@ -41,6 +46,10 @@ from skas_algo.services.replay_market import ReplayChain, ReplayMarket
 # measures (last minute-bar 15:39); before 2026-08-03 nothing trades past 15:29, so an
 # over-wide end is harmless and an over-tight one silently truncates.
 SESSION_OPEN = time(9, 15)
+# Where a freshly opened day parks the cursor. NOT the open: the first minutes carry the
+# widest spreads of the day and half the ladder has not printed yet, so 09:15 shows a chain
+# nobody could have traded. 09:20 is where liquidity arrives (owner, 2026-09-09).
+SESSION_DEFAULT = time(9, 20)
 SESSION_CLOSE = time(15, 40)
 
 # One risk-free rate for the whole feature, shipped to the frontend in ConsoleState.pricing
@@ -54,6 +63,8 @@ T_FLOOR_S = 120.0
 _YEAR_S = 365.0 * 24 * 3600
 
 UNDERLYINGS = ("NIFTY", "BANKNIFTY", "SENSEX")
+
+logger = logging.getLogger("skas_algo.console")
 
 
 def _t_years(expiry_iso: str, now: datetime) -> float:
@@ -130,7 +141,7 @@ class ConsoleSession:
         self.expiry: str | None = expiry
         self.clock: datetime = datetime.combine(self.day, SESSION_OPEN)
         self._open_day(self.day)
-        self.seek(at or SESSION_OPEN.strftime("%H:%M"))
+        self.seek(at or SESSION_DEFAULT.strftime("%H:%M"))
 
     # ----------------------------------------------------------------- days / tape
     def _replayable_days(self) -> list[date]:
@@ -146,18 +157,23 @@ class ConsoleSession:
             future = [e for e in self.tape.expiries if date.fromisoformat(e) >= day]
             self.expiry = (future or self.tape.expiries or [None])[0]
 
-    def set_day(self, day: date) -> ConsoleSession:
+    def set_day(self, day: date, *, at: str | None = None) -> ConsoleSession:
         if day not in self.days:
             raise ValueError(f"{day.isoformat()} is not in the store for {self.underlying}")
         self._open_day(day)
-        self.seek(SESSION_OPEN.strftime("%H:%M"))
+        self.seek(at or SESSION_DEFAULT.strftime("%H:%M"))
         return self
 
     def shift_day(self, days: int) -> ConsoleSession:
         """±1d on the jog row: the NEXT captured day, not the next calendar day (a holiday
-        or a capture gap would otherwise land on an empty session)."""
+        or a capture gap would otherwise land on an empty session).
+
+        The TIME OF DAY carries across. Comparing 09:30 on Tuesday with 09:30 on Wednesday
+        is the whole reason to press +1d, and resetting to the open threw that away every
+        time (owner, 2026-09-09)."""
         i = self.days.index(self.day)
-        return self.set_day(self.days[max(0, min(len(self.days) - 1, i + days))])
+        keep = self.clock.strftime("%H:%M")
+        return self.set_day(self.days[max(0, min(len(self.days) - 1, i + days))], at=keep)
 
     # ----------------------------------------------------------------- the cursor
     def _rebuild_to(self, target: datetime) -> None:
@@ -265,6 +281,48 @@ class ConsoleSession:
         ks = sorted({float(r["strike"]) for r in rows})
         gaps = [b - a for a, b in zip(ks, ks[1:], strict=False) if b > a]
         return min(gaps) if gaps else 100.0
+
+    # ----------------------------------------------------------------- probe
+    def probe(self, right: str, strike: float, *, look_back_days: int = 10) -> dict:
+        """The most recent print for one contract AT OR BEFORE the cursor, hunting back
+        through earlier sessions when today has none.
+
+        The ladder leaves an untraded strike blank on purpose — a price nobody paid is not
+        a quote. But "blank" and "worthless" look identical, and for a wing you are weighing
+        up, yesterday's close is real information. So this is on demand and comes back
+        LABELLED with its age: the caller shows it as a reference, never as a live mark, and
+        neither the book nor any risk figure ever reads it."""
+        right = right.upper()
+        if right not in ("CE", "PE") or not self.expiry:
+            raise ValueError("probe needs a CE/PE and a selected expiry")
+        sym = f"{self.underlying}|{self.expiry}|{int(strike)}|{right}"
+        q = self.market.quotes.get(sym)
+        if q is not None:                       # already on today's tape
+            seen = datetime.fromisoformat(q[2])
+            return {"symbol": sym, "ltp": float(q[0]), "at": q[2],
+                    "age_min": int((self.clock - seen).total_seconds() // 60),
+                    "days_back": 0, "found": True}
+        # Walk back over CAPTURED days only — a calendar walk spends its budget on weekends
+        # and holidays and gives up before reaching a day that traded.
+        i = self.days.index(self.day)
+        window = self.days[max(0, i - look_back_days): i + 1]
+        try:
+            bars = load_contract_bars(self.underlying, self.expiry, strike, right,
+                                      window[0], self.day)
+        except Exception:  # pragma: no cover - a probe must never break the screen
+            logger.exception("probe failed for %s", sym)
+            return {"symbol": sym, "found": False}
+        if bars is None or bars.empty:
+            return {"symbol": sym, "found": False}
+        upto = bars[pd.to_datetime(bars["start"]) <= self.clock]
+        if upto.empty:
+            return {"symbol": sym, "found": False}
+        row = upto.iloc[-1]
+        at = pd.to_datetime(row["start"]).to_pydatetime()
+        return {"symbol": sym, "ltp": float(row["close"]),
+                "at": at.isoformat(timespec="minutes"),
+                "age_min": int((self.clock - at).total_seconds() // 60),
+                "days_back": (self.day - at.date()).days, "found": True}
 
     # ----------------------------------------------------------------- state
     def state(self) -> dict:
