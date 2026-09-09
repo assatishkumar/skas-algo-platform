@@ -476,6 +476,15 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   "the sale funds the same tick, so every EXIT must precede every buy". The sale no longer
   funds today at all, yet must STILL go first: a rejected BUY halts the run, and a sale queued
   behind the buys would then never fire, starving TOMORROW too.
+  **The tile must answer for the money the DECISION will have, not the ledger right now
+  (2026-09-09).** Credits are aged into `settled_cash` by `_settle` when the 15:05 decision
+  runs, so between the open and 15:05 a T+1 drip's proceeds sit in `pending_credits` dated
+  TODAY and are invisible: run 28 showed "spendable ₹702" against a ₹5,000 budget at 11:30
+  while the decision four hours later had ₹5,579. `_spendable_asof(today)` is now the ONE
+  definition (settled + everything landing today, capped by the broker balance) and both
+  `_settle` and `preview_plan` call it; the preview never mutates, so the ageing still
+  happens only at the decision. The tile splits "landed today" (already inside spendable)
+  from "settling later", because saying the same rupees twice reads as a poorer day.
   **LIVE reconciles against the broker**: `manager._maybe_refresh_funds` (mirrors
   `_maybe_refresh_margin` — STOCK + broker source, market hours, ~1/min, `getattr`-probed)
   pushes `adapter.funds().available`, and the ledger is capped at `min(ledger, broker)` —

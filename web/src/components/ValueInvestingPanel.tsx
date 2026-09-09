@@ -97,14 +97,21 @@ function Body({ h }: { h: LiveHoldings }) {
       <div className="rounded-[12px] border border-[var(--border)] bg-[var(--field)] px-3 py-2.5 text-[12.5px]">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 tabular-nums">
           <span><span className="text-[var(--faint)]">Spendable today</span>{" "}
-            <b>{formatInr(today.spendable ?? 0)}</b>{today.projected ? <span className="text-[var(--faint)]"> · projected</span> : null}</span>
-          <span><span className="text-[var(--faint)]">Settling</span> <b>{formatInr(today.settling ?? 0)}</b></span>
+            <b>{formatInr(today.spendable ?? 0)}</b>{today.projected ? <span className="text-[var(--faint)]"> · projected</span> : null}
+            {/* Say where the money came from: a T+1 drip spends yesterday's sale, which
+                lands this morning, so the settled ledger alone reads far too poor. */}
+            {today.settling_today ? (
+              <span className="text-[var(--faint)]">
+                {" "}({formatInr(today.settled_now ?? 0)} settled + {formatInr(today.settling_today)} landed today)
+              </span>
+            ) : null}</span>
+          <span><span className="text-[var(--faint)]">Settling later</span> <b>{formatInr(today.settling ?? 0)}</b></span>
           <span>
             <span className="text-[var(--faint)]">{today.shopped_today ? "Bought today" : "Will buy at 15:05"}</span>{" "}
             {today.plan.length ? (
               <b>{today.plan.map((p) => `${p.symbol} ${p.units}`).join(" · ")} = {formatInr(today.plan_total)}</b>
             ) : today.blocked_by === "cash" ? (
-              <b className="text-[var(--warn-text)]">nothing — no settled cash to pay with{today.settling ? ` (${formatInr(today.settling)} lands tomorrow)` : ""}</b>
+              <b className="text-[var(--warn-text)]">nothing — no settled cash to pay with{today.settling ? ` (${formatInr(today.settling)} lands on a later day)` : ""}</b>
             ) : (
               <b className="text-[var(--faint)]">nothing — no pot affords a share at today's prices</b>
             )}

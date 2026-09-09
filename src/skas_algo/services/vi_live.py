@@ -171,7 +171,12 @@ def value_investing_report(live, today: date | None = None) -> dict[str, Any]:
         "today": {
             "spendable": preview.get("spendable", basket.get("settled_cash")),
             "projected": preview.get("projected", basket.get("settled_projected")),
-            "settling": basket.get("pending_total", 0.0),
+            # "Settling" is what is STILL to come — money landing TODAY is already inside
+            # `spendable` and saying it twice reads as if the day were poorer than it is.
+            "settling": max(0.0, round(float(basket.get("pending_total", 0.0))
+                                       - float(preview.get("settling_today", 0.0)), 2)),
+            "settling_today": preview.get("settling_today", 0.0),
+            "settled_now": preview.get("settled_now"),
             "daily_budget": getattr(strategy, "daily_budget", None),
             "pots_total": round(sum(float(v) for v in pots.values()), 2),
             "plan": [{"symbol": s, "price": px, "units": u, "cost": c}

@@ -372,10 +372,28 @@ class ValueInvestingStrategy:
         # one options run blocking margin permanently destroyed the difference: ₹5,500 of
         # settled cash clamped to ₹200 stayed ₹200 after the margin released, because the
         # ledger is persisted and nothing restores it. Cap the return value only.
-        spendable = self.settled_cash
+        return self._spendable_asof(today)
+
+    def _settling_on(self, today: date) -> float:
+        """Proceeds that become spendable ON ``today`` — sold T-1 and landing now."""
+        return sum(float(c[1]) for c in self.pending_credits
+                   if date.fromisoformat(c[0]) <= today)
+
+    def _spendable_asof(self, today: date) -> float:
+        """What may be spent on ``today``, WITHOUT moving anything: settled cash plus every
+        credit that lands today, capped by the broker balance.
+
+        One definition, two callers. ``_settle`` uses it after ageing (when the credits are
+        already in), and ``preview_plan`` uses it BEFORE — which is the whole point. The
+        preview used to read ``settled_cash`` raw, so a T+1 drip showed the owner ₹702 of
+        buying power on a ₹5,000 budget at 11:30, because the ₹4,864 sold yesterday sits in
+        ``pending_credits`` dated today and is not aged in until the 15:05 decision runs.
+        The tile was describing the ledger at that instant rather than the money the
+        decision would actually have (owner, 2026-09-09)."""
+        base = float(self.settled_cash or 0.0) + self._settling_on(today)
         if self._broker_funds is not None:
-            spendable = min(spendable, self._broker_funds)
-        return max(0.0, spendable)
+            base = min(base, self._broker_funds)
+        return max(0.0, base)
 
     def _pending_total(self) -> float:
         return sum(float(c[1]) for c in self.pending_credits)
@@ -703,11 +721,11 @@ class ValueInvestingStrategy:
             ranked.append((float(px) / float(prev) - 1.0, i, sym, float(px)))
         ranked.sort(key=lambda r: (r[0], r[1]))
         projected = self.settled_cash is None
-        cap = (self.settled_cash if not projected
+        cap = (self._spendable_asof(today) if not projected
                else min(self.initial_capital,
                         self._broker_funds if self._broker_funds is not None
                         else self.initial_capital))
-        if self._broker_funds is not None and cap is not None:
+        if projected and self._broker_funds is not None and cap is not None:
             cap = min(cap, self._broker_funds)
         cap = max(0.0, float(cap or 0.0))
         # the planner mutates pots / epoch state — run it on a copy and put everything back
@@ -743,6 +761,10 @@ class ValueInvestingStrategy:
             "pots": {n: round(pots_today.get(n, 0.0), 2) for n in names},
             "pots_after": {n: round(pots_after.get(n, 0.0), 2) for n in names},
             "spendable": round(cap, 2),
+            "settling_today": round(self._settling_on(today), 2),
+            "settled_now": round(float(self.settled_cash or 0.0), 2),
+            "broker_funds": (round(self._broker_funds, 2)
+                             if self._broker_funds is not None else None),
             "projected": projected,
         }
 

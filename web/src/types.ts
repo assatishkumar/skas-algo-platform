@@ -134,7 +134,10 @@ export interface LiveHoldings {
   totals: Holdings["totals"];
   fund: { symbol: string; units: number; value: number; runway_days?: number | null; checked?: boolean | null } | null;
   today: {
-    spendable: number | null; projected: boolean | null; settling: number;
+    spendable: number | null; projected: boolean | null;
+    settling: number;         // still to come, on a LATER day
+    settling_today?: number;  // landed today — already inside `spendable`
+    settled_now?: number | null;
     daily_budget: number | null; pots_total: number;
     plan: { symbol: string; price: number; units: number; cost: number }[];
     plan_total: number;
