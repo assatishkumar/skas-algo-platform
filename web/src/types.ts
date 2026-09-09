@@ -1955,6 +1955,7 @@ export interface ConsoleChainLeg {
 export interface ConsoleChainRow {
   strike: number;
   atm: boolean;
+  iv: number | null;      // the OTM side's IV — the ladder shows one per strike
   itm_ce: boolean;
   itm_pe: boolean;
   ce: ConsoleChainLeg;
@@ -1969,7 +1970,8 @@ export interface ConsoleState {
     has_prev_day: boolean; has_next_day: boolean;
   };
   market: {
-    spot: number | null; fut: number | null; basis: number | null;
+    spot: number | null; fut: number | null;
+    carry: number | null;   // fut − spot, i.e. what de-carrying removed; NOT a cash basis
     prev_close: number | null;
     day_open: number | null; day_high: number | null; day_low: number | null;
     expiry: string | null; dte: number | null;

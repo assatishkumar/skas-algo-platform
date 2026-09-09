@@ -159,10 +159,18 @@ def implied_vol(observed_price: float, spot: float, strike: float, t: float, r: 
     """
     if t <= 0:
         return None
-    itr = intrinsic(right, spot, strike)
-    # Price must sit within [intrinsic, spot] (call) / [intrinsic, strike] (put) bounds.
-    upper = spot * math.exp(-q * t) if _is_call(right) else strike * math.exp(-r * t)
-    if observed_price < itr - tol or observed_price > upper + tol:
+    # The no-arbitrage FLOOR is the DISCOUNTED forward intrinsic, not max(0, S-K): a
+    # European call is worth at least S·e^(-qt) − K·e^(-rt), which for a deep-ITM 7-DTE
+    # leg sits ~₹30 above the undiscounted number. Using the looser bound let a stale
+    # print slip through — NIFTY 23500 CE printed 1128.10 on 2026-08-04 against a floor of
+    # 1129.30 (the deep leg had not re-priced while the index ran) — and no sigma can reach
+    # it, so the solve below walked to its own upper bracket and returned 500% vol with a
+    # delta to match. Refuse it here instead.
+    disc_s = spot * math.exp(-q * t)
+    disc_k = strike * math.exp(-r * t)
+    floor = max(0.0, disc_s - disc_k) if _is_call(right) else max(0.0, disc_k - disc_s)
+    upper = disc_s if _is_call(right) else disc_k
+    if observed_price < floor - tol or observed_price > upper + tol:
         return None
 
     sigma = 0.20  # ATM-ish seed
@@ -180,6 +188,12 @@ def implied_vol(observed_price: float, spot: float, strike: float, t: float, r: 
     # Bisection fallback over [lo, hi].
     a, b = lo, hi
     fa = price(spot, strike, t, r, a, right, q) - observed_price
+    fb = price(spot, strike, t, r, b, right, q) - observed_price
+    if (fa < 0) == (fb < 0):
+        # The target is not bracketed, so there is no root in [lo, hi] and every step below
+        # would march to whichever end is closer. Returning that end reads as a real answer
+        # — a 500% IV and the nonsense delta that follows it — so say "no vol" instead.
+        return None
     for _ in range(max_iter):
         m = 0.5 * (a + b)
         fm = price(spot, strike, t, r, m, right, q) - observed_price
@@ -189,4 +203,8 @@ def implied_vol(observed_price: float, spot: float, strike: float, t: float, r: 
             a, fa = m, fm
         else:
             b = m
-    return 0.5 * (a + b)
+    sigma = 0.5 * (a + b)
+    # Converged on the bracket, not necessarily on the price: only answer if it reprices.
+    if abs(price(spot, strike, t, r, sigma, right, q) - observed_price) > max(tol, 1e-4):
+        return None
+    return sigma

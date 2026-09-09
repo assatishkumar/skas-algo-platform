@@ -117,7 +117,7 @@ function ChainRow({ row, onPick }: {
       <div className="h-full flex items-center justify-center text-[10.5px]"
         style={{ background: row.atm ? "var(--oc-accent-dim)" : "var(--oc-strike)",
           color: "var(--oc-muted)" }}>
-        {row.ce.iv ?? row.pe.iv ? num(row.ce.iv ?? row.pe.iv, 2) : "—"}
+        {row.iv == null ? "—" : num(row.iv, 2)}
       </div>
       <BsCell tint={row.itm_pe} onB={() => onPick("B", "PE", row.strike)}
         onS={() => onPick("S", "PE", row.strike)} disabled={!row.pe.quoted} left />
@@ -314,11 +314,11 @@ export default function ConsolePage() {
       {/* market strip */}
       <div className="h-[30px] flex items-center overflow-x-auto"
         style={{ background: "var(--oc-panel2)", borderBottom: "1px solid var(--oc-line)" }}>
-        <StripItem label={underlying}>{num(state?.market.spot ?? null)}</StripItem>
+        <StripItem label={`${underlying} (parity)`}>{num(state?.market.spot ?? null)}</StripItem>
         <StripItem label={`FUT ${state?.market.expiry ?? ""}`}>
           {num(state?.market.fut ?? null)}
           <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}>
-            basis {signed(state?.market.basis ?? null)}
+            carry {signed(state?.market.carry ?? null)}
           </span>
         </StripItem>
         <StripItem label="Day (so far)">

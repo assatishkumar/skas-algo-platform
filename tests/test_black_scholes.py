@@ -57,3 +57,38 @@ def test_implied_vol_round_trips():
 def test_implied_vol_none_below_intrinsic():
     # A price below intrinsic has no real IV.
     assert bs.implied_vol(10.0, 21500, 21000, 0.05, 0.06, "CE") is None
+
+
+# ------------------------------------------- stale deep-ITM prints (Options Console, 2026-09-09)
+
+def test_a_price_below_the_discounted_floor_has_no_implied_vol():
+    """A European call is worth at least S·e^(-qt) − K·e^(-rt). The band check used the
+    UNDISCOUNTED max(0, S−K), which on a deep-ITM 7-DTE leg sits ~₹30 low, so a stale print
+    slipped through to a solve no sigma could satisfy.
+
+    Real case, NIFTY 2026-08-04 09:23: the 23500 CE printed 1128.10 while the rest of the
+    chain implied a spot of 24599.48 — a floor of ~1129.30. The old code answered 500% vol
+    (its own upper bracket) and a delta to match, which rendered on the option chain as a
+    plausible-looking number. There is no vol here; the honest answer is None."""
+    spot, k, t, r = 24599.48, 23500.0, 7.25 / 365, 0.065
+    floor = spot - k * math.exp(-r * t)
+    assert bs.implied_vol(floor - 1.2, spot, k, t, r, "CE") is None
+    # …and a price just ABOVE the floor still solves, to a small vol.
+    iv = bs.implied_vol(floor + 8.0, spot, k, t, r, "CE")
+    assert iv is not None and 0.0 < iv < 1.0
+
+
+def test_an_unbracketed_solve_returns_none_not_the_bracket_end():
+    """Bisection used to return the midpoint of its final interval whatever happened, so a
+    target outside [lo, hi] converged onto a bound and was reported as if it were a root."""
+    spot, k, t, r = 24000.0, 24000.0, 30 / 365, 0.065
+    huge = bs.price(spot, k, t, r, 4.0, "CE") * 3      # beyond any sigma ≤ 5
+    assert bs.implied_vol(huge, spot, k, t, r, "CE") is None
+
+
+def test_an_ordinary_quote_still_round_trips():
+    """The guards must not cost the normal case: solve, then reprice."""
+    spot, k, t, r = 24000.0, 24200.0, 21 / 365, 0.065
+    px = bs.price(spot, k, t, r, 0.135, "CE")
+    iv = bs.implied_vol(px, spot, k, t, r, "CE")
+    assert iv == pytest.approx(0.135, abs=1e-4)

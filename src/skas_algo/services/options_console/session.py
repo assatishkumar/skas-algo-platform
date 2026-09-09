@@ -244,12 +244,19 @@ class ConsoleSession:
         out = []
         for r in keep:
             k = r["strike"]
+            ce, pe = leg(r.get("ce"), "CE", k), leg(r.get("pe"), "PE", k)
+            # The ladder shows ONE IV per strike, and it should be the OTM side's. An ITM
+            # option is nearly all intrinsic, so its vol is inferred from a sliver of time
+            # value and swings wildly on a stale print or a tick of rounding; the OTM side
+            # of the same strike is all time value and is the number a trader means by
+            # "the vol at 24000".
+            iv = (pe["iv"] if k <= atm else ce["iv"])
             out.append({"strike": k,
                         "atm": k == atm,
                         "itm_ce": k <= atm,
                         "itm_pe": k >= atm,
-                        "ce": leg(r.get("ce"), "CE", k),
-                        "pe": leg(r.get("pe"), "PE", k)})
+                        "iv": iv if iv is not None else (ce["iv"] or pe["iv"]),
+                        "ce": ce, "pe": pe})
         return out
 
     @staticmethod
@@ -263,8 +270,15 @@ class ConsoleSession:
     def state(self) -> dict:
         snap = (self.market.live_chain(self.underlying, self.expiry)
                 if self.expiry else None) or {}
-        spot = self.market.index_spot(self.underlying)
+        # ONE spot, and it is the SELECTED expiry's own de-carried parity forward — the same
+        # number live_chain anchors the ATM row to. The strip used to read index_spot (the
+        # NEAREST expiry's), which quietly disagreed with the ladder: 24,620 in the header
+        # against 24,599 in the chain on 2026-08-04, and at the expiry-day close the two
+        # expiries diverged enough to print a basis of −110, which no 7-day future has.
+        # With one source, "basis" is definitionally the carry we removed, so it is labelled
+        # as carry rather than dressed up as a futures premium we cannot measure.
         fut = self.market._parity(self.expiry) if self.expiry else None
+        spot = snap.get("spot") or self.market.index_spot(self.underlying)
         rows = self.chain_rows()
         quoted = sum(1 for r in rows for s in ("ce", "pe") if r[s]["quoted"])
         day_i = self.days.index(self.day)
@@ -285,7 +299,7 @@ class ConsoleSession:
             },
             "market": {
                 "spot": spot, "fut": fut,
-                "basis": (fut - spot) if (fut is not None and spot is not None) else None,
+                "carry": (fut - spot) if (fut is not None and spot is not None) else None,
                 "prev_close": prev_close,
                 "day_open": self.market.spot_open, "day_high": self.market.spot_high,
                 "day_low": self.market.spot_low,

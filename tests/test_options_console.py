@@ -222,3 +222,19 @@ def test_the_console_cannot_reach_the_order_path():
             assert f"import {bad}" not in text and f"from {bad}" not in text, (
                 f"{mod.name} reaches into {bad} — the console is not an order path")
     assert "session" in seen and "registry" in seen
+
+
+def test_the_strip_and_the_ladder_agree_on_spot():
+    """The header's spot and the chain's ATM must come from ONE number. They did not: the
+    strip read the NEAREST expiry's parity while the ladder anchored on the SELECTED one,
+    so on 2026-08-04 the header said 24,620 and the chain 24,599 — and at the expiry-day
+    close the gap printed a 'basis' of −110, which no seven-day future has. What is left is
+    the carry we removed, and it is labelled as such rather than as a futures premium we
+    have no cash index to measure."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    st = s.state()
+    assert st["market"]["spot"] == pytest.approx(s.market.live_chain("NIFTY", EXP)["spot"])
+    assert st["market"]["carry"] == pytest.approx(
+        st["market"]["fut"] - st["market"]["spot"], abs=1e-6)
+    assert st["market"]["carry"] > 0        # de-carrying only ever removes carry
