@@ -116,6 +116,10 @@ class ConsolePreset(BaseModel):
     lots: int = 1
 
 
+class ConsoleScale(BaseModel):
+    factor: float                     # every leg's lots × factor, one action
+
+
 class ConsoleJump(BaseModel):
     kind: Literal[
         "next_fill", "prev_fill", "next_bookmark", "prev_bookmark", "next_move", "prev_move"]

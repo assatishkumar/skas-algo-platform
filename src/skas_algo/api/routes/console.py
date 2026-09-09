@@ -24,6 +24,7 @@ from skas_algo.api.models import (
     ConsoleOpen,
     ConsolePreset,
     ConsoleSave,
+    ConsoleScale,
     ConsoleStage,
     ConsoleTransport,
 )
@@ -157,6 +158,16 @@ def apply_basket(session_id: str, body: ConsoleBasket) -> dict:
     try:
         session.apply_basket(body.legs, label=body.label)
     except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
+
+
+@router.post("/sessions/{session_id}/scale")
+def scale_book(session_id: str, body: ConsoleScale) -> dict:
+    session = _get(session_id)
+    try:
+        session.scale_book(body.factor)
+    except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return session.state()
 

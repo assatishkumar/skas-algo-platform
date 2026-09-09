@@ -416,14 +416,16 @@ class ConsoleSession:
                 return self.seek(hi)
             if i + 1 < len(self.days):
                 excess = int((target - hi).total_seconds() // 60)
-                nxt = datetime.combine(self.days[i + 1], SESSION_OPEN) + timedelta(minutes=excess - 1)
+                nxt = (datetime.combine(self.days[i + 1], SESSION_OPEN)
+                       + timedelta(minutes=excess - 1))
                 self.set_day(self.days[i + 1], at=SESSION_OPEN.strftime("%H:%M"))
                 return self.seek(nxt)
             return self.seek(hi)
         if target < lo and minutes < 0:
             if i > 0:
                 excess = int((lo - target).total_seconds() // 60)
-                prev = datetime.combine(self.days[i - 1], SESSION_CLOSE) - timedelta(minutes=excess - 1)
+                prev = (datetime.combine(self.days[i - 1], SESSION_CLOSE)
+                        - timedelta(minutes=excess - 1))
                 self.set_day(self.days[i - 1], at=SESSION_CLOSE.strftime("%H:%M"))
                 return self.seek(prev)
             return self.seek(lo)
@@ -557,6 +559,33 @@ class ConsoleSession:
             return None
         self.staged = {"items": items,
                        "label": label or " · ".join(i["label"] for i in items)}
+        return self.staged
+
+    def scale_book(self, factor: float) -> dict | None:
+        """The design's multiplier: every leg's lots × ``factor`` in ONE action (one group,
+        so Undo takes the whole rescale back). A rescale of 1 leg is a resize; of a condor
+        it is four resizes that must all price — all-or-nothing like a basket. A factor
+        that would take a leg below one lot is refused rather than rounded to zero."""
+        if not self.legs:
+            raise ValueError("nothing to scale")
+        if factor <= 0:
+            raise ValueError("the multiplier must be positive")
+        items = []
+        for leg in self.legs:
+            want = int(round(leg.lots * factor))
+            if want < 1:
+                raise ValueError(f"{int(leg.strike)} {leg.right} would go below one lot")
+            if want != leg.lots:
+                items.append(self._stage_item(kind="resize", leg_id=leg.id, lots=want))
+        if not items:
+            return None
+        if not self.requires_confirm:
+            self._group += 1
+            minute = self.clock.strftime("%Y-%m-%dT%H:%M")
+            for it in items:
+                self._apply(it, minute)
+            return None
+        self.staged = {"items": items, "label": f"Scale ×{factor:g}"}
         return self.staged
 
     def presets(self, lots: int = 1) -> list[dict]:

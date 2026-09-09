@@ -906,6 +906,18 @@ export default function ConsolePage() {
     },
     onSuccess: setState,
   });
+  // The design's multiplier: every leg's lots × n, as one undoable action. The multiple
+  // is READ from the legs (the gcd of their lots), never tracked on the page — a tracked
+  // counter drifted the moment Undo rebuilt the book (×2 shown against ×3 held).
+  const mult = useMemo(() => {
+    const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+    return (state?.legs ?? []).map((l) => l.lots).reduce((g, n) => gcd(g, n), 0) || 1;
+  }, [state?.legs]);
+  const scale = useMutation({
+    mutationFn: (next: number) => call((id) => api.consoleScale(id, next / mult)),
+    onSuccess: (s) => { setState(s); setError(null); },
+    onError: (e: Error) => setError(e.message),
+  });
   const applyPreset = useMutation({
     mutationFn: (body: { preset: string; lots: number }) =>
       call((id) => api.consoleApplyPreset(id, body)),
@@ -1362,7 +1374,16 @@ export default function ConsolePage() {
               <Panel>
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[13px] font-semibold">Positions</span>
-              <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+              <span className="text-[10.5px] flex items-center gap-1" style={{ color: "var(--oc-faint)" }}>
+                {state?.legs.length ? (
+                  <span className="inline-flex items-center gap-1 mr-2"
+                    title="multiplier: every leg's lots × n, one action (U undoes)">
+                    <MiniBtn disabled={mult <= 1} onClick={() => scale.mutate(mult - 1)}>−</MiniBtn>
+                    <b className="text-[11px] tabular-nums" style={{ color: "var(--oc-ink)", minWidth: 22, textAlign: "center" }}>
+                      ×{mult}</b>
+                    <MiniBtn onClick={() => scale.mutate(mult + 1)}>+</MiniBtn>
+                  </span>
+                ) : null}
                 {state?.legs.length ?? 0} legs · lot {state?.session.lot_size ?? "—"}
                 {state?.session.can_undo ? (
                   <button type="button" className="ml-3 underline"

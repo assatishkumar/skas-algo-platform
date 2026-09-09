@@ -199,6 +199,9 @@ export const api = {
   consoleApplyPreset: (id: string, body: { preset: string; lots: number }) =>
     request<ConsoleState>(`/console/sessions/${id}/preset`,
       { method: "POST", body: JSON.stringify(body) }),
+  consoleScale: (id: string, factor: number) =>
+    request<ConsoleState>(`/console/sessions/${id}/scale`,
+      { method: "POST", body: JSON.stringify({ factor }) }),
   consoleJump: (id: string, body: { kind: string; pct?: number }) =>
     request<ConsoleState>(`/console/sessions/${id}/jump`,
       { method: "POST", body: JSON.stringify(body) }),

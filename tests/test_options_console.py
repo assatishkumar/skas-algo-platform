@@ -956,3 +956,18 @@ def test_a_cycle_whose_expiry_is_past_the_captured_data_says_so():
     s.seek("15:40"); s.step(5)
     assert s.day == DAY and s.clock.strftime("%H:%M") == "15:40"       # nowhere to go
     assert s.state()["session"]["has_next_day"] is False
+
+
+def test_the_multiplier_scales_every_leg_as_one_action():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    s.stage(kind="add", right="PE", strike=24000, side="S", lots=2)
+    s.scale_book(3)
+    assert [leg.lots for leg in s.legs] == [3, 6]
+    assert s.undo_last() is True and [leg.lots for leg in s.legs] == [1, 2]
+    s.scale_book(3); s.scale_book(2 / 3)
+    assert [leg.lots for leg in s.legs] == [2, 4]
+    with pytest.raises(ValueError):
+        s.scale_book(0.1)                       # a leg would go below one lot
+    assert [leg.lots for leg in s.legs] == [2, 4]   # nothing partial applied
