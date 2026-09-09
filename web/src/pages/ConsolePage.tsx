@@ -90,7 +90,7 @@ function Chip({ children, onClick, active, title, disabled }: {
 /** Shortcuts, hidden until asked for. A dense screen should not spend permanent space on a
  *  reference you need twice, but a transport nobody can find is a transport nobody uses —
  *  so: a ? chip, the ? key, click-outside and Esc to dismiss. */
-function KeyHelp({ onClose }: { onClose: () => void }) {
+function KeyHelp({ onClose, notes }: { onClose: () => void; notes: string[] }) {
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
@@ -118,6 +118,15 @@ function KeyHelp({ onClose }: { onClose: () => void }) {
           style={{ borderTop: "1px solid var(--oc-hair)", color: "var(--oc-faint)" }}>
           Click the page once after loading it — the keys need the page to have focus.
         </div>
+        {!!notes.length && (
+          <div className="mt-2 pt-2" style={{ borderTop: "1px solid var(--oc-hair)" }}>
+            <div className="text-[9.5px] font-semibold uppercase tracking-[.07em] mb-1"
+              style={{ color: "var(--oc-faint)" }}>What this screen cannot know</div>
+            <ul className="space-y-1 text-[10.5px]" style={{ color: "var(--oc-muted)" }}>
+              {notes.map((n) => <li key={n}>· {n}</li>)}
+            </ul>
+          </div>
+        )}
       </div>
     </>
   );
@@ -131,9 +140,11 @@ const inr0 = (v: number | null | undefined) =>
 const pctOf = (a: number | null | undefined, b: number | null | undefined) =>
   a == null || !b || !Number.isFinite(a) ? "—" : `${((a / b) * 100).toFixed(2)}%`;
 
-function Panel({ children }: { children: React.ReactNode }) {
+function Panel({ children, className = "" }: {
+  children: React.ReactNode; className?: string;
+}) {
   return (
-    <div className="rounded-[10px] p-3"
+    <div className={`rounded-[10px] p-3 ${className}`}
       style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)" }}>
       {children}
     </div>
@@ -166,30 +177,45 @@ function LegRow({ leg, grid, onStage }: {
 }) {
   const [exitLots, setExitLots] = useState(leg.lots);
   useEffect(() => { setExitLots((n) => Math.min(Math.max(1, n), leg.lots)); }, [leg.lots]);
+  const value = leg.ltp == null ? null : leg.ltp * leg.units;
   return (
     <tr style={{ opacity: leg.enabled ? 1 : 0.45 }}>
-      <td className="py-1">
+      <td className="py-1.5">
         <button type="button" title={leg.enabled ? "exclude from the payoff" : "include"}
           onClick={() => onStage({ kind: "toggle", leg_id: leg.id })}
-          className="w-[26px] h-[15px] rounded-full mr-2 align-middle"
+          className="w-[26px] h-[15px] rounded-full align-middle"
           style={{ background: leg.enabled ? "var(--oc-accent)" : "var(--oc-chip)" }}>
           <span className="block w-[11px] h-[11px] rounded-full bg-white"
             style={{ marginLeft: leg.enabled ? 13 : 2 }} />
         </button>
+      </td>
+      <td>
         <span className="px-1 rounded-[3px] text-[10px] font-bold"
           style={{ color: leg.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)",
             background: leg.side === "S" ? "var(--oc-neg-fill)" : "var(--oc-pos-fill)" }}>
-          {leg.side}</span>{" "}
-        <Nudge title="roll this leg a strike"
+          {leg.side}</span>
+      </td>
+      {/* Strike and size are steppers in their OWN fixed columns and ALWAYS visible.
+          Revealing them on hover re-flowed the row as the pointer arrived, so the button
+          moved out from under the click; and inside a narrow column the cell wrapped onto
+          three lines (owner, 2026-09-09). */}
+      <td>
+        <Stepper title={`roll a strike (${grid} pts)`}
           onDown={() => onStage({ kind: "roll", leg_id: leg.id, strike: leg.strike - grid })}
           onUp={() => onStage({ kind: "roll", leg_id: leg.id, strike: leg.strike + grid })}>
-          <b>{Math.round(leg.strike).toLocaleString("en-IN")} {leg.right}</b>
-        </Nudge>{" "}
-        <Nudge title="resize this leg"
+          <b className="whitespace-nowrap">
+            {Math.round(leg.strike).toLocaleString("en-IN")} {leg.right}</b>
+        </Stepper>
+      </td>
+      <td>
+        <Stepper title="add to or trim this position"
           onDown={() => onStage({ kind: "resize", leg_id: leg.id, lots: leg.lots - 1 })}
           onUp={() => onStage({ kind: "resize", leg_id: leg.id, lots: leg.lots + 1 })}>
-          <span style={{ color: "var(--oc-faint)" }}>×{leg.lots}</span>
-        </Nudge>
+          <span className="whitespace-nowrap">×{leg.lots}
+            <span style={{ color: "var(--oc-faint)" }}>
+              {" "}· {leg.units.toLocaleString("en-IN")}</span>
+          </span>
+        </Stepper>
       </td>
       <td className="text-right">{num(leg.entry)}</td>
       <td className="text-right">{leg.ltp == null ? "—" : num(leg.ltp)}</td>
@@ -197,44 +223,47 @@ function LegRow({ leg, grid, onStage }: {
         style={{ color: (leg.pnl ?? 0) >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
         {leg.pnl == null ? "—" : inr0(leg.pnl)}
       </td>
+      <td className="text-right" style={{ color: "var(--oc-muted)" }}>
+        {value == null ? "—" : inr0(value)}
+      </td>
       <td className="text-right whitespace-nowrap">
-        {/* how many lots leave — the design's − 4 ＋ · Exit */}
-        <span className="inline-flex items-center gap-[3px] mr-1">
+        <span className="inline-flex items-center gap-[3px] mr-1.5">
           <MiniBtn onClick={() => setExitLots((n) => Math.max(1, n - 1))}>−</MiniBtn>
-          <span className="text-[10.5px] tabular-nums" style={{ minWidth: 14, display: "inline-block" }}>
+          <span className="text-[10.5px] tabular-nums"
+            style={{ minWidth: 16, display: "inline-block", textAlign: "center" }}>
             {exitLots}</span>
           <MiniBtn onClick={() => setExitLots((n) => Math.min(leg.lots, n + 1))}>+</MiniBtn>
         </span>
         <button type="button"
           onClick={() => onStage({ kind: "exit", leg_id: leg.id, lots: exitLots })}
-          className="px-1.5 h-[18px] rounded-[3px] text-[10.5px]"
+          className="px-2 h-[20px] rounded-[4px] text-[10.5px]"
           style={{ border: "1px solid var(--oc-line)", color: "var(--oc-accent)" }}>
-          Exit</button>
+          Exit {exitLots === leg.lots ? "all" : exitLots}</button>
       </td>
     </tr>
+  );
+}
+
+/** A value with − / + either side, ALWAYS visible. The hover-reveal version looked tidier
+ *  and was unusable: the buttons appeared as the pointer arrived, the row re-flowed, and
+ *  the target moved. A control meant to be clicked twice must not move between clicks. */
+function Stepper({ children, onDown, onUp, title }: {
+  children: React.ReactNode; onDown: () => void; onUp: () => void; title: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5" title={title}>
+      <MiniBtn onClick={onDown}>−</MiniBtn>
+      {children}
+      <MiniBtn onClick={onUp}>+</MiniBtn>
+    </span>
   );
 }
 
 function MiniBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick}
-      className="w-[14px] h-[14px] rounded-[3px] text-[10px] leading-[13px]"
+      className="w-[18px] h-[18px] rounded-[4px] text-[11px] leading-[17px] shrink-0"
       style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>{children}</button>
-  );
-}
-
-/** A value with − / + on either side, revealed on hover so the row stays quiet at rest. */
-function Nudge({ children, onDown, onUp, title }: {
-  children: React.ReactNode; onDown: () => void; onUp: () => void; title: string;
-}) {
-  return (
-    <span className="inline-flex items-center gap-[3px] group/n" title={title}>
-      <span className="opacity-0 group-hover/n:opacity-100 transition">
-        <MiniBtn onClick={onDown}>−</MiniBtn></span>
-      {children}
-      <span className="opacity-0 group-hover/n:opacity-100 transition">
-        <MiniBtn onClick={onUp}>+</MiniBtn></span>
-    </span>
   );
 }
 
@@ -582,7 +611,6 @@ export default function ConsolePage() {
     return spotNow && expNow && legs.length
       ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
   }, [state?.staged, spotNow, expNow, state?.session.date]);
-  const atmIndex = useMemo(() => rows.findIndex((r) => r.atm), [rows]);
   const busy = open.isPending || move.isPending;
 
   return (
@@ -592,7 +620,7 @@ export default function ConsolePage() {
       {/* session bar */}
       <div className="relative h-10 flex items-center gap-2 px-3"
         style={{ background: "var(--oc-surface)", borderBottom: "1px solid var(--oc-line)" }}>
-        {showKeys && <KeyHelp onClose={() => setShowKeys(false)} />}
+        {showKeys && <KeyHelp onClose={() => setShowKeys(false)} notes={state?.notes ?? []} />}
         <span className="px-2 h-[22px] leading-[22px] rounded-[5px] text-[10px] font-bold tracking-wide"
           style={{ border: "1px solid var(--oc-accent)", color: "var(--oc-accent)" }}>
           REPLAY
@@ -746,186 +774,192 @@ export default function ConsolePage() {
         </div>
 
         <div className="flex-1 min-w-0 space-y-2.5">
-          <Panel>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[13px] font-semibold">Payoff</span>
-              <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
-                expiry · T+0 dashed · staged dotted
-              </span>
-            </div>
-            <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
-              spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
-              today={state?.session.date ?? ""} />
-          </Panel>
+          <div className="flex gap-2.5 items-start">
+            <div className="flex-1 min-w-0 space-y-2.5">
+            <Panel>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[13px] font-semibold">Payoff</span>
+                <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+                  expiry · T+0 dashed · staged dotted
+                </span>
+              </div>
+              <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
+                spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
+                today={state?.session.date ?? ""} />
+            </Panel>
 
-          {/* Only a book that can reach a broker gets an Apply between the click and the
-              trade. In replay this block never renders — the click IS the trade, and Undo
-              is the way back. */}
-          {state?.staged && state.session.requires_confirm && (
-            <div className="rounded-[10px] p-3"
-              style={{ border: "1px dashed var(--oc-accent)",
-                background: "var(--oc-accent-tint)" }}>
-              <div className="flex items-center gap-2 flex-wrap">
+            {/* Only a book that can reach a broker gets an Apply between the click and the
+                trade. In replay this block never renders — the click IS the trade, and Undo
+                is the way back. */}
+            {state?.staged && state.session.requires_confirm && (
+              <div className="rounded-[10px] p-3"
+                style={{ border: "1px dashed var(--oc-accent)",
+                  background: "var(--oc-accent-tint)" }}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
+                    style={{ background: "var(--oc-accent)", color: "#fff" }}>STAGED</span>
+                  <b className="text-[12.5px]">{state.staged.label}</b>
+                  <span className="text-[11px]" style={{ color: "var(--oc-muted)" }}>
+                    previewed on the chart before commit
+                  </span>
+                  <span className="ml-auto flex gap-2">
+                    <button type="button" onClick={() => commit.mutate()}
+                      className="px-2.5 h-[24px] rounded-[5px] text-[11.5px] font-semibold"
+                      style={{ background: "var(--oc-accent)", color: "#fff" }}>Apply ⏎</button>
+                    <button type="button" onClick={() => discard.mutate()}
+                      className="px-2.5 h-[24px] rounded-[5px] text-[11.5px]"
+                      style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
+                      Discard esc</button>
+                  </span>
+                </div>
+                <div className="mt-1.5 flex gap-5 text-[11.5px] flex-wrap tabular-nums">
+                  <Delta label="max profit" good
+                    a={mNow?.maxProfit} unlimitedA={mNow?.maxProfitUnlimited}
+                    b={mStaged?.maxProfit} unlimitedB={mStaged?.maxProfitUnlimited} />
+                  <Delta label="max loss"
+                    a={mNow?.maxLoss} unlimitedA={mNow?.maxLossUnlimited}
+                    b={mStaged?.maxLoss} unlimitedB={mStaged?.maxLossUnlimited} />
+                  <span><span style={{ color: "var(--oc-faint)" }}>margin</span>{" "}
+                    {inr0(state.staged.margin_before)} → <b>{inr0(state.staged.margin_after)}</b>
+                    <span style={{ color: "var(--oc-faint)" }}> · {state.staged.margin_source}</span>
+                  </span>
+                </div>
+              </div>
+            )}
+            </div>
+            <div className="w-[348px] shrink-0 space-y-2.5">
+            <Panel>
+              <div className="flex items-start justify-between">
+                <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
+                  style={{ color: "var(--oc-faint)" }}>Total MTM · realised + open</span>
                 <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
-                  style={{ background: "var(--oc-accent)", color: "#fff" }}>STAGED</span>
-                <b className="text-[12.5px]">{state.staged.label}</b>
-                <span className="text-[11px]" style={{ color: "var(--oc-muted)" }}>
-                  previewed on the chart before commit
-                </span>
-                <span className="ml-auto flex gap-2">
-                  <button type="button" onClick={() => commit.mutate()}
-                    className="px-2.5 h-[24px] rounded-[5px] text-[11.5px] font-semibold"
-                    style={{ background: "var(--oc-accent)", color: "#fff" }}>Apply ⏎</button>
-                  <button type="button" onClick={() => discard.mutate()}
-                    className="px-2.5 h-[24px] rounded-[5px] text-[11.5px]"
-                    style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
-                    Discard esc</button>
+                  style={{ background: risk && risk.legs_open ? "var(--oc-chip)" : "transparent",
+                    color: "var(--oc-muted)" }}>
+                  {!risk?.legs_open ? "NO POSITION"
+                    : mNow && !mNow.maxLossUnlimited ? "DEFINED RISK" : "UNDEFINED RISK"}
                 </span>
               </div>
-              <div className="mt-1.5 flex gap-5 text-[11.5px] flex-wrap tabular-nums">
-                <Delta label="max profit" good
-                  a={mNow?.maxProfit} unlimitedA={mNow?.maxProfitUnlimited}
-                  b={mStaged?.maxProfit} unlimitedB={mStaged?.maxProfitUnlimited} />
-                <Delta label="max loss"
-                  a={mNow?.maxLoss} unlimitedA={mNow?.maxLossUnlimited}
-                  b={mStaged?.maxLoss} unlimitedB={mStaged?.maxLossUnlimited} />
-                <span><span style={{ color: "var(--oc-faint)" }}>margin</span>{" "}
-                  {inr0(state.staged.margin_before)} → <b>{inr0(state.staged.margin_after)}</b>
-                  <span style={{ color: "var(--oc-faint)" }}> · {state.staged.margin_source}</span>
-                </span>
+              <div className="text-[21px] font-semibold mt-1"
+                style={{ color: !risk?.mtm ? "var(--oc-ink)"
+                  : risk.mtm > 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
+                {inr0(risk?.mtm ?? 0)}
               </div>
+              <div className="text-[11px] mt-0.5" style={{ color: "var(--oc-muted)" }}>
+                {risk?.legs_open ? `${risk.legs_open} legs open` : "no open position"} · paused{" "}
+                {state?.session.clock ?? "—"}
+              </div>
+              {/* A session's realised P&L survives closing the position — it is money you
+                  made. Said plainly, because "MTM ₹5,487 · NO POSITION" reads as a bug, and
+                  a later structure's rail would otherwise show the previous one's profit as
+                  if it were its own. Reset clears it. */}
+              {!!risk?.realised && (
+                <div className="text-[11px] mt-1 flex items-center gap-2">
+                  <span style={{ color: "var(--oc-faint)" }}>
+                    {risk.legs_open
+                      ? `includes ${inr0(risk.realised)} banked from closed legs`
+                      : `${inr0(risk.realised)} banked this session · nothing open`}
+                  </span>
+                  <button type="button" onClick={() => reset.mutate()}
+                    className="underline" style={{ color: "var(--oc-muted)" }}>reset</button>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
+                  sub={`${risk?.margin_source ?? "model"} · ${pctOf(risk?.margin, risk?.capital)} of capital`} />
+                <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
+                  sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
+                <Tile label="Max profit" tone="pos"
+                  value={mNow ? (mNow.maxProfitUnlimited ? "unlimited" : inr0(mNow.maxProfit)) : "—"}
+                  sub={pctOf(mNow?.maxProfit, risk?.margin) + " of margin"} />
+                <Tile label="Max loss" tone="neg"
+                  value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss)) : "—"}
+                  sub={pctOf(mNow?.maxLoss, risk?.margin) + " of margin"} />
+                <Tile label="Breakeven"
+                  value={mNow?.breakevens.length
+                    ? mNow.breakevens.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ")
+                    : "—"}
+                  sub={mNow?.breakevens.length && state?.market.spot
+                    ? `${signed(100 * (mNow.breakevens[0] / state.market.spot - 1))}% from spot` : "—"} />
+                <Tile label="Open P&L" tone={(risk?.unrealised ?? 0) >= 0 ? "pos" : "neg"}
+                  value={inr0(risk?.unrealised ?? 0)}
+                  sub={`banked ${inr0(risk?.realised ?? 0)} · ${inr0(-(risk?.charges ?? 0))} costs`} />
+              </div>
+              {risk?.margin_source === "model" && (
+                <div className="mt-2 text-[10.5px]" style={{ color: "var(--oc-caution)" }}>
+                  Model margin: span+exposure on the shorts, blind to long hedges — it reads
+                  several times a broker basket on a spread. Set a measured anchor to make the
+                  percentages real.
+                </div>
+              )}
+            </Panel>
             </div>
-          )}
+          </div>
 
+          {/* Positions spans the payoff AND the rail. A dense table of editable numbers
+              needs room: inside a ~400px middle column the leg cell wrapped onto a second
+              line, which is what made the row jump as values changed length. */}
           <Panel>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[13px] font-semibold">Positions</span>
-              <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
-                {state?.legs.length ?? 0} legs · lot {state?.session.lot_size ?? "—"}
-                {state?.session.can_undo ? (
-                  <button type="button" className="ml-3 underline"
-                    title="undo the last action (U) — the whole action, roll and basket included"
-                    onClick={() => undo.mutate()}
-                    style={{ color: "var(--oc-accent)" }}>Undo</button>
-                ) : null}
-                {state?.legs.length ? (
-                  <button type="button" className="ml-3 underline"
-                    onClick={() => stage.mutate({ kind: "flatten", replace: true })}
-                    style={{ color: "var(--oc-neg)" }}>Exit all</button>
-                ) : null}
-                {(state?.legs.length || risk?.realised) ? (
-                  <button type="button" className="ml-3 underline"
-                    title="clear the book AND this session's realised P&L — a clean slate"
-                    onClick={() => reset.mutate()}
-                    style={{ color: "var(--oc-muted)" }}>Reset</button>
-                ) : null}
-              </span>
-            </div>
-            {!state?.legs.length ? (
-              <div className="py-4 text-center text-[12px]" style={{ color: "var(--oc-faint)" }}>
-                No position. Click B or S on any strike to stage a leg.
-              </div>
-            ) : (
-              <table className="w-full text-[12px] tabular-nums">
-                <thead>
-                  <tr className="text-[9px] uppercase tracking-[.06em]"
-                    style={{ color: "var(--oc-faint)" }}>
-                    <th className="text-left font-semibold py-1">Leg</th>
-                    <th className="text-right font-semibold">Entry</th>
-                    <th className="text-right font-semibold">LTP</th>
-                    <th className="text-right font-semibold">P&amp;L</th>
-                    <th className="text-right font-semibold">Exit</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.legs.map((l) => (
-                    <LegRow key={l.id} leg={l} grid={gridStep}
-                      onStage={(b) => stage.mutate(b)} />
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </Panel>
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[13px] font-semibold">Positions</span>
+          <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+            {state?.legs.length ?? 0} legs · lot {state?.session.lot_size ?? "—"}
+            {state?.session.can_undo ? (
+              <button type="button" className="ml-3 underline"
+                title="undo the last action (U) — the whole action, roll and basket included"
+                onClick={() => undo.mutate()}
+                style={{ color: "var(--oc-accent)" }}>Undo</button>
+            ) : null}
+            {state?.legs.length ? (
+              <button type="button" className="ml-3 underline"
+                onClick={() => stage.mutate({ kind: "flatten", replace: true })}
+                style={{ color: "var(--oc-neg)" }}>Exit all</button>
+            ) : null}
+            {(state?.legs.length || risk?.realised) ? (
+              <button type="button" className="ml-3 underline"
+                title="clear the book AND this session's realised P&L — a clean slate"
+                onClick={() => reset.mutate()}
+                style={{ color: "var(--oc-muted)" }}>Reset</button>
+            ) : null}
+          </span>
         </div>
-
-        <div className="w-[348px] shrink-0 space-y-2.5">
-          <Panel>
-            <div className="flex items-start justify-between">
-              <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
-                style={{ color: "var(--oc-faint)" }}>Total MTM · realised + open</span>
-              <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
-                style={{ background: risk && risk.legs_open ? "var(--oc-chip)" : "transparent",
-                  color: "var(--oc-muted)" }}>
-                {!risk?.legs_open ? "NO POSITION"
-                  : mNow && !mNow.maxLossUnlimited ? "DEFINED RISK" : "UNDEFINED RISK"}
-              </span>
-            </div>
-            <div className="text-[21px] font-semibold mt-1"
-              style={{ color: !risk?.mtm ? "var(--oc-ink)"
-                : risk.mtm > 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
-              {inr0(risk?.mtm ?? 0)}
-            </div>
-            <div className="text-[11px] mt-0.5" style={{ color: "var(--oc-muted)" }}>
-              {risk?.legs_open ? `${risk.legs_open} legs open` : "no open position"} · paused{" "}
-              {state?.session.clock ?? "—"}
-            </div>
-            {/* A session's realised P&L survives closing the position — it is money you
-                made. Said plainly, because "MTM ₹5,487 · NO POSITION" reads as a bug, and
-                a later structure's rail would otherwise show the previous one's profit as
-                if it were its own. Reset clears it. */}
-            {!!risk?.realised && (
-              <div className="text-[11px] mt-1 flex items-center gap-2">
-                <span style={{ color: "var(--oc-faint)" }}>
-                  {risk.legs_open
-                    ? `includes ${inr0(risk.realised)} banked from closed legs`
-                    : `${inr0(risk.realised)} banked this session · nothing open`}
-                </span>
-                <button type="button" onClick={() => reset.mutate()}
-                  className="underline" style={{ color: "var(--oc-muted)" }}>reset</button>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-2 mt-3">
-              <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
-                sub={`${risk?.margin_source ?? "model"} · ${pctOf(risk?.margin, risk?.capital)} of capital`} />
-              <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
-                sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
-              <Tile label="Max profit" tone="pos"
-                value={mNow ? (mNow.maxProfitUnlimited ? "unlimited" : inr0(mNow.maxProfit)) : "—"}
-                sub={pctOf(mNow?.maxProfit, risk?.margin) + " of margin"} />
-              <Tile label="Max loss" tone="neg"
-                value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss)) : "—"}
-                sub={pctOf(mNow?.maxLoss, risk?.margin) + " of margin"} />
-              <Tile label="Breakeven"
-                value={mNow?.breakevens.length
-                  ? mNow.breakevens.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ")
-                  : "—"}
-                sub={mNow?.breakevens.length && state?.market.spot
-                  ? `${signed(100 * (mNow.breakevens[0] / state.market.spot - 1))}% from spot` : "—"} />
-              <Tile label="Open P&L" tone={(risk?.unrealised ?? 0) >= 0 ? "pos" : "neg"}
-                value={inr0(risk?.unrealised ?? 0)}
-                sub={`banked ${inr0(risk?.realised ?? 0)} · ${inr0(-(risk?.charges ?? 0))} costs`} />
-            </div>
-            {risk?.margin_source === "model" && (
-              <div className="mt-2 text-[10.5px]" style={{ color: "var(--oc-caution)" }}>
-                Model margin: span+exposure on the shorts, blind to long hedges — it reads
-                several times a broker basket on a spread. Set a measured anchor to make the
-                percentages real.
-              </div>
-            )}
-          </Panel>
-          <Panel>
-            <div className="text-[9.5px] font-semibold uppercase tracking-[.07em] mb-1"
-              style={{ color: "var(--oc-faint)" }}>Session</div>
-            <div className="text-[11px]" style={{ color: "var(--oc-muted)" }}>
-              ATM row {atmIndex >= 0 ? `#${atmIndex + 1}` : "—"} · strikes {rows.length} ·
-              grid {state?.chain.listing_grid ? "listing (50s)" : "100s"}
-            </div>
-            <ul className="mt-2 space-y-1 text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
-              {(state?.notes ?? []).map((n) => <li key={n}>· {n}</li>)}
-            </ul>
-          </Panel>
+        {!state?.legs.length ? (
+          <div className="py-4 text-center text-[12px]" style={{ color: "var(--oc-faint)" }}>
+            No position. Click B or S on any strike to stage a leg.
+          </div>
+        ) : (
+          <table className="w-full text-[12px] tabular-nums table-fixed">
+            {/* Fixed widths, so a row cannot re-flow as its numbers change length. */}
+            <colgroup>
+              <col style={{ width: 52 }} /><col style={{ width: 40 }} />
+              <col style={{ width: 190 }} /><col style={{ width: 150 }} />
+              <col /><col /><col /><col /><col style={{ width: 215 }} />
+            </colgroup>
+            <thead>
+              <tr className="text-[9px] uppercase tracking-[.06em]"
+                style={{ color: "var(--oc-faint)" }}>
+                <th className="text-left font-semibold py-1">On</th>
+                <th className="text-left font-semibold">Side</th>
+                <th className="text-left font-semibold">Strike</th>
+                <th className="text-left font-semibold">Lots</th>
+                <th className="text-right font-semibold">Entry</th>
+                <th className="text-right font-semibold">LTP</th>
+                <th className="text-right font-semibold">P&amp;L</th>
+                <th className="text-right font-semibold">Value</th>
+                <th className="text-right font-semibold">Exit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.legs.map((l) => (
+                <LegRow key={l.id} leg={l} grid={gridStep}
+                  onStage={(b) => stage.mutate(b)} />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Panel>
         </div>
       </div>
+
 
       {/* footer — the design's P&L strip; for now it carries the keyboard ladder, because a
           transport nobody can find is a transport nobody uses. */}
