@@ -589,3 +589,62 @@ def test_rolling_moves_the_leg_rather_than_adding_one():
     s.stage(kind="roll", leg_id=s.legs[0].id, strike=24100)
     assert len(s.legs) == 1
     assert int(s.legs[0].strike) == 24100 and s.legs[0].lots == 3
+
+
+# ------------------------------------------------ a leg is its own contract (2026-09-09)
+
+def test_a_held_leg_is_priced_on_its_own_expiry_not_the_selected_chip():
+    """Found in a browser pass: switching the expiry chip re-priced every open leg off the
+    newly selected series, and stepping past a leg's expiry marked a dead contract at the
+    next series' price. A leg carries its expiry; the chip is only for what you click next."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    before = s.state()["legs"][0]["ltp"]
+    s.expiry = "2099-01-01"                       # a chip with nothing on it
+    after = s.state()["legs"][0]
+    assert after["ltp"] == before and after["expiry"] == EXP
+    # and the ladder for that other series shows no badge for this leg
+    assert not any(r["ce"]["held"] for r in s.chain_rows())
+
+
+def test_an_expired_leg_settles_to_intrinsic_at_the_close_and_pays_no_brokerage():
+    """The batch replay settles a leg still open on its expiry day at 15:30 to parity
+    intrinsic with zero brokerage. The console must end a day the same way, or a replayed
+    week and a hand-traded week disagree about the same position."""
+    exp_day = date(2026, 7, 21)
+    store.write_day(exp_day, _day(exp_day))
+    s = ConsoleSession(underlying="NIFTY", day=exp_day, at="10:00", expiry=EXP)
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    charges_after_entry = s.charges
+    s.seek("15:25")
+    assert len(s.legs) == 1                        # still alive before the close
+    s.seek("15:35")
+    st = s.state()
+    assert st["legs"] == []                        # settled
+    row = [f for f in s.journal if f["action"] == "SETTLE"]
+    assert len(row) == 1 and row[0]["at"] == f"{EXP}T15:30" and row[0]["group"] is None
+    # exchange fees and GST still apply (the shared charge model, same as the batch
+    # replay); what a settlement does NOT pay is brokerage or STT — so it must cost less
+    # than covering the same amount with an order would.
+    amount = row[0]["units"] * row[0]["price"]
+    as_order = charges_for_txn({"action": "COVER", "amount": amount})["total"]
+    assert 0 <= row[0]["charges"] < as_order
+    assert st["risk"]["charges"] == pytest.approx(charges_after_entry + row[0]["charges"],
+                                                  abs=0.01)
+    # rewinding to before the close reopens it — the settle is a journal fill like any other
+    s.seek("15:00")
+    assert len(s.legs) == 1
+
+
+def test_settlement_is_not_undoable():
+    """An expiry is the market's action, not the owner's; Undo must reach past it to the
+    owner's own last action."""
+    exp_day = date(2026, 7, 21)
+    store.write_day(exp_day, _day(exp_day))
+    s = ConsoleSession(underlying="NIFTY", day=exp_day, at="10:00", expiry=EXP)
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    s.seek("15:35")
+    assert s.legs == [] and any(f["action"] == "SETTLE" for f in s.journal)
+    assert s.undo_last() is True                    # undoes the ENTRY, not the settlement
+    assert s.journal == [] or all(f["action"] != "SHORT" for f in s.journal)

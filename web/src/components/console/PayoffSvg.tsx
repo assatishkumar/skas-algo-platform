@@ -34,25 +34,33 @@ export function toPayoffLegs(legs: ConsoleLeg[]): LiveLeg[] {
   }));
 }
 
-export default function PayoffSvg({ legs, staged, spot, expiry, today, height = 240 }: {
+export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight = 220 }: {
   legs: ConsoleLeg[];
   staged: ConsoleLeg[] | null;
   spot: number | null;
   expiry: string | null;
   today: string;
-  height?: number;
+  minHeight?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(462);
+  // The chart fills whatever the column gives it, in BOTH directions. A fixed height left
+  // the payoff panel shorter than the risk rail beside it, so the two columns did not line
+  // up at the bottom (owner, 2026-09-09).
+  const [h, setH] = useState(minHeight);
   // The spot the pointer is over. A payoff chart is read by asking "and if it closes
   // THERE?", which is a question the picture can only answer with a number attached.
   const [hover, setHover] = useState<number | null>(null);
   useEffect(() => {
     if (!box.current) return;
-    const ro = new ResizeObserver(([e]) => setW(Math.max(320, e.contentRect.width)));
+    const ro = new ResizeObserver(([e]) => {
+      setW(Math.max(320, e.contentRect.width));
+      setH(Math.max(minHeight, e.contentRect.height));
+    });
     ro.observe(box.current);
     return () => ro.disconnect();
-  }, []);
+  }, [minHeight]);
+  const height = h;
 
   const live = useMemo(() => toPayoffLegs(legs), [legs]);
   const ghost = useMemo(() => (staged ? toPayoffLegs(staged) : null), [staged]);
@@ -69,8 +77,8 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, height = 
 
   if (!spot || !expiry || (!data && !ghostData)) {
     return (
-      <div ref={box} className="flex items-center justify-center text-[12px]"
-        style={{ height, color: "var(--oc-faint)" }}>
+      <div ref={box} className="flex items-center justify-center text-[12px] h-full"
+        style={{ minHeight, color: "var(--oc-faint)" }}>
         Buy or sell a strike to see its payoff.
       </div>
     );
@@ -114,7 +122,8 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, height = 
         Math.abs(p.spot - hover) < Math.abs(best.spot - hover) ? p : best, gpts[0]);
 
   return (
-    <div ref={box} style={{ width: "100%", position: "relative" }}>
+    <div ref={box} className="h-full" style={{ width: "100%", position: "relative",
+      minHeight }}>
       <svg width={w} height={height} style={{ display: "block" }}
         onMouseLeave={() => setHover(null)}
         onMouseMove={(e) => {

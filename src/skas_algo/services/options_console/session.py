@@ -259,7 +259,79 @@ class ConsoleSession:
         m._spot_dirty = True
         m.now = target
         self.clock = target
+        self._settle_expired()
         self._replay_book(target)
+
+    def _settle_expired(self) -> None:
+        """A leg whose expiry has passed is SETTLED — a synthetic fill at the expiry day's
+        15:30, at intrinsic off that day's closing parity spot, with no brokerage.
+
+        It goes into the JOURNAL rather than being applied directly, so it obeys the same
+        rule as every other fill: at a cursor before 15:30 on expiry day the leg is open;
+        after it, it is settled; rewind and it is open again. Not undoable (`group` None) —
+        an expiry is the market's action, not the owner's. Found because stepping from
+        04 Aug to 05 Aug left a 0-DTE straddle alive, marked at the next series' prices."""
+        opened = {}
+        for f in self.journal:
+            if f["action"] in ("BUY", "SHORT"):
+                opened[f["symbol"]] = True
+        settled = {f["symbol"] for f in self.journal if f["action"] == "SETTLE"}
+        for symbol in opened:
+            if symbol in settled:
+                continue
+            _u, exp_iso, strike_s, right = symbol.split("|")
+            exp = date.fromisoformat(exp_iso)
+            if exp > self.day:
+                continue
+            # On expiry day itself the SETTLE is stamped 15:30, and the journal replay does
+            # the rest: before 15:30 the leg is open, after it is settled — the batch
+            # replay's convention, so a console day and a replayed day end the same way.
+            spot = self._close_spot_on(exp, exp_iso)
+            strike = float(strike_s)
+            if spot is None:
+                # no expiry-day tape (a capture hole): settle at the contract's last print
+                got = self.probe(right, strike) if exp_iso == self.expiry else None
+                px = float(got["ltp"]) if got and got.get("found") else 0.0
+            else:
+                px = max(0.0, spot - strike) if right == "CE" else max(0.0, strike - spot)
+            # net units still open for this symbol, from the journal itself
+            net = 0.0
+            for f in self.journal:
+                if f["symbol"] != symbol:
+                    continue
+                if f["action"] in ("BUY", "SHORT"):
+                    net += f["units"]
+                else:
+                    net -= f["units"]
+            if net <= 0:
+                continue
+            c = charges_for_txn({"action": "SETTLE", "amount": net * px})
+            self.journal.append({"at": f"{exp_iso}T15:30", "symbol": symbol,
+                                 "action": "SETTLE", "group": None, "units": net,
+                                 "price": round(px, 2), "charges": round(c["total"], 2),
+                                 "note": "expired — settled to intrinsic"})
+        self.journal.sort(key=lambda f: f["at"])
+
+    def _close_spot_on(self, day: date, expiry_iso: str) -> float | None:
+        """The parity spot of ``expiry_iso``'s own series at ``day``'s close. Loads that
+        day's tape once and keeps the answer; None when the day was never captured."""
+        cache = self.__dict__.setdefault("_settle_spots", {})
+        key = f"{day.isoformat()}|{expiry_iso}"
+        if key in cache:
+            return cache[key]
+        val = None
+        if day in self.days:
+            tape = self.tape if day == self.day else _Tape.load(self.underlying, day)
+            if tape.symbols:
+                m = ReplayMarket(self.underlying, allow_fifty_strikes=True)
+                m.start_day(day, tape.all_symbols)
+                for i in range(len(tape.symbols)):
+                    m.quotes[tape.symbols[i]] = (tape.closes[i], tape.ois[i], tape.minutes[i])
+                m._spot_dirty = True
+                own = m._parity(expiry_iso)
+                val = float(own) if own is not None else m.index_spot(self.underlying)
+        cache[key] = val
+        return val
 
     def _replay_book(self, target: datetime, *, force: bool = False) -> None:
         """Rebuild the book from the fill journal at the cursor.
@@ -297,7 +369,8 @@ class ConsoleSession:
         else:
             for leg in self.legs:
                 if leg.symbol == fill["symbol"]:
-                    self._close(leg, int(fill["units"] // lot), fill["price"], fill["at"])
+                    self._close(leg, int(fill["units"] // lot), fill["price"], fill["at"],
+                                action=fill["action"] if fill["action"] == "SETTLE" else None)
                     break
 
     def seek(self, at: str | datetime) -> ConsoleSession:
@@ -356,8 +429,8 @@ class ConsoleSession:
         for r in keep:
             k = r["strike"]
             ce, pe = leg(r.get("ce"), "CE", k), leg(r.get("pe"), "PE", k)
-            ce["held"] = held.get(f"{int(k)}|CE")
-            pe["held"] = held.get(f"{int(k)}|PE")
+            ce["held"] = held.get(f"{self.expiry}|{int(k)}|CE")
+            pe["held"] = held.get(f"{self.expiry}|{int(k)}|PE")
             # The ladder shows ONE IV per strike, and it should be the OTM side's. An ITM
             # option is nearly all intrinsic, so its vol is inferred from a sliver of time
             # value and swings wildly on a stale print or a tick of rounding; the OTM side
@@ -380,10 +453,15 @@ class ConsoleSession:
         return min(gaps) if gaps else 100.0
 
     # ----------------------------------------------------------------- the book
-    def _price(self, right: str, strike: float) -> float | None:
+    def _price(self, right: str, strike: float, expiry: str | None = None) -> float | None:
         """What this contract is worth at the cursor. A leg can only be traded on a price
-        the market actually printed — the probe's reference prices never reach this."""
-        sym = f"{self.underlying}|{self.expiry}|{int(strike)}|{right}"
+        the market actually printed — the probe's reference prices never reach this.
+
+        ``expiry`` defaults to the SELECTED chip for a fresh click, but a held leg must
+        always pass its own: without that, switching the chip re-priced every open leg off
+        a different contract, and stepping past a leg's expiry marked a dead 04 Aug option
+        at the 11 Aug option's price (found in a browser pass, 2026-09-09)."""
+        sym = f"{self.underlying}|{expiry or self.expiry}|{int(strike)}|{right}"
         q = self.market.quotes.get(sym)
         return float(q[0]) if q else None
 
@@ -424,7 +502,7 @@ class ConsoleSession:
         four legs go together. This is what replaces the confirm step: a misclick is
         cheaper to reverse than it is to prevent, and unlike a confirm it also covers the
         leg you decide against a minute later."""
-        groups = [f.get("group") for f in self.journal if f.get("group")]
+        groups = [f.get("group") for f in self.journal if f.get("group")]   # SETTLE has None
         if not groups:
             return False
         last = max(groups)
@@ -451,7 +529,7 @@ class ConsoleSession:
         elif kind == "exit":
             leg = self._leg(leg_id)
             n = max(1, min(int(lots), leg.lots))
-            px = self._price(leg.right, leg.strike)
+            px = self._price(leg.right, leg.strike, leg.expiry)
             if px is None:
                 raise ValueError(f"{leg.symbol} has no price at {self.clock:%H:%M}")
             return {"kind": "exit", "leg_id": leg.id, "lots": n, "price": px,
@@ -468,8 +546,8 @@ class ConsoleSession:
             leg = self._leg(leg_id)
             if strike is None:
                 raise ValueError("a roll needs a target strike")
-            new_px = self._price(leg.right, float(strike))
-            old_px = self._price(leg.right, leg.strike)
+            new_px = self._price(leg.right, float(strike), leg.expiry)
+            old_px = self._price(leg.right, leg.strike, leg.expiry)
             if new_px is None or old_px is None:
                 raise ValueError(f"{int(strike)} {leg.right} has no price at "
                                  f"{self.clock:%H:%M} to roll into")
@@ -481,7 +559,7 @@ class ConsoleSession:
             n = max(0, int(lots))
             if n == leg.lots:
                 raise ValueError("that is the size it already is")
-            px = self._price(leg.right, leg.strike)
+            px = self._price(leg.right, leg.strike, leg.expiry)
             if px is None:
                 raise ValueError(f"{leg.symbol} has no price at {self.clock:%H:%M}")
             return {"kind": "resize", "leg_id": leg.id, "lots": n, "price": px,
@@ -518,8 +596,9 @@ class ConsoleSession:
         elif kind == "roll":
             leg = self._leg(st["leg_id"])
             side, lots, right = leg.side, leg.lots, leg.right
+            expiry = leg.expiry
             self._close(leg, lots, st["exit_price"], minute)
-            self._open(right, st["strike"], side, lots, st["price"], minute)
+            self._open(right, st["strike"], side, lots, st["price"], minute, expiry=expiry)
         elif kind == "resize":
             leg = self._leg(st["leg_id"])
             want = int(st["lots"])
@@ -527,10 +606,10 @@ class ConsoleSession:
                 self._close(leg, leg.lots - want, st["price"], minute)
             else:
                 self._open(leg.right, leg.strike, leg.side, want - leg.lots,
-                           st["price"], minute)
+                           st["price"], minute, expiry=leg.expiry)
         elif kind == "flatten":
             for leg in list(self.legs):
-                px = self._price(leg.right, leg.strike)
+                px = self._price(leg.right, leg.strike, leg.expiry)
                 if px is not None:
                     self._close(leg, leg.lots, px, minute)
 
@@ -572,14 +651,17 @@ class ConsoleSession:
                 return leg
         raise ValueError(f"no leg {leg_id!r}")
 
-    def _close(self, leg: ConsoleLeg, lots: int, price: float, minute: str) -> None:
+    def _close(self, leg: ConsoleLeg, lots: int, price: float, minute: str,
+               action: str | None = None) -> None:
         n = max(0, min(int(lots), leg.lots))
         if not n:
             return
         units = n * leg.lot_size
         pnl = (price - leg.entry) * units * leg.direction
-        pnl -= self._charge("COVER" if leg.side == "S" else "SELL", units, price, minute,
-                            leg.symbol)
+        # SETTLE pays no brokerage and no STT — the batch replay's convention, and the
+        # exchange's: an expiry is not an order.
+        pnl -= self._charge(action or ("COVER" if leg.side == "S" else "SELL"), units, price,
+                            minute, leg.symbol)
         leg.realized += pnl
         leg.exited_lots += n
         self.realized += pnl
@@ -612,7 +694,7 @@ class ConsoleSession:
 
     # ----------------------------------------------------------------- risk
     def _leg_out(self, leg: ConsoleLeg) -> dict:
-        ltp = self._price(leg.right, leg.strike)
+        ltp = self._price(leg.right, leg.strike, leg.expiry)
         pnl = ((ltp - leg.entry) * leg.units * leg.direction) if ltp is not None else None
         return {"id": leg.id, "symbol": leg.symbol, "right": leg.right, "strike": leg.strike,
                 "expiry": leg.expiry, "side": leg.side, "lots": leg.lots,
@@ -660,7 +742,7 @@ class ConsoleSession:
         head — the design puts an S×10 / B×10 badge on the row for exactly that reason."""
         out: dict[str, dict] = {}
         for leg in self.legs:
-            key = f"{int(leg.strike)}|{leg.right}"
+            key = f"{leg.expiry}|{int(leg.strike)}|{leg.right}"
             row = out.setdefault(key, {"lots": 0, "side": leg.side, "enabled": False})
             row["lots"] += leg.lots * leg.direction
             row["enabled"] = row["enabled"] or leg.enabled

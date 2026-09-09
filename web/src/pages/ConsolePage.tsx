@@ -774,18 +774,22 @@ export default function ConsolePage() {
         </div>
 
         <div className="flex-1 min-w-0 space-y-2.5">
-          <div className="flex gap-2.5 items-start">
-            <div className="flex-1 min-w-0 space-y-2.5">
-            <Panel>
+          {/* items-stretch: the payoff and the rail are the same height, so the two
+              columns line up at the bottom instead of leaving a ragged edge. */}
+          <div className="flex gap-2.5 items-stretch">
+            <div className="flex-1 min-w-0 space-y-2.5 flex flex-col">
+            <Panel className="flex-1 flex flex-col min-h-0">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[13px] font-semibold">Payoff</span>
                 <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
                   expiry · T+0 dashed · staged dotted
                 </span>
               </div>
-              <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
-                spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
-                today={state?.session.date ?? ""} />
+              <div className="flex-1 min-h-0">
+                <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
+                  spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
+                  today={state?.session.date ?? ""} />
+              </div>
             </Panel>
 
             {/* Only a book that can reach a broker gets an Apply between the click and the
@@ -963,7 +967,7 @@ export default function ConsolePage() {
 
       {/* footer — the design's P&L strip; for now it carries the keyboard ladder, because a
           transport nobody can find is a transport nobody uses. */}
-      <div className="h-7 flex items-center gap-4 px-3 text-[10.5px]"
+      <div className="min-h-[28px] py-1 flex items-center gap-x-4 gap-y-0.5 flex-wrap px-3 text-[10.5px]"
         style={{ background: "var(--oc-panel2)", borderTop: "1px solid var(--oc-line)",
           color: "var(--oc-faint)" }}>
         <span style={{ color: "var(--oc-accent)" }}>
