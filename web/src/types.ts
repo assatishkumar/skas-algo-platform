@@ -1974,7 +1974,9 @@ export interface ConsoleState {
     requires_confirm: boolean;  // replay applies a click at once; paper/live stages it
     can_undo: boolean;
     has_prev_day: boolean; has_next_day: boolean;
-  };
+    // live/paper only: the deployment behind the console
+    run_id?: number; run_name?: string; strategy_id?: string; order_error?: string | null;
+    };
   market: {
     spot: number | null; fut: number | null;
     carry: number | null;   // fut − spot, i.e. what de-carrying removed; NOT a cash basis
@@ -2023,6 +2025,13 @@ export interface ConsolePreset {
   legs: ConsoleLeg[];
   margin: number; margin_source: string;
   net_credit: number | null;
+}
+
+/** A running DERIV deployment the console can drive. */
+export interface ConsoleLiveRun {
+  run_id: number; name: string; strategy_id: string;
+  mode: "PAPER" | "LIVE"; order_broker: "live" | "paper" | null;
+  underlying: string; status: string | null; open_positions: number | null;
 }
 
 export interface ConsoleSaved {

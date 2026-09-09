@@ -13,7 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsolePreset, ConsoleProbe,
+  ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleLiveRun, ConsolePreset, ConsoleProbe,
   ConsoleState,
 } from "../types";
 import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
@@ -802,6 +802,35 @@ export default function ConsolePage() {
   const [showSaves, setShowSaves] = useState(false);
   const [showSaveBox, setShowSaveBox] = useState(false);
   const [saveName, setSaveName] = useState("");
+  const [realTyped, setRealTyped] = useState("");
+  // The console over a RUNNING deployment: same DTO, no transport, every click staged and
+  // applied through the run's own manual-order path. `isLive` = "not a replay".
+  const isLive = !!state && state.session.mode !== "replay";
+  const isReal = !!state && state.session.mode === "live";
+  const { data: liveRuns } = useQuery({
+    queryKey: ["console-live-runs"], queryFn: api.consoleLiveRuns, refetchInterval: 30_000,
+  });
+  const openLive = useMutation({
+    mutationFn: (run_id: number) => api.consoleOpenLive({ run_id }),
+    onSuccess: (s) => {
+      setState(s); setDay(s.session.date); setError(null); setPlaying(false);
+      setUnderlying(s.session.underlying);
+      setParams({ live: String(s.session.run_id ?? "") }, { replace: true });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+  // Live polls: the market moves on its own clock. Paused while a call is in flight so a
+  // slow answer cannot land on top of a newer one.
+  useEffect(() => {
+    if (!isLive || !state) return;
+    const t = window.setInterval(async () => {
+      const cur = stateRef.current;
+      if (!cur || cur.session.mode === "replay") return;
+      try { setState(await api.consoleGet(cur.session.id)); } catch { /* the next tick retries */ }
+    }, 3000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLive, state?.session.id]);
   const qc = useQueryClient();
   // The latest state, readable from inside a mutation without re-creating it.
   const stateRef = useRef<ConsoleState | null>(null);
@@ -822,6 +851,12 @@ export default function ConsolePage() {
       return await fn(cur.session.id);
     } catch (e) {
       if (!lost(e)) throw e;
+      if (cur.session.mode !== "replay" && cur.session.run_id != null) {
+        const again = await api.consoleOpenLive({ run_id: cur.session.run_id,
+          expiry: cur.chain.expiry ?? undefined });
+        stateRef.current = again; setState(again);
+        return fn(again.session.id);
+      }
       const fresh = await api.consoleOpen({
         underlying: cur.session.underlying, day: cur.session.date, at: cur.session.clock,
         expiry: cur.chain.expiry ?? undefined, capital: cur.session.capital,
@@ -1030,6 +1065,8 @@ export default function ConsolePage() {
   useEffect(() => {
     if (!days || opened.current) return;
     opened.current = true;
+    const liveId = params.get("live");
+    if (liveId) { openLive.mutate(Number(liveId)); return; }
     open.mutate({ underlying, day: params.get("day") ?? days.last });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days]);
@@ -1049,7 +1086,9 @@ export default function ConsolePage() {
         if (state?.staged) discard.mutate();
         return;
       }
-      if (e.key === "Enter" && state?.staged) { e.preventDefault(); commit.mutate(); return; }
+      if (e.key === "Enter" && state?.staged && state.session.mode !== "live") {
+        e.preventDefault(); commit.mutate(); return;
+      }
       if ((e.key === "u" || e.key === "U") && state?.session.can_undo) {
         e.preventDefault(); undo.mutate(); return;
       }
@@ -1061,6 +1100,7 @@ export default function ConsolePage() {
       if ((e.key === "j" || e.key === "J") && state) { e.preventDefault(); jump.mutate({ kind: "next_fill" }); return; }
       if ((e.key === "k" || e.key === "K") && state) { e.preventDefault(); jump.mutate({ kind: "prev_fill" }); return; }
       if (!state || e.metaKey || e.ctrlKey) return;
+      if (state.session.mode !== "replay") return;      // live runs on the market's clock
       // Match on code OR key. e.key changes under Shift ("." becomes ">"), which is why the
       // Shift ladder did nothing when this keyed on e.key alone; e.code is stable but is not
       // always populated (synthetic events, some layouts), so accept either.
@@ -1209,10 +1249,20 @@ export default function ConsolePage() {
                       <span className="text-[11px]" style={{ color: "var(--oc-muted)" }}>
                         previewed on the chart before commit
                       </span>
-                      <span className="ml-auto flex gap-2">
-                        <button type="button" onClick={() => commit.mutate()}
-                          className="px-2.5 h-[24px] rounded-[5px] text-[11.5px] font-semibold"
-                          style={{ background: "var(--oc-accent)", color: "#fff" }}>Apply ⏎</button>
+                      <span className="ml-auto flex items-center gap-2">
+                        {isReal && (
+                          <input value={realTyped} onChange={(e) => setRealTyped(e.target.value)}
+                            placeholder="type REAL to send" aria-label="type REAL to confirm real orders"
+                            className="h-[24px] w-[150px] rounded-[5px] px-2 text-[11px] font-semibold tracking-wide"
+                            style={{ background: "var(--oc-chip)", color: "var(--oc-neg)", border: "1px solid var(--oc-neg)" }} />
+                        )}
+                        <button type="button"
+                          disabled={commit.isPending || (isReal && realTyped !== "REAL") || !!state?.session.order_error}
+                          onClick={() => { commit.mutate(); setRealTyped(""); }}
+                          title={isReal ? "sends REAL orders through the run's LiveBroker" : "fills on the run's paper broker"}
+                          className="px-2.5 h-[24px] rounded-[5px] text-[11.5px] font-semibold disabled:opacity-40"
+                          style={{ background: isReal ? "var(--oc-neg)" : "var(--oc-accent)", color: "#fff" }}>
+                          {isReal ? "Send to broker" : "Apply to paper ⏎"}</button>
                         <button type="button" onClick={() => discard.mutate()}
                           className="px-2.5 h-[24px] rounded-[5px] text-[11.5px]"
                           style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
@@ -1396,7 +1446,7 @@ export default function ConsolePage() {
                     onClick={() => stage.mutate({ kind: "flatten", replace: true })}
                     style={{ color: "var(--oc-neg)" }}>Exit all</button>
                 ) : null}
-                {(state?.legs.length || risk?.realised) ? (
+                {!isLive && (state?.legs.length || risk?.realised) ? (
                   <button type="button" className="ml-3 underline"
                     title="clear the book AND this session's realised P&L — a clean slate"
                     onClick={() => reset.mutate()}
@@ -1465,10 +1515,25 @@ export default function ConsolePage() {
       <div className="relative min-h-10 flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1 min-w-0"
         style={{ background: "var(--oc-surface)", borderBottom: "1px solid var(--oc-line)" }}>
         {showKeys && <KeyHelp onClose={() => setShowKeys(false)} notes={state?.notes ?? []} />}
-        <span className="px-2 h-[22px] leading-[22px] rounded-[5px] text-[10px] font-bold tracking-wide"
-          style={{ border: "1px solid var(--oc-accent)", color: "var(--oc-accent)" }}>
-          REPLAY
-        </span>
+        {/* the SOURCE: a past session from the store, or a running deployment. A paper run
+            fills on its PaperBroker; a LIVE run fills through LiveBroker — the run's gate,
+            never a second order path. */}
+        <select value={isLive ? `run:${state?.session.run_id}` : "replay"}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === "replay") { opened.current = false; setState(null); setParams({}, { replace: true }); open.mutate({ underlying }); }
+            else openLive.mutate(Number(v.slice(4)));
+          }}
+          className="h-[22px] rounded-[5px] px-1.5 text-[10px] font-bold tracking-wide"
+          style={{ border: `1px solid ${isReal ? "var(--oc-neg)" : "var(--oc-accent)"}`,
+            color: isReal ? "var(--oc-neg)" : "var(--oc-accent)", background: "transparent" }}>
+          <option value="replay">REPLAY</option>
+          {(liveRuns?.runs ?? []).map((r: ConsoleLiveRun) => (
+            <option key={r.run_id} value={`run:${r.run_id}`}>
+              {r.mode === "LIVE" && r.order_broker === "live" ? "LIVE" : "PAPER"} · #{r.run_id} {r.name} · {r.underlying}
+            </option>
+          ))}
+        </select>
         <select value={underlying}
           onChange={(e) => { setUnderlying(e.target.value); opened.current = false; setState(null); }}
           className="h-[22px] rounded-[5px] px-1.5 text-[11px] font-semibold"
@@ -1480,11 +1545,11 @@ export default function ConsolePage() {
         </span>
         <input type="date" value={day} min={days?.first ?? undefined} max={days?.last ?? undefined}
           onChange={(e) => { setDay(e.target.value); open.mutate({ underlying, day: e.target.value }); }}
-          className="h-[22px] rounded-[5px] px-1.5 text-[11px]"
+          className={`h-[22px] rounded-[5px] px-1.5 text-[11px] ${isLive ? "!hidden" : ""}`}
           style={{ background: "var(--oc-chip)", color: "var(--oc-ink)", border: "none" }} />
         <div className="w-px h-5" style={{ background: "var(--oc-line)" }} />
 
-        <div className="flex items-center gap-1">
+        <div className={`flex items-center gap-1 ${isLive ? "!hidden" : ""}`}>
           {JOGS.map((j) => (
             <Chip key={j.label} disabled={!state || busy}
               onClick={() => move.mutate(j.op ? { op: j.op }
@@ -1504,8 +1569,8 @@ export default function ConsolePage() {
             </Chip>
           ))}
         </div>
-        <div className="w-px h-5" style={{ background: "var(--oc-line)" }} />
-        <div className="flex items-center gap-1">
+        <div className={`w-px h-5 ${isLive ? "!hidden" : ""}`} style={{ background: "var(--oc-line)" }} />
+        <div className={`flex items-center gap-1 ${isLive ? "!hidden" : ""}`}>
           <button type="button" disabled={!state}
             onClick={() => setPlaying((v) => !v)}
             title={playing ? "pause (Space)" : "play (Space)"}
@@ -1524,10 +1589,17 @@ export default function ConsolePage() {
         </div>
 
         <div className="ml-auto flex items-center gap-2 relative">
-          <Chip disabled={!state} title="bookmark this minute (B)"
+          {isLive && (
+            <span className="text-[10.5px] font-semibold px-2 h-[22px] leading-[22px] rounded-[5px]"
+              style={{ background: isReal ? "var(--oc-neg-fill)" : "var(--oc-accent-dim)",
+                color: isReal ? "var(--oc-neg)" : "var(--oc-accent)" }}>
+              {isReal ? "REAL ORDERS" : "paper fills"} · {state?.session.run_name} · live clock
+            </span>
+          )}
+          <Chip disabled={!state || isLive} title="bookmark this minute (B)"
             active={!!state && state.bookmarks.includes(`${state.session.date}T${state.session.clock}`)}
             onClick={() => bookmark.mutate()}>◇ mark</Chip>
-          <Chip disabled={!state} active={showSaveBox} title="save this session (day, cursor, book, alerts)"
+          <Chip disabled={!state || isLive} active={showSaveBox} title="save this session (day, cursor, book, alerts)"
             onClick={() => { setShowSaveBox((v) => !v); setShowSaves(false);
               setSaveName(`${underlying} ${state?.session.date ?? ""} ${state?.session.clock ?? ""}`); }}>
             ⤓ save</Chip>
@@ -1585,6 +1657,7 @@ export default function ConsolePage() {
           <span className="text-[10px] font-bold px-2 h-[22px] leading-[22px] rounded-[4px]"
             style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
             {playing ? "PLAYING" : busy ? "…"
+              : isLive ? state?.session.status
               : state && !state.session.has_next_day && state.session.played_pct >= 100 ? "END OF DATA"
               : state?.session.status ?? "READY"}
           </span>
@@ -1630,7 +1703,7 @@ export default function ConsolePage() {
           </>
         )}
         <div className="w-px h-3.5" style={{ background: "var(--oc-line)" }} />
-        <div className="flex items-center gap-1 shrink-0" title="jump to the next / previous event">
+        <div className={`flex items-center gap-1 shrink-0 ${isLive ? "!hidden" : ""}`} title="jump to the next / previous event">
           <TrackChip onClick={() => jump.mutate({ kind: "prev_fill" })} disabled={!state} title="previous fill (K)">‹ fill</TrackChip>
           <TrackChip onClick={() => jump.mutate({ kind: "next_fill" })} disabled={!state} title="next fill (J)">fill ›</TrackChip>
           <TrackChip onClick={() => jump.mutate({ kind: "next_move", pct: 1 })} disabled={!state} title="next 1% move in spot">1% ›</TrackChip>
@@ -1685,6 +1758,13 @@ export default function ConsolePage() {
       {error && (
         <div className="px-3 py-2 text-[12px]"
           style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>{error}</div>
+      )}
+      {isLive && state?.session.order_error && (
+        <div className="px-3 py-2 text-[12px] font-semibold"
+          style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>
+          Run halted on an order error — acknowledge it on the Live page before applying anything:
+          {" "}{state.session.order_error}
+        </div>
       )}
       {notice && (
         <div className="px-3 py-1.5 text-[12px] flex items-center gap-3"
@@ -1807,7 +1887,9 @@ export default function ConsolePage() {
         style={{ background: "var(--oc-panel2)", borderTop: "1px solid var(--oc-line)",
           color: "var(--oc-faint)" }}>
         <span style={{ color: "var(--oc-accent)" }}>
-          {state?.session.requires_confirm ? "STAGED — apply to trade" : "clicks trade at once · U undoes"}
+          {isReal ? "every click is STAGED — Send to broker places REAL orders"
+            : state?.session.requires_confirm ? "every click is STAGED — Apply fills on the paper broker"
+            : "clicks trade at once · U undoes"}
         </span>
         <span>REALISED <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.realised ?? 0)}</b></span>
         <span>UNREALISED <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.unrealised ?? 0)}</b></span>

@@ -1047,12 +1047,32 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   NOT clear an `order_error` halt; that stays a separate, explicit ack.
   Coverage: `test_adopt_broker_close_*` in tests/test_live_options.py.
 
-## 8d. The Options Console (`/console`) — replay first, orders never (yet)
-A single screen for trading a PAST session by hand: an option chain you click, a payoff, a
-risk rail, and a minute cursor. `services/options_console/` is deliberately outside `live/`
-and imports no order path (pinned by `tests/test_options_console.py`); live mode, when it
-lands, will drive an EXISTING `LiveRun` through the already-gated `manual_order`, never a
-second order path (§1).
+## 8d. The Options Console (`/console`) — replay, paper, live: one screen, one order path
+A single screen for trading a PAST session by hand (replay) or a RUNNING deployment
+(paper/live): an option chain you click, a payoff, a risk rail, and — in replay — a minute
+cursor. `services/options_console/` is deliberately outside `live/` and imports no order
+path (pinned by `tests/test_options_console.py`; the one allowed import is the NSE
+calendar). **Live/paper mode (P5, 2026-09-09) is `services/console_live.py::LiveConsole`,
+a bridge OUTSIDE that package**: same `ConsoleState` DTO, the deployment's own live chain
+and portfolio, and a commit is `LiveRun.manual_order` — the already-gated manual path —
+so a paper run fills on its PaperBroker and a LIVE run fills through LiveBroker only when
+every §1 key is set. The console never places, modifies or cancels anything itself. Session
+ids are `live:<run_id>`; replay-only verbs (transport, undo, bookmarks, save) answer 409.
+The page gates a real send behind a typed REAL; per §1 Claude never presses it.
+- **Two additive engine changes carried this (both default to the old behaviour, pinned by
+  the mode-equivalence suites):** `ManualLegOpen.expiry` (an open on ANY expiry — the
+  console trades whichever chip is selected; the strategy's expiry remains the default),
+  and `ManualLegClose.units` → `CloseShort.units` → `Portfolio.reduce_short_lot` (a PARTIAL
+  cover: a strategy opens ONE lot-record for all its lots, so "exit 4 of 10" had no
+  representation short of closing everything). `LiveSession.manual_order` walks records
+  FIFO for a units close. Coverage: `test_manual_order_takes_an_expiry_and_a_partial_short_cover`,
+  `tests/test_console_live.py` (a fake LiveRun around a REAL LiveSession — every commit is
+  asserted to arrive as `manual_order(closes, opens)`, expiry on every open).
+- A LIVE-mode run whose orders are on the paper broker (the restart demotion) reads
+  `mode: "paper"` in the console too — the label follows `order_broker`, never the config.
+- Margin in live mode is the RUN's own figure when it has one (`margin_used`/`margin_source`
+  from the snapshot: a Zerodha basket, a manual anchor) and the SPAN-shaped estimate only
+  for a staged preview or a run with no broker figure.
 - **The market is IMPORTED, never forked.** `services/replay_market.py` holds
   `ReplayMarket`/`ReplayChain`/`ReplayCtx`, moved verbatim out of `intraday_replay` so the
   console and the batch replay answer "what was this leg worth at 09:30" identically. Two

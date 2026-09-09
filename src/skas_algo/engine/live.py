@@ -300,15 +300,33 @@ class LiveSession:
                      tag: str = "MANUAL") -> list[dict]:
         """Close selected legs/lots and/or open new legs immediately, at live prices.
 
-        ``closes``: [{"symbol", "lots"?}] — close ``lots`` lot-records (None = all).
-        ``opens``:  [{"right", "strike", "lots", "side"}] — new legs on the strategy's
-        current expiry. Afterwards the strategy adopts the resulting book.
+        ``closes``: [{"symbol", "lots"?, "units"?}] — close ``lots`` lot-RECORDS (None =
+        all), or exactly ``units`` contracts of the symbol walking its records FIFO (the
+        console's "exit 4 of 10": a strategy opens ONE record for all its lots, so a
+        record count could never say "part of it").
+        ``opens``:  [{"right", "strike", "lots", "side", "expiry"?}] — new legs on the
+        given expiry, else the strategy's current one. Afterwards the strategy adopts the
+        resulting book.
         """
         actions: list = []
         for c in closes or []:
             symbol = c["symbol"]
             held = self.portfolio.lots(symbol)
             if not held:
+                continue
+            want_units = c.get("units")
+            if want_units is not None:
+                remaining = max(0, int(want_units))
+                for lot in held:
+                    if remaining <= 0:
+                        break
+                    take = min(remaining, lot.units)
+                    if lot.direction == -1:
+                        actions.append(CloseShort(symbol, lot.id, tag=tag, reason="manual",
+                                                  units=take))
+                    else:
+                        actions.append(CloseLot(symbol, lot.id, take, tag=tag))
+                    remaining -= take
                 continue
             n = c.get("lots")
             chosen = held if n is None else held[: max(0, int(n))]
@@ -340,7 +358,10 @@ class LiveSession:
         underlying = getattr(strat, "underlying", None)
         if underlying is None:
             raise ValueError("manual legs require an options strategy")
-        expiry = getattr(strat, "entry_expiry", None) or self._default_expiry()
+        # An explicit expiry wins (the console trades any chip); else the strategy's own.
+        expiry = o.get("expiry") or getattr(strat, "entry_expiry", None) or self._default_expiry()
+        if isinstance(expiry, str):
+            expiry = date.fromisoformat(expiry[:10])
         if expiry is None:
             raise ValueError("could not resolve an expiry for the manual leg")
         lots = int(o["lots"])

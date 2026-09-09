@@ -100,6 +100,13 @@ class ConsoleOpen(BaseModel):
     restore: "ConsoleRestore | None" = None
 
 
+class ConsoleOpenLive(BaseModel):
+    """Open the console over a RUNNING deployment (paper or live)."""
+
+    run_id: int
+    expiry: str | None = None
+
+
 class ConsoleRestore(BaseModel):
     journal: list[dict] = []
     alerts: list[dict] = []
@@ -923,15 +930,17 @@ class ManualLegClose(BaseModel):
 
     symbol: str
     lots: int | None = None  # None = close every lot-record of this symbol
+    units: int | None = None  # close exactly this many contracts (FIFO across records)
 
 
 class ManualLegOpen(BaseModel):
-    """Open a new option leg on a running deployment (uses the strategy's current expiry)."""
+    """Open a new option leg on a running deployment (the given expiry, else the strategy's)."""
 
     right: str  # "CE" | "PE"
     strike: float
     lots: int  # lot-sets (× the contract lot size)
     side: str  # "buy" | "sell"
+    expiry: str | None = None  # ISO; None = the strategy's current expiry
 
 
 class ManualOrderInput(BaseModel):

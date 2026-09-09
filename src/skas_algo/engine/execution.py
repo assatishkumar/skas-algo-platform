@@ -197,7 +197,8 @@ class SliceExecutor:
             if lot is None:
                 return []
             ev = self._buy_to_close(
-                ts, action.symbol, action.lot_id, lot, action.tag, action.reason
+                ts, action.symbol, action.lot_id, lot, action.tag, action.reason,
+                units=action.units,
             )
             return [ev] if ev else []
         return []
@@ -262,13 +263,22 @@ class SliceExecutor:
             fill=fill,
         )
 
-    def _buy_to_close(self, ts, symbol, lot_id, lot, tag, reason="") -> dict | None:
-        """Buy-to-close a short lot; profit = (entry − exit)·units·multiplier."""
-        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.BUY, lot.units, reduce_only=True))
-        profit = self.portfolio.buy_to_close(symbol, lot_id, fill.price)
+    def _buy_to_close(self, ts, symbol, lot_id, lot, tag, reason="", units=None) -> dict | None:
+        """Buy-to-close a short lot; profit = (entry − exit)·units·multiplier. ``units``
+        (None = the whole lot) covers part of it and leaves the rest in the same lot — the
+        whole-lot path is byte-identical to before."""
+        if units is None or units >= lot.units:
+            fill = self.broker.execute(BrokerOrder(symbol, OrderSide.BUY, lot.units, reduce_only=True))
+            profit = self.portfolio.buy_to_close(symbol, lot_id, fill.price)
+            done = lot.units
+        else:
+            n = max(1, int(units))
+            fill = self.broker.execute(BrokerOrder(symbol, OrderSide.BUY, n, reduce_only=True))
+            profit = self.portfolio.reduce_short_lot(symbol, lot_id, n, fill.price)
+            done = n
         pnl_pct = (lot.price - fill.price) / lot.price if lot.price else 0.0
         return trade_event(
-            ts, symbol, "COVER", lot.units, fill.price, profit, pnl_pct,
+            ts, symbol, "COVER", done, fill.price, profit, pnl_pct,
             len(self.portfolio.lots(symbol)), tag,
             exit_reason=(reason or "manual"),
             entry_premium=lot.price,

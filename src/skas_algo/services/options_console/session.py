@@ -45,6 +45,7 @@ from skas_algo.live.holidays import next_trading_day
 from skas_algo.services.replay_market import ReplayChain, ReplayMarket
 
 from . import presets as _presets
+from .alerts import AlertBook
 from .margin import MarginLeg, span_like
 
 # The session window the store is filtered to. 15:40 is the post-CAS close the store itself
@@ -145,7 +146,7 @@ class _Tape:
         )
 
 
-class ConsoleSession:
+class ConsoleSession(AlertBook):
     """A console cursor. In-process and single-user, like everything else here (§7)."""
 
     def __init__(self, *, underlying: str = "NIFTY", day: date | None = None,
@@ -194,8 +195,7 @@ class ConsoleSession:
         # Armed levels. Each carries `fired_at` (a minute) once it trips; the cursor decides
         # what that means — before it the alert is armed, at or after it, fired — so a
         # rewind re-arms and stepping forward re-fires, like every other fact in a replay.
-        self.alerts: list[dict] = []
-        self._alert_seq = 0
+        self._init_alerts()
         # Bookmarks are minutes ("2026-04-01T11:40") the owner flagged; the transport jumps
         # between them. The per-minute spot series backs "next 1% move" and is built once
         # per day, lazily, from a separate pass over the tape.
@@ -1152,47 +1152,6 @@ class ConsoleSession:
         return {"delta": round(tot["delta"], 2), "gamma": round(tot["gamma"], 4),
                 "theta": round(tot["theta"], 0), "vega": round(tot["vega"], 0)}
 
-    # ----------------------------------------------------------------- alerts
-    def arm_alert(self, kind: str, value: float, *, note: str | None = None) -> dict:
-        """Arm a level. ``target``/``stop`` are rupees of TOTAL MTM (stop is a loss, given as
-        a positive number); ``delta`` is |net Δ| in units; ``above``/``below`` are spot."""
-        if kind not in ("target", "stop", "delta", "above", "below"):
-            raise ValueError(f"unknown alert kind {kind!r}")
-        self._alert_seq += 1
-        a = {"id": f"A{self._alert_seq}", "kind": kind, "value": float(value),
-             "note": note, "fired_at": None, "fired_value": None}
-        self.alerts.append(a)
-        return a
-
-    def clear_alert(self, alert_id: str) -> bool:
-        before = len(self.alerts)
-        self.alerts = [a for a in self.alerts if a["id"] != alert_id]
-        return len(self.alerts) < before
-
-    def _evaluate_alerts(self, mtm: float, net_delta: float | None, spot: float | None) -> None:
-        """Trip armed alerts against the book AT THE CURSOR, once each. A fired alert
-        holds its minute; if the cursor is ever before that minute it is armed again,
-        because in a replay what has not happened yet has not happened."""
-        now = self.clock.strftime("%Y-%m-%dT%H:%M")
-        for a in self.alerts:
-            if a["fired_at"] and a["fired_at"] > now:
-                a["fired_at"], a["fired_value"] = None, None     # rewound past it
-            if a["fired_at"]:
-                continue
-            k, v = a["kind"], a["value"]
-            hit = ((k == "target" and mtm >= v)
-                   or (k == "stop" and mtm <= -abs(v))
-                   or (k == "delta" and net_delta is not None and abs(net_delta) >= v)
-                   or (k == "above" and spot is not None and spot >= v)
-                   or (k == "below" and spot is not None and spot <= v))
-            if hit:
-                a["fired_at"] = now
-                a["fired_value"] = round(mtm if k in ("target", "stop")
-                                         else (net_delta if k == "delta" else spot) or 0.0, 2)
-
-    def _alerts_out(self) -> list[dict]:
-        return [{**a, "state": "fired" if a["fired_at"] else "armed"} for a in self.alerts]
-
     def _risk_out(self) -> dict:
         margin, source = self.margin()
         detail = self._margin_detail
@@ -1272,7 +1231,8 @@ class ConsoleSession:
         legs_out = [self._leg_out(leg) for leg in self.legs]
         greeks = self._net_greeks(legs_out)
         risk = self._risk_out()
-        self._evaluate_alerts(risk["mtm"], greeks["delta"], spot)
+        self._evaluate_alerts(self.clock.strftime("%Y-%m-%dT%H:%M"), risk["mtm"],
+                              greeks["delta"], spot)
         day_i = self.days.index(self.day)
         prev_close = None      # P2: the prior settled close for the change figures
         open_dt = datetime.combine(self.day, SESSION_OPEN)

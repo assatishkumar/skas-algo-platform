@@ -78,7 +78,7 @@ class OpenShort:
 
 @dataclass
 class CloseShort:
-    """Buy-to-close a specific short lot."""
+    """Buy-to-close a specific short lot — all of it, or ``units`` of it."""
 
     symbol: str
     lot_id: int
@@ -86,6 +86,11 @@ class CloseShort:
     # Why the short is being closed ("target"/"stop"/"" → "manual"). Carried so the
     # options report can attribute each exit; equity exits never construct CloseShort.
     reason: str = ""
+    # PARTIAL cover (2026-09-09): buy back only ``units`` and keep the remainder in the
+    # same lot. None = the whole lot, which is every existing caller — a strategy opens
+    # one lot-record for all its lots, so "exit 4 of 10" had no representation short of
+    # closing everything. The console's exit stepper is the first user.
+    units: int | None = None
 
 
 _PRECEDENCE = {"POSITION": 0, "SYMBOL": 1, "ALGO": 2}

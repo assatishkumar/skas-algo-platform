@@ -97,6 +97,22 @@ class Portfolio:
                 return profit
         raise KeyError(f"Short lot {lot_id} not found for {symbol}")
 
+    def reduce_short_lot(self, symbol: str, lot_id: int, units: int, price: float) -> float:
+        """Buy back ``units`` of a short lot at ``price``; keep the remainder (same lot id).
+        The mirror of ``reduce_lot`` for the short side; covers the whole lot when
+        ``units`` >= the lot's size. Returns realized profit (entry − exit)·units·mult."""
+        for lot in self._lots.get(symbol, []):
+            if lot.id == lot_id:
+                if units >= lot.units:
+                    return self.buy_to_close(symbol, lot_id, price)
+                cost = units * price * lot.multiplier
+                profit = (lot.price - price) * units * lot.multiplier
+                self.cash -= cost
+                self.month_realized += profit
+                lot.units -= units
+                return profit
+        raise KeyError(f"Short lot {lot_id} not found for {symbol}")
+
     def close_lot(self, symbol: str, lot_id: int, price: float) -> float:
         """Sell an entire lot at ``price``; return realized profit (gross)."""
         lots = self._lots.get(symbol, [])

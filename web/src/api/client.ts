@@ -72,6 +72,7 @@ import type {
   WeeklyIntradayStraddleDeploy, LiveHoldings,
   ConsolePreset,
   ConsoleSaved,
+  ConsoleLiveRun,
 } from "../types";
 
 import { clearToken, getToken } from "../lib/auth";
@@ -176,6 +177,9 @@ export const api = {
     restore?: { journal: ConsoleState["journal"]; alerts: ConsoleState["alerts"] };
   }) => request<ConsoleState>("/console/sessions", { method: "POST", body: JSON.stringify(body) }),
   consoleGet: (id: string) => request<ConsoleState>(`/console/sessions/${id}`),
+  consoleLiveRuns: () => request<{ runs: ConsoleLiveRun[] }>("/console/live-runs"),
+  consoleOpenLive: (body: { run_id: number; expiry?: string | null }) =>
+    request<ConsoleState>("/console/sessions/live", { method: "POST", body: JSON.stringify(body) }),
   consoleTransport: (id: string, body: {
     op: "step" | "seek" | "sod" | "eod" | "day"; minutes?: number; days?: number; at?: string;
   }) => request<ConsoleState>(`/console/sessions/${id}/transport`,

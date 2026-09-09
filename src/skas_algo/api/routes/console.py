@@ -22,6 +22,7 @@ from skas_algo.api.models import (
     ConsoleJump,
     ConsoleLoad,
     ConsoleOpen,
+    ConsoleOpenLive,
     ConsolePreset,
     ConsoleSave,
     ConsoleScale,
@@ -29,6 +30,7 @@ from skas_algo.api.models import (
     ConsoleTransport,
 )
 from skas_algo.data.option_intraday_store import captured_days
+from skas_algo.services import console_live
 from skas_algo.services.options_console import registry
 from skas_algo.services.options_console import store as console_store
 from skas_algo.services.options_console.session import UNDERLYINGS, ConsoleSession
@@ -36,13 +38,44 @@ from skas_algo.services.options_console.session import UNDERLYINGS, ConsoleSessi
 router = APIRouter(prefix="/console", tags=["console"])
 
 
-def _get(session_id: str) -> ConsoleSession:
+def _get(session_id: str):
+    """A replay session from the registry, or — for a ``live:<run_id>`` id — the console
+    over that running deployment. Both answer the same DTO and the same verbs; a verb a
+    live console has no meaning for (transport, undo, bookmarks…) answers 409."""
     try:
+        if console_live.is_live_id(session_id):
+            return console_live.get_console(session_id)
         return registry.get(session_id)
     except KeyError:
         raise HTTPException(status_code=404,
                             detail="console session not found — it expired or the backend "
                                    "restarted; open a new one") from None
+
+
+def _replay_only(session, what: str) -> ConsoleSession:
+    if not isinstance(session, ConsoleSession):
+        raise HTTPException(status_code=409,
+                            detail=f"{what} is a replay control — a live console runs on the "
+                                   "market's own clock")
+    return session
+
+
+@router.get("/live-runs")
+def live_runs() -> dict:
+    """The DERIV deployments the console can drive (paper and live)."""
+    return {"runs": console_live.runs()}
+
+
+@router.post("/sessions/live")
+async def open_live(body: ConsoleOpenLive) -> dict:
+    """Open the console over a RUNNING deployment. Nothing is ordered by opening it."""
+    try:
+        c = await asyncio.to_thread(console_live.open_console, body.run_id, expiry=body.expiry)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await asyncio.to_thread(c.state)
 
 
 @router.get("/days")
@@ -93,6 +126,8 @@ def get_session(session_id: str) -> dict:
 
 @router.delete("/sessions/{session_id}")
 def close_session(session_id: str) -> dict:
+    if console_live.is_live_id(session_id):
+        return {"closed": console_live.drop_console(session_id)}
     return {"closed": registry.drop(session_id)}
 
 
@@ -100,7 +135,7 @@ def close_session(session_id: str) -> dict:
 async def transport(session_id: str, body: ConsoleTransport) -> dict:
     """Move the cursor. A seek rebuilds the day from its open (see ConsoleSession) — 17 ms
     for a whole session — so it runs off the event loop like every other blocking read."""
-    session = _get(session_id)
+    session = _replay_only(_get(session_id), "transport")
 
     def _move() -> dict:
         if body.op == "step":
@@ -174,7 +209,7 @@ def scale_book(session_id: str, body: ConsoleScale) -> dict:
 
 @router.post("/sessions/{session_id}/jump")
 def jump(session_id: str, body: ConsoleJump) -> dict:
-    session = _get(session_id)
+    session = _replay_only(_get(session_id), "jump")
     before = session.clock
     session.jump(body.kind, pct=body.pct)
     st = session.state()
@@ -184,21 +219,21 @@ def jump(session_id: str, body: ConsoleJump) -> dict:
 
 @router.post("/sessions/{session_id}/bookmark")
 def add_bookmark(session_id: str) -> dict:
-    session = _get(session_id)
+    session = _replay_only(_get(session_id), "bookmark")
     session.add_bookmark()
     return session.state()
 
 
 @router.delete("/sessions/{session_id}/bookmark/{minute}")
 def remove_bookmark(session_id: str, minute: str) -> dict:
-    session = _get(session_id)
+    session = _replay_only(_get(session_id), "bookmark")
     session.remove_bookmark(minute)
     return session.state()
 
 
 @router.post("/sessions/{session_id}/save")
 def save_session(session_id: str, body: ConsoleSave) -> dict:
-    session = _get(session_id)
+    session = _replay_only(_get(session_id), "save")
     return console_store.save(body.name, session.save_payload())
 
 
@@ -257,7 +292,7 @@ def clear_alert(session_id: str, alert_id: str) -> dict:
 def undo(session_id: str) -> dict:
     """Undo the last action — all of it, so a roll's two fills and a basket's four legs go
     together. In replay this is what stands in for a confirm step."""
-    session = _get(session_id)
+    session = _replay_only(_get(session_id), "undo")
     session.undo_last()
     return session.state()
 
@@ -276,7 +311,7 @@ async def commit(session_id: str) -> dict:
 def reset_book(session_id: str) -> dict:
     """Clear the book, the journal and the session's realised P&L — a clean slate at the
     same minute, without reopening the day."""
-    session = _get(session_id)
+    session = _replay_only(_get(session_id), "reset")
     session.reset_book()
     return session.state()
 
@@ -293,7 +328,7 @@ async def probe_price(session_id: str, right: str, strike: float) -> dict:
     """The last price this contract printed at or before the cursor, looking back through
     earlier sessions. On demand only, and the answer carries its own age — the ladder shows
     it as a reference beside a blank cell, never as a live mark."""
-    session = _get(session_id)
+    session = _replay_only(_get(session_id), "the probe")
     try:
         return await asyncio.to_thread(session.probe, right, strike)
     except ValueError as exc:
@@ -305,6 +340,12 @@ async def set_chain(session_id: str, expiry: str | None = None,
                     window: int | None = None,
                     allow_fifty_strikes: bool | None = None) -> dict:
     session = _get(session_id)
+    if not isinstance(session, ConsoleSession):          # live: the chip is the only knob
+        if expiry is not None:
+            session.set_expiry(expiry)
+        if window is not None:
+            session.strike_window = max(4, int(window))
+        return await asyncio.to_thread(session.state)
     if expiry is not None:
         if expiry not in session.tape.expiries:
             raise HTTPException(status_code=422,

@@ -384,3 +384,28 @@ def test_the_snapshot_carries_why_a_flat_run_did_not_enter():
     assert sess.snapshot()["entry_skip"]["reason"].startswith("waiting")
     strat.last_skip = None                              # …and clears once it has entered
     assert sess.snapshot()["entry_skip"] is None
+
+
+def test_manual_order_takes_an_expiry_and_a_partial_short_cover():
+    """The console's two needs on the live path (2026-09-09): an open on ANY expiry, not
+    only the strategy's, and 'exit 4 of 10' on a short that was opened as one record.
+    The whole-lot path is untouched (the mode-equivalence suites pin it)."""
+    cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
+    sd = FakeLiveSD(cal)
+    sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
+    sess.run_decision(datetime(2026, 1, 5, 9, 50))
+    sess.update_quotes({leg["symbol"]: leg["entry"] for leg in strat.legs})
+    later = [e for e in EXPIRIES if e > date(2026, 1, 13)][0]
+    sess.manual_order(datetime(2026, 1, 5, 10, 0),
+                      opens=[{"right": "CE", "strike": 25800, "lots": 3, "side": "sell",
+                              "expiry": later.isoformat()}])
+    sym = f"NIFTY|{later.isoformat()}|25800|CE"
+    lots = sess.portfolio.lots(sym)
+    assert len(lots) == 1 and lots[0].units == 195 and lots[0].direction == -1
+    sess.update_quotes({sym: 50.0})
+    events = sess.manual_order(datetime(2026, 1, 5, 10, 5), closes=[{"symbol": sym, "units": 65}])
+    assert [e["action"] for e in events] == ["COVER"] and events[0]["units"] == 65
+    lots = sess.portfolio.lots(sym)
+    assert len(lots) == 1 and lots[0].units == 130           # the rest stays, same record
+    sess.manual_order(datetime(2026, 1, 5, 10, 6), closes=[{"symbol": sym}])
+    assert not sess.portfolio.lots(sym)
