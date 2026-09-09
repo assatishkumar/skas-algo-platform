@@ -893,3 +893,20 @@ def test_the_session_margin_is_the_span_shaped_one_and_says_so():
     s.margin_per_lot_set = 130000
     r2 = s.state()["risk"]
     assert r2["margin"] == 130000 and r2["margin_source"] == "manual" and r2["margin_detail"] is None
+
+
+def test_a_step_past_the_close_rolls_into_the_next_session():
+    """15:40 +1m is the next captured day's 09:15; 15:40 +15m its 09:29; 09:15 −1m the
+    previous day's 15:40. The last day pins at the close (nowhere to go), the first at
+    the open. Jogs used to stop dead at 15:40."""
+    d1, d2 = DAY, date(2026, 7, 15)
+    store.write_day(d1, _day(d1))
+    store.write_day(d2, _day(d2))
+    s = _open(day=d1, at="15:40")
+    s.step(1);   assert (s.day, s.clock.strftime("%H:%M")) == (d2, "09:15")
+    s.step(-1);  assert (s.day, s.clock.strftime("%H:%M")) == (d1, "15:40")
+    s.step(15);  assert (s.day, s.clock.strftime("%H:%M")) == (d2, "09:29")
+    s.seek("15:40"); s.step(60)
+    assert (s.day, s.clock.strftime("%H:%M")) == (d2, "15:40")      # last day: pinned
+    s.set_day(d1, at="09:15"); s.step(-5)
+    assert (s.day, s.clock.strftime("%H:%M")) == (d1, "09:15")      # first day: pinned

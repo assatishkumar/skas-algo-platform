@@ -790,6 +790,7 @@ export default function ConsolePage() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const firedSeen = useRef<string>("");
+  const lastKey = useRef<string>("");
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
     if (!notice) return;
@@ -952,7 +953,11 @@ export default function ConsolePage() {
   }, [playing, speed, state?.session.id]);
   useEffect(() => {
     if (!state) return;
-    if (state.session.played_pct >= 100) setPlaying(false);
+    // The close no longer stops autoplay — a step past 15:40 rolls into the next captured
+    // day. Only a cursor that did not move (the last day, pinned at its close) stops it.
+    const key = `${state.session.date}T${state.session.clock}`;
+    if (playing && lastKey.current === key && state.session.played_pct >= 100) setPlaying(false);
+    lastKey.current = key;
     // An alert that was NOT fired at the previous cursor and is now: pause. Compared as
     // sets, so the very first fire counts too (a "was anything fired before" guard
     // silently let the first target scroll past at 15 minutes a second).

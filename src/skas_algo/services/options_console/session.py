@@ -397,7 +397,31 @@ class ConsoleSession:
         return self
 
     def step(self, minutes: int) -> ConsoleSession:
-        return self.seek(self.clock + timedelta(minutes=int(minutes)))
+        """Step the cursor. A step that runs PAST the session close rolls into the NEXT
+        captured day (and past the open into the previous one), carrying the excess:
+        15:40 +1m is the next session's 09:15, 15:40 +15m its 09:29. At the close the
+        jogs used to pin at 15:40 with nothing happening (owner, 2026-09-09). The last
+        captured day still pins — there is nowhere to go."""
+        minutes = int(minutes)
+        target = self.clock + timedelta(minutes=minutes)
+        lo = datetime.combine(self.day, SESSION_OPEN)
+        hi = datetime.combine(self.day, SESSION_CLOSE)
+        i = self.days.index(self.day)
+        if target > hi and minutes > 0:
+            if i + 1 < len(self.days):
+                excess = int((target - hi).total_seconds() // 60)
+                nxt = datetime.combine(self.days[i + 1], SESSION_OPEN) + timedelta(minutes=excess - 1)
+                self.set_day(self.days[i + 1], at=SESSION_OPEN.strftime("%H:%M"))
+                return self.seek(nxt)
+            return self.seek(hi)
+        if target < lo and minutes < 0:
+            if i > 0:
+                excess = int((lo - target).total_seconds() // 60)
+                prev = datetime.combine(self.days[i - 1], SESSION_CLOSE) - timedelta(minutes=excess - 1)
+                self.set_day(self.days[i - 1], at=SESSION_CLOSE.strftime("%H:%M"))
+                return self.seek(prev)
+            return self.seek(lo)
+        return self.seek(target)
 
     # ----------------------------------------------------------------- the chain
     def chain_rows(self) -> list[dict]:
