@@ -377,6 +377,9 @@ export const api = {
     ),
   liveStart: (body: StartLiveRequest) =>
     request<LiveRunSnapshot>("/live/start", { method: "POST", body: JSON.stringify(body) }),
+  liveBackfillHistory: (id: number) =>
+    request<{ thin: number; backfilled?: number; missing?: number; still?: string[]; error?: string; snapshot: LiveRunSnapshot }>(
+      `/live/${id}/backfill-history`, { method: "POST" }),
   liveRefresh: (id: number, decide = false) =>
     request<LiveRunSnapshot>(`/live/${id}/refresh${decide ? "?decide=true" : ""}`, { method: "POST" }),
   liveActivate: (id: number) =>

@@ -582,6 +582,14 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   (`thin_symbols`: < `MIN_HISTORY_DAYS`=900 of cached history, read via the cache-only loader;
   a failed depth check falls back to the 30-day window, never fails the refresh). The strategy
   raises `strategy_alert` when a HELD name has no direction ("cannot exit on a red flip").
+  **The backfill does NOT wait for 15:05 (owner concern 2026-09-09: a Nifty 500 deploy on
+  a thin box would pull ~100 histories synchronously with the decision waiting).**
+  `LiveRun.prepare_history()` = follow the index + backfill every thin name + re-seed;
+  `manager._prepare_history_bg` submits it to the tick pool at DEPLOY and at RECOVERY, the
+  tile shows a "history thin · N" chip from `snapshot["history_thin"]`, and the menu's
+  "Backfill history now" (`POST /live/{id}/backfill-history`, `force=True`, 409 while one
+  runs) is the hand trigger. The pre-decision pass stays as the backstop. Read-only data
+  session, throttled by skas-data; never an order path.
   Coverage: `tests/test_history_backfill.py`.
 - **21_ema_momentum** (`strategies/ema21_momentum.py`, NIFTY): daily EMA(21)-on-high/low
   channel; fresh close beyond the band at 15:20 → OTM 100-pt credit spread (bull put /

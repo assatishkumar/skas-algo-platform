@@ -529,6 +529,20 @@ async def reconnect_quotes(run_id: int, db: Session = Depends(get_db)) -> dict:
     return live.snapshot()
 
 
+@router.post("/{run_id}/backfill-history")
+async def backfill_history(run_id: int) -> dict:
+    """Get an equity run's names and history ready NOW (owner ask 2026-09-09): follow the
+    index, pull every thin symbol's history through the read-only data session, re-seed
+    the SuperTrend. The same work deploy/recovery start in the background; this is the
+    hand trigger for a box whose cache is thin, so 15:05 does not wait on 93 downloads.
+    Places no order, touches no broker book; 409 while one is already running."""
+    live = _get(run_id)
+    out = await asyncio.to_thread(live.prepare_history, force=True)
+    if out.get("busy"):
+        raise HTTPException(status_code=409, detail="a history backfill is already running")
+    return {**out, "snapshot": live.snapshot()}
+
+
 @router.post("/{run_id}/refresh")
 async def refresh_live(run_id: int, decide: bool = False) -> dict:
     """Re-price all positions. With ``decide=true`` it then runs a decision so any

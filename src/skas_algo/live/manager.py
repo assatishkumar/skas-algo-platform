@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time as _time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
@@ -518,6 +520,8 @@ class LiveRun:
         self._last_funds_at: datetime | None = None
         self._history_backfill_day: date | None = None   # SuperTrend cache backfill latch
         self._universe_sync_day: date | None = None      # index-membership sync latch
+        self._backfill_lock = threading.Lock()            # one prepare_history at a time
+        self._history_prepared_at: datetime | None = None
         self._wire_quote_source()
 
     def _wire_quote_source(self) -> None:
@@ -1129,9 +1133,55 @@ class LiveRun:
         except Exception:  # pragma: no cover - never break the decision loop on a cache hiccup
             logger.exception("supertrend refresh failed for run %s", self.run_id)
 
-    def _maybe_backfill_history(self) -> None:
+    def prepare_history(self, *, force: bool = False) -> dict:
+        """Get the run's names and their history ready NOW, off the decision path: follow
+        the index (a joiner is added here, not at 15:05), then backfill every thin name and
+        re-seed. Kicked off in the background at deploy and at recovery, and by the tile's
+        "Backfill history now" (``force`` re-runs today even if the daily latch fired).
+
+        Why not leave it to the pre-decision pass: a Nifty 500 deploy on a box that lacks
+        93 names would pull ~1,500 days × 93 symbols at 15:05, synchronously, with the
+        decision waiting behind it (owner concern 2026-09-09). Done here it finishes hours
+        earlier and the 15:05 pass finds nothing thin. One Kite historical call per chunk
+        through the read-only data session, throttled by skas-data; never an order path."""
+        if self.config.instrument_class.upper() == "DERIV":
+            return {"ok": True, "skipped": "not an equity run"}
+        if not self._backfill_lock.acquire(blocking=False):
+            return {"ok": False, "busy": True, "thin": len(self._thin_symbols())}
+        try:
+            if force:
+                self._universe_sync_day = None
+                self._history_backfill_day = None
+            moved = None
+            try:
+                moved = self._maybe_sync_universe()
+            except Exception:  # pragma: no cover - the backfill still runs
+                logger.exception("universe sync failed for run %s", self.run_id)
+            if getattr(getattr(self.session, "strategy", None), "needs_supertrend", False):
+                # the seed decides what is thin; re-run it so a just-added joiner counts
+                try:
+                    from skas_algo.data.provider import get_price_loader
+
+                    _seed_supertrend(self.session, self.session.strategy, get_price_loader(),
+                                     self.config.symbols)
+                except Exception:  # pragma: no cover
+                    logger.exception("supertrend seed failed for run %s", self.run_id)
+            result = self._maybe_backfill_history() or {}
+            out = {"ok": True, "universe": moved, **result,
+                   "thin": len(self._thin_symbols()),
+                   "thin_symbols": self._thin_symbols()[:20]}
+            self._history_prepared_at = datetime.now(IST)
+            return out
+        finally:
+            self._backfill_lock.release()
+
+    def _thin_symbols(self) -> list[str]:
+        return list(getattr(self.session, "supertrend_missing", None) or [])
+
+    def _maybe_backfill_history(self) -> dict | None:
         """Fill the cache for the SuperTrend symbols the seed found thin, then re-seed — once
-        per day per run, on the box the run happens to be on.
+        per day per run, on the box the run happens to be on. Returns what it did (or None
+        when there was nothing to do / the latch had fired).
 
         The VPS cache is 17 symbols deep (2026-09-08); the Mac's holds the Nifty 500. A run
         deployed on the VPS read no direction for any name (no entries — and no EXITS for a
@@ -1140,10 +1190,10 @@ class LiveRun:
         historical call per thin symbol through the read-only data session."""
         missing = list(getattr(self.session, "supertrend_missing", None) or [])
         if not missing:
-            return
+            return None
         today = datetime.now(IST).date()
         if self._history_backfill_day == today:
-            return
+            return None
         self._history_backfill_day = today
         from skas_algo.services.market_data import refresh_cache
 
@@ -1152,13 +1202,18 @@ class LiveRun:
                 account = manager._data_account(db)
                 if account is None:
                     logger.warning("run %s: %s SuperTrend symbols have thin history and no "
-                                   "Zerodha session is available to backfill", self.run_id, len(missing))
+                                   "Zerodha session is available to backfill",
+                                   self.run_id, len(missing))
                     self._history_backfill_day = None    # try again next tick
-                    return
+                    return {"backfilled": 0, "missing": len(missing),
+                            "error": "no Zerodha session to backfill from"}
+                started = _time.monotonic()
+                logger.info("run %s: backfilling %s thin SuperTrend symbols (%s…)",
+                            self.run_id, len(missing), ", ".join(missing[:5]))
                 result = refresh_cache(account, missing)
             ok = sum(1 for r in result.values() if "error" not in r)
-            logger.info("run %s: backfilled %s/%s SuperTrend symbols (%s)", self.run_id, ok,
-                        len(missing), ", ".join(missing[:5]))
+            logger.info("run %s: backfilled %s/%s SuperTrend symbols in %.0fs", self.run_id,
+                        ok, len(missing), _time.monotonic() - started)
             from skas_algo.data.provider import get_price_loader
 
             still = _seed_supertrend(self.session, self.session.strategy, get_price_loader(),
@@ -1166,8 +1221,10 @@ class LiveRun:
             if still:
                 logger.warning("run %s: %s symbols still thin after backfill: %s", self.run_id,
                                len(still), ", ".join(still[:8]))
+            return {"backfilled": ok, "missing": len(missing), "still": list(still)}
         except Exception:  # pragma: no cover - never break the decision loop
             logger.exception("SuperTrend history backfill failed for run %s", self.run_id)
+            return {"backfilled": 0, "missing": len(missing), "error": "backfill raised"}
 
     def _tag_underlying_spot(self, events: list[dict]) -> None:
         """Stamp each option trade event with the underlying's live spot at execution, so the
@@ -1615,6 +1672,18 @@ class LiveRun:
             # unfetchable → entries self-gated) — amber banner on the run card + a tile chip.
             "strategy_alert": getattr(
                 getattr(self.session, "strategy", None), "strategy_alert", None
+            ),
+            # Equity SuperTrend runs: names whose cached history is too thin to trust the
+            # direction (None = not a SuperTrend run). The tile chips it and offers
+            # "Backfill history now"; deploy/recovery kick the same backfill in the background.
+            "history_thin": (
+                len(self._thin_symbols())
+                if getattr(getattr(self.session, "strategy", None), "needs_supertrend", False)
+                else None
+            ),
+            "history_prepared_at": (
+                self._history_prepared_at.isoformat(timespec="seconds")
+                if self._history_prepared_at else None
             ),
             "parts_total": self.config.params.get("capital_parts"),
             # Options deployments expose lot-sets (editable live while flat); equity
@@ -2073,11 +2142,37 @@ class LiveRunManager:
         live = LiveRun(run_id, algo_id, config, session, quote_source, self.broadcaster)
         self.runs[run_id] = live
         live._persist_state()  # initial snapshot so a restart can recover it immediately
+        self._prepare_history_bg(live)
         return live
 
     def register(self, live: LiveRun) -> None:
         """Register a run rebuilt by recovery (already has its DB row + state)."""
         self.runs[live.run_id] = live
+        self._prepare_history_bg(live)
+
+    def _prepare_history_bg(self, live: LiveRun) -> None:
+        """Get an equity SuperTrend run's history ready in the background, right away —
+        not at 15:05 with the decision waiting (LiveRun.prepare_history). Never blocks the
+        caller; a failure is logged, the pre-decision pass remains the backstop."""
+        strategy = getattr(live.session, "strategy", None)
+        if live.config.instrument_class.upper() == "DERIV" or not getattr(
+                strategy, "needs_supertrend", False):
+            return
+        if not live._thin_symbols() and not getattr(live.config, "universe_name", None):
+            return  # nothing thin and no index to follow
+
+        def _go():
+            try:
+                out = live.prepare_history()
+                logger.info("run %s: history prepared in the background: %s", live.run_id,
+                            {k: v for k, v in out.items() if k != "thin_symbols"})
+            except Exception:  # pragma: no cover
+                logger.exception("background history prepare failed for run %s", live.run_id)
+
+        try:
+            self._tick_pool.submit(_go)
+        except Exception:  # pragma: no cover - pool gone (shutdown)
+            logger.exception("could not schedule history prepare for run %s", live.run_id)
 
     def get(self, run_id: int) -> LiveRun | None:
         return self.runs.get(run_id)

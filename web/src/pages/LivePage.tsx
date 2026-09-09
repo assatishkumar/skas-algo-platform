@@ -1334,6 +1334,15 @@ function DeploymentTile({
           // contract, where the equivalent repair is "Mark closed at broker". Offering it
           // on an options run invites setting a leg to a quantity nothing reconciles.
           ...(isOptions ? [] : [{ label: "Correct units held", onClick: () => setShowUnits(true) }]),
+          // Equity SuperTrend runs: pull thin history + follow the index NOW, not at 15:05
+          // with the decision waiting behind ~100 downloads (owner 2026-09-09).
+          ...(dep.history_thin != null ? [{
+            label: dep.history_thin > 0 ? `Backfill history now (${dep.history_thin} thin)` : "Backfill history now",
+            onClick: () => act(async () => {
+              const r = await api.liveBackfillHistory(dep.run_id);
+              alert(r.error ? `Backfill: ${r.error}` : `Backfilled ${r.backfilled ?? 0} of ${r.missing ?? 0}; ${r.thin} still thin${r.still?.length ? ` (${r.still.slice(0, 8).join(", ")})` : ""}`);
+            }),
+          }] : []),
           { label: "Stop deployment", tone: "danger", onClick: () => act(() => api.liveStop(dep.run_id)) },
           { label: "Edit params", onClick: () => setShowParams(true) },
           { label: "Edit name / notes", onClick: () => setEditing(true) },
@@ -1423,6 +1432,12 @@ function DeploymentTile({
             )}
             {dep.order_error && (
               <Tag bg="var(--danger)" color="#fff" title={dep.order_error}>orders halted</Tag>
+            )}
+            {dep.history_thin != null && dep.history_thin > 0 && (
+              <Tag bg="var(--warn-bg)" color="var(--warn-text)"
+                title={`${dep.history_thin} names have too little cached history for a trusted SuperTrend direction. A backfill runs in the background at deploy and before each decision; "Backfill history now" in the menu runs it immediately.`}>
+                history thin · {dep.history_thin}
+              </Tag>
             )}
             {dep.strategy_alert && (
               <Tag bg="var(--warn-bg)" color="var(--warn-text)" title={dep.strategy_alert}>alert ⚠</Tag>
