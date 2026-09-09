@@ -44,6 +44,8 @@ from skas_algo.engine.options.charges import charges_for_txn
 from skas_algo.engine.options.margin import MarginParams, short_option_margin
 from skas_algo.services.replay_market import ReplayChain, ReplayMarket
 
+from . import presets as _presets
+
 # The session window the store is filtered to. 15:40 is the post-CAS close the store itself
 # measures (last minute-bar 15:39); before 2026-08-03 nothing trades past 15:29, so an
 # over-wide end is harmless and an over-tight one silently truncates.
@@ -194,6 +196,11 @@ class ConsoleSession:
         # rewind re-arms and stepping forward re-fires, like every other fact in a replay.
         self.alerts: list[dict] = []
         self._alert_seq = 0
+        # Bookmarks are minutes ("2026-04-01T11:40") the owner flagged; the transport jumps
+        # between them. The per-minute spot series backs "next 1% move" and is built once
+        # per day, lazily, from a separate pass over the tape.
+        self.bookmarks: list[str] = []
+        self._spot_series: dict[str, list[tuple[str, float]]] = {}
         self.market = ReplayMarket(u, allow_fifty_strikes=self.allow_fifty_strikes)
         self.chain_view = ReplayChain(self.market)
         self.tape = _Tape(day=self.day)
@@ -502,6 +509,157 @@ class ConsoleSession:
                        "label": " · ".join(i["label"] for i in items)}
         return self.staged
 
+    def apply_basket(self, specs: list[dict], *, label: str | None = None) -> dict | None:
+        """Several legs as ONE action — a preset, a hand-built basket. In replay they fill
+        together under one `group` so Undo takes the whole structure back; in paper/live
+        they replace the staged basket. Every leg must price or nothing is applied: a
+        condor with three legs is a different trade, not a partial success."""
+        items = [self._stage_item(kind="add", right=sp["right"], strike=sp["strike"],
+                                  side=sp["side"], lots=int(sp.get("lots", 1)))
+                 for sp in specs]
+        if not items:
+            raise ValueError("an empty basket")
+        if not self.requires_confirm:
+            self._group += 1
+            minute = self.clock.strftime("%Y-%m-%dT%H:%M")
+            for it in items:
+                self._apply(it, minute)
+            return None
+        self.staged = {"items": items,
+                       "label": label or " · ".join(i["label"] for i in items)}
+        return self.staged
+
+    def presets(self, lots: int = 1) -> list[dict]:
+        """Every preset resolved against the chain at the cursor: concrete strikes, the
+        margin the session would report for them, and a reason when one cannot be built.
+        The card's max P/L, POP and breakevens are the frontend's `computeMetrics` over
+        these legs — the same calculator as the rail, so a card cannot promise a number the
+        rail will then contradict."""
+        rows = self.chain_rows()
+        snap = (self.market.live_chain(self.underlying, self.expiry)
+                if self.expiry else None) or {}
+        atm = snap.get("atm_strike")
+        grid = self._grid(rows) if rows else 100.0
+        lot = self._lot_size() or 1
+        out = []
+        for p in _presets.PRESETS:
+            r = _presets.resolve(p, rows, atm, grid, lots)
+            legs = []
+            for x in r["legs"]:
+                legs.append(ConsoleLeg(
+                    id=f"P{x['i']}",
+                    symbol=f"{self.underlying}|{self.expiry}|{int(x['strike'])}|{x['right']}",
+                    right=x["right"], strike=x["strike"], expiry=self.expiry or "",
+                    side=x["side"], lots=x["lots"], lot_size=lot, entry=x["ltp"],
+                    entered_at=self.clock.strftime("%Y-%m-%dT%H:%M")))
+            margin, source = self.margin(legs) if r["ok"] else (0.0, "model")
+            credit = sum((1 if x["side"] == "S" else -1) * x["ltp"] * x["lots"] * lot
+                         for x in r["legs"]) if r["ok"] else None
+            out.append({"id": p.id, "name": p.name, "rule": p.rule, "defined": p.defined,
+                        "tags": list(p.tags), "ok": r["ok"], "reason": r["reason"],
+                        "legs": [self._leg_out(leg) for leg in legs] if r["ok"] else [],
+                        "margin": margin, "margin_source": source,
+                        "net_credit": round(credit, 2) if credit is not None else None})
+        return out
+
+    def apply_preset(self, preset_id: str, lots: int = 1) -> dict | None:
+        p = _presets.BY_ID.get(preset_id)
+        if not p:
+            raise ValueError(f"unknown preset {preset_id!r}")
+        rows = self.chain_rows()
+        snap = (self.market.live_chain(self.underlying, self.expiry)
+                if self.expiry else None) or {}
+        grid = self._grid(rows) if rows else 100.0
+        r = _presets.resolve(p, rows, snap.get("atm_strike"), grid, lots)
+        if not r["ok"]:
+            raise ValueError(f"{p.name}: {r['reason']}")
+        return self.apply_basket(r["legs"], label=p.name)
+
+    # ------------------------------------------------------------- replay track
+    def _minute_key(self) -> str:
+        return self.clock.strftime("%Y-%m-%dT%H:%M")
+
+    def spot_series(self) -> list[tuple[str, float]]:
+        """(minute, parity spot) for every minute of the open day — one pass over the tape
+        with a scratch market, cached per day. Backs "next 1% move" and the track."""
+        key = self.day.isoformat()
+        if key in self._spot_series:
+            return self._spot_series[key]
+        m = ReplayMarket(self.underlying)
+        m.start_day(self.day, self.tape.all_symbols)
+        q = m.quotes
+        mins, syms, closes, ois = (self.tape.minutes, self.tape.symbols,
+                                   self.tape.closes, self.tape.ois)
+        out: list[tuple[str, float]] = []
+        prev = None
+        for i in range(len(mins)):
+            minute = mins[i]
+            if minute != prev:
+                if prev is not None:
+                    m._spot_dirty = True
+                    m.now = datetime.fromisoformat(prev)
+                    sp = m.index_spot(self.underlying)
+                    if sp:
+                        out.append((prev, float(sp)))
+                prev = minute
+            q[syms[i]] = (closes[i], ois[i], minute)
+        if prev is not None:
+            m._spot_dirty = True
+            m.now = datetime.fromisoformat(prev)
+            sp = m.index_spot(self.underlying)
+            if sp:
+                out.append((prev, float(sp)))
+        self._spot_series[key] = out
+        return out
+
+    def add_bookmark(self) -> list[str]:
+        k = self._minute_key()
+        if k not in self.bookmarks:
+            self.bookmarks = sorted(self.bookmarks + [k])
+        return self.bookmarks
+
+    def remove_bookmark(self, minute: str) -> list[str]:
+        self.bookmarks = [b for b in self.bookmarks if b != minute]
+        return self.bookmarks
+
+    def jump(self, kind: str, *, pct: float = 1.0) -> ConsoleSession:
+        """Move the cursor to the next/previous EVENT: a fill, a bookmark, or a spot move of
+        ``pct`` percent from where the cursor stands. Only events on the OPEN day — a jump
+        that finds nothing leaves the cursor where it is (the route reports that)."""
+        now = self._minute_key()
+        day = self.day.isoformat()
+        if kind in ("next_fill", "prev_fill"):
+            mins = sorted({f["at"] for f in self.journal if f["at"].startswith(day)})
+        elif kind in ("next_bookmark", "prev_bookmark"):
+            mins = [b for b in self.bookmarks if b.startswith(day)]
+        elif kind in ("next_move", "prev_move"):
+            series = self.spot_series()
+            here = next((sp for mk, sp in series if mk >= now), None) if series else None
+            if here is None:
+                return self
+            fwd = kind == "next_move"
+            cands = [mk for mk, sp in series
+                     if (mk > now if fwd else mk < now) and abs(sp / here - 1) >= pct / 100.0]
+            if not cands:
+                return self
+            target = min(cands) if fwd else max(cands)
+            return self.seek(datetime.fromisoformat(target))
+        else:
+            raise ValueError(f"unknown jump {kind!r}")
+        if kind.startswith("next"):
+            later = [m for m in mins if m > now]
+            return self.seek(datetime.fromisoformat(later[0])) if later else self
+        earlier = [m for m in mins if m < now]
+        return self.seek(datetime.fromisoformat(earlier[-1])) if earlier else self
+
+    def save_payload(self) -> dict:
+        return {"underlying": self.underlying, "day": self.day.isoformat(),
+                "clock": self.clock.strftime("%H:%M"), "expiry": self.expiry,
+                "capital": self.capital, "margin_per_lot_set": self.margin_per_lot_set,
+                "allow_fifty_strikes": self.allow_fifty_strikes,
+                "journal": self.journal, "alerts": self._alerts_out(),
+                "bookmarks": self.bookmarks}
+
     def undo_last(self) -> bool:
         """Undo the last action — the whole action, so a roll's two fills and a basket's
         four legs go together. This is what replaces the confirm step: a misclick is
@@ -685,7 +843,8 @@ class ConsoleSession:
             self.journal.append(row)
         return c["total"]
 
-    def restore(self, journal: list[dict], alerts: list[dict] | None = None) -> None:
+    def restore(self, journal: list[dict], alerts: list[dict] | None = None,
+                bookmarks: list[str] | None = None) -> None:
         """Rebuild a LOST session from the journal the page kept.
 
         The registry is in-process: a backend restart or an eviction drops the object, and
@@ -711,6 +870,7 @@ class ConsoleSession:
                 self.arm_alert(str(a["kind"]), float(a["value"]), note=a.get("note"))
             except (KeyError, ValueError, TypeError):
                 continue
+        self.bookmarks = sorted({str(b) for b in (bookmarks or [])})
         self._settle_expired()
         self._replay_book(self.clock, force=True)
 
@@ -1033,6 +1193,17 @@ class ConsoleSession:
             "fills": self.fills[-40:],
             "journal": self.journal,          # the whole tape of actions — what a restore needs
             "alerts": self._alerts_out(),
+            "bookmarks": self.bookmarks,
+            # the replay track: markers on the OPEN day for the scrubber
+            "track": {
+                "fills": [{"at": f["at"][11:], "action": f["action"]}
+                          for f in self.journal if f["at"].startswith(self.day.isoformat())],
+                "alerts": [{"at": a["fired_at"][11:], "kind": a["kind"]}
+                           for a in self.alerts
+                           if a["fired_at"] and a["fired_at"].startswith(self.day.isoformat())],
+                "bookmarks": [b[11:] for b in self.bookmarks
+                              if b.startswith(self.day.isoformat())],
+            },
             "pricing": {"r": RISK_FREE, "q": 0.0, "t_floor_s": T_FLOOR_S,
                         "expiry_time": EXPIRY_TIME.strftime("%H:%M")},
             "notes": _notes(),

@@ -1999,8 +1999,31 @@ export interface ConsoleState {
   journal: { at: string; symbol: string; action: string; group: number | null;
     units: number; price: number; charges: number }[];
   alerts: ConsoleAlert[];
+  bookmarks: string[];                       // full minutes "2026-04-01T11:40"
+  track: {                                   // markers on the OPEN day, "HH:MM"
+    fills: { at: string; action: string }[];
+    alerts: { at: string; kind: string }[];
+    bookmarks: string[];
+  };
   pricing: { r: number; q: number; t_floor_s: number; expiry_time: string };
   notes: string[];
+  jumped?: boolean;                          // on a /jump answer: did the cursor move
+}
+
+/** A preset resolved against the chain at the cursor. `legs` are ConsoleLeg-shaped so the
+ *  card's metrics come from the same calculator as the rail. */
+export interface ConsolePreset {
+  id: string; name: string; rule: string; defined: boolean; tags: string[];
+  ok: boolean; reason: string | null;
+  legs: ConsoleLeg[];
+  margin: number; margin_source: string;
+  net_credit: number | null;
+}
+
+export interface ConsoleSaved {
+  file: string; name: string; saved_at: string | null;
+  underlying: string | null; day: string | null; clock: string | null;
+  legs: number; fills: number;
 }
 
 export interface ConsoleLeg {

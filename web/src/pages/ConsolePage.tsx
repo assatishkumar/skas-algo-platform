@@ -9,11 +9,12 @@
  *  indigo palette, kept away from the app's teal. Type is IBM Plex Sans via `font-plex`.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { ConsoleAlert,
-  ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleProbe, ConsoleState,
+import type {
+  ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsolePreset, ConsoleProbe,
+  ConsoleState,
 } from "../types";
 import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
 import { buildLivePayoff } from "../lib/payoff";
@@ -65,6 +66,9 @@ const KEYS: { keys: string; does: string }[] = [
   { keys: "Home / End", does: "session open / close" },
   { keys: "U", does: "undo the last action" },
   { keys: "Space", does: "play / pause the replay at the chosen speed" },
+  { keys: "B", does: "bookmark this minute (again to remove)" },
+  { keys: "J / K", does: "next / previous event (fill, bookmark)" },
+  { keys: "H", does: "hide or show the option chain" },
   { keys: "?", does: "show or hide this list" },
 ];
 
@@ -158,12 +162,12 @@ const inr0 = (v: number | null | undefined) =>
 const pctOf = (a: number | null | undefined, b: number | null | undefined) =>
   a == null || !b || !Number.isFinite(a) ? "—" : `${((a / b) * 100).toFixed(2)}%`;
 
-function Panel({ children, className = "" }: {
-  children: React.ReactNode; className?: string;
+function Panel({ children, className = "", style }: {
+  children: React.ReactNode; className?: string; style?: React.CSSProperties;
 }) {
   return (
     <div className={`rounded-[10px] p-3 ${className}`}
-      style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)" }}>
+      style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)", ...style }}>
       {children}
     </div>
   );
@@ -180,6 +184,148 @@ function Tile({ label, value, sub, tone }: {
         style={{ color: tone === "pos" ? "var(--oc-pos)"
           : tone === "neg" ? "var(--oc-neg)" : "var(--oc-ink)" }}>{value}</div>
       {sub && <div className="text-[10px]" style={{ color: "var(--oc-faint)" }}>{sub}</div>}
+    </div>
+  );
+}
+
+/** The scrubber with the day's events on it. Positions are minutes since the open over
+ *  the session length, so a marker sits exactly under where the playhead will be when
+ *  the cursor reaches it. Click to seek. */
+function Track({ state, onSeek }: { state: ConsoleState | null; onSeek: (at: string) => void }) {
+  const [a, b] = state?.session.range ?? ["09:15", "15:40"];
+  const mins = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const span = Math.max(1, mins(b) - mins(a));
+  const pct = (t: string) => `${Math.max(0, Math.min(100, (100 * (mins(t) - mins(a))) / span))}%`;
+  const bar = useRef<HTMLDivElement>(null);
+  const seek = (e: React.MouseEvent) => {
+    if (!bar.current || !state) return;
+    const r = bar.current.getBoundingClientRect();
+    const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    const m = mins(a) + Math.round(f * span);
+    onSeek(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+  };
+  const tr = state?.track;
+  return (
+    <div ref={bar} onClick={seek} className="flex-1 relative h-4 cursor-pointer" title="click to seek">
+      <div className="absolute left-0 right-0 top-[6px] h-1 rounded" style={{ background: "var(--oc-chip)" }} />
+      <div className="absolute left-0 top-[6px] h-1 rounded"
+        style={{ width: `${state?.session.played_pct ?? 0}%`, background: "var(--oc-accent)" }} />
+      {tr?.fills.map((f, i) => (
+        <span key={`f${i}`} className="absolute w-[5px] h-[5px] rounded-full -translate-x-1/2"
+          title={`${f.action} ${f.at}`}
+          style={{ left: pct(f.at), top: 5.5,
+            background: f.action === "SHORT" || f.action === "SELL" ? "var(--oc-neg)" : "var(--oc-pos)" }} />
+      ))}
+      {tr?.alerts.map((x, i) => (
+        <span key={`a${i}`} className="absolute w-[2px] h-[10px] -translate-x-1/2"
+          title={`${x.kind} fired ${x.at}`}
+          style={{ left: pct(x.at), top: 3, background: "var(--oc-caution)" }} />
+      ))}
+      {tr?.bookmarks.map((t) => (
+        <span key={`b${t}`} className="absolute text-[9px] leading-none -translate-x-1/2"
+          title={`bookmark ${t}`} style={{ left: pct(t), top: -1, color: "var(--oc-accent)" }}>◇</span>
+      ))}
+      {state && (
+        <span className="absolute w-[9px] h-[9px] rounded-full -translate-x-1/2"
+          style={{ left: pct(state.session.clock), top: 3.5, background: "var(--oc-accent)",
+            boxShadow: "0 0 0 2px var(--oc-surface)" }} />
+      )}
+    </div>
+  );
+}
+
+function TrackChip({ children, onClick, disabled, title }: {
+  children: React.ReactNode; onClick: () => void; disabled?: boolean; title?: string;
+}) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} title={title}
+      className="h-[16px] px-1.5 rounded-[4px] text-[9.5px] font-semibold whitespace-nowrap disabled:opacity-40"
+      style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>{children}</button>
+  );
+}
+
+/** Design D4: prebuilt structures as cards — the rule in words, the strikes it resolved to
+ *  at THIS cursor, credit, margin (labelled), max P/L and POP from the same calculator as
+ *  the rail, a DEFINED / UNDEFINED badge, and the reason when it cannot be built. In
+ *  replay, Apply trades all its legs as one action; Undo takes them all back. */
+function PresetGallery({ presets, state, lots, onApply }: {
+  presets: ConsolePreset[]; state: ConsoleState | null; lots: number;
+  onApply: (id: string) => void;
+}) {
+  const spot = state?.market.spot ?? null, expiry = state?.chain.expiry ?? null;
+  if (!state) {
+    return <div className="h-full flex items-center justify-center text-[12px]"
+      style={{ color: "var(--oc-faint)" }}>Opening the session…</div>;
+  }
+  return (
+    <div className="h-full overflow-auto">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
+        {presets.map((p) => {
+          const legs = toPayoffLegs(p.legs);
+          const m = p.ok && spot && expiry && legs.length
+            ? computeMetrics(legs, spot, expiry, state.session.date) : null;
+          return (
+            <div key={p.id} className="rounded-[8px] p-2.5 flex flex-col gap-1"
+              style={{ background: "var(--oc-panel2)", opacity: p.ok ? 1 : 0.7 }}>
+              <div className="flex items-center justify-between gap-2">
+                <b className="text-[12.5px]">{p.name}</b>
+                <span className="px-1.5 py-[1px] rounded-[3px] text-[8.5px] font-bold whitespace-nowrap"
+                  style={{ color: p.defined ? "var(--oc-pos)" : "var(--oc-neg)",
+                    border: `1px solid ${p.defined ? "var(--oc-pos)" : "var(--oc-neg)"}` }}>
+                  {p.defined ? "DEFINED" : "UNDEFINED"}
+                </span>
+              </div>
+              <div className="text-[10.5px]" style={{ color: "var(--oc-muted)" }}>{p.rule}</div>
+              {p.ok ? (
+                <>
+                  <div className="text-[11px] tabular-nums leading-snug">
+                    {p.legs.map((l) => (
+                      <div key={l.id} className="flex justify-between">
+                        <span>
+                          <span className="font-bold" style={{ color: l.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)" }}>
+                            {l.side}</span>{" "}
+                          {Math.round(l.strike).toLocaleString("en-IN")} {l.right}
+                          {l.lots > 1 ? ` ×${l.lots}` : ""}
+                        </span>
+                        <span style={{ color: "var(--oc-muted)" }}>{num(l.entry)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-2 text-[10px] tabular-nums mt-0.5"
+                    style={{ color: "var(--oc-muted)" }}>
+                    <span>{p.net_credit != null && p.net_credit >= 0 ? "credit" : "debit"}{" "}
+                      <b style={{ color: "var(--oc-ink)" }}>{inr0(Math.abs(p.net_credit ?? 0))}</b></span>
+                    <span>margin <b style={{ color: "var(--oc-ink)" }}>{inr0(p.margin)}</b>
+                      <span style={{ color: "var(--oc-faint)" }}> {p.margin_source}</span></span>
+                    <span>max P <b style={{ color: "var(--oc-pos)" }}>
+                      {m ? (m.maxProfitUnlimited ? "∞" : inr0(m.maxProfit)) : "—"}</b></span>
+                    <span>max L <b style={{ color: "var(--oc-neg)" }}>
+                      {m ? (m.maxLossUnlimited ? "∞" : inr0(m.maxLoss)) : "—"}</b></span>
+                    <span>POP <b style={{ color: "var(--oc-ink)" }}>
+                      {m?.pop == null ? "—" : `${(m.pop * 100).toFixed(0)}%`}</b></span>
+                    <span>BE <b style={{ color: "var(--oc-ink)" }}>
+                      {m?.breakevens.length ? m.breakevens.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ") : "—"}</b></span>
+                  </div>
+                </>
+              ) : (
+                <div className="text-[10.5px] py-1" style={{ color: "var(--oc-caution)" }}>
+                  Cannot build here: {p.reason}
+                </div>
+              )}
+              <button type="button" disabled={!p.ok} onClick={() => onApply(p.id)}
+                className="mt-auto h-[24px] rounded-[5px] text-[11px] font-semibold disabled:opacity-40"
+                style={{ background: "var(--oc-accent)", color: "#fff" }}>
+                {state.session.requires_confirm ? "Stage" : "Trade"} {p.legs.length || ""} leg{p.legs.length === 1 ? "" : "s"} ×{lots}
+              </button>
+            </div>
+          );
+        })}
+        {!presets.length && (
+          <div className="col-span-full py-6 text-center text-[12px]" style={{ color: "var(--oc-faint)" }}>
+            Resolving presets against the chain…
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -615,6 +761,17 @@ export default function ConsolePage() {
   const [speed, setSpeed] = useState(1);
   const firedSeen = useRef<string>("");
   const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [notice]);
+  const [chainOpen, setChainOpen] = useState(true);
+  const [showPresets, setShowPresets] = useState(false);
+  const [showSaves, setShowSaves] = useState(false);
+  const [showSaveBox, setShowSaveBox] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const qc = useQueryClient();
   // The latest state, readable from inside a mutation without re-creating it.
   const stateRef = useRef<ConsoleState | null>(null);
   useEffect(() => { stateRef.current = state; }, [state]);
@@ -658,7 +815,8 @@ export default function ConsolePage() {
         expiry: params.get("expiry") ?? undefined }),
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
-      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock },
+      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
+        ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
     onError: (e: Error) => setError(e.message),
@@ -669,7 +827,8 @@ export default function ConsolePage() {
       call((id) => api.consoleTransport(id, body)),
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
-      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock },
+      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
+        ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
     onError: (e: Error) => { setError(e.message); setPlaying(false); },
@@ -684,6 +843,67 @@ export default function ConsolePage() {
   const clearAlert = useMutation({
     mutationFn: (aid: string) => call((id) => api.consoleClearAlert(id, aid)),
     onSuccess: setState,
+  });
+
+  const jump = useMutation({
+    mutationFn: (body: { kind: string; pct?: number }) => call((id) => api.consoleJump(id, body)),
+    onSuccess: (s) => {
+      setState(s); setDay(s.session.date); setError(null);
+      if (s.jumped === false) setNotice("No such event in this session's direction.");
+      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
+        ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
+        { replace: true });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+  const bookmark = useMutation({
+    mutationFn: () => {
+      const cur = stateRef.current!;
+      const key = `${cur.session.date}T${cur.session.clock}`;
+      return cur.bookmarks.includes(key)
+        ? call((id) => api.consoleUnbookmark(id, key))
+        : call((id) => api.consoleBookmark(id));
+    },
+    onSuccess: setState,
+  });
+  const applyPreset = useMutation({
+    mutationFn: (body: { preset: string; lots: number }) =>
+      call((id) => api.consoleApplyPreset(id, body)),
+    onSuccess: (s) => { setState(s); setError(null); setShowPresets(false); },
+    onError: (e: Error) => setError(e.message),
+  });
+  const save = useMutation({
+    mutationFn: (name: string) => call((id) => api.consoleSave(id, name)),
+    onSuccess: (r) => {
+      setNotice(`Saved as "${r.name}".`); qc.invalidateQueries({ queryKey: ["console-saved"] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+  const load = useMutation({
+    mutationFn: (file: string) => api.consoleLoad(file),
+    onSuccess: (s) => {
+      setState(s); setDay(s.session.date); setUnderlying(s.session.underlying);
+      setError(null); setShowSaves(false);
+      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
+        ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
+        { replace: true });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+  const deleteSaved = useMutation({
+    mutationFn: (file: string) => api.consoleDeleteSaved(file),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["console-saved"] }),
+  });
+  const { data: savedList } = useQuery({
+    queryKey: ["console-saved"], queryFn: api.consoleSaved, enabled: showSaves,
+  });
+  // Presets are resolved server-side against the chain at the CURSOR, so they refetch
+  // whenever the cursor, the ladder or the click-size changes.
+  const { data: presetData } = useQuery({
+    queryKey: ["console-presets", state?.session.id, state?.session.date, state?.session.clock,
+      state?.chain.expiry, lots],
+    queryFn: () => api.consolePresets(state!.session.id, lots),
+    enabled: !!state && (showPresets || !state.legs.length),
   });
 
   // Autoplay ticks. Stops itself at the session close, on an error, and the moment an
@@ -743,7 +963,11 @@ export default function ConsolePage() {
 
   const pickExpiry = useMutation({
     mutationFn: (expiry: string) => call((id) => api.consoleChain(id, { expiry })),
-    onSuccess: setState,
+    onSuccess: (s) => {
+      setState(s);
+      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
+        ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) }, { replace: true });
+    },
   });
 
   // Open a session once the store's day list is known — the newest captured day.
@@ -776,6 +1000,10 @@ export default function ConsolePage() {
       if ((e.code === "Space" || e.key === " ") && state) {
         e.preventDefault(); setPlaying((v) => !v); return;
       }
+      if ((e.key === "b" || e.key === "B") && state) { e.preventDefault(); bookmark.mutate(); return; }
+      if ((e.key === "h" || e.key === "H") && state) { e.preventDefault(); setChainOpen((v) => !v); return; }
+      if ((e.key === "j" || e.key === "J") && state) { e.preventDefault(); jump.mutate({ kind: "next_fill" }); return; }
+      if ((e.key === "k" || e.key === "K") && state) { e.preventDefault(); jump.mutate({ kind: "prev_fill" }); return; }
       if (!state || e.metaKey || e.ctrlKey) return;
       // Match on code OR key. e.key changes under Shift ("." becomes ">"), which is why the
       // Shift ladder did nothing when this keyed on e.key alone; e.code is stable but is not
@@ -799,7 +1027,7 @@ export default function ConsolePage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state, move, commit, discard, undo]);
+  }, [state, move, commit, discard, undo, bookmark, jump]);
 
   // Probed reference prices, keyed "CE24000". Cleared whenever the cursor or the ladder
   // moves — a price fetched at 09:30 is not an answer about 11:00.
@@ -855,13 +1083,16 @@ export default function ConsolePage() {
     return [d.data[0].now, d.data[Math.floor(n / 2)].now, d.data[n - 1].now];
   }, [state?.legs, spotNow, expNow, state?.session.date]);
   const busy = open.isPending || move.isPending;
+  const breach = state?.alerts.find((a) => a.kind === "stop" && a.state === "fired") ?? null;
 
   return (
-    <div className="oc-root font-plex min-h-[calc(100vh-3.5rem)]"
-      style={{ background: "var(--oc-ground)", color: "var(--oc-ink)" }}>
+    <div className="oc-root font-plex min-h-[calc(100vh-3.5rem)] min-w-0 max-w-full"
+      style={{ background: "var(--oc-ground)", color: "var(--oc-ink)", overflowX: "clip" }}>
 
-      {/* session bar */}
-      <div className="relative h-10 flex items-center gap-2 px-3"
+      {/* session bar. flex-wrap + min-w-0: a row of non-wrapping chips is the min-content
+          width of the page, and inside the app's flex main that WIDENED the whole console
+          past the viewport at 1440 (the rail fell off the right edge). */}
+      <div className="relative min-h-10 flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1 min-w-0"
         style={{ background: "var(--oc-surface)", borderBottom: "1px solid var(--oc-line)" }}>
         {showKeys && <KeyHelp onClose={() => setShowKeys(false)} notes={state?.notes ?? []} />}
         <span className="px-2 h-[22px] leading-[22px] rounded-[5px] text-[10px] font-bold tracking-wide"
@@ -922,7 +1153,60 @@ export default function ConsolePage() {
           ))}
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2 relative">
+          <Chip disabled={!state} title="bookmark this minute (B)"
+            active={!!state && state.bookmarks.includes(`${state.session.date}T${state.session.clock}`)}
+            onClick={() => bookmark.mutate()}>◇ mark</Chip>
+          <Chip disabled={!state} active={showSaveBox} title="save this session (day, cursor, book, alerts)"
+            onClick={() => { setShowSaveBox((v) => !v); setShowSaves(false);
+              setSaveName(`${underlying} ${state?.session.date ?? ""} ${state?.session.clock ?? ""}`); }}>
+            ⤓ save</Chip>
+          <Chip active={showSaves} title="load a saved session"
+            onClick={() => { setShowSaves((v) => !v); setShowSaveBox(false); }}>
+            ⤒ load</Chip>
+          {showSaveBox && (
+            <div className="absolute right-0 top-[26px] z-30 w-[320px] rounded-[10px] p-2 shadow-lg flex items-center gap-1.5"
+              style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)" }}>
+              <input autoFocus value={saveName} onChange={(e) => setSaveName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && saveName.trim()) { save.mutate(saveName.trim()); setShowSaveBox(false); }
+                  if (e.key === "Escape") setShowSaveBox(false);
+                }}
+                placeholder="name this session"
+                className="h-[24px] flex-1 min-w-0 rounded-[5px] px-2 text-[11.5px]"
+                style={{ background: "var(--oc-chip)", color: "var(--oc-ink)", border: "none" }} />
+              <button type="button" disabled={!saveName.trim()}
+                onClick={() => { save.mutate(saveName.trim()); setShowSaveBox(false); }}
+                className="h-[24px] px-2.5 rounded-[5px] text-[11px] font-semibold disabled:opacity-40"
+                style={{ background: "var(--oc-accent)", color: "#fff" }}>Save</button>
+            </div>
+          )}
+          {showSaves && (
+            <div className="absolute right-0 top-[26px] z-30 w-[380px] rounded-[10px] p-2 shadow-lg"
+              style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)" }}>
+              <div className="text-[9.5px] font-semibold uppercase tracking-[.07em] px-1 pb-1"
+                style={{ color: "var(--oc-faint)" }}>Saved sessions</div>
+              {!savedList?.saved.length ? (
+                <div className="px-1 py-2 text-[11.5px]" style={{ color: "var(--oc-faint)" }}>
+                  Nothing saved yet. ⤓ save keeps the day, the cursor, the book and the alerts.
+                </div>
+              ) : savedList.saved.map((r) => (
+                <div key={r.file} className="flex items-center gap-2 px-1 py-1 text-[11.5px] rounded-[6px] hover:bg-[var(--oc-panel2)]">
+                  <button type="button" className="flex-1 text-left" onClick={() => load.mutate(r.file)}>
+                    <b>{r.name}</b>
+                    <span className="ml-2" style={{ color: "var(--oc-muted)" }}>
+                      {r.underlying} · {r.day} {r.clock} · {r.legs} leg{r.legs === 1 ? "" : "s"}
+                    </span>
+                    <span className="ml-2 text-[10px]" style={{ color: "var(--oc-faint)" }}>
+                      {r.saved_at?.slice(0, 16).replace("T", " ")}
+                    </span>
+                  </button>
+                  <button type="button" title="delete" onClick={() => deleteSaved.mutate(r.file)}
+                    style={{ color: "var(--oc-faint)" }}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
           <button type="button" onClick={() => setShowKeys((v) => !v)}
             title="Keyboard shortcuts (?)"
             className="w-[22px] h-[22px] rounded-[5px] text-[11px] font-bold"
@@ -935,19 +1219,26 @@ export default function ConsolePage() {
         </div>
       </div>
 
-      {/* scrubber */}
-      <div className="h-4 flex items-center gap-2 px-3"
+      {/* replay track: the scrubber with the day's EVENTS on it — fills (S red / B green),
+          fired alerts (amber), bookmarks (◇) — click anywhere to seek, and jump chips that
+          move the cursor to the next such event. Where the design's D6 lives. */}
+      <div className="min-h-6 flex items-center gap-2 px-3 min-w-0"
         style={{ background: "var(--oc-surface)", borderBottom: "1px solid var(--oc-hair)" }}>
-        <span className="text-[9px]" style={{ color: "var(--oc-faint)" }}>
+        <span className="text-[9px] w-[30px]" style={{ color: "var(--oc-faint)" }}>
           {state?.session.range[0] ?? "09:15"}
         </span>
-        <div className="flex-1 h-1 rounded" style={{ background: "var(--oc-chip)" }}>
-          <div className="h-1 rounded"
-            style={{ width: `${state?.session.played_pct ?? 0}%`, background: "var(--oc-accent)" }} />
-        </div>
-        <span className="text-[9px]" style={{ color: "var(--oc-faint)" }}>
+        <Track state={state} onSeek={(at) => move.mutate({ op: "seek", at })} />
+        <span className="text-[9px] w-[30px] text-right" style={{ color: "var(--oc-faint)" }}>
           {state?.session.range[1] ?? "15:40"}
         </span>
+        <div className="w-px h-3.5" style={{ background: "var(--oc-line)" }} />
+        <div className="flex items-center gap-1 shrink-0" title="jump to the next / previous event">
+          <TrackChip onClick={() => jump.mutate({ kind: "prev_fill" })} disabled={!state} title="previous fill (K)">‹ fill</TrackChip>
+          <TrackChip onClick={() => jump.mutate({ kind: "next_fill" })} disabled={!state} title="next fill (J)">fill ›</TrackChip>
+          <TrackChip onClick={() => jump.mutate({ kind: "next_move", pct: 1 })} disabled={!state} title="next 1% move in spot">1% ›</TrackChip>
+          <TrackChip onClick={() => jump.mutate({ kind: "prev_bookmark" })} disabled={!state} title="previous bookmark">‹ ◇</TrackChip>
+          <TrackChip onClick={() => jump.mutate({ kind: "next_bookmark" })} disabled={!state} title="next bookmark">◇ ›</TrackChip>
+        </div>
       </div>
 
       {/* market strip */}
@@ -990,11 +1281,33 @@ export default function ConsolePage() {
 
       {/* body: chain 560 · analysis flex · rail 348 */}
       <div className="flex gap-2.5 p-2.5 items-start">
+        {/* ⟨⟨ Hide collapses the chain to a 36px rail; the analysis column absorbs the
+            width and the payoff re-renders at whatever the column now gives it. */}
+        {!chainOpen && (
+          <button type="button" onClick={() => setChainOpen(true)} title="show the option chain (H)"
+            className="w-9 shrink-0 self-stretch rounded-[10px] flex flex-col items-center py-2 gap-3"
+            style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)",
+              minHeight: 420 }}>
+            <span className="text-[12px] font-bold" style={{ color: "var(--oc-accent)" }}>⟩⟩</span>
+            <span className="text-[9.5px] font-semibold uppercase tracking-[.1em]"
+              style={{ writingMode: "vertical-rl", color: "var(--oc-faint)" }}>
+              Option chain · {state?.chain.expiry ? expiryChip(state.chain.expiry) : ""}
+            </span>
+            <span className="text-[9.5px]"
+              style={{ writingMode: "vertical-rl", color: "var(--oc-muted)" }}>
+              ATM {state?.chain.atm_strike?.toLocaleString("en-IN") ?? "—"} · lot {state?.session.lot_size ?? "—"}
+            </span>
+          </button>
+        )}
         <div className="w-[560px] shrink-0 rounded-[10px] overflow-hidden"
+          hidden={!chainOpen}
           style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)" }}>
           {/* expiry chips */}
           <div className="h-9 flex items-center gap-1 px-2 overflow-x-auto"
             style={{ borderBottom: "1px solid var(--oc-hair)" }}>
+            <button type="button" onClick={() => setChainOpen(false)} title="hide the chain (H)"
+              className="text-[10px] font-bold pr-1 shrink-0" style={{ color: "var(--oc-accent)" }}>
+              ⟨⟨</button>
             <span className="text-[9.5px] font-semibold uppercase tracking-[.07em] pr-1"
               style={{ color: "var(--oc-faint)" }}>Expiry</span>
             {/* the size a B/S click stages — kept beside the ladder because it is part of
@@ -1049,16 +1362,33 @@ export default function ConsolePage() {
             <div className="flex-1 min-w-0 space-y-2.5 flex flex-col">
             <Panel className="flex-1 flex flex-col min-h-0">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[13px] font-semibold">Payoff</span>
-                <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
-                  expiry · T+0 dashed · staged dotted
+                <span className="text-[13px] font-semibold">
+                  {showPresets || !state?.legs.length ? "Presets" : "Payoff"}
+                  {(showPresets || !state?.legs.length) && (
+                    <span className="ml-2 text-[10.5px] font-normal" style={{ color: "var(--oc-faint)" }}>
+                      resolved at {state?.session.clock ?? "—"} on {state?.chain.expiry ? expiryChip(state.chain.expiry) : "—"} · ×{lots}
+                    </span>
+                  )}
+                </span>
+                <span className="flex items-center gap-2 text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+                  {state?.legs.length ? (
+                    <Chip active={showPresets} onClick={() => setShowPresets((v) => !v)}
+                      title="prebuilt structures, resolved against the chain at the cursor">
+                      {showPresets ? "payoff" : "presets"}</Chip>
+                  ) : null}
+                  {!showPresets && state?.legs.length ? "expiry · T+0 dashed · staged dotted" : null}
                 </span>
               </div>
               <div className="flex-1 min-h-0">
-                <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
-                  spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
-                  today={state?.session.date ?? ""} alerts={state?.alerts ?? []}
-                  realised={risk?.realised ?? 0} />
+                {(showPresets || !state?.legs.length) ? (
+                  <PresetGallery presets={presetData?.presets ?? []} state={state} lots={lots}
+                    onApply={(id) => applyPreset.mutate({ preset: id, lots })} />
+                ) : (
+                  <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
+                    spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
+                    today={state?.session.date ?? ""} alerts={state?.alerts ?? []}
+                    realised={risk?.realised ?? 0} />
+                )}
               </div>
               {/* NET GREEKS: Σ per-share greek × units over the enabled legs, the same
                   convention as the Live tile. Beside them, the T+0 book at ±1% of spot —
@@ -1115,7 +1445,14 @@ export default function ConsolePage() {
             )}
             </div>
             <div className="w-[348px] shrink-0 space-y-2.5">
-            <Panel>
+            <Panel className={breach ? "border-l-4" : ""}
+              style={breach ? { borderLeftColor: "var(--oc-neg)" } : undefined}>
+              {breach && (
+                <div className="mb-2 px-2 py-1 rounded-[6px] text-[11px] font-semibold"
+                  style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>
+                  STOP FIRED {breach.fired_at?.slice(11)} · MTM {inr0(breach.fired_value ?? 0)} crossed {inr0(-Math.abs(breach.value))}
+                </div>
+              )}
               <div className="flex items-start justify-between">
                 <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
                   style={{ color: "var(--oc-faint)" }}>Total MTM · realised + open</span>

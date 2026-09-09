@@ -1105,6 +1105,26 @@ second order path (§1).
   "was anything fired before" guard let the very first target scroll past at 15 min/s).
   Target/stop are rupees of TOTAL MTM (realised + open); the chart draws them at
   `level − realised` because its y-axis is the open book alone. Stop accepts either sign.
+- **A preset is a RULE, resolved server-side at the cursor** (`options_console/presets.py`,
+  2026-09-09): legs are anchored to ATM, a target |Δ| (the OTM strike whose chain-solved Δ
+  is nearest), N grid steps off another leg, or the straddle's combined premium — so the
+  same eight cards apply at any spot/expiry, and the "25-delta" a card names is the one
+  the ladder shows. A leg that cannot be honoured (an unquoted wing at 09:30 on a far
+  month) REFUSES the whole preset with the reason; nothing partial lands. Applied as one
+  `group` so Undo takes the structure back. The card's max P/L, POP and breakevens are
+  the frontend's `computeMetrics` over the resolved legs — the rail's calculator.
+- **A session is in-process and therefore LOSABLE — the page keeps what rebuilds it.**
+  `state.journal` is the whole tape of actions; when a call 404s "session not found"
+  (restart, eviction — the registry held THREE and a second browser evicted the owner's
+  mid-trade: "the lots stepper does nothing", 2026-09-09) the page reopens at the same
+  day/minute/expiry with `ConsoleOpen.restore{journal, alerts, bookmarks}`, retries once
+  and says so. `⤓ save` writes the same payload to `~/.skas_data/console/*.json`
+  (`SKAS_CONSOLE_DIR`, tmp in tests); `⤒ load` opens a new session from it. Never
+  persist the BOOK: it is re-derived from the tape on load, so a file cannot disagree
+  with the store. Registry: 8 sessions, 3h idle.
+- The replay track's "next 1% move" reads a per-day spot series built in ONE pass over
+  the tape with a scratch `ReplayMarket` (14 ms, cached per day) — never by stepping the
+  live cursor minute by minute (376 rebuilds ≈ 6 s, and it would move the book).
 - Full plan + phases: `docs/PLAN-options-console.md`.
 
 ## 8a. The /portfolio tracker is NOT part of the trading system

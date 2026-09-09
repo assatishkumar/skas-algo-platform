@@ -103,6 +103,32 @@ class ConsoleOpen(BaseModel):
 class ConsoleRestore(BaseModel):
     journal: list[dict] = []
     alerts: list[dict] = []
+    bookmarks: list[str] = []
+
+
+class ConsoleBasket(BaseModel):
+    legs: list[dict]                  # [{right, strike, side, lots}]
+    label: str | None = None
+
+
+class ConsolePreset(BaseModel):
+    preset: str
+    lots: int = 1
+
+
+class ConsoleJump(BaseModel):
+    kind: Literal[
+        "next_fill", "prev_fill", "next_bookmark", "prev_bookmark", "next_move", "prev_move"]
+    pct: float = 1.0
+
+
+class ConsoleSave(BaseModel):
+    name: str
+
+
+class ConsoleLoad(BaseModel):
+    file: str
+    at: str | None = None             # override the saved clock
 
 
 class ConsoleTransport(BaseModel):

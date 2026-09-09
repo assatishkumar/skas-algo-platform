@@ -28,6 +28,7 @@ def _tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "OPTION_INTRADAY_DIR", tmp_path / "1min")
     from skas_algo.config import get_settings
     monkeypatch.setattr(get_settings(), "option_bars_backup_dir", None)
+    monkeypatch.setenv("SKAS_CONSOLE_DIR", str(tmp_path / "console"))
     registry.clear()
     yield
     registry.clear()
@@ -761,3 +762,94 @@ def test_a_lost_session_is_rebuilt_from_the_journal_the_page_kept():
 def test_registry_holds_more_than_a_handful():
     """Three was enough for one browser and not for two on the same backend."""
     assert registry.MAX_SESSIONS >= 8
+
+
+# ------------------------------------------------------------------ presets, track, save (P4)
+
+
+def test_a_preset_is_resolved_against_the_ladder_and_applied_as_one_action():
+    """Δ-anchored rules become concrete strikes off the chain's OWN solved Δ, fill together
+    under one group (so Undo takes the whole structure back), and a preset with an
+    unquoted leg is refused by name rather than filled in with a guess."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    ps = {p["id"]: p for p in s.presets()}
+    st = ps["short_straddle"]
+    assert st["ok"] and sorted((l["side"], l["right"]) for l in st["legs"]) == \
+        [("S", "CE"), ("S", "PE")]
+    assert st["margin"] > 0 and st["margin_source"] == "model" and st["net_credit"] > 0
+    # the synthetic ladder has no quoted wings two steps out → refused, with the reason
+    assert ps["iron_condor"]["ok"] is False and "has not traded" in ps["iron_condor"]["reason"]
+    s.apply_preset("short_straddle", lots=2)
+    assert [(l.side, l.lots) for l in s.legs] == [("S", 2), ("S", 2)]
+    assert len({f["group"] for f in s.journal}) == 1
+    assert s.undo_last() is True and s.legs == []
+    with pytest.raises(ValueError):
+        s.apply_preset("iron_condor")
+    assert s.journal == []                      # nothing partial landed
+
+
+def test_a_delta_anchor_picks_the_otm_strike_nearest_the_target():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    rows = s.chain_rows()
+    atm = next(r["strike"] for r in rows if r["atm"])
+    spread = {p["id"]: p for p in s.presets()}["bear_call_spread"]
+    if spread["ok"]:
+        short = next(l for l in spread["legs"] if l["side"] == "S")
+        assert short["strike"] >= atm
+        quoted = [(abs(r["ce"]["delta"] or 9), r["strike"]) for r in rows
+                  if r["strike"] >= atm and r["ce"]["quoted"] and r["ce"]["delta"] is not None]
+        best = min(quoted, key=lambda x: abs(x[0] - 0.25))[1]
+        assert short["strike"] == best
+
+
+def test_the_track_jumps_between_fills_bookmarks_and_spot_moves():
+    store.write_day(DAY, _day())
+    s = _open(at="09:20")
+    s.stage(kind="add", right="CE", strike=24000, side="B", lots=1)
+    s.seek("10:00")
+    s.stage(kind="add", right="PE", strike=24000, side="B", lots=1)
+    s.add_bookmark()
+    s.seek("09:16")
+    s.jump("next_fill");     assert s.clock.strftime("%H:%M") == "09:20"
+    s.jump("next_fill");     assert s.clock.strftime("%H:%M") == "10:00"
+    s.jump("next_fill");     assert s.clock.strftime("%H:%M") == "10:00"   # nothing later: stays
+    s.jump("prev_fill");     assert s.clock.strftime("%H:%M") == "09:20"
+    s.jump("next_bookmark"); assert s.clock.strftime("%H:%M") == "10:00"
+    # the synthetic straddle drifts ~1.5/5min on a ~24k spot: a 1% move never happens, a
+    # tiny one does — and the series is one pass, cached
+    s.seek("09:20")
+    s.jump("next_move", pct=1.0); assert s.clock.strftime("%H:%M") == "09:20"
+    s.jump("next_move", pct=0.001)
+    assert s.clock.strftime("%H:%M") > "09:20"
+    assert s.spot_series() is s.spot_series()
+    st = s.state()
+    assert st["track"]["fills"][0] == {"at": "09:20", "action": "BUY"}
+    assert st["track"]["bookmarks"] == ["10:00"]
+
+
+def test_a_saved_session_reloads_with_its_book_alerts_and_bookmarks():
+    from skas_algo.services.options_console import store as cstore
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=3)
+    s.arm_alert("target", 500.0)
+    s.add_bookmark()
+    s.seek("11:00")
+    rec = cstore.save("my straddle", s.save_payload())
+    listing = cstore.saved()
+    assert listing[0]["file"] == rec["file"] and listing[0]["legs"] == 1
+    j = cstore.load(rec["file"])
+    fresh = ConsoleSession(underlying=j["underlying"], day=date.fromisoformat(j["day"]),
+                           at=j["clock"], expiry=j["expiry"], capital=j["capital"])
+    fresh.restore(j["journal"], j["alerts"], j["bookmarks"])
+    a, b = s.state(), fresh.state()
+    assert [(l["strike"], l["lots"], l["entry"]) for l in b["legs"]] == \
+        [(l["strike"], l["lots"], l["entry"]) for l in a["legs"]]
+    assert b["risk"]["mtm"] == pytest.approx(a["risk"]["mtm"])
+    assert [x["kind"] for x in b["alerts"]] == ["target"] and b["bookmarks"] == s.bookmarks
+    assert cstore.delete(rec["file"]) is True and cstore.saved() == []
+    assert cstore.load.__name__ == "load"
+    with pytest.raises(OSError):
+        cstore.load("../../etc/passwd")          # the name is basename'd, never a path

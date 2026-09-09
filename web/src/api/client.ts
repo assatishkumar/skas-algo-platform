@@ -69,7 +69,9 @@ import type {
   LossStudyProgress,
   SmokeTestDeploy,
   WatchRow,
-  WeeklyIntradayStraddleDeploy, LiveHoldings
+  WeeklyIntradayStraddleDeploy, LiveHoldings,
+  ConsolePreset,
+  ConsoleSaved,
 } from "../types";
 
 import { clearToken, getToken } from "../lib/auth";
@@ -192,6 +194,28 @@ export const api = {
     request<ConsoleState>(`/console/sessions/${id}/reset`, { method: "POST" }),
   consoleDiscard: (id: string) =>
     request<ConsoleState>(`/console/sessions/${id}/discard`, { method: "POST" }),
+  consolePresets: (id: string, lots = 1) =>
+    request<{ presets: ConsolePreset[]; lots: number }>(`/console/sessions/${id}/presets?lots=${lots}`),
+  consoleApplyPreset: (id: string, body: { preset: string; lots: number }) =>
+    request<ConsoleState>(`/console/sessions/${id}/preset`,
+      { method: "POST", body: JSON.stringify(body) }),
+  consoleJump: (id: string, body: { kind: string; pct?: number }) =>
+    request<ConsoleState>(`/console/sessions/${id}/jump`,
+      { method: "POST", body: JSON.stringify(body) }),
+  consoleBookmark: (id: string) =>
+    request<ConsoleState>(`/console/sessions/${id}/bookmark`, { method: "POST" }),
+  consoleUnbookmark: (id: string, minute: string) =>
+    request<ConsoleState>(`/console/sessions/${id}/bookmark/${encodeURIComponent(minute)}`,
+      { method: "DELETE" }),
+  consoleSave: (id: string, name: string) =>
+    request<{ file: string; name: string; saved_at: string }>(`/console/sessions/${id}/save`,
+      { method: "POST", body: JSON.stringify({ name }) }),
+  consoleSaved: () => request<{ saved: ConsoleSaved[] }>("/console/saved"),
+  consoleDeleteSaved: (file: string) =>
+    request<{ deleted: boolean }>(`/console/saved/${encodeURIComponent(file)}`, { method: "DELETE" }),
+  consoleLoad: (file: string) =>
+    request<ConsoleState>("/console/sessions/load",
+      { method: "POST", body: JSON.stringify({ file }) }),
   consoleArmAlert: (id: string, body: {
     kind: "target" | "stop" | "delta" | "above" | "below"; value: number; note?: string | null;
   }) => request<ConsoleState>(`/console/sessions/${id}/alerts`,

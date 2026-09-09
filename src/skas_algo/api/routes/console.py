@@ -16,9 +16,20 @@ from datetime import date
 
 from fastapi import APIRouter, HTTPException
 
-from skas_algo.api.models import ConsoleAlert, ConsoleOpen, ConsoleStage, ConsoleTransport
+from skas_algo.api.models import (
+    ConsoleAlert,
+    ConsoleBasket,
+    ConsoleJump,
+    ConsoleLoad,
+    ConsoleOpen,
+    ConsolePreset,
+    ConsoleSave,
+    ConsoleStage,
+    ConsoleTransport,
+)
 from skas_algo.data.option_intraday_store import captured_days
 from skas_algo.services.options_console import registry
+from skas_algo.services.options_console import store as console_store
 from skas_algo.services.options_console.session import UNDERLYINGS, ConsoleSession
 
 router = APIRouter(prefix="/console", tags=["console"])
@@ -61,7 +72,8 @@ async def open_session(body: ConsoleOpen) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if body.restore and (body.restore.journal or body.restore.alerts):
         try:
-            await asyncio.to_thread(session.restore, body.restore.journal, body.restore.alerts)
+            await asyncio.to_thread(session.restore, body.restore.journal, body.restore.alerts,
+                                    body.restore.bookmarks)
         except (KeyError, ValueError, TypeError) as exc:
             registry.drop(session.id)
             raise HTTPException(status_code=422, detail=f"restore failed: {exc}") from exc
@@ -118,6 +130,94 @@ async def stage(session_id: str, body: ConsoleStage) -> dict:
     try:
         await asyncio.to_thread(lambda: session.stage(**body.model_dump()))
     except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
+
+
+@router.get("/sessions/{session_id}/presets")
+def presets(session_id: str, lots: int = 1) -> dict:
+    """Every preset resolved against the chain at the cursor."""
+    session = _get(session_id)
+    return {"presets": session.presets(lots), "lots": lots}
+
+
+@router.post("/sessions/{session_id}/preset")
+def apply_preset(session_id: str, body: ConsolePreset) -> dict:
+    session = _get(session_id)
+    try:
+        session.apply_preset(body.preset, body.lots)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
+
+
+@router.post("/sessions/{session_id}/basket")
+def apply_basket(session_id: str, body: ConsoleBasket) -> dict:
+    session = _get(session_id)
+    try:
+        session.apply_basket(body.legs, label=body.label)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
+
+
+@router.post("/sessions/{session_id}/jump")
+def jump(session_id: str, body: ConsoleJump) -> dict:
+    session = _get(session_id)
+    before = session.clock
+    session.jump(body.kind, pct=body.pct)
+    st = session.state()
+    st["jumped"] = session.clock != before
+    return st
+
+
+@router.post("/sessions/{session_id}/bookmark")
+def add_bookmark(session_id: str) -> dict:
+    session = _get(session_id)
+    session.add_bookmark()
+    return session.state()
+
+
+@router.delete("/sessions/{session_id}/bookmark/{minute}")
+def remove_bookmark(session_id: str, minute: str) -> dict:
+    session = _get(session_id)
+    session.remove_bookmark(minute)
+    return session.state()
+
+
+@router.post("/sessions/{session_id}/save")
+def save_session(session_id: str, body: ConsoleSave) -> dict:
+    session = _get(session_id)
+    return console_store.save(body.name, session.save_payload())
+
+
+@router.get("/saved")
+def saved_sessions() -> dict:
+    return {"saved": console_store.saved()}
+
+
+@router.delete("/saved/{file}")
+def delete_saved(file: str) -> dict:
+    return {"deleted": console_store.delete(file)}
+
+
+@router.post("/sessions/load")
+async def load_session(body: ConsoleLoad) -> dict:
+    """A saved file → a NEW session at its day/clock with the journal restored."""
+    try:
+        j = console_store.load(body.file)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=f"saved session not found: {exc}") from exc
+    try:
+        session = await asyncio.to_thread(
+            registry.create, underlying=j["underlying"], day=date.fromisoformat(j["day"]),
+            at=body.at or j.get("clock"), expiry=j.get("expiry"),
+            capital=j.get("capital", 500_000),
+            allow_fifty_strikes=j.get("allow_fifty_strikes", False),
+            margin_per_lot_set=j.get("margin_per_lot_set", 0.0))
+        await asyncio.to_thread(session.restore, j.get("journal", []), j.get("alerts", []),
+                                j.get("bookmarks", []))
+    except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return session.state()
 
