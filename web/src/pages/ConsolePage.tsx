@@ -38,6 +38,12 @@ const signed = (v: number | null | undefined, dp = 2) =>
  *  pipe in an option ticker reading as an "I"). */
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "2026-08-03" → "Mon 03 Aug 2026". */
+const prettyDay = (iso: string) => {
+  const d = new Date(`${iso}T00:00:00`);
+  const wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+  return `${wd} ${iso.slice(8, 10)} ${MONTHS[Number(iso.slice(5, 7)) - 1] ?? ""} ${iso.slice(0, 4)}`;
+};
 const expiryChip = (iso: string) =>
   `${iso.slice(8, 10)} ${MONTHS[Number(iso.slice(5, 7)) - 1] ?? iso.slice(5, 7)}`;
 
@@ -1573,6 +1579,24 @@ export default function ConsolePage() {
       {/* market strip */}
       <div className="h-[30px] flex items-center overflow-x-auto"
         style={{ background: "var(--oc-panel2)", borderBottom: "1px solid var(--oc-line)" }}>
+        {/* THE DAY, first and loud: a replay's whole meaning is "which session is this", and
+            a date input in the toolbar was not saying it (owner, 2026-09-09). */}
+        <div className="px-3 h-full flex items-center gap-2 shrink-0"
+          style={{ borderRight: "1px solid var(--oc-line)", background: "var(--oc-accent-tint)" }}>
+          <span className="text-[13px] font-bold tabular-nums whitespace-nowrap"
+            style={{ color: "var(--oc-accent)" }}>
+            {state ? prettyDay(state.session.date) : "—"}
+          </span>
+          <span className="text-[13px] font-semibold tabular-nums" style={{ color: "var(--oc-ink)" }}>
+            {state?.session.clock ?? "—:—"}
+          </span>
+          {state && (
+            <span className="text-[10px] font-semibold px-1.5 rounded-[3px]"
+              style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
+              {state.session.played_pct >= 100 ? "CLOSED" : state.session.clock < "09:20" ? "OPENING" : "IN SESSION"}
+            </span>
+          )}
+        </div>
         <StripItem label={`${underlying} (parity)`}>{num(state?.market.spot ?? null)}</StripItem>
         <StripItem label={`FUT ${state?.market.expiry ?? ""}`}>
           {num(state?.market.fut ?? null)}
@@ -1701,13 +1725,13 @@ export default function ConsolePage() {
         ) : (
           /* chain hidden: risk + positions on the left, the chart on the right */
           <div className="flex-1 min-w-0 flex gap-2.5 items-start">
-            <div className="w-[46%] min-w-[420px] space-y-2.5">
+            <div className="w-[50%] min-w-[460px] space-y-2.5">
+              {riskStrip}
               {positionsPanel}
               {alertsCard}
             </div>
             <div className="flex-1 min-w-0 space-y-2.5 flex flex-col">
               {payoffPanel}
-              {riskStrip}
               {stagedBar}
             </div>
           </div>
