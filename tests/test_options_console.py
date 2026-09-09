@@ -215,10 +215,15 @@ def test_the_console_cannot_reach_the_order_path():
     import skas_algo.services.options_console as pkg
 
     banned = ("skas_algo.live", "skas_algo.brokers")
+    # The ONE exception: the NSE calendar. `live.holidays` is dates and a holiday list —
+    # no adapter, no manager, no order — and the cycle bar needs trading sessions.
+    allowed = ("from skas_algo.live.holidays import",)
     seen = []
     for mod in pkgutil.iter_modules(pkg.__path__):
         src = (pkg.__path__[0] + "/" + mod.name + ".py")
         text = open(src).read()
+        for ok in allowed:
+            text = text.replace(ok, "")
         seen.append(mod.name)
         for bad in banned:
             assert f"import {bad}" not in text and f"from {bad}" not in text, (
@@ -923,8 +928,10 @@ def test_a_finished_cycle_pins_at_the_close_and_the_cycle_bar_counts_sessions():
     assert s.state()["cycle"] is None
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
     c = s.state()["cycle"]
-    assert (c["start"], c["end"], c["sessions"], c["session_no"]) == (d1.isoformat(), EXP, 3, 1)
-    assert 0 < c["pct"] < 34 and c["done"] is False
+    # 14 Jul (Tue) → 21 Jul (Tue) 2026 is six NSE sessions, whatever the store captured
+    assert (c["start"], c["end"], c["sessions"], c["session_no"]) == (d1.isoformat(), EXP, 6, 1)
+    assert 0 < c["pct"] < 17 and c["done"] is False
+    assert c["beyond_data"] is False and c["data_until"] == d3.isoformat()
     s.seek("15:40"); s.step(1)                                  # rolls: legs still alive
     assert s.day == d2
     s.set_day(d3, at="15:35")                                   # expiry day, settled
@@ -937,3 +944,15 @@ def test_a_finished_cycle_pins_at_the_close_and_the_cycle_bar_counts_sessions():
     assert s.day == d3                                           # (last captured day → pins)
     s2 = _open(day=d1, at="15:40")
     s2.step(1); assert s2.day == d2                              # untraded book rolls
+
+
+def test_a_cycle_whose_expiry_is_past_the_captured_data_says_so():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)   # EXP 07-21, store ends 07-14
+    c = s.state()["cycle"]
+    assert c["beyond_data"] is True and c["data_until"] == DAY.isoformat()
+    assert c["sessions"] == 6 and c["session_no"] == 1 and not c["done"]
+    s.seek("15:40"); s.step(5)
+    assert s.day == DAY and s.clock.strftime("%H:%M") == "15:40"       # nowhere to go
+    assert s.state()["session"]["has_next_day"] is False

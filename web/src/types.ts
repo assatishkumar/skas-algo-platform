@@ -2003,7 +2003,8 @@ export interface ConsoleState {
   // The cycle: first fill's day → the last expiry among the legs held, in captured
   // sessions. null until something has traded. `done` = every leg has expired.
   cycle: { start: string; end: string; sessions: number; session_no: number; pct: number;
-    done: boolean; legs_open: number } | null;
+    done: boolean; legs_open: number;
+    beyond_data: boolean; data_until: string } | null;   // expiry past the last captured day
   track: {                                   // markers on the OPEN day, "HH:MM"
     fills: { at: string; action: string }[];
     alerts: { at: string; kind: string }[];

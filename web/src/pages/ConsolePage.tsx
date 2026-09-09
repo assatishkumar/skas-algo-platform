@@ -858,10 +858,13 @@ export default function ConsolePage() {
       call((id) => api.consoleTransport(id, body)),
     onSuccess: (s, body) => {
       const prev = stateRef.current;
-      if (prev && body.op === "step" && (body.minutes ?? 0) > 0 && s.cycle?.done
-          && prev.session.date === s.session.date && prev.session.clock === s.session.clock
-          && s.session.played_pct >= 100) {
+      const stuck = prev && body.op === "step" && (body.minutes ?? 0) > 0
+        && prev.session.date === s.session.date && prev.session.clock === s.session.clock
+        && s.session.played_pct >= 100;
+      if (stuck && s.cycle?.done) {
         setNotice("Every leg has expired — the replay stops at this close. Reset the book, or press +1d to move on regardless.");
+      } else if (stuck && !s.session.has_next_day) {
+        setNotice(`${prettyDay(s.session.date)} is the last captured session in the 1-min store — nothing to replay past it yet. Today's bars are captured after 16:00 IST.`);
       }
       setState(s); setDay(s.session.date); setError(null);
       setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
@@ -1560,7 +1563,9 @@ export default function ConsolePage() {
               color: showKeys ? "var(--oc-accent)" : "var(--oc-muted)" }}>?</button>
           <span className="text-[10px] font-bold px-2 h-[22px] leading-[22px] rounded-[4px]"
             style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
-            {playing ? "PLAYING" : busy ? "…" : state?.session.status ?? "READY"}
+            {playing ? "PLAYING" : busy ? "…"
+              : state && !state.session.has_next_day && state.session.played_pct >= 100 ? "END OF DATA"
+              : state?.session.status ?? "READY"}
           </span>
         </div>
       </div>
@@ -1583,7 +1588,7 @@ export default function ConsolePage() {
           <>
             <div className="w-px h-3.5" style={{ background: "var(--oc-line)" }} />
             <div className="flex items-center gap-1.5 shrink-0"
-              title={`cycle: ${state.cycle.start} → expiry ${state.cycle.end} · session ${state.cycle.session_no} of ${state.cycle.sessions}`}>
+              title={`cycle: ${state.cycle.start} → expiry ${state.cycle.end} · NSE session ${state.cycle.session_no} of ${state.cycle.sessions}${state.cycle.beyond_data ? ` · the store's last captured day is ${state.cycle.data_until}; later sessions appear once captured (~16:00 IST daily)` : ""}`}>
               <span className="text-[9px] whitespace-nowrap" style={{ color: "var(--oc-faint)" }}>
                 {expiryChip(state.cycle.start)}
               </span>
@@ -1596,7 +1601,8 @@ export default function ConsolePage() {
                 style={{ color: state.cycle.done ? "var(--oc-muted)" : "var(--oc-caution)" }}>
                 {state.cycle.done ? "expired" : `exp ${expiryChip(state.cycle.end)}`}
                 <span className="font-normal" style={{ color: "var(--oc-faint)" }}>
-                  {" "}· {state.cycle.session_no}/{state.cycle.sessions}
+                  {" "}· session {state.cycle.session_no}/{state.cycle.sessions}
+                  {state.cycle.beyond_data ? ` · data to ${expiryChip(state.cycle.data_until)}` : ""}
                 </span>
               </span>
             </div>

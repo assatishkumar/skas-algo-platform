@@ -41,6 +41,7 @@ from skas_algo.data.option_intraday_store import (
 )
 from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.charges import charges_for_txn
+from skas_algo.live.holidays import next_trading_day
 from skas_algo.services.replay_market import ReplayChain, ReplayMarket
 
 from . import presets as _presets
@@ -704,12 +705,16 @@ class ConsoleSession:
         held = {leg.expiry for leg in self.legs} or {sym.split("|")[1] for sym in syms}
         end = max(held)
         today = self.day.isoformat()
-        span = [d.isoformat() for d in self.days if start <= d.isoformat() <= end]
-        if end > (self.days[-1].isoformat() if self.days else end):
-            # the expiry is past the last captured day: count it as one more session
-            span.append(end)
+        # TRADING sessions, from the NSE calendar — not captured days. The store ends at
+        # the last capture (today's bars land after 16:00), so a cycle whose expiry lies
+        # beyond it read "12/13" with two weeks still to run (owner, 2026-09-09).
+        span: list[str] = []
+        d = date.fromisoformat(start)
+        stop = date.fromisoformat(end)
+        while d <= stop and len(span) < 400:
+            span.append(d.isoformat())
+            d = next_trading_day(d)
         total = max(1, len(span))
-        done = len([d for d in span if d < today]) + (1 if today >= end else 0)
         open_dt = datetime.combine(self.day, SESSION_OPEN)
         close_dt = datetime.combine(self.day, SESSION_CLOSE)
         frac_today = (self.clock - open_dt).total_seconds() / max(
@@ -722,10 +727,13 @@ class ConsoleSession:
             pct = 100.0 * (before + max(0.0, min(1.0, frac_today))) / total
         else:
             pct = 100.0
+        last_captured = self.days[-1].isoformat() if self.days else today
         return {"start": start, "end": end, "sessions": total,
                 "session_no": min(total, len([d for d in span if d <= today]) or 1),
                 "pct": round(min(100.0, pct), 2), "done": self.cycle_done(),
-                "legs_open": len(self.legs)}
+                "legs_open": len(self.legs),
+                # the expiry lies past the last captured session: the replay cannot reach it
+                "beyond_data": end > last_captured, "data_until": last_captured}
 
     def save_payload(self) -> dict:
         return {"underlying": self.underlying, "day": self.day.isoformat(),
