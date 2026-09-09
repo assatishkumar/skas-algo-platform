@@ -856,7 +856,13 @@ export default function ConsolePage() {
   const move = useMutation({
     mutationFn: (body: Parameters<typeof api.consoleTransport>[1]) =>
       call((id) => api.consoleTransport(id, body)),
-    onSuccess: (s) => {
+    onSuccess: (s, body) => {
+      const prev = stateRef.current;
+      if (prev && body.op === "step" && (body.minutes ?? 0) > 0 && s.cycle?.done
+          && prev.session.date === s.session.date && prev.session.clock === s.session.clock
+          && s.session.played_pct >= 100) {
+        setNotice("Every leg has expired — the replay stops at this close. Reset the book, or press +1d to move on regardless.");
+      }
       setState(s); setDay(s.session.date); setError(null);
       setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
@@ -1571,6 +1577,31 @@ export default function ConsolePage() {
         <span className="text-[9px] w-[30px] text-right" style={{ color: "var(--oc-faint)" }}>
           {state?.session.range[1] ?? "15:40"}
         </span>
+        {/* the CYCLE bar: first fill → last expiry, in sessions. The day bar above says
+            where in the session you are; this says where in the trade (owner, 2026-09-09). */}
+        {state?.cycle && (
+          <>
+            <div className="w-px h-3.5" style={{ background: "var(--oc-line)" }} />
+            <div className="flex items-center gap-1.5 shrink-0"
+              title={`cycle: ${state.cycle.start} → expiry ${state.cycle.end} · session ${state.cycle.session_no} of ${state.cycle.sessions}`}>
+              <span className="text-[9px] whitespace-nowrap" style={{ color: "var(--oc-faint)" }}>
+                {expiryChip(state.cycle.start)}
+              </span>
+              <div className="relative w-[140px] h-1 rounded" style={{ background: "var(--oc-chip)" }}>
+                <div className="absolute left-0 top-0 h-1 rounded"
+                  style={{ width: `${state.cycle.pct}%`,
+                    background: state.cycle.done ? "var(--oc-muted)" : "var(--oc-caution)" }} />
+              </div>
+              <span className="text-[9px] whitespace-nowrap font-semibold"
+                style={{ color: state.cycle.done ? "var(--oc-muted)" : "var(--oc-caution)" }}>
+                {state.cycle.done ? "expired" : `exp ${expiryChip(state.cycle.end)}`}
+                <span className="font-normal" style={{ color: "var(--oc-faint)" }}>
+                  {" "}· {state.cycle.session_no}/{state.cycle.sessions}
+                </span>
+              </span>
+            </div>
+          </>
+        )}
         <div className="w-px h-3.5" style={{ background: "var(--oc-line)" }} />
         <div className="flex items-center gap-1 shrink-0" title="jump to the next / previous event">
           <TrackChip onClick={() => jump.mutate({ kind: "prev_fill" })} disabled={!state} title="previous fill (K)">‹ fill</TrackChip>

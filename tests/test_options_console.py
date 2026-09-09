@@ -910,3 +910,30 @@ def test_a_step_past_the_close_rolls_into_the_next_session():
     assert (s.day, s.clock.strftime("%H:%M")) == (d2, "15:40")      # last day: pinned
     s.set_day(d1, at="09:15"); s.step(-5)
     assert (s.day, s.clock.strftime("%H:%M")) == (d1, "09:15")      # first day: pinned
+
+
+def test_a_finished_cycle_pins_at_the_close_and_the_cycle_bar_counts_sessions():
+    """A book whose every leg has expired does NOT roll into the next session: the close
+    is where the replay ends. A flat book that never traded still rolls. The cycle bar
+    runs from the first fill's day to the last expiry, in captured sessions."""
+    d1, d2, d3 = DAY, date(2026, 7, 15), date(2026, 7, 21)     # EXP is 07-21
+    for d in (d1, d2, d3):
+        store.write_day(d, _day(d))
+    s = _open(day=d1, at="10:00")
+    assert s.state()["cycle"] is None
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    c = s.state()["cycle"]
+    assert (c["start"], c["end"], c["sessions"], c["session_no"]) == (d1.isoformat(), EXP, 3, 1)
+    assert 0 < c["pct"] < 34 and c["done"] is False
+    s.seek("15:40"); s.step(1)                                  # rolls: legs still alive
+    assert s.day == d2
+    s.set_day(d3, at="15:35")                                   # expiry day, settled
+    c = s.state()["cycle"]
+    assert c["done"] is True and c["pct"] == 100.0 and s.legs == []
+    s.seek("15:40"); s.step(5)
+    assert s.day == d3 and s.clock.strftime("%H:%M") == "15:40"  # pinned, no roll
+    s.reset_book()
+    s.step(5)                                                    # flat & untraded: rolls
+    assert s.day == d3                                           # (last captured day → pins)
+    s2 = _open(day=d1, at="15:40")
+    s2.step(1); assert s2.day == d2                              # untraded book rolls

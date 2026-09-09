@@ -408,6 +408,11 @@ class ConsoleSession:
         hi = datetime.combine(self.day, SESSION_CLOSE)
         i = self.days.index(self.day)
         if target > hi and minutes > 0:
+            # A book whose every leg has EXPIRED is a finished cycle: the close is where the
+            # replay stops, not a doorway into the next session (owner, 2026-09-09). A flat
+            # book that never traded still rolls — there is nothing to have finished.
+            if self.cycle_done():
+                return self.seek(hi)
             if i + 1 < len(self.days):
                 excess = int((target - hi).total_seconds() // 60)
                 nxt = datetime.combine(self.days[i + 1], SESSION_OPEN) + timedelta(minutes=excess - 1)
@@ -675,6 +680,52 @@ class ConsoleSession:
             return self.seek(datetime.fromisoformat(later[0])) if later else self
         earlier = [m for m in mins if m < now]
         return self.seek(datetime.fromisoformat(earlier[-1])) if earlier else self
+
+    # ------------------------------------------------------------- the cycle
+    def _traded_symbols(self) -> set[str]:
+        return {f["symbol"] for f in self.journal if f["action"] in ("BUY", "SHORT")}
+
+    def cycle_done(self) -> bool:
+        """True when the book HAS traded and every leg it ever held has expired on or
+        before the open day, with nothing open."""
+        syms = self._traded_symbols()
+        if not syms or self.legs:
+            return False
+        last = max(sym.split("|")[1] for sym in syms)
+        return last <= self.day.isoformat()
+
+    def cycle_info(self) -> dict | None:
+        """The cycle's progress bar: from the first fill's day to the LAST expiry among the
+        legs held, in captured sessions. None until something has traded."""
+        syms = self._traded_symbols()
+        if not syms:
+            return None
+        start = min(f["at"][:10] for f in self.journal if f["action"] in ("BUY", "SHORT"))
+        held = {leg.expiry for leg in self.legs} or {sym.split("|")[1] for sym in syms}
+        end = max(held)
+        today = self.day.isoformat()
+        span = [d.isoformat() for d in self.days if start <= d.isoformat() <= end]
+        if end > (self.days[-1].isoformat() if self.days else end):
+            # the expiry is past the last captured day: count it as one more session
+            span.append(end)
+        total = max(1, len(span))
+        done = len([d for d in span if d < today]) + (1 if today >= end else 0)
+        open_dt = datetime.combine(self.day, SESSION_OPEN)
+        close_dt = datetime.combine(self.day, SESSION_CLOSE)
+        frac_today = (self.clock - open_dt).total_seconds() / max(
+            1.0, (close_dt - open_dt).total_seconds())
+        before = len([d for d in span if d < today])
+        if self.cycle_done():
+            pct = 100.0
+        elif today <= end:
+            # the expiry day itself progresses through its session like any other
+            pct = 100.0 * (before + max(0.0, min(1.0, frac_today))) / total
+        else:
+            pct = 100.0
+        return {"start": start, "end": end, "sessions": total,
+                "session_no": min(total, len([d for d in span if d <= today]) or 1),
+                "pct": round(min(100.0, pct), 2), "done": self.cycle_done(),
+                "legs_open": len(self.legs)}
 
     def save_payload(self) -> dict:
         return {"underlying": self.underlying, "day": self.day.isoformat(),
@@ -1232,6 +1283,7 @@ class ConsoleSession:
             "journal": self.journal,          # the whole tape of actions — what a restore needs
             "alerts": self._alerts_out(),
             "bookmarks": self.bookmarks,
+            "cycle": self.cycle_info(),
             # the replay track: markers on the OPEN day for the scrubber
             "track": {
                 "fills": [{"at": f["at"][11:], "action": f["action"]}
