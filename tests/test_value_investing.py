@@ -1035,3 +1035,49 @@ def test_the_ledger_seeds_to_capital_less_the_adopted_etf():
     st = _strat(watchlist="AAA", initial_capital=600_000, settlement_days=1)
     st.on_slice(ctx)
     assert st.settled_cash is not None and st.settled_cash <= 50_000
+
+
+def test_the_preview_counts_money_that_settles_today():
+    """The tile answers "what will be bought today", so it must use the money TODAY'S
+    decision will have — including yesterday's sale, which lands today.
+
+    Run 28 on 2026-09-09: ₹714.95 settled and ₹4,864.44 dated today still sitting in
+    pending_credits, because credits are only aged when the 15:05 decision runs. The panel
+    read the ledger raw and told the owner it could buy ₹702 of stock on a ₹5,000 budget,
+    while the decision four hours later would have ₹5,579."""
+    st = _strat(daily_budget=5_000, settlement_days=1, watchlist="INFY,TCS")
+    st.settled_cash = 714.95
+    st.pending_credits = [["2026-09-09", 4864.44]]
+    today = date(2026, 9, 9)
+
+    preview = st.preview_plan(_view({"INFY": (1500.0, 1530.0), "TCS": (3000.0, 2900.0)}), today)
+    assert preview["settled_now"] == 714.95
+    assert preview["settling_today"] == 4864.44
+    assert preview["spendable"] == pytest.approx(5579.39)
+
+    # …and the preview must not have spent or aged anything: the decision still finds them.
+    assert st.settled_cash == 714.95
+    assert st.pending_credits == [["2026-09-09", 4864.44]]
+
+
+def test_the_preview_and_the_decision_agree_on_spendable():
+    """One definition, two callers — the tile and the 15:05 walk must never disagree about
+    how much money there is."""
+    st = _strat(daily_budget=5_000, settlement_days=1, watchlist="INFY,TCS")
+    st.settled_cash = 100.0
+    st.pending_credits = [["2026-09-09", 4000.0], ["2026-09-10", 900.0]]
+    today = date(2026, 9, 9)
+    previewed = st.preview_plan(_view({"INFY": (1500.0, 1530.0)}), today)["spendable"]
+    ctx, _pf = _ctx(_view({"INFY": (1500.0, 1530.0)}))
+    assert st._settle(ctx, today) == pytest.approx(previewed)
+    assert st.pending_credits == [["2026-09-10", 900.0]]      # tomorrow's is untouched
+
+
+def test_the_broker_balance_still_caps_the_preview():
+    """The cap is the whole reason run 23 halted; ageing credits must not lift it."""
+    st = _strat(daily_budget=5_000, settlement_days=1, watchlist="INFY,TCS")
+    st.settled_cash = 700.0
+    st.pending_credits = [["2026-09-09", 4900.0]]
+    st.set_broker_funds(1200.0)
+    p = st.preview_plan(_view({"INFY": (1500.0, 1530.0)}), date(2026, 9, 9))
+    assert p["spendable"] == 1200.0 and p["broker_funds"] == 1200.0
