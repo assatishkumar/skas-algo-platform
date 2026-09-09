@@ -1971,6 +1971,8 @@ export interface ConsoleState {
     id: string; mode: string; underlying: string; lot_size: number;
     date: string; clock: string; range: [string, string]; played_pct: number;
     capital: number; status: string;
+    requires_confirm: boolean;  // replay applies a click at once; paper/live stages it
+    can_undo: boolean;
     has_prev_day: boolean; has_next_day: boolean;
   };
   market: {

@@ -300,10 +300,11 @@ def _staged(s, **kw):
 
 
 def test_staging_previews_and_changes_nothing():
-    """The design's whole loop is preview-then-commit. A staged change must describe the
-    book it WOULD produce without touching the one that exists."""
+    """PAPER/LIVE: preview-then-commit. A staged change describes the book it WOULD produce
+    without touching the one that exists."""
     store.write_day(DAY, _day())
     s = _open(at="10:00")
+    s.mode = "paper"
     st = _staged(s, kind="add", right="CE", strike=24000, side="S", lots=10)
     assert st["label"] == "S 24000 CE ×10"
     assert len(st["after_legs"]) == 1 and st["margin_after"] > st["margin_before"]
@@ -317,7 +318,6 @@ def test_a_commit_fills_at_the_minute_and_pays_charges():
     s = _open(at="10:00")
     px = {r["strike"]: r for r in s.chain_rows()}[24000.0]["ce"]["ltp"]
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
-    s.commit()
     leg = s.state()["legs"][0]
     assert leg["entry"] == pytest.approx(px) and leg["lots"] == 2 and leg["side"] == "S"
     # charged the same way the batch replay charges its fills — one cost model, not two
@@ -330,10 +330,8 @@ def test_a_partial_exit_books_its_share_and_leaves_the_rest():
     store.write_day(DAY, _day())
     s = _open(at="09:30")
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=10)
-    s.commit()
     s.seek("11:00")
     s.stage(kind="exit", leg_id=s.legs[0].id, lots=4)
-    s.commit()
     st = s.state()
     assert st["legs"][0]["lots"] == 6
     assert st["risk"]["realised"] != 0.0
@@ -348,10 +346,8 @@ def test_a_disabled_leg_stays_listed_but_leaves_the_risk():
     s = _open(at="10:00")
     for k, side in ((24000, "S"), (24100, "B")):
         s.stage(kind="add", right="CE", strike=k, side=side, lots=5)
-        s.commit()
     before = s.state()["risk"]["margin"]
     s.stage(kind="toggle", leg_id=s.legs[0].id, enabled=False)
-    s.commit()
     st = s.state()
     assert len(st["legs"]) == 2                     # still listed
     assert st["legs"][0]["enabled"] is False
@@ -366,7 +362,6 @@ def test_rewinding_past_a_trade_unwinds_it_and_going_forward_brings_it_back():
     store.write_day(DAY, _day())
     s = _open(at="09:30")
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=3)
-    s.commit()
     assert len(s.state()["legs"]) == 1
     s.seek("09:20")
     assert s.state()["legs"] == [] and s.state()["risk"]["charges"] == 0.0
@@ -391,12 +386,10 @@ def test_margin_says_where_its_number_came_from():
     store.write_day(DAY, _day())
     s = _open(at="10:00")
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=4)
-    s.commit()
     assert s.state()["risk"]["margin_source"] == "model"
 
     anchored = _open(at="10:00", margin_per_lot_set=134_612)
     anchored.stage(kind="add", right="CE", strike=24000, side="S", lots=4)
-    anchored.commit()
     risk = anchored.state()["risk"]
     assert risk["margin_source"] == "manual" and risk["margin"] == pytest.approx(538_448)
 
@@ -404,11 +397,12 @@ def test_margin_says_where_its_number_came_from():
 # ---------------------------------------------------------------- the basket (2026-09-09)
 
 def test_staging_accumulates_a_basket_and_commits_it_together():
-    """A structure is several legs, and committing them one at a time means you cannot see
-    the condor's payoff until the fourth leg lands — the preview is useless for exactly the
-    positions that need it. Clicking B/S adds to a basket; Apply commits the lot."""
+    """PAPER/LIVE only. A structure is several legs, and committing them one at a time means
+    you cannot see the condor's payoff until the fourth leg lands — the preview is useless
+    for exactly the positions that need it. B/S adds to the basket; Apply commits the lot."""
     store.write_day(DAY, _day())
     s = _open(at="10:00")
+    s.mode = "paper"
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
     s.stage(kind="add", right="CE", strike=24100, side="B", lots=2)
     st = s.state()["staged"]
@@ -425,7 +419,6 @@ def test_the_chain_marks_the_strikes_you_are_holding():
     store.write_day(DAY, _day())
     s = _open(at="10:00")
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=3)
-    s.commit()
     row = {r["strike"]: r for r in s.chain_rows()}[24000.0]
     assert row["ce"]["held"] == {"lots": 3, "side": "S", "enabled": True}
     assert row["pe"]["held"] is None       # only the leg you actually hold
@@ -437,10 +430,8 @@ def test_a_leg_can_be_rolled_to_another_strike_in_one_action():
     store.write_day(DAY, _day())
     s = _open(at="10:00")
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
-    s.commit()
     charges_before = s.charges
     s.stage(kind="roll", leg_id=s.legs[0].id, strike=24100)
-    s.commit()
     legs = s.state()["legs"]
     assert len(legs) == 1 and legs[0]["strike"] == 24100.0 and legs[0]["lots"] == 2
     assert legs[0]["side"] == "S"
@@ -451,12 +442,9 @@ def test_resizing_a_leg_trims_it_or_adds_to_it():
     store.write_day(DAY, _day())
     s = _open(at="10:00")
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=5)
-    s.commit()
     s.stage(kind="resize", leg_id=s.legs[0].id, lots=2)
-    s.commit()
     assert s.state()["legs"][0]["lots"] == 2
     s.stage(kind="resize", leg_id=s.legs[0].id, lots=6)
-    s.commit()
     assert sum(x["lots"] for x in s.state()["legs"]) == 6
 
 
@@ -467,10 +455,8 @@ def test_reset_clears_the_book_and_the_session_pnl():
     store.write_day(DAY, _day())
     s = _open(at="09:30")
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
-    s.commit()
     s.seek("11:00")
     s.stage(kind="flatten", replace=True)
-    s.commit()
     flat = s.state()
     assert flat["legs"] == [] and flat["risk"]["realised"] != 0.0
     assert flat["risk"]["mtm"] == flat["risk"]["realised"]   # banked, not open
@@ -478,3 +464,63 @@ def test_reset_clears_the_book_and_the_session_pnl():
     clean = s.state()
     assert clean["risk"]["mtm"] == 0.0 and clean["risk"]["charges"] == 0.0
     assert clean["legs"] == [] and clean["staged"] is None
+
+
+# ------------------------------------------- replay trades on the click (owner 2026-09-09)
+
+def test_in_replay_a_click_is_the_trade():
+    """An Apply between every click is friction with nothing to protect — the trade is
+    imaginary. Rehearsing a structure means dozens of clicks, and the confirm step made the
+    console slower to explore with than a spreadsheet."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    assert s.requires_confirm is False
+    assert s.stage(kind="add", right="CE", strike=24000, side="S", lots=2) is None
+    st = s.state()
+    assert st["staged"] is None                      # no basket to confirm
+    assert len(st["legs"]) == 1 and st["risk"]["charges"] > 0
+    assert st["session"]["requires_confirm"] is False and st["session"]["can_undo"] is True
+
+
+def test_a_book_that_can_reach_a_broker_still_asks_first():
+    """The same machinery, kept for the mode where a confirm stops being friction and
+    becomes the point."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.mode = "paper"
+    assert s.requires_confirm is True
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    assert s.legs == [] and s.state()["staged"] is not None
+    s.commit()
+    assert len(s.legs) == 1
+
+
+def test_undo_takes_back_the_whole_action():
+    """Undo is what replaces the confirm step, and it is a better safety net because it also
+    covers the leg you decide against a minute later. A ROLL is two fills and one action, so
+    undoing it must not leave the position half-moved."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.stage(kind="add", right="CE", strike=24100, side="B", lots=2)
+    s.stage(kind="roll", leg_id=s.legs[0].id, strike=23500)
+    assert {int(x.strike) for x in s.legs} == {23500, 24100}
+
+    assert s.undo_last() is True
+    assert {int(x.strike) for x in s.legs} == {24000, 24100}, "the roll went back whole"
+    assert s.undo_last() and {int(x.strike) for x in s.legs} == {24000}
+    assert s.undo_last() and s.legs == []
+    assert s.realized == 0.0 and s.charges == 0.0
+    assert s.undo_last() is False                    # nothing left, and it says so
+
+
+def test_undo_leaves_the_clock_where_it_was():
+    """Undo edits the journal, not the cursor — the book must rebuild at the SAME minute."""
+    store.write_day(DAY, _day())
+    s = _open(at="09:30")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    s.seek("11:00")
+    s.stage(kind="add", right="CE", strike=24100, side="B", lots=1)
+    s.undo_last()
+    assert s.clock.strftime("%H:%M") == "11:00"
+    assert len(s.legs) == 1 and int(s.legs[0].strike) == 24000

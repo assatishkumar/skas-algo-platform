@@ -104,13 +104,24 @@ async def transport(session_id: str, body: ConsoleTransport) -> dict:
 
 @router.post("/sessions/{session_id}/stage")
 async def stage(session_id: str, body: ConsoleStage) -> dict:
-    """Preview a change. The response carries the book it WOULD produce, so the chart can
-    draw the staged curve beside the live one before anything is real."""
+    """Change the book. In REPLAY this applies straight away (undo is the safety net); in
+    PAPER/LIVE it accumulates into a basket to be confirmed, and the response carries the
+    book it WOULD produce so the chart can preview it. Either way the answer is the whole
+    state, so the caller does not need to know which happened."""
     session = _get(session_id)
     try:
         await asyncio.to_thread(lambda: session.stage(**body.model_dump()))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
+
+
+@router.post("/sessions/{session_id}/undo")
+def undo(session_id: str) -> dict:
+    """Undo the last action — all of it, so a roll's two fills and a basket's four legs go
+    together. In replay this is what stands in for a confirm step."""
+    session = _get(session_id)
+    session.undo_last()
     return session.state()
 
 

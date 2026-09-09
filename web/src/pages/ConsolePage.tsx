@@ -62,6 +62,7 @@ const KEYS: { keys: string; does: string }[] = [
   { keys: "Alt + , .", does: "1 hour" },
   { keys: "[  ]", does: "previous / next trading day (keeps the time)" },
   { keys: "Home / End", does: "session open / close" },
+  { keys: "U", does: "undo the last action" },
   { keys: "?", does: "show or hide this list" },
 ];
 
@@ -469,6 +470,10 @@ export default function ConsolePage() {
     onSuccess: (s) => { setState(s); setError(null); },
     onError: (e: Error) => setError(e.message),
   });
+  const undo = useMutation({
+    mutationFn: () => api.consoleUndo(state!.session.id),
+    onSuccess: setState,
+  });
   const reset = useMutation({
     mutationFn: () => api.consoleReset(state!.session.id),
     onSuccess: setState,
@@ -507,6 +512,9 @@ export default function ConsolePage() {
         return;
       }
       if (e.key === "Enter" && state?.staged) { e.preventDefault(); commit.mutate(); return; }
+      if ((e.key === "u" || e.key === "U") && state?.session.can_undo) {
+        e.preventDefault(); undo.mutate(); return;
+      }
       if (!state || e.metaKey || e.ctrlKey) return;
       // Match on code OR key. e.key changes under Shift ("." becomes ">"), which is why the
       // Shift ladder did nothing when this keyed on e.key alone; e.code is stable but is not
@@ -530,7 +538,7 @@ export default function ConsolePage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state, move, commit, discard]);
+  }, [state, move, commit, discard, undo]);
 
   // Probed reference prices, keyed "CE24000". Cleared whenever the cursor or the ladder
   // moves — a price fetched at 09:30 is not an answer about 11:00.
@@ -750,7 +758,10 @@ export default function ConsolePage() {
               today={state?.session.date ?? ""} />
           </Panel>
 
-          {state?.staged && (
+          {/* Only a book that can reach a broker gets an Apply between the click and the
+              trade. In replay this block never renders — the click IS the trade, and Undo
+              is the way back. */}
+          {state?.staged && state.session.requires_confirm && (
             <div className="rounded-[10px] p-3"
               style={{ border: "1px dashed var(--oc-accent)",
                 background: "var(--oc-accent-tint)" }}>
@@ -791,6 +802,12 @@ export default function ConsolePage() {
               <span className="text-[13px] font-semibold">Positions</span>
               <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
                 {state?.legs.length ?? 0} legs · lot {state?.session.lot_size ?? "—"}
+                {state?.session.can_undo ? (
+                  <button type="button" className="ml-3 underline"
+                    title="undo the last action (U) — the whole action, roll and basket included"
+                    onClick={() => undo.mutate()}
+                    style={{ color: "var(--oc-accent)" }}>Undo</button>
+                ) : null}
                 {state?.legs.length ? (
                   <button type="button" className="ml-3 underline"
                     onClick={() => stage.mutate({ kind: "flatten", replace: true })}
@@ -915,6 +932,9 @@ export default function ConsolePage() {
       <div className="h-7 flex items-center gap-4 px-3 text-[10.5px]"
         style={{ background: "var(--oc-panel2)", borderTop: "1px solid var(--oc-line)",
           color: "var(--oc-faint)" }}>
+        <span style={{ color: "var(--oc-accent)" }}>
+          {state?.session.requires_confirm ? "STAGED — apply to trade" : "clicks trade at once · U undoes"}
+        </span>
         <span>REALISED <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.realised ?? 0)}</b></span>
         <span>UNREALISED <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.unrealised ?? 0)}</b></span>
         <span>TOTAL <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.mtm ?? 0)}</b>

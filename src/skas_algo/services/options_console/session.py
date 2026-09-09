@@ -170,8 +170,15 @@ class ConsoleSession:
         if self.day not in self.days:
             raise ValueError(f"{self.day.isoformat()} is not in the store for {u}")
 
+        # REPLAY applies a click straight away; PAPER/LIVE will stage it for confirmation.
+        # Rehearsing a structure means dozens of clicks and an Apply between each one is
+        # friction with nothing to protect — the trade is imaginary. When the same screen
+        # can reach a broker, that confirm step stops being friction and becomes the point,
+        # so the machinery below stays and only this flag moves (owner, 2026-09-09).
+        self.mode = "replay"
         self.legs: list[ConsoleLeg] = []
         self.staged: dict | None = None
+        self._group = 0
         self.realized = 0.0
         self.charges = 0.0
         self._leg_seq = 0
@@ -254,7 +261,7 @@ class ConsoleSession:
         self.clock = target
         self._replay_book(target)
 
-    def _replay_book(self, target: datetime) -> None:
+    def _replay_book(self, target: datetime, *, force: bool = False) -> None:
         """Rebuild the book from the fill journal at the cursor.
 
         Rewinding past a trade UNWINDS it. That falls straight out of seeking being a
@@ -263,9 +270,12 @@ class ConsoleSession:
         at 09:22 unless the journal, not the object graph, is the source of truth."""
         key = target.strftime("%Y-%m-%dT%H:%M")
         if not self.journal:
+            if force:                    # an undo that emptied the journal empties the book
+                self.legs, self.realized, self.charges, self.fills = [], 0.0, 0.0, []
+                self._leg_seq = 0
             return
         kept = [f for f in self.journal if f["at"] <= key]
-        if len(kept) == len(self.fills) and self.legs:
+        if not force and len(kept) == len(self.fills) and self.legs:
             return                       # already the right slice — nothing to rebuild
         self.legs, self.realized, self.charges, self.fills = [], 0.0, 0.0, []
         self._leg_seq = 0
@@ -385,23 +395,46 @@ class ConsoleSession:
         snap = self.market.live_chain(self.underlying, self.expiry) if self.expiry else None
         return int((snap or {}).get("lot_size") or 0)
 
+    @property
+    def requires_confirm(self) -> bool:
+        """Only a book that can reach a broker needs an Apply between the click and the
+        trade. In replay the trade is imaginary and the confirm is pure friction."""
+        return self.mode != "replay"
+
     def stage(self, *, kind: str, right: str | None = None, strike: float | None = None,
               side: str | None = None, lots: int = 1, leg_id: str | None = None,
-              enabled: bool | None = None, replace: bool = False) -> dict:
-        """Describe a change WITHOUT making it, ACCUMULATING into a basket.
+              enabled: bool | None = None, replace: bool = False) -> dict | None:
+        """Apply a change, or stage it for confirmation — decided by the session's MODE.
 
-        A structure is several legs, and committing them one at a time is both tedious and
-        wrong: you cannot see the condor's payoff until the fourth leg lands, so the
-        preview — the entire point of staging — is useless for exactly the positions that
-        need it most. Clicking B/S adds to the basket; Apply commits the lot.
-        ``replace=True`` starts a fresh basket (used by flatten)."""
+        In REPLAY it happens immediately; ``undo_last`` is the safety net rather than a
+        confirm step, and it is a better one because it also covers the click you regret a
+        minute later. In PAPER/LIVE the change accumulates into a basket the way a structure
+        is actually built (you cannot see a condor's payoff until the fourth leg lands), and
+        Apply commits the lot. ``replace=True`` starts a fresh basket."""
         item = self._stage_item(kind=kind, right=right, strike=strike, side=side, lots=lots,
                                 leg_id=leg_id, enabled=enabled)
+        if not self.requires_confirm:
+            self._group += 1
+            self._apply(item, self.clock.strftime("%Y-%m-%dT%H:%M"))
+            return None
         items = [] if (replace or not self.staged) else list(self.staged["items"])
         items.append(item)
         self.staged = {"items": items,
                        "label": " · ".join(i["label"] for i in items)}
         return self.staged
+
+    def undo_last(self) -> bool:
+        """Undo the last action — the whole action, so a roll's two fills and a basket's
+        four legs go together. This is what replaces the confirm step: a misclick is
+        cheaper to reverse than it is to prevent, and unlike a confirm it also covers the
+        leg you decide against a minute later."""
+        groups = [f.get("group") for f in self.journal if f.get("group")]
+        if not groups:
+            return False
+        last = max(groups)
+        self.journal = [f for f in self.journal if f.get("group") != last]
+        self._replay_book(self.clock, force=True)
+        return True
 
     def _stage_item(self, *, kind: str, right: str | None = None, strike: float | None = None,
                     side: str | None = None, lots: int = 1, leg_id: str | None = None,
@@ -472,6 +505,7 @@ class ConsoleSession:
             raise ValueError("nothing staged")
         items = self.staged["items"]
         minute = self.clock.strftime("%Y-%m-%dT%H:%M")
+        self._group += 1
         for st in items:
             self._apply(st, minute)
         self.staged = None
@@ -542,7 +576,7 @@ class ConsoleSession:
                 symbol: str) -> float:
         c = charges_for_txn({"action": action, "amount": units * price})
         self.charges += c["total"]
-        row = {"at": minute, "symbol": symbol, "action": action,
+        row = {"at": minute, "symbol": symbol, "action": action, "group": self._group,
                "units": units, "price": price, "charges": round(c["total"], 2)}
         self.fills.append(row)
         if not self._replaying:          # a replay re-derives the book; it does not re-trade
@@ -742,12 +776,14 @@ class ConsoleSession:
             1.0, (close_dt - open_dt).total_seconds())
         return {
             "session": {
-                "id": self.id, "mode": "replay", "underlying": self.underlying,
+                "id": self.id, "mode": self.mode, "underlying": self.underlying,
                 "lot_size": snap.get("lot_size") or 0,
                 "date": self.day.isoformat(), "clock": self.clock.strftime("%H:%M"),
                 "range": [SESSION_OPEN.strftime("%H:%M"), SESSION_CLOSE.strftime("%H:%M")],
                 "played_pct": round(100 * max(0.0, min(1.0, played)), 2),
                 "capital": self.capital, "status": "PAUSED",
+                "requires_confirm": self.requires_confirm,
+                "can_undo": bool([f for f in self.journal if f.get("group")]),
                 "has_prev_day": day_i > 0, "has_next_day": day_i < len(self.days) - 1,
             },
             "market": {

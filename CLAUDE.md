@@ -1071,6 +1071,16 @@ second order path (§1).
   (`note_spot`), because a replayed day's settled bar contains the future. A strike that has
   not printed stays unquoted; the ⟲ probe fetches its last real trade from an earlier
   session, LABELLED with its age, and that reference price can never fill a leg.
+- **A click IS the trade in REPLAY; only a book that can reach a broker asks first**
+  (owner, 2026-09-09). An Apply between every click is friction with nothing to protect —
+  rehearsing a structure is dozens of clicks and the confirm step made the console slower
+  to explore with than a spreadsheet. `ConsoleSession.mode` decides:
+  `requires_confirm` is False for `replay` (the click applies at once) and True for
+  paper/live, where the staged BASKET returns and Apply commits the lot. The staging
+  machinery is unchanged and kept for exactly that. `undo_last()` is the replay safety net
+  and a better one than a confirm, because it also covers the leg you decide against a
+  minute later: fills carry a `group`, so an undo takes back the WHOLE action — a roll's
+  two fills, a basket's four legs — and rebuilds the book at the same minute.
 - **Margin is labelled by source, always.** `margin_per_lot_set` (the `margin_per_set`
   precedent) is the only accurate answer; the fallback is the platform's model, which is
   span+exposure on the SHORTS and blind to long hedges — ₹19.4L against a Kite basket's

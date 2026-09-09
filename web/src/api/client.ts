@@ -185,6 +185,8 @@ export const api = {
     { method: "POST", body: JSON.stringify(body) }),
   consoleCommit: (id: string) =>
     request<ConsoleState>(`/console/sessions/${id}/commit`, { method: "POST" }),
+  consoleUndo: (id: string) =>
+    request<ConsoleState>(`/console/sessions/${id}/undo`, { method: "POST" }),
   consoleReset: (id: string) =>
     request<ConsoleState>(`/console/sessions/${id}/reset`, { method: "POST" }),
   consoleDiscard: (id: string) =>
