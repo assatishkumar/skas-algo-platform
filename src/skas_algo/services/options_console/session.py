@@ -1094,6 +1094,22 @@ class ConsoleSession(AlertBook):
         self._settle_expired()
         self._replay_book(self.clock, force=True)
 
+    def delete_leg(self, leg_id: str) -> bool:
+        """Remove a leg AS IF IT WAS NEVER TRADED: every journal row for its contract —
+        opens, closes, its settlement — goes, and the book is rebuilt at the cursor. No
+        P&L is booked, unlike ⊖ (an exit at the cursor's price). The replay's 🗑, so a
+        structure can be re-shaped without the discarded leg leaving a trade behind
+        (owner, 2026-09-10)."""
+        leg = next((x for x in self.legs if x.id == leg_id), None)
+        if leg is None:
+            return False
+        before = len(self.journal)
+        self.journal = [f for f in self.journal if f["symbol"] != leg.symbol]
+        if len(self.journal) == before:
+            return False
+        self._replay_book(self.clock, force=True)
+        return True
+
     def reset_book(self) -> None:
         """Start again: no legs, no journal, no realised, no charges.
 

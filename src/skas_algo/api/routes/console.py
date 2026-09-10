@@ -199,13 +199,15 @@ def apply_basket(session_id: str, body: ConsoleBasket) -> dict:
 
 
 @router.post("/sessions/{session_id}/unstage")
-def unstage(session_id: str, body: ConsoleUnstage) -> dict:
-    """Drop the pending change(s) on one leg (live/paper only — replay never stages)."""
+async def unstage(session_id: str, body: ConsoleUnstage) -> dict:
+    """Drop the pending change(s) on one leg (live/paper), or in replay delete the leg as
+    if it was never traded."""
     session = _get(session_id)
-    fn = getattr(session, "unstage", None)
-    if fn is None:
-        raise HTTPException(status_code=409, detail="nothing is ever staged in replay")
-    fn(body.leg_id, body.kind)
+    if isinstance(session, ConsoleSession):
+        # replay: nothing is staged — the 🗑 removes the leg as if it was never traded
+        session.delete_leg(body.leg_id)
+        return await asyncio.to_thread(session.state)
+    session.unstage(body.leg_id, body.kind)
     return session.state()
 
 

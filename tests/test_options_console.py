@@ -1046,3 +1046,20 @@ def test_the_cycle_remembers_where_the_underlying_stood_at_entry():
     s.stage(kind="add", right="PE", strike=24000, side="S", lots=1)     # a new cycle, new entry
     c2 = s.state()["cycle"]
     assert c2["entry_at"] == f"{DAY.isoformat()}T11:00" and c2["entry_spot"] != c["entry_spot"]
+
+
+def test_deleting_a_leg_in_replay_is_as_if_it_was_never_traded():
+    store.write_day(DAY, _day())
+    s = _open(at="09:20")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    s.stage(kind="add", right="PE", strike=24000, side="S", lots=1)
+    s.seek("10:30")
+    pe = next(l for l in s.legs if l.right == "PE")
+    s.stage(kind="exit", leg_id=pe.id, lots=1)              # a closed PE → realised P&L
+    assert s.state()["risk"]["realised_total"] != 0
+    assert s.delete_leg(next(l for l in s.legs if l.right == "CE").id) is True
+    st = s.state()
+    assert st["legs"] == [] and all(f["symbol"].endswith("|PE") for f in s.journal)
+    # the PE's history is untouched, the CE's is gone — no P&L was booked for it
+    assert st["risk"]["realised_total"] != 0
+    assert s.delete_leg("nope") is False

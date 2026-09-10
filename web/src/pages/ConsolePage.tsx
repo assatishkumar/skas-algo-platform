@@ -646,11 +646,13 @@ function AlertsCard({ alerts, disabled, onArm, onClear }: {
  *  thinks about it. Both go through staging like everything else: a strike change is a
  *  roll (close here, open there) and a size change is a partial exit or a top-up, so the
  *  payoff previews it and the charges are real. */
-function LegRow({ leg, grid, onStage, onUnstage, chainExpiry, resetKey }: {
+function LegRow({ leg, grid, onStage, onUnstage, chainExpiry, resetKey, replay }: {
   leg: ConsoleLeg; grid: number; chainExpiry: string | null;
   onStage: (b: Parameters<typeof api.consoleStage>[1]) => void;
-  onUnstage?: (legId: string, kind?: string | null) => void;   // live/paper only
+  // live/paper: drop the pending change; replay: delete the leg as if never traded
+  onUnstage?: (legId: string, kind?: string | null) => void;
   resetKey: string;      // changes when the basket is reverted → the exit selector resets
+  replay?: boolean;
 }) {
   const [exitLots, setExitLots] = useState(leg.lots);
   useEffect(() => { setExitLots((n) => Math.min(Math.max(1, n), leg.lots)); }, [leg.lots]);
@@ -761,10 +763,18 @@ function LegRow({ leg, grid, onStage, onUnstage, chainExpiry, resetKey }: {
             )}
             <button type="button"
               onClick={() => onStage({ kind: "exit", leg_id: leg.id, lots: exitLots })}
-              title={leg.lots > 1 ? `exit ${exitLots} of ${leg.lots} lots` : "exit this leg"}
+              title={leg.lots > 1 ? `exit ${exitLots} of ${leg.lots} lots at the cursor's price` : "exit this leg at the cursor's price"}
               className="w-[22px] h-[20px] rounded-full text-[13px] font-bold leading-[18px]"
               style={{ border: "1px solid var(--oc-neg)", color: "var(--oc-neg)" }}>⊖</button>
-          </span>
+            {replay && onUnstage && (
+              /* replay only: remove the leg as if it was never traded — no P&L, its fills leave
+                 the journal (⊖ is an exit and books P&L) */
+              <button type="button" onClick={() => onUnstage(leg.id)}
+                title="delete this leg as if it was never traded (no P&L booked)"
+                className="w-[22px] h-[20px] rounded-[4px] text-[12px]"
+                style={{ border: "1px solid var(--oc-line)", color: "var(--oc-muted)" }}>🗑</button>
+            )}
+            </span>
         )}
       </td>
     </tr>
@@ -1708,7 +1718,8 @@ export default function ConsolePage() {
                     <LegRow key={l.id} leg={l} grid={gridStep} chainExpiry={state?.chain.expiry ?? null}
                       resetKey={state?.staged ? "staged" : "clean"}
                       onStage={(b) => stage.mutate(b)}
-                      onUnstage={isLive ? (legId, kind) => unstage.mutate({ leg_id: legId, kind }) : undefined} />
+                      onUnstage={(legId, kind) => unstage.mutate({ leg_id: legId, kind })}
+                      replay={!isLive} />
                   ))}
                 </tbody>
               </table>
