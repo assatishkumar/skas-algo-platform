@@ -74,6 +74,10 @@ class OpenShort:
     symbol: str
     units: int
     multiplier: int = 1
+    # Who opened it. Every strategy path leaves the default; a MANUAL open (the Live page's
+    # manual order, the console's Commit) says so, instead of reading as the strategy's
+    # doing in the trade log (a console short on run 111 did, 2026-09-10).
+    tag: str = "STRATEGY"
 
 
 @dataclass

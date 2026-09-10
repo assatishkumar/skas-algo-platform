@@ -339,7 +339,7 @@ class LiveSession:
             symbol, units = self._build_manual_leg(o)
             side = str(o.get("side", "")).lower()
             if side in ("sell", "short"):
-                actions.append(OpenShort(symbol, units, int(o.get("multiplier", 1))))
+                actions.append(OpenShort(symbol, units, int(o.get("multiplier", 1)), tag=tag))
             elif side in ("buy", "long"):
                 actions.append(BuyLot(symbol, units, tag=tag))
             else:

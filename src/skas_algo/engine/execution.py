@@ -190,7 +190,8 @@ class SliceExecutor:
             ev = self._buy(ts, action.symbol, action.units, action.tag)
             return [ev] if ev else []
         if isinstance(action, OpenShort):
-            ev = self._sell_to_open(ts, action.symbol, action.units, action.multiplier)
+            ev = self._sell_to_open(ts, action.symbol, action.units, action.multiplier,
+                                    tag=action.tag)
             return [ev] if ev else []
         if isinstance(action, CloseShort):
             lot = self.portfolio.get_lot(action.symbol, action.lot_id)
@@ -251,7 +252,7 @@ class SliceExecutor:
             fill=fill,
         )
 
-    def _sell_to_open(self, ts, symbol, units, multiplier) -> dict | None:
+    def _sell_to_open(self, ts, symbol, units, multiplier, tag="STRATEGY") -> dict | None:
         """Write (sell-to-open) a short lot at the option's market price."""
         if units <= 0:
             return None
@@ -259,7 +260,7 @@ class SliceExecutor:
         self.portfolio.sell_to_open(symbol, units, fill.price, ts, multiplier)
         return trade_event(
             ts, symbol, "SHORT", units, fill.price, 0.0, 0.0,
-            len(self.portfolio.lots(symbol)), "STRATEGY",
+            len(self.portfolio.lots(symbol)), tag,
             fill=fill,
         )
 
