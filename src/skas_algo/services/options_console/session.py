@@ -211,6 +211,9 @@ class ConsoleSession(AlertBook):
         self._cycle_entry: dict | None = None
         # legs closed in the CURRENT cycle — shown under the open ones, never silently gone
         self.closed: list[dict] = []
+        # legs switched OFF for the payoff (a view flag, by contract) — kept apart from the
+        # legs themselves so a rebuild from the journal does not switch them back on
+        self._disabled: set[str] = set()
         self._margin_detail: dict | None = None
         self._spot_series: dict[str, list[tuple[str, float]]] = {}
         # per-symbol (minutes, closes) for the open day — the tape regrouped once, so a
@@ -386,12 +389,26 @@ class ConsoleSession(AlertBook):
         self.closed = []
         self._replaying = True
         try:
+            prev: dict | None = None
             for f in kept:
+                # A cycle begins when an OPEN lands on a flat book from a DIFFERENT action
+                # than the one that flattened it — a roll's close-then-open shares a group
+                # and is one cycle continuing, not a new one (it wiped the closed rows and
+                # re-stamped the entry, 2026-09-10).
+                if (not self.legs and f["action"] in ("BUY", "SHORT")
+                        and (prev is None or prev.get("group") != f.get("group"))):
+                    self._cycle_realized_before = self.realized
+                    self.closed = []
+                    self._cycle_entry = {"at": f["at"], "spot": f.get("spot")}
                 self._reapply(f)
+                if f["action"] != "NOOP":
+                    prev = f
         finally:
             self._replaying = False
 
     def _reapply(self, fill: dict) -> None:
+        if fill["action"] == "NOOP":
+            return
         _u, expiry, strike_s, right = fill["symbol"].split("|")
         strike, lot = float(strike_s), self._lot_size() or 1
         if fill["action"] in ("BUY", "SHORT"):
@@ -554,6 +571,7 @@ class ConsoleSession(AlertBook):
         if not self.requires_confirm:
             self._group += 1
             self._apply(item, self.clock.strftime("%Y-%m-%dT%H:%M"))
+            self._replay_book(self.clock, force=True)   # the journal is the book, always
             return None
         items = [] if (replace or not self.staged) else list(self.staged["items"])
         items.append(item)
@@ -576,6 +594,7 @@ class ConsoleSession(AlertBook):
             minute = self.clock.strftime("%Y-%m-%dT%H:%M")
             for it in items:
                 self._apply(it, minute)
+            self._replay_book(self.clock, force=True)
             return None
         self.staged = {"items": items,
                        "label": label or " · ".join(i["label"] for i in items)}
@@ -604,6 +623,7 @@ class ConsoleSession(AlertBook):
             minute = self.clock.strftime("%Y-%m-%dT%H:%M")
             for it in items:
                 self._apply(it, minute)
+            self._replay_book(self.clock, force=True)
             return None
         self.staged = {"items": items, "label": f"Scale ×{factor:g}"}
         return self.staged
@@ -889,7 +909,13 @@ class ConsoleSession(AlertBook):
         if not groups:
             return False
         last = max(groups)
-        self.journal = [f for f in self.journal if f.get("group") != last]
+        kept: list[dict] = []
+        for f in self.journal:
+            if f.get("group") != last:
+                kept.append(f)
+            else:
+                kept.extend(f.get("replaces") or [])   # an edit gives back what it replaced
+        self.journal = kept
         self._replay_book(self.clock, force=True)
         return True
 
@@ -965,6 +991,7 @@ class ConsoleSession(AlertBook):
         self._group += 1
         for st in items:
             self._apply(st, minute)
+        self._replay_book(self.clock, force=True)
         self.staged = None
         return {"committed": len(items), "at": minute}
 
@@ -975,9 +1002,16 @@ class ConsoleSession(AlertBook):
         elif kind == "exit":
             self._close(self._leg(st["leg_id"]), st["lots"], st["price"], minute)
         elif kind == "toggle":
-            self._leg(st["leg_id"]).enabled = st["enabled"]
+            leg = self._leg(st["leg_id"])
+            leg.enabled = st["enabled"]
+            if st["enabled"]:
+                self._disabled.discard(leg.symbol)
+            else:
+                self._disabled.add(leg.symbol)
         elif kind == "roll":
             leg = self._leg(st["leg_id"])
+            if self._rewrite_fresh(leg, minute, strike=st["strike"], price=st["price"]):
+                return
             side, lots, right = leg.side, leg.lots, leg.right
             expiry = leg.expiry
             self._close(leg, lots, st["exit_price"], minute)
@@ -985,6 +1019,8 @@ class ConsoleSession(AlertBook):
         elif kind == "resize":
             leg = self._leg(st["leg_id"])
             want = int(st["lots"])
+            if self._rewrite_fresh(leg, minute, lots=want, price=st["price"]):
+                return
             if want < leg.lots:
                 self._close(leg, leg.lots - want, st["price"], minute)
             else:
@@ -995,6 +1031,41 @@ class ConsoleSession(AlertBook):
                 px = self._price(leg.right, leg.strike, leg.expiry)
                 if px is not None:
                     self._close(leg, leg.lots, px, minute)
+
+    def _rewrite_fresh(self, leg: ConsoleLeg, minute: str, *, strike: float | None = None,
+                       lots: int | None = None, price: float) -> bool:
+        """A leg placed THIS minute is still being shaped: a roll or resize on it edits its
+        opening fill instead of closing it and opening another — no ₹0 "closed" rows for a
+        strike nudged twice, no charges paid twice (owner, 2026-09-10). Only when EVERY
+        journal row for the contract is an open at this minute; a leg from an earlier
+        minute is a real position and a roll of it is a real trade."""
+        rows = [f for f in self.journal if f["symbol"] == leg.symbol]
+        if not rows or any(f["at"] != minute or f["action"] not in ("BUY", "SHORT") for f in rows):
+            return False
+        # Replace IN PLACE (the journal's order is the legs' order — appending re-sorted
+        # them and the multiplier then scaled the wrong leg) under THIS action's group,
+        # carrying the rows it replaced so Undo can put them back.
+        idx = self.journal.index(rows[0])
+        self.journal = [f for f in self.journal if f["symbol"] != leg.symbol]
+        new_lots = leg.lots if lots is None else int(lots)
+        new_strike = leg.strike if strike is None else float(strike)
+        if new_lots > 0:
+            sym = f"{self.underlying}|{leg.expiry}|{int(new_strike)}|{leg.right}"
+            units = new_lots * leg.lot_size
+            c = charges_for_txn({"action": "SHORT" if leg.side == "S" else "BUY",
+                                 "amount": units * price})
+            self.journal.insert(idx, {"at": minute, "symbol": sym,
+                                      "action": "SHORT" if leg.side == "S" else "BUY",
+                                      "group": self._group, "units": units, "price": price,
+                                      "charges": round(c["total"], 2), "replaces": rows,
+                                      "spot": rows[0].get("spot")})
+        else:
+            # trimmed to nothing: an empty edit that still owns what it replaced, for Undo
+            self.journal.insert(idx, {"at": minute, "symbol": leg.symbol, "action": "NOOP",
+                                      "group": self._group, "units": 0, "price": price,
+                                      "charges": 0.0, "replaces": rows})
+        self._replay_book(self.clock, force=True)
+        return True
 
     def _open(self, right: str, strike: float, side: str, lots: int, price: float,
               minute: str, *, expiry: str | None = None) -> None:
@@ -1007,17 +1078,12 @@ class ConsoleSession(AlertBook):
         (owner, 2026-09-09). The rare case this forecloses — holding two tranches of the same
         contract separately — is not what this screen is for, and the fills journal still has
         every entry if the history is ever wanted."""
-        if not self.legs:                # flat → open: a new cycle begins here
-            self._cycle_realized_before = self.realized
-            self.closed = []                # a new cycle: last cycle's closes leave the table
-            sp = self.market.index_spot(self.underlying)
-            self._cycle_entry = {"at": minute, "spot": round(float(sp), 2) if sp else None}
         if lots <= 0:
             return
         exp = expiry or str(self.expiry)
         symbol = f"{self.underlying}|{exp}|{int(strike)}|{right}"
         existing = next((x for x in self.legs
-                         if x.symbol == symbol and x.side == side and x.enabled), None)
+                         if x.symbol == symbol and x.side == side), None)
         if existing is not None:
             added = lots * existing.lot_size
             total = existing.units + added
@@ -1028,7 +1094,7 @@ class ConsoleSession(AlertBook):
             existing = ConsoleLeg(
                 id=f"L{self._leg_seq}", symbol=symbol, right=right, strike=float(strike),
                 expiry=exp, side=side, lots=lots, lot_size=self._lot_size(),
-                entry=price, entered_at=minute)
+                entry=price, entered_at=minute, enabled=symbol not in self._disabled)
             self.legs.append(existing)
         self._charge("SHORT" if side == "S" else "BUY", lots * existing.lot_size, price,
                      minute, symbol)
@@ -1074,6 +1140,8 @@ class ConsoleSession(AlertBook):
                "units": units, "price": price, "charges": round(c["total"], 2)}
         self.fills.append(row)
         if not self._replaying:          # a replay re-derives the book; it does not re-trade
+            sp = self.market.index_spot(self.underlying)
+            row["spot"] = round(float(sp), 2) if sp else None   # where the index stood
             self.journal.append(row)
         return c["total"]
 
@@ -1089,12 +1157,13 @@ class ConsoleSession(AlertBook):
         re-evaluated at the cursor, so one that had fired fires again at the same minute."""
         rows = []
         for f in journal:
-            if f.get("action") == "SETTLE":
+            if f.get("action") in ("SETTLE", "NOOP"):
                 continue
             rows.append({"at": str(f["at"]), "symbol": str(f["symbol"]),
                          "action": str(f["action"]), "group": f.get("group"),
                          "units": float(f["units"]), "price": float(f["price"]),
-                         "charges": float(f.get("charges") or 0.0)})
+                         "charges": float(f.get("charges") or 0.0),
+                         "spot": f.get("spot")})
         rows.sort(key=lambda f: f["at"])
         self.journal = rows
         self._group = max([int(f["group"]) for f in rows if f.get("group")] or [0])
@@ -1137,6 +1206,7 @@ class ConsoleSession(AlertBook):
         self._cycle_realized_before = 0.0
         self._cycle_entry = None
         self.closed = []
+        self._disabled = set()
         self._leg_seq = 0
         self.staged = None
         for a in self.alerts:
@@ -1426,7 +1496,7 @@ class ConsoleSession(AlertBook):
             "closed": list(self.closed),
             "staged": self._staged_out(),
             "risk": {**risk, "greeks": greeks},
-            "fills": self.fills[-40:],
+            "fills": [f for f in self.fills if f["action"] != "NOOP"][-40:],
             "journal": self.journal,          # the whole tape of actions — what a restore needs
             "alerts": self._alerts_out(),
             "bookmarks": self.bookmarks,

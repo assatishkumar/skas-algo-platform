@@ -437,6 +437,7 @@ def test_a_leg_can_be_rolled_to_another_strike_in_one_action():
     s = _open(at="10:00")
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
     charges_before = s.charges
+    s.seek("10:05")                      # a roll of a HELD leg (the entry minute would be an edit)
     s.stage(kind="roll", leg_id=s.legs[0].id, strike=24100)
     legs = s.state()["legs"]
     assert len(legs) == 1 and legs[0]["strike"] == 24100.0 and legs[0]["lots"] == 2
@@ -1072,15 +1073,51 @@ def test_realised_is_gross_and_a_closed_leg_stays_on_the_table():
     store.write_day(DAY, _day())
     s = _open(at="10:00")
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
-    s.stage(kind="resize", leg_id=s.legs[0].id, lots=1)          # same minute, same price
+    s.seek("10:05")
+    px = s.state()["legs"][0]["ltp"]
+    s.stage(kind="resize", leg_id=s.legs[0].id, lots=1)          # a real trim, five minutes on
     r = s.state()["risk"]
-    assert r["realised"] == 0.0 and r["charges"] > 0
+    assert r["charges"] > 0
     c = s.state()["closed"]
-    assert len(c) == 1 and c[0]["lots"] == 1 and c[0]["exit"] == c[0]["entry"] and c[0]["pnl"] == 0.0
+    assert len(c) == 1 and c[0]["lots"] == 1 and c[0]["exit"] == pytest.approx(px)
+    assert c[0]["pnl"] == pytest.approx((c[0]["entry"] - c[0]["exit"]) * 65, abs=0.01)   # gross
     s.seek("11:00")
     s.stage(kind="flatten", replace=True)
     c = s.state()["closed"]
-    assert len(c) == 2 and c[1]["pnl"] == pytest.approx(s.state()["risk"]["realised"], abs=0.01)
+    assert len(c) == 2 and c[0]["pnl"] + c[1]["pnl"] == pytest.approx(s.state()["risk"]["realised"], abs=0.01)
     assert s.delete_leg(c[1]["symbol"]) is True and s.state()["closed"] == []   # by symbol
     s.stage(kind="add", right="PE", strike=24000, side="B", lots=1)             # a new cycle
     assert s.state()["closed"] == []
+
+
+def test_shaping_a_leg_in_the_minute_it_was_placed_edits_it_rather_than_closing_it():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=3)
+    leg = s.legs[0]
+    s.stage(kind="roll", leg_id=leg.id, strike=24100)           # same minute: an edit
+    st = s.state()
+    assert st["closed"] == [] and [(l["strike"], l["lots"]) for l in st["legs"]] == [(24100.0, 3)]
+    assert len(s.journal) == 1 and s.journal[0]["action"] == "SHORT"
+    s.stage(kind="resize", leg_id=s.legs[0].id, lots=2)          # still that minute
+    st = s.state()
+    assert st["closed"] == [] and st["legs"][0]["lots"] == 2 and st["risk"]["realised"] == 0.0
+    assert len(s.journal) == 1
+    s.seek("10:05")                                              # the clock moved on
+    s.stage(kind="resize", leg_id=s.legs[0].id, lots=1)          # now a real trim
+    st = s.state()
+    assert len(st["closed"]) == 1 and st["legs"][0]["lots"] == 1
+    s.stage(kind="roll", leg_id=s.legs[0].id, strike=24000)      # and a real roll
+    assert len(s.state()["closed"]) == 2
+
+
+def test_undoing_a_same_minute_edit_gives_the_original_leg_back():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=3)
+    s.stage(kind="roll", leg_id=s.legs[0].id, strike=24100)
+    s.stage(kind="resize", leg_id=s.legs[0].id, lots=1)
+    assert [(l.strike, l.lots) for l in s.legs] == [(24100.0, 1)]
+    assert s.undo_last() and [(l.strike, l.lots) for l in s.legs] == [(24100.0, 3)]
+    assert s.undo_last() and [(l.strike, l.lots) for l in s.legs] == [(24000.0, 3)]
+    assert s.undo_last() and s.legs == [] and s.journal == []
