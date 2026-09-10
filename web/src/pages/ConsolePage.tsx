@@ -166,6 +166,32 @@ const inr0 = (v: number | null | undefined) =>
     : (v < 0 ? MINUS : "") + "₹" + Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 
 /** "% of X", or an em dash when X is zero — a percentage of nothing is not a number. */
+/** ONE rule for the line under "Margin", so the rail and the strip agree on what the
+ *  number is: a measured anchor, Kite's basket for today's equivalent, or the model. */
+const marginSub = (risk: ConsoleRisk | null | undefined, perSet?: number) => {
+  if (!risk) return "model";
+  if (risk.margin_source === "manual") return `anchor · ${inr0(perSet ?? 0)} / lot-set`;
+  if (risk.margin_source === "zerodha") {
+    // the tile is ~110px wide: the account and the mapped legs live in the ⓘ text
+    return risk.margin_note?.shifted ? "Kite · today's equivalent" : "Kite basket";
+  }
+  if (risk.margin_detail)
+    return `est · scan ${inr0(risk.margin_detail.span)} + exp ${inr0(risk.margin_detail.exposure)}`;
+  return `${risk.margin_source} · ${pctOf(risk.margin, risk.capital)} of capital`;
+};
+const marginHelp = (risk: ConsoleRisk | null | undefined) => {
+  if (risk?.margin_source === "manual")
+    return "Margin is the anchor you typed for one lot-set × the lot-sets held. Every % here is of that figure. Set it to 0 to go back to Kite's figure.";
+  if (risk?.margin_source === "zerodha") {
+    const n = risk.margin_note;
+    const legs = (n?.legs ?? []).map((l) => `${l.side} ${l.lots}× ${l.strike} ${l.right} ${l.expiry.slice(5)}`).join(", ");
+    return n?.shifted
+      ? `Kite's basket margin (${n?.account ?? "Zerodha"}) for TODAY'S EQUIVALENT of this book: the same moneyness (strikes scaled by today's spot ${n?.spot_today ? inr0(n.spot_today) : ""} over the replay's) and the same days to expiry on the chain Kite lists now — priced as ${legs}. Margin depends on moneyness, DTE and vol, not the calendar year, so this is the closest figure available; across a different vol regime it is still an estimate. Every % here is of it. Click the Margin tile to type the calculator's own number instead.`
+      : `Kite's basket margin (${n?.account ?? "Zerodha"}) for exactly these legs (${legs}). Every % here is of it.`;
+  }
+  return "Margin is estimated the way SPAN is: the book's worst loss over a ±6% move (hedges offset) plus 2% exposure on every short unit. It gets the order of structures right, not the rupees (₹74.8k against Zerodha's ₹90.8k on an iron fly). Log in to a Zerodha account to get Kite's figure, or type the calculator's number as an anchor. Every % here is of this margin.";
+};
+
 const pctOf = (a: number | null | undefined, b: number | null | undefined) =>
   a == null || !b || !Number.isFinite(a) ? "—" : `${((a / b) * 100).toFixed(2)}%`;
 
@@ -199,11 +225,13 @@ function InfoIcon({ text, title }: { text: string; title?: string }) {
   );
 }
 
-function Tile({ label, value, sub, tone }: {
-  label: string; value: string; sub?: string; tone?: "pos" | "neg";
+function Tile({ label, value, sub, tone, onClick }: {
+  label: string; value: string; sub?: string; tone?: "pos" | "neg"; onClick?: () => void;
 }) {
   return (
-    <div className="rounded-[8px] px-2 py-1.5" style={{ background: "var(--oc-panel2)" }}>
+    <div className={`rounded-[8px] px-2 py-1.5${onClick ? " cursor-pointer hover:brightness-95" : ""}`}
+      style={{ background: "var(--oc-panel2)" }} onClick={onClick}
+      title={onClick ? "click to set the margin anchor for one lot-set" : undefined}>
       <div className="text-[9px] font-semibold uppercase tracking-[.06em]"
         style={{ color: "var(--oc-faint)" }}>{label}</div>
       <div className="text-[13px] font-semibold tabular-nums"
@@ -1285,6 +1313,33 @@ export default function ConsolePage() {
     mutationFn: () => call((id) => api.consoleReset(id)),
     onSuccess: setState,
   });
+  // the manual margin anchor: the broker calculator's figure for ONE lot-set (replay only)
+  const [anchorOpen, setAnchorOpen] = useState(false);
+  const [anchorText, setAnchorText] = useState("");
+  const anchor = useMutation({
+    mutationFn: (v: number) => call((id) => api.consoleMarginAnchor(id, v)),
+    onSuccess: (st) => { setState(st); setAnchorOpen(false); },
+  });
+  const anchorEditor = anchorOpen && !isLive ? (
+    <div className="flex flex-wrap items-center gap-1.5 mt-1.5 text-[10.5px]" style={{ color: "var(--oc-muted)" }}>
+      <span>Margin anchor · ₹ per lot-set</span>
+      <input value={anchorText} onChange={(e) => setAnchorText(e.target.value)}
+        placeholder={String(state?.session.margin_per_lot_set || "e.g. 90828")}
+        inputMode="numeric"
+        className="w-[88px] px-1.5 py-[2px] rounded-[4px] border text-[11px] tabular-nums"
+        style={{ borderColor: "var(--oc-line)", background: "var(--oc-panel)", color: "var(--oc-ink)" }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { const v = Number(anchorText); if (Number.isFinite(v) && v >= 0) anchor.mutate(v); }
+          if (e.key === "Escape") setAnchorOpen(false);
+        }} />
+      <button type="button" className="underline" disabled={anchor.isPending}
+        onClick={() => { const v = Number(anchorText); if (Number.isFinite(v) && v >= 0) anchor.mutate(v); }}>set</button>
+      {!!state?.session.margin_per_lot_set && (
+        <button type="button" className="underline" onClick={() => anchor.mutate(0)}>clear</button>
+      )}
+      <button type="button" onClick={() => setAnchorOpen(false)} style={{ color: "var(--oc-faint)" }}>✕</button>
+    </div>
+  ) : null;
   const discard = useMutation({
     mutationFn: () => call((id) => api.consoleDiscard(id)),
     onSuccess: setState,
@@ -1527,9 +1582,7 @@ export default function ConsolePage() {
                   <div className="flex items-start justify-between">
                     <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
                       style={{ color: "var(--oc-faint)" }}>Cycle MTM · realised + open
-                      <InfoIcon title="how the numbers are made" text={risk?.margin_source === "model"
-                        ? "Margin is estimated the way SPAN is: the book's worst loss over a ±6% move (hedges offset) plus 2% exposure on every short unit. Within ~10% of a Kite basket on a spread; still an estimate. Every % here is of that margin."
-                        : "Margin is the run's own figure (a Zerodha basket where it has one). Every % here is of that margin. POP, max P/L and breakevens come from the same calculator as the chart."} />
+                      <InfoIcon title="how the numbers are made" text={marginHelp(risk)} />
                     </span>
                     <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
                       style={{ background: risk && risk.legs_open ? "var(--oc-chip)" : "transparent",
@@ -1579,9 +1632,8 @@ export default function ConsolePage() {
                   )}
                   <div className="grid grid-cols-3 gap-2 mt-3">
                     <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
-                      sub={risk?.margin_detail
-                        ? `est · scan ${inr0(risk.margin_detail.span)} + exp ${inr0(risk.margin_detail.exposure)}`
-                        : `${risk?.margin_source ?? "model"} · ${pctOf(risk?.margin, risk?.capital)} of capital`} />
+                      sub={marginSub(risk, state?.session.margin_per_lot_set)}
+                      onClick={isLive ? undefined : () => setAnchorOpen((v) => !v)} />
                     <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
                       sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
                     {/* cycle basis: the open book's max P/L shifted by what the cycle has already banked,
@@ -1606,7 +1658,7 @@ export default function ConsolePage() {
                       value={risk?.net_credit == null ? "—" : inr0(Math.abs(risk.net_credit))}
                       sub={risk?.net_credit == null ? "—" : risk.net_credit >= 0 ? "premium received at entry" : "premium paid at entry"} />
                     </div>
-
+                    {anchorEditor}
                 </Panel>
   );
 
@@ -1639,9 +1691,8 @@ export default function ConsolePage() {
           value={`${inr0(risk?.mtm ?? 0)}${risk?.margin ? ` · ${pctOf(risk.mtm, risk.margin)}` : ""}`}
           sub={risk?.realised ? `banked ${inr0(risk.realised)}` : `${risk?.legs_open ?? 0} legs open`} />
         <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
-          sub={risk?.margin_detail
-            ? `est · scan ${inr0(risk.margin_detail.span)} + exp ${inr0(risk.margin_detail.exposure)}`
-            : `${risk?.margin_source ?? "model"}`} />
+          sub={marginSub(risk, state?.session.margin_per_lot_set)}
+          onClick={isLive ? undefined : () => setAnchorOpen((v) => !v)} />
         <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
           sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
         <Tile label="Max profit" tone="pos"
@@ -1663,6 +1714,7 @@ export default function ConsolePage() {
           value={risk?.net_credit == null ? "—" : inr0(Math.abs(risk.net_credit))}
           sub={risk?.net_credit == null ? "—" : "at entry"} />
       </div>
+      {anchorEditor}
     </Panel>
   );
 

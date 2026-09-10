@@ -1971,6 +1971,7 @@ export interface ConsoleState {
     id: string; mode: string; underlying: string; lot_size: number;
     date: string; clock: string; range: [string, string]; played_pct: number;
     capital: number; status: string;
+    margin_per_lot_set?: number; // replay: the manual anchor for one lot-set, 0 = none
     requires_confirm: boolean;  // replay applies a click at once; paper/live stages it
     can_undo: boolean;
     has_prev_day: boolean; has_next_day: boolean;
@@ -2117,8 +2118,13 @@ export interface ConsoleRisk {
   net_credit: number | null; // + premium received, − premium paid, on the enabled legs
   unrealised: number; mtm: number; charges: number;
   margin: number;
-  margin_source: string;   // "manual" = a measured anchor, "model" = SPAN-shaped estimate
+  margin_source: string;   // "manual" = a measured anchor, "zerodha" = Kite's basket for today's equivalent, "model" = SPAN-shaped estimate
   margin_detail: { span: number; exposure: number; total: number; worst_move_pct: number } | null;
+  // "zerodha" only: which account priced it, today's spot, the legs Kite was asked about
+  margin_note?: {
+    account: string; spot_today: number; shifted: boolean;
+    legs: { right: string; strike: number; expiry: string; side: string; lots: number }[];
+  } | null;
   capital: number; legs_open: number;
   greeks: ConsoleGreeks;   // Σ per-share greek × units over ENABLED legs
 }

@@ -1132,6 +1132,24 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   the DTO, and `margin_per_lot_set` (the `margin_per_set` precedent) outranks it. Do NOT
   reuse this for strategy sizing — that path is deliberately the deterministic
   `short_option_margin` (§8 ratio sizing).
+  **The rupees come from KITE since 2026-09-10 — a replayed book priced as TODAY'S
+  EQUIVALENT.** The scan reads ₹74,779 for an iron fly Zerodha's calculator puts at
+  ₹90,828 (SPAN 28,435 + exposure 62,393 − premium 20,105): a real SPAN has 16 scenarios
+  plus a vol-of-vol term, and there is no honest replica. So `services/console_margin.py`
+  (OUTSIDE the package — it may not import brokers, pinned) asks Kite's basket API on any
+  logged-in Zerodha account, read-only, for the SAME STRUCTURE on today's chain: strikes
+  scaled by today's spot over the replay's (a 100-grid book stays on the 100s), each
+  replay expiry → the listed expiry with the nearest DTE (distinct → distinct, so a
+  calendar stays one), lots × today's lot size. Margin depends on moneyness, DTE and vol,
+  not the year, so it is the closest figure available and is LABELLED "zerodha" with the
+  mapped legs in `margin_note` (`shifted` = the mapping moved something); the live console
+  passes its own legs, so there the figure is exact. Injected as `session.margin_fn` by
+  the ROUTE layer; order of precedence `manual` > `zerodha` > `model`; cached per book
+  SHAPE (10 min, a miss 1 min) so autoplay never re-asks, presets stay on the model (eight
+  structures per gallery open), a long-only book never asks. The adapter is cached per
+  account TOKEN (`make_adapter` re-downloads the instruments dump every call, ~1.5 s, 11 s
+  cold) and `warm()` pre-fetches it in a thread at session open. The manual anchor is now
+  on-screen: click the Margin tile (replay only) → `POST /console/sessions/{id}/margin`.
 - **A leg's expiry is shown ON the leg, flagged when it is not the ladder's.** A 1-DTE
   straddle built under one chip and viewed under the next settled at 15:30 and read as
   "pressing +1d made my position vanish"; the Positions row now carries the leg's own
@@ -1141,6 +1159,10 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   share one calculator; the frontend reuses `lib/payoff.ts::computeMetrics` for max P/L,
   breakevens, POP and the staged before→after, so the rail and the chart cannot disagree.
   `pricing {r,q,t_floor_s,expiry_time}` ships in the DTO so nothing hardcodes a second `r`.
+- **A fresh day opens on ITS MONTH's expiry chip** (owner 2026-09-10): the last listed
+  expiry inside the day's calendar month that has not passed, else the nearest future one.
+  A chip the owner chose is kept across ±1d while it is still listed; the date picker
+  opens a new session, so it lands on the new month's chip.
 - NIFTY 100-strike coarsening is ON by default here even though this is a manual surface
   (§8): the console exists to rehearse what the automated strategies would do, and they can
   never place a 50. `allow_fifty_strikes` is the explicit opt-out.

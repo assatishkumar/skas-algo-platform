@@ -1121,3 +1121,143 @@ def test_undoing_a_same_minute_edit_gives_the_original_leg_back():
     assert s.undo_last() and [(l.strike, l.lots) for l in s.legs] == [(24100.0, 3)]
     assert s.undo_last() and [(l.strike, l.lots) for l in s.legs] == [(24000.0, 3)]
     assert s.undo_last() and s.legs == [] and s.journal == []
+
+
+def test_a_fresh_day_opens_on_its_own_months_expiry():
+    """The store on the synthetic day lists a weekly (07-21) and, here, a monthly
+    (07-28): a new session lands on the month's last listed expiry, not the nearest."""
+    df = _day()
+    monthly = pd.concat([df, pd.DataFrame(_rows(DAY, 24000, "CE", {(10, 0): 160.0}, exp="2026-07-28"),
+                                          columns=store.COLUMNS)], ignore_index=True)
+    store.write_day(DAY, monthly)
+    s = ConsoleSession(underlying="NIFTY", day=DAY, at="10:00")
+    assert s.expiry == "2026-07-28"
+    s.expiry = EXP                                   # a chosen chip is kept across +1d
+    assert s.state()["chain"]["expiry"] == EXP
+
+
+# ------------------------------------------------------------------ broker-priced margin
+def _bear_call(s):
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.stage(kind="add", right="CE", strike=24100, side="B", lots=2)
+
+
+def test_the_margin_source_order_is_manual_then_zerodha_then_model():
+    store.write_day(DAY, _day())
+    s = ConsoleSession(underlying="NIFTY", day=DAY, at="10:00", expiry=EXP)
+    _bear_call(s)
+    calls: list[dict] = []
+
+    def fn(underlying, legs, *, spot, day):
+        calls.append({"u": underlying, "legs": legs, "spot": spot, "day": day})
+        return {"total": 91000.0, "account": "Satish Kite", "spot_today": 25000.0,
+                "legs": legs, "shifted": True}
+
+    assert s.state()["risk"]["margin_source"] == "model"          # no fn injected
+    s.margin_fn = fn
+    r = s.state()["risk"]
+    assert (r["margin"], r["margin_source"]) == (91000.0, "zerodha")
+    assert r["margin_note"]["account"] == "Satish Kite" and r["margin_detail"] is None
+    assert calls[0]["u"] == "NIFTY" and calls[0]["day"] == DAY and calls[0]["spot"] > 0
+    assert sorted(x["side"] for x in calls[0]["legs"]) == ["B", "S"]
+    # the same book shape is NOT asked again on the next tick
+    s.step(1)
+    s.state()
+    assert len(calls) == 1
+    # a different shape is
+    s.stage(kind="add", right="PE", strike=24000, side="S", lots=2)
+    s.state()
+    assert len(calls) == 2
+    # the manual anchor outranks the broker figure — and clearing it hands back
+    s.margin_per_lot_set = 50_000
+    r = s.state()["risk"]
+    assert (r["margin"], r["margin_source"], r["margin_note"]) == (100_000.0, "manual", None)
+    s.margin_per_lot_set = 0
+    assert s.state()["risk"]["margin_source"] == "zerodha"
+
+
+def test_a_failed_broker_margin_falls_back_to_the_model_and_is_not_hammered():
+    store.write_day(DAY, _day())
+    s = ConsoleSession(underlying="NIFTY", day=DAY, at="10:00", expiry=EXP)
+    _bear_call(s)
+    n = {"calls": 0}
+
+    def fn(underlying, legs, *, spot, day):
+        n["calls"] += 1
+        return None
+
+    s.margin_fn = fn
+    r = s.state()["risk"]
+    assert r["margin_source"] == "model" and r["margin"] > 0 and r["margin_note"] is None
+    s.state()
+    assert n["calls"] == 1                                # the miss is remembered
+    # a long-only book never asks a broker for margin
+    s2 = ConsoleSession(underlying="NIFTY", day=DAY, at="10:00", expiry=EXP)
+    s2.margin_fn = fn
+    s2.stage(kind="add", right="CE", strike=24100, side="B", lots=1)
+    assert s2.state()["risk"]["margin_source"] == "model" and n["calls"] == 1
+    # the preset gallery prices eight structures on the model, never the broker
+    s.presets(1)
+    assert n["calls"] == 1
+
+
+def test_todays_equivalent_keeps_moneyness_dte_and_a_calendar_shape():
+    from datetime import date as _d
+
+    from skas_algo.services.console_margin import map_legs
+
+    legs = [{"right": "CE", "strike": 22440, "expiry": "2024-03-28", "side": "S", "lots": 1},
+            {"right": "CE", "strike": 22440, "expiry": "2024-04-25", "side": "B", "lots": 1},
+            {"right": "PE", "strike": 21560, "expiry": "2024-03-28", "side": "S", "lots": 2}]
+    out = map_legs(legs, underlying="NIFTY", spot_replay=22000.0, spot_today=25000.0,
+                   day=_d(2024, 3, 14), today=_d(2026, 9, 10),
+                   expiries_today=["2026-09-15", "2026-09-22", "2026-09-29", "2026-10-27"])
+    # 2% OTM stays 2% OTM (25,500 → nearest 50), 2% ITM put likewise (24,500)
+    assert [x["strike"] for x in out] == [25500.0, 25500.0, 24500.0]
+    # 14 DTE → the 09-22 (12d) over 09-29 (19d); 42 DTE → 10-27 (47d); distinct expiries
+    assert [x["expiry"] for x in out] == ["2026-09-22", "2026-10-27", "2026-09-22"]
+    assert [(x["side"], x["lots"]) for x in out] == [("S", 1), ("B", 1), ("S", 2)]
+    # a book on the console's 100-grid is mapped on the 100s, never split onto a 50
+    fly = [{"right": "CE", "strike": 24600, "expiry": "2026-04-28", "side": "B", "lots": 1},
+           {"right": "PE", "strike": 23800, "expiry": "2026-04-28", "side": "B", "lots": 1}]
+    out = map_legs(fly, underlying="NIFTY", spot_replay=24198.0, spot_today=23425.0,
+                   day=_d(2026, 4, 15), today=_d(2026, 9, 10), expiries_today=["2026-09-22"])
+    assert [x["strike"] for x in out] == [23800.0, 23000.0]
+
+
+def test_the_kite_equivalent_prices_a_mapped_basket_and_caches_it(monkeypatch):
+    from datetime import date as _d
+
+    from skas_algo.services import console_margin as cm
+
+    cm.clear_cache()
+    seen: list[list[dict]] = []
+
+    class _Adapter:
+        def underlying_ltp(self, u):
+            return 25000.0
+
+        def option_expiries(self, u):
+            return ["2026-09-15", "2026-09-22", "2026-09-29"]
+
+        def basket_margin(self, legs):
+            seen.append(legs)
+            return 90828.0
+
+    monkeypatch.setattr(cm, "_account", lambda: ("Satish Kite", _Adapter()))
+    legs = [{"right": "CE", "strike": 24000, "expiry": "2026-04-28", "side": "S", "lots": 1},
+            {"right": "CE", "strike": 24200, "expiry": "2026-04-28", "side": "B", "lots": 1}]
+    got = cm.kite_equivalent("NIFTY", legs, spot=24000.0, day=_d(2026, 4, 14))
+    assert got and got["total"] == 90828.0 and got["account"] == "Satish Kite" and got["shifted"]
+    assert [x["strike"] for x in got["legs"]] == [25000.0, 25200.0]
+    assert [x["expiry"] for x in got["legs"]] == ["2026-09-22", "2026-09-22"]
+    first = seen[0][0]
+    assert first["symbol"].startswith("NIFTY|2026-09-22|25000") and first["direction"] == -1
+    assert seen[0][0]["units"] % 1 == 0 and seen[0][0]["units"] > 0
+    cm.kite_equivalent("NIFTY", legs, spot=24000.0, day=_d(2026, 4, 14))
+    assert len(seen) == 1                                    # cached by mapped shape
+    # a long-only book asks nothing; no session → None (the caller falls back)
+    assert cm.kite_equivalent("NIFTY", [legs[1]], spot=24000.0, day=_d(2026, 4, 14)) is None
+    monkeypatch.setattr(cm, "_account", lambda: None)
+    cm.clear_cache()
+    assert cm.kite_equivalent("NIFTY", legs, spot=24000.0, day=_d(2026, 4, 14)) is None

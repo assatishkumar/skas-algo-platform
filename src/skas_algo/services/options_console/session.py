@@ -29,6 +29,7 @@ from __future__ import annotations
 import bisect
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
@@ -166,6 +167,12 @@ class ConsoleSession(AlertBook):
         self.allow_fifty_strikes = bool(allow_fifty_strikes)
         self.margin_per_lot_set = float(margin_per_lot_set)
         self.created_at = datetime.now()
+        # A broker-priced margin, injected by the ROUTE layer (this package may not import
+        # the broker layer): `fn(underlying, legs, spot=, day=) -> {"total", …} | None`.
+        # Outranked by the manual anchor, outranks the model; cached per book shape.
+        self.margin_fn: Callable[..., dict | None] | None = None
+        self._broker_margin: dict[tuple, tuple[datetime, dict | None]] = {}
+        self._margin_note: dict | None = None
 
         self.days = self._replayable_days()
         if not self.days:
@@ -236,10 +243,13 @@ class ConsoleSession(AlertBook):
         self.tape = _Tape.load(self.underlying, day)
         self.chain_view.days = sorted({date.fromisoformat(e) for e in self.tape.expiries})
         if self.expiry not in self.tape.expiries:
-            # Default to the nearest expiry that is not already past — the design's chip row
-            # opens on the one the eye lands on, and a settled expiry has nothing to trade.
+            # Default to the MONTHLY — the last listed expiry inside the day's own month that
+            # has not passed (owner, 2026-09-10: picking a date should land on that month's
+            # chip) — else the nearest expiry that is not already past.
             future = [e for e in self.tape.expiries if date.fromisoformat(e) >= day]
-            self.expiry = (future or self.tape.expiries or [None])[0]
+            same_month = [e for e in future if e[:7] == day.isoformat()[:7]]
+            fallback = (future or self.tape.expiries or [None])[0]
+            self.expiry = same_month[-1] if same_month else fallback
 
     def set_day(self, day: date, *, at: str | None = None) -> ConsoleSession:
         if day not in self.days:
@@ -651,7 +661,7 @@ class ConsoleSession(AlertBook):
                     right=x["right"], strike=x["strike"], expiry=self.expiry or "",
                     side=x["side"], lots=x["lots"], lot_size=lot, entry=x["ltp"],
                     entered_at=self.clock.strftime("%Y-%m-%dT%H:%M")))
-            margin, source = self.margin(legs) if r["ok"] else (0.0, "model")
+            margin, source = self.margin(legs, broker=False) if r["ok"] else (0.0, "model")
             credit = sum((1 if x["side"] == "S" else -1) * x["ltp"] * x["lots"] * lot
                          for x in r["legs"]) if r["ok"] else None
             out.append({"id": p.id, "name": p.name, "rule": p.rule, "defined": p.defined,
@@ -1226,20 +1236,31 @@ class ConsoleSession(AlertBook):
         out.update(self._leg_greeks(leg, out))
         return out
 
-    def margin(self, legs: list[ConsoleLeg] | None = None) -> tuple[float, str]:
+    def margin(self, legs: list[ConsoleLeg] | None = None, *,
+               broker: bool = True) -> tuple[float, str]:
         """Margin, and — just as important — WHERE THE NUMBER CAME FROM.
 
-        A manual anchor (the real broker figure for one lot-set, the `margin_per_set`
-        precedent) is the only accurate answer here. The fallback is the platform's model,
-        which is span+exposure on the SHORTS and blind to long hedges: on the design's own
-        bear call spread it reads ₹19.4L against a Kite basket's ₹3.64L. That is 5.3x, and in
-        the direction that makes a hedged structure look unaffordable — so every percentage
-        measured against it is labelled with its source rather than presented as fact."""
+        Three sources, in order. A manual anchor (the real broker figure for one lot-set,
+        the `margin_per_set` precedent) is exact by definition. Then Kite's basket margin
+        for TODAY'S EQUIVALENT of the book (`services/console_margin`, injected as
+        `margin_fn` — same moneyness, same DTE, today's chain; the mapping is the identity
+        on a live console), labelled "zerodha". The fallback is the SPAN-shaped model, which
+        gets the order of structures right but not the rupees (₹74,779 against Zerodha's
+        ₹90,828 on the owner's iron fly, 2026-09-10) — so every percentage measured against
+        it is labelled with its source rather than presented as fact. ``broker=False`` skips
+        the broker call (the preset gallery prices eight structures at once)."""
         book = [leg for leg in (self.legs if legs is None else legs) if leg.enabled]
+        self._margin_note = None
         if self.margin_per_lot_set:
             sets = max((leg.lots for leg in book if leg.side == "S"), default=0)
             self._margin_detail = None
             return round(self.margin_per_lot_set * sets, 2), "manual"
+        if broker and self.margin_fn is not None and any(leg.side == "S" for leg in book):
+            got = self._broker_margin_for(book)
+            if got is not None:
+                self._margin_detail = None
+                self._margin_note = got
+                return float(got["total"]), "zerodha"
         # SPAN-shaped: the book's worst scenario loss (hedges offset) + 2% exposure on
         # every short unit (nothing offsets). See margin.py for the calibration. The old
         # per-short-leg span+exposure sum read ₹4.1L for a 1-lot straddle.
@@ -1254,6 +1275,30 @@ class ConsoleSession(AlertBook):
         d = span_like(mlegs, spot, r=RISK_FREE)
         self._margin_detail = d
         return d["total"], "model"
+
+    def _broker_margin_for(self, book: list[ConsoleLeg]) -> dict | None:
+        """The injected broker figure for this book shape, remembered for 10 minutes — a
+        failure is remembered for one, so a dead session cannot be asked on every tick."""
+        spot = self.market.index_spot(self.underlying) or 0.0
+        if spot <= 0:
+            return None
+        # the book's SHAPE: strikes as a fraction of spot (1% buckets), DTE, side, lots
+        sig = tuple(sorted((leg.right, round(leg.strike / spot, 2), leg.expiry, leg.side,
+                            leg.lots) for leg in book))
+        now = datetime.now()
+        hit = self._broker_margin.get(sig)
+        if hit and now - hit[0] < (timedelta(minutes=10) if hit[1] else timedelta(minutes=1)):
+            return hit[1]
+        legs = [{"right": leg.right, "strike": leg.strike, "expiry": leg.expiry,
+                 "side": leg.side, "lots": leg.lots} for leg in book]
+        try:
+            got = self.margin_fn(self.underlying, legs, spot=spot, day=self.day)  # type: ignore[misc]
+        except Exception:  # pragma: no cover - the broker layer logs its own failures
+            got = None
+        if len(self._broker_margin) > 64:
+            self._broker_margin.clear()
+        self._broker_margin[sig] = (now, got)
+        return got
 
     def _staged_out(self) -> dict | None:
         """The staged change, plus the book it WOULD produce. The frontend draws the dotted
@@ -1386,6 +1431,8 @@ class ConsoleSession(AlertBook):
             # Kite basket), so a "% of margin" against it is only as honest as this label.
             "margin_source": source,
             "margin_detail": detail,          # {span, exposure, total, worst_move_pct} | None
+            # "zerodha" only: which account priced it, today's spot and the mapped legs
+            "margin_note": self._margin_note,
             "capital": self.capital,
             "legs_open": len([leg for leg in self.legs if leg.enabled]),
         }
@@ -1467,6 +1514,7 @@ class ConsoleSession(AlertBook):
                 "played_pct": round(100 * max(0.0, min(1.0, played)), 2),
                 "capital": self.capital, "status": "PAUSED",
                 "requires_confirm": self.requires_confirm,
+                "margin_per_lot_set": self.margin_per_lot_set,
                 "can_undo": bool([f for f in self.journal if f.get("group")]),
                 "has_prev_day": day_i > 0, "has_next_day": day_i < len(self.days) - 1,
             },

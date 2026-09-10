@@ -20,6 +20,7 @@ from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.instrument import make as make_option
 from skas_algo.engine.options.instrument import parse
 from skas_algo.live.manager import manager
+from skas_algo.services import console_margin
 from skas_algo.services.live_cycles import cycle_info
 from skas_algo.services.options_console import presets as _presets
 from skas_algo.services.options_console.alerts import AlertBook
@@ -367,6 +368,12 @@ class LiveConsole(AlertBook):
             return float(used), str(src), None
         if not spot:
             return 0.0, "model", None
+        # Kite's basket for THESE legs on today's chain (the mapping is the identity here,
+        # so the figure is exact) — read-only, any logged-in Zerodha account; the model
+        # only when there is no session or the call fails.
+        got = self._broker_margin(legs, spot)
+        if got is not None:
+            return float(got["total"]), "zerodha", None
         ml = []
         for leg in legs:
             px = leg.get("ltp") or leg.get("entry") or 0.0
@@ -381,6 +388,25 @@ class LiveConsole(AlertBook):
             )
         d = span_like(ml, spot, r=RISK_FREE)
         return d["total"], "model", d
+
+    def _broker_margin(self, legs: list[dict], spot: float) -> dict | None:
+        shorts = [leg for leg in legs if leg["direction"] < 0 and leg.get("units")]
+        if not shorts:
+            return None
+        spec = []
+        for leg in legs:
+            lot = self._lot_size(leg["expiry"]) or 0
+            if lot <= 0:
+                return None
+            spec.append({"right": leg["right"], "strike": float(leg["strike"]),
+                         "expiry": leg["expiry"], "side": "B" if leg["direction"] > 0 else "S",
+                         "lots": max(1, int(round(float(leg["units"]) / lot)))})
+        try:
+            return console_margin.kite_equivalent(self.underlying, spec, spot=spot,
+                                                  day=self._clock().date())
+        except Exception:  # pragma: no cover - never break a poll on a margin lookup
+            logger.exception("console: broker margin failed")
+            return None
 
     # ---------------------------------------------------------------- staging
     def _item(

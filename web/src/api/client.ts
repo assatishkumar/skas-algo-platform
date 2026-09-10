@@ -209,6 +209,9 @@ export const api = {
   consoleScale: (id: string, factor: number) =>
     request<ConsoleState>(`/console/sessions/${id}/scale`,
       { method: "POST", body: JSON.stringify({ factor }) }),
+  consoleMarginAnchor: (id: string, margin_per_lot_set: number) =>
+    request<ConsoleState>(`/console/sessions/${id}/margin`,
+      { method: "POST", body: JSON.stringify({ margin_per_lot_set }) }),
   consoleJump: (id: string, body: { kind: string; pct?: number }) =>
     request<ConsoleState>(`/console/sessions/${id}/jump`,
       { method: "POST", body: JSON.stringify(body) }),

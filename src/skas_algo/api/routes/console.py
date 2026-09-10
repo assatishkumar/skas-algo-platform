@@ -21,6 +21,7 @@ from skas_algo.api.models import (
     ConsoleBasket,
     ConsoleJump,
     ConsoleLoad,
+    ConsoleMarginAnchor,
     ConsoleOpen,
     ConsoleOpenLive,
     ConsolePreset,
@@ -31,7 +32,7 @@ from skas_algo.api.models import (
     ConsoleUnstage,
 )
 from skas_algo.data.option_intraday_store import captured_days
-from skas_algo.services import console_live
+from skas_algo.services import console_live, console_margin
 from skas_algo.services.options_console import registry
 from skas_algo.services.options_console import store as console_store
 from skas_algo.services.options_console.session import UNDERLYINGS, ConsoleSession
@@ -76,6 +77,7 @@ async def open_live(body: ConsoleOpenLive) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    console_margin.warm(c.underlying)
     return await asyncio.to_thread(c.state)
 
 
@@ -105,6 +107,8 @@ async def open_session(body: ConsoleOpen) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    session.margin_fn = console_margin.kite_equivalent
+    console_margin.warm(session.underlying)
     if body.restore and (body.restore.journal or body.restore.alerts):
         try:
             await asyncio.to_thread(session.restore, body.restore.journal, body.restore.alerts,
@@ -221,6 +225,17 @@ def scale_book(session_id: str, body: ConsoleScale) -> dict:
     return session.state()
 
 
+@router.post("/sessions/{session_id}/margin")
+def set_margin_anchor(session_id: str, body: ConsoleMarginAnchor) -> dict:
+    """Set (or clear, with 0) the manual margin anchor for one lot-set. Replay only — a
+    live console's anchor is its strategy's own `margin_per_set`."""
+    session = _replay_only(_get(session_id), "the margin anchor")
+    if body.margin_per_lot_set < 0:
+        raise HTTPException(status_code=422, detail="margin per lot-set cannot be negative")
+    session.margin_per_lot_set = float(body.margin_per_lot_set)
+    return session.state()
+
+
 @router.post("/sessions/{session_id}/jump")
 def jump(session_id: str, body: ConsoleJump) -> dict:
     session = _replay_only(_get(session_id), "jump")
@@ -275,6 +290,8 @@ async def load_session(body: ConsoleLoad) -> dict:
             capital=j.get("capital", 500_000),
             allow_fifty_strikes=j.get("allow_fifty_strikes", False),
             margin_per_lot_set=j.get("margin_per_lot_set", 0.0))
+        session.margin_fn = console_margin.kite_equivalent
+        console_margin.warm(session.underlying)
         await asyncio.to_thread(session.restore, j.get("journal", []), j.get("alerts", []),
                                 j.get("bookmarks", []))
     except (ValueError, KeyError, TypeError) as exc:

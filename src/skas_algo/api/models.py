@@ -97,7 +97,7 @@ class ConsoleOpen(BaseModel):
     margin_per_lot_set: float = 0.0   # the accurate %-of-margin anchor; 0 = model margin
     # A lost session's journal + alerts, handed back by the page so the book survives a
     # backend restart or a registry eviction. Applied after the open, at `at`.
-    restore: "ConsoleRestore | None" = None
+    restore: ConsoleRestore | None = None
 
 
 class ConsoleOpenLive(BaseModel):
@@ -130,6 +130,13 @@ class ConsoleUnstage(BaseModel):
 
 class ConsoleScale(BaseModel):
     factor: float                     # every leg's lots × factor, one action
+
+
+class ConsoleMarginAnchor(BaseModel):
+    """The measured broker margin for ONE lot-set of the book (the `margin_per_set`
+    precedent); 0 clears it and the session goes back to Kite's figure / the model."""
+
+    margin_per_lot_set: float = 0.0
 
 
 class ConsoleJump(BaseModel):
