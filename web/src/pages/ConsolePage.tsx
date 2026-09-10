@@ -608,10 +608,11 @@ function ScenarioCell({ label, v, base }: {
 /** Armed levels. An alert fires ONCE at the cursor's minute, draws amber on the chart,
  *  and pauses autoplay so the minute stays on screen; step back before it and it is
  *  armed again — in a replay, what has not happened yet has not happened. */
-function AlertsCard({ alerts, disabled, onArm, onClear }: {
+function AlertsCard({ alerts, disabled, onArm, onClear, manualMode }: {
   alerts: ConsoleAlert[]; disabled: boolean;
   onArm: (b: { kind: ConsoleAlert["kind"]; value: number }) => void;
   onClear: (id: string) => void;
+  manualMode?: boolean;  // a live run the owner's hand took over: target/stop here ARE the rail's rules
 }) {
   const [kind, setKind] = useState<ConsoleAlert["kind"]>("target");
   const [value, setValue] = useState("");
@@ -644,6 +645,10 @@ function AlertsCard({ alerts, disabled, onArm, onClear }: {
                 {ALERT_KINDS.find((k) => k.kind === a.kind)?.label ?? a.kind}
               </span>
               <span>{fmt(a)}</span>
+              {a.rail && (
+                <span className="px-1 rounded-[3px] text-[9px] font-bold" title="the manual rail's own rule: it exits the whole book when it trips"
+                  style={{ background: "var(--oc-caution-dim)", color: "var(--oc-caution)" }}>EXITS BOOK</span>
+              )}
               <span className="ml-auto text-[10px] font-bold px-1.5 rounded-[3px]"
                 style={{ color: a.state === "fired" ? "var(--oc-caution)" : "var(--oc-muted)",
                   border: `1px solid ${a.state === "fired" ? "var(--oc-caution)" : "var(--oc-line)"}` }}>
@@ -656,6 +661,11 @@ function AlertsCard({ alerts, disabled, onArm, onClear }: {
         </div>
       ) : (
         <div className="mt-1.5 text-[11px]" style={{ color: "var(--oc-faint)" }}>None armed.</div>
+      )}
+      {manualMode && (
+        <div className="mt-1.5 text-[10.5px]" style={{ color: "var(--oc-muted)" }}>
+          Manual mode: a target or stop armed here is the run's own rule — it exits the whole book when it trips (optional).
+        </div>
       )}
       <div className="mt-2 flex items-center gap-1.5">
         <select value={kind} onChange={(e) => setKind(e.target.value as ConsoleAlert["kind"])}
@@ -1679,6 +1689,7 @@ export default function ConsolePage() {
 
   const alertsCard = (
                 <AlertsCard alerts={state?.alerts ?? []} disabled={!state}
+                  manualMode={state?.session.managed_by === "manual"}
                   onArm={(b) => armAlert.mutate(b)} onClear={(id) => clearAlert.mutate(id)} />
   );
 
@@ -2090,6 +2101,7 @@ export default function ConsolePage() {
           <TrackChip onClick={() => jump.mutate({ kind: "prev_fill" })} disabled={!state} title="previous fill (K)">‹ fill</TrackChip>
           <TrackChip onClick={() => jump.mutate({ kind: "next_fill" })} disabled={!state} title="next fill (J)">fill ›</TrackChip>
           <TrackChip onClick={() => jump.mutate({ kind: "next_move", pct: 1 })} disabled={!state} title="next 1% move in spot">1% ›</TrackChip>
+          <TrackChip onClick={() => jump.mutate({ kind: "next_iv_spike", pct: 1 })} disabled={!state} title="next minute the ATM implied vol is 1 vol point above now">iv ›</TrackChip>
           <TrackChip onClick={() => jump.mutate({ kind: "next_alert" })} disabled={!state || !state.alerts.some((a) => a.state === "armed")}
             title="run forward to the minute an armed alert would fire">alert ›</TrackChip>
           <TrackChip onClick={() => jump.mutate({ kind: "prev_bookmark" })} disabled={!state} title="previous bookmark">‹ ◇</TrackChip>

@@ -545,6 +545,7 @@ export interface ManualOrderInput {
 
 export interface ManualRail {
   stop_pct: number; target_pct: number; time_exit: string | null;
+  stop_amt?: number; target_amt?: number; // rupee thresholds on MTM (the console's Alerts card arms these)
   margin_base: number | null; margin_source: string; no_stop: boolean;
   paused_strategy_id: string | null; handover_at: string | null; handover_label?: string | null;
   handover_reason: string | null;
@@ -2111,6 +2112,8 @@ export interface ConsoleAlert {
   note: string | null;
   fired_at: string | null;
   fired_value: number | null;
+  rail?: boolean; // live manual mode: this is the rail's own rule — it EXITS the book when it trips
+
   state: "armed" | "fired";
 }
 

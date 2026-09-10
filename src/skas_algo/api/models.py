@@ -142,8 +142,8 @@ class ConsoleMarginAnchor(BaseModel):
 class ConsoleJump(BaseModel):
     kind: Literal[
         "next_fill", "prev_fill", "next_bookmark", "prev_bookmark", "next_move", "prev_move",
-        "next_alert"]
-    pct: float = 1.0
+        "next_alert", "next_iv_spike"]
+    pct: float = 1.0                  # next_move: % of spot; next_iv_spike: vol points
 
 
 class ConsoleSave(BaseModel):

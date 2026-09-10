@@ -229,6 +229,7 @@ class ConsoleSession(AlertBook):
         self._disabled: set[str] = set()
         self._margin_detail: dict | None = None
         self._spot_series: dict[str, list[tuple[str, float]]] = {}
+        self._iv_series: dict[str, list[tuple[str, float]]] = {}
         # per-symbol (minutes, closes) for the open day — the tape regrouped once, so a
         # 30-minute P&L path or an alert scan is a few bisects, not thirty rebuilds
         self._sym_series: dict[str, dict[str, tuple[list[str], list[float]]]] = {}
@@ -733,6 +734,35 @@ class ConsoleSession(AlertBook):
         self._spot_series[key] = out
         return out
 
+    def iv_series(self) -> list[tuple[str, float]]:
+        """(minute, ATM implied vol %) for the open day on the chain's expiry — the ATM
+        strike re-picked from the parity spot each minute, the CE's last print solved
+        with the same Black–Scholes the ladder uses. Backs the "next IV spike" jump.
+        Cached per day+expiry; a minute whose ATM has not printed is skipped."""
+        key = f"{self.day.isoformat()}|{self.expiry}"
+        if key in self._iv_series:
+            return self._iv_series[key]
+        out: list[tuple[str, float]] = []
+        if self.expiry:
+            per = self._series_for_day()
+            rows = self.chain_rows()
+            grid = self._grid(rows) if rows else 100.0
+            for minute, sp in self.spot_series():
+                k = round(sp / grid) * grid
+                sym = f"{self.underlying}|{self.expiry}|{int(k)}|CE"
+                series = per.get(sym)
+                if not series:
+                    continue
+                i = bisect.bisect_right(series[0], minute) - 1
+                if i < 0:
+                    continue
+                t = _t_years(self.expiry, datetime.fromisoformat(minute))
+                iv = bs.implied_vol(series[1][i], sp, k, t, RISK_FREE, "CE")
+                if iv:
+                    out.append((minute, round(iv * 100.0, 2)))
+        self._iv_series[key] = out
+        return out
+
     def _series_for_day(self) -> dict[str, tuple[list[str], list[float]]]:
         key = self.day.isoformat()
         if key not in self._sym_series:
@@ -837,6 +867,14 @@ class ConsoleSession(AlertBook):
         elif kind == "next_alert":
             when = self.next_alert_minute()
             return self.seek(when) if when is not None else self
+        elif kind == "next_iv_spike":
+            # the next minute where ATM IV sits ``pct`` vol points ABOVE the cursor's IV
+            series = self.iv_series()
+            here = next((iv for mk, iv in series if mk >= now), None) if series else None
+            if here is None:
+                return self
+            cands = [mk for mk, iv in series if mk > now and iv - here >= pct]
+            return self.seek(datetime.fromisoformat(min(cands))) if cands else self
         elif kind in ("next_move", "prev_move"):
             series = self.spot_series()
             here = next((sp for mk, sp in series if mk >= now), None) if series else None

@@ -297,6 +297,46 @@ class LiveConsole(AlertBook):
             )
         return out
 
+    # ---------------------------------------------------------------- alerts → rail
+    def arm_alert(self, kind: str, value: float, *, note: str | None = None) -> dict:
+        """On a MANUAL-MODE run a ₹ target/stop is not a page-side alert: it is written to
+        the manual rail, which EXITS the book when it trips (persisted on the run, survives
+        the page). Every other kind, and every strategy-managed run, arms as before."""
+        if kind in ("target", "stop") and self.handover_state()["managed_by"] == "manual":
+            edit = getattr(self.live, "update_params", None)
+            if edit is None:
+                raise ValueError("this run cannot take a rail rule")
+            edit({("target_amt" if kind == "target" else "stop_amt"): abs(float(value))})
+            return {"id": f"rail:{kind}", "kind": kind, "value": abs(float(value)),
+                    "note": note, "fired_at": None, "fired_value": None}
+        return AlertBook.arm_alert(self, kind, value, note=note)
+
+    def clear_alert(self, alert_id: str) -> bool:
+        if alert_id in ("rail:target", "rail:stop"):
+            edit = getattr(self.live, "update_params", None)
+            if edit is None:
+                return False
+            edit({("target_amt" if alert_id.endswith("target") else "stop_amt"): 0.0})
+            return True
+        return AlertBook.clear_alert(self, alert_id)
+
+    def _rail_alerts(self) -> list[dict]:
+        h = self.handover_state()
+        r = h["rail"] or {}
+        if h["managed_by"] != "manual":
+            return []
+        out = []
+        for kind, key in (("target", "target_amt"), ("stop", "stop_amt")):
+            v = float(r.get(key) or 0.0)
+            if v > 0:
+                fired = r.get("exit_reason") == f"rail_{kind}"
+                out.append({"id": f"rail:{kind}", "kind": kind, "value": v,
+                            "note": "manual rail — exits the whole book when it trips",
+                            "fired_at": r.get("exited_at") if fired else None,
+                            "fired_value": None, "state": "fired" if fired else "armed",
+                            "rail": True})
+        return out
+
     # ---------------------------------------------------------------- handover
     def handover_state(self) -> dict:
         """managed_by / handover / rail straight from the session (the snapshot carries the
@@ -1226,7 +1266,7 @@ class LiveConsole(AlertBook):
             },
             "fills": fills,
             "journal": [],
-            "alerts": self._alerts_out(),
+            "alerts": self._rail_alerts() + self._alerts_out(),
             "bookmarks": [],
             "cycle": ({"entry_at": entry_at, "entry_spot": entry_spot} if legs else None),
             "track": {"fills": [], "alerts": [], "bookmarks": []},

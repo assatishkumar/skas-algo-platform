@@ -227,3 +227,43 @@ def test_a_strategy_exception_halts_visibly(monkeypatch):
     assert live.strategy_error and live.strategy_error.startswith("KeyError")
     assert live.snapshot()["strategy_error"] == live.strategy_error
     assert manager._maybe_self_stop(live) is False   # a halted run never self-stops
+
+
+def test_a_rupee_stop_fires_without_a_margin_anchor_and_outranks_the_percent():
+    fams = dict(_families())
+    sess = _session(fams["delta_neutral_monthly"])
+    sess.manual_order(TS, closes=[{"symbol": WING}])
+    rail = sess.strategy
+    assert rail.margin_base is None                     # nothing pushed yet
+    rail.update(stop_pct=2.0)                           # % needs an anchor → inert
+    sess.update_quotes({CE: 140.0, PE: 140.0})           # −₹5,200
+    assert sess.run_decision(datetime(2026, 1, 5, 10, 40)) == []
+    rail.update(stop_amt=5000)                          # rupees fire on their own
+    assert rail.exit_amounts() == (None, 5000.0)
+    events = sess.run_decision(datetime(2026, 1, 5, 10, 41))
+    assert events and all(e["exit_reason"] == "rail_stop" for e in events)
+    assert rail.rail_status()["exit_reason"] == "rail_stop"
+
+
+def test_the_console_arms_a_manual_mode_target_or_stop_on_the_rail(monkeypatch):
+    from skas_algo.services import console_live
+    from tests.test_console_live import FakeLiveRun
+
+    fams = dict(_families())
+    sess = _session(fams["delta_neutral_monthly"])
+    live = FakeLiveRun(sess)
+    edits: list[dict] = []
+    live.update_params = lambda changes: edits.append(changes) or sess.strategy.update(**changes)
+    monkeypatch.setattr(console_live, "_ist_now", lambda: TS)
+    c = console_live.LiveConsole(live)
+    # strategy-managed: a plain page alert, as before
+    a = c.arm_alert("stop", 3000)
+    assert a["id"].startswith("A") and edits == []
+    sess.manual_order(TS, closes=[{"symbol": WING}])     # → manual mode
+    a = c.arm_alert("stop", 4000)
+    assert a["id"] == "rail:stop" and edits == [{"stop_amt": 4000.0}]
+    assert sess.strategy.stop_amt == 4000.0
+    rail_rows = [x for x in c.state()["alerts"] if x.get("rail")]
+    assert [(x["kind"], x["value"], x["state"]) for x in rail_rows] == [("stop", 4000.0, "armed")]
+    assert c.clear_alert("rail:stop") and sess.strategy.stop_amt == 0.0
+    assert not [x for x in c.state()["alerts"] if x.get("rail")]

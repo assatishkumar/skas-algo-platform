@@ -941,7 +941,11 @@ function RunCard({
                 const clots = p.lot_size && p.lot_size > 0 ? Math.round(p.units / p.lot_size) : null;
                 return (
                 <tr onClick={() => { if (!isOptions) setChartSym(chartSym === p.symbol ? null : p.symbol); }} title={!isOptions ? "Click to chart this stock and its trades" : undefined} key={p.symbol} className={`border-t border-slate-800 ${!isOptions ? "cursor-pointer hover:bg-[var(--row-hover)]" : ""} ${chartSym === p.symbol ? "bg-brand/10" : ""}`}>
-                  <td className="py-1 pr-4 whitespace-nowrap">{isOptions && <SideTag dir={p.direction} />}{formatOptionSymbol(p.symbol)}{clots != null && <span className="text-slate-500"> ({clots} lot{clots === 1 ? "" : "s"})</span>}</td>
+                  <td className="py-1 pr-4 whitespace-nowrap">{isOptions && <SideTag dir={p.direction} />}{formatOptionSymbol(p.symbol)}{clots != null && <span className="text-slate-500"> ({clots} lot{clots === 1 ? "" : "s"})</span>}
+                    {p.tag && p.tag !== "STRATEGY" && (
+                      <span className="ml-1.5 px-1 rounded text-[9px] font-bold align-middle bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                        title={p.tag === "MIXED" ? "the strategy and your hand both hold this contract" : "opened by hand"}>{p.tag}</span>
+                    )}</td>
                   <td className="py-1 pr-4">{p.entry_date ?? "—"}</td>
                   <td className="py-1 pr-4 text-right">{p.units}</td>
                   <td className="py-1 pr-4 text-right">{formatInr(p.avg_price, 2)}</td>

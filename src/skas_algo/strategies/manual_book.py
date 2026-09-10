@@ -65,13 +65,18 @@ class ManualBookStrategy(OpenSettleGuard):
     def __init__(self, universe: list[str] | None = None, initial_capital: float = 0.0,
                  underlying: str | None = None, stop_pct: float = 0.0,
                  target_pct: float = 0.0, time_exit: str | None = None,
-                 margin_anchor: float = 0.0, paused_strategy_id: str | None = None,
+                 margin_anchor: float = 0.0, stop_amt: float = 0.0, target_amt: float = 0.0,
+                 paused_strategy_id: str | None = None,
                  handover_at: str | None = None, handover_reason: str | None = None,
                  **_ignored) -> None:
         self.underlying = (underlying or (universe[0] if universe else "NIFTY")).upper()
         self.initial_capital = float(initial_capital or 0.0)
         self.stop_pct = float(stop_pct or 0.0)          # % of the margin anchor, 0 = OFF
         self.target_pct = float(target_pct or 0.0)      # % of the margin anchor, 0 = OFF
+        # RUPEE thresholds on the book's MTM (what the console's Alerts card arms): they
+        # need no margin anchor and outrank the % rules when both are set.
+        self.stop_amt = float(stop_amt or 0.0)          # loss as a positive number, 0 = OFF
+        self.target_amt = float(target_amt or 0.0)      # profit, 0 = OFF
         self.time_exit: time | None = _hhmm(time_exit)  # hard square-off, None = hold to expiry
         self.margin_anchor = float(margin_anchor or 0.0)  # manual ₹ anchor, outranks the broker
         self.paused_strategy_id = paused_strategy_id
@@ -131,7 +136,7 @@ class ManualBookStrategy(OpenSettleGuard):
         """Hot-edit the rail's own knobs (the tile's Edit params on a handed-over run)."""
         applied = []
         for k, v in changes.items():
-            if k in ("stop_pct", "target_pct"):
+            if k in ("stop_pct", "target_pct", "stop_amt", "target_amt"):
                 setattr(self, k, max(0.0, float(v or 0.0)))
             elif k == "time_exit":
                 self.time_exit = _hhmm(v)
@@ -143,6 +148,16 @@ class ManualBookStrategy(OpenSettleGuard):
                 raise ValueError(f"unknown manual-rail param: {k}")
             applied.append(k)
         return applied
+
+    def _thresholds(self) -> tuple[float | None, float | None]:
+        """(target ₹, stop ₹ as a positive loss): rupees first, else % of the anchor."""
+        tgt = self.target_amt if self.target_amt > 0 else (
+            self.margin_base * self.target_pct / 100.0
+            if self.margin_base and self.target_pct > 0 else None)
+        stp = self.stop_amt if self.stop_amt > 0 else (
+            self.margin_base * self.stop_pct / 100.0
+            if self.margin_base and self.stop_pct > 0 else None)
+        return tgt, stp
 
     # ------------------------------------------------------------ the slice
     def _book(self, ctx) -> list[dict]:
@@ -182,14 +197,15 @@ class ManualBookStrategy(OpenSettleGuard):
             return self._exit_all(legs, "rail_time_exit", now)
         if not self._open_settled(now):
             return []
-        if self.margin_base is None or (self.stop_pct <= 0 and self.target_pct <= 0):
+        tgt, stp = self._thresholds()
+        if tgt is None and stp is None:
             return []
         pnl = self._pnl(legs, ctx.close)
         if pnl is None:
             return []                                   # a leg without a print: hold
-        if self.stop_pct > 0 and pnl <= -self.margin_base * self.stop_pct / 100.0:
+        if stp is not None and pnl <= -stp:
             return self._exit_all(legs, "rail_stop", now)
-        if self.target_pct > 0 and pnl >= self.margin_base * self.target_pct / 100.0:
+        if tgt is not None and pnl >= tgt:
             return self._exit_all(legs, "rail_target", now)
         return []
 
@@ -209,23 +225,24 @@ class ManualBookStrategy(OpenSettleGuard):
         return self._pnl(self.legs, closes.get) if self.legs else None
 
     def exit_amounts(self) -> tuple[float | None, float | None]:
-        if self.margin_base is None:
-            return None, None
-        tgt = self.margin_base * self.target_pct / 100.0 if self.target_pct > 0 else None
-        stp = self.margin_base * self.stop_pct / 100.0 if self.stop_pct > 0 else None
-        return tgt, stp
+        return self._thresholds()
 
     def exit_rules(self) -> list[str]:
         anchor = (f"₹{self.margin_base:,.0f} ({self.margin_source} anchor)"
                   if self.margin_base else "the margin anchor (pending)")
         rules = [f"Manual mode — {self.paused_strategy_id or 'the strategy'} paused since "
                  f"{_when(self.handover_at)}; you handle adjustments and exits"]
-        if self.stop_pct > 0:
+        if self.stop_amt > 0:
+            rules.append(f"Stop out at −₹{self.stop_amt:,.0f} MTM")
+        elif self.stop_pct > 0:
             rules.append(f"Stop out at −{self.stop_pct:g}% of {anchor}")
-        if self.target_pct > 0:
+        if self.target_amt > 0:
+            rules.append(f"Book profit at +₹{self.target_amt:,.0f} MTM")
+        elif self.target_pct > 0:
             rules.append(f"Book profit at +{self.target_pct:g}% of {anchor}")
-        if self.stop_pct <= 0 and self.target_pct <= 0:
-            rules.append("No stop or target set (optional — Edit params)")
+        if self.stop_pct <= 0 and self.target_pct <= 0 and self.stop_amt <= 0 \
+                and self.target_amt <= 0:
+            rules.append("No stop or target set (optional — Edit params or the console)")
         if self.time_exit is not None:
             rules.append(f"Square off at {self.time_exit.strftime('%H:%M')}")
         rules.append("Expiry settles to intrinsic (engine)")
@@ -233,9 +250,11 @@ class ManualBookStrategy(OpenSettleGuard):
 
     def rail_status(self) -> dict:
         return {"stop_pct": self.stop_pct, "target_pct": self.target_pct,
+                "stop_amt": self.stop_amt, "target_amt": self.target_amt,
                 "time_exit": self.time_exit.strftime("%H:%M") if self.time_exit else None,
                 "margin_base": self.margin_base, "margin_source": self.margin_source,
-                "no_stop": self.stop_pct <= 0, "paused_strategy_id": self.paused_strategy_id,
+                "no_stop": self.stop_pct <= 0 and self.stop_amt <= 0,
+                "paused_strategy_id": self.paused_strategy_id,
                 "handover_at": self.handover_at, "handover_label": _when(self.handover_at),
                 "handover_reason": self.handover_reason,
                 "exited_at": self.exited_at, "exit_reason": self.exit_reason}
@@ -254,6 +273,8 @@ class ManualBookStrategy(OpenSettleGuard):
     def load_state(self, state: dict) -> None:
         self.stop_pct = float(state.get("stop_pct", self.stop_pct) or 0.0)
         self.target_pct = float(state.get("target_pct", self.target_pct) or 0.0)
+        self.stop_amt = float(state.get("stop_amt", 0.0) or 0.0)
+        self.target_amt = float(state.get("target_amt", 0.0) or 0.0)
         self.time_exit = _hhmm(state.get("time_exit"))
         self.margin_anchor = float(state.get("margin_anchor", 0.0) or 0.0)
         mb = state.get("margin_base")

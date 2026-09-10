@@ -1041,7 +1041,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   intraday deck's hard `time_exit`, and the engine's expiry settlement. Exits are plain
   `EXIT_ALL`s through the executor (charges/events/reconcile/§1 gates identical), tagged
   `rail_*`. Hot-edit on a handed-over run edits the RAIL's knobs only (`stop_pct`,
-  `target_pct`, `time_exit`, `margin_anchor`); "Resume strategy" (`POST
+  `target_pct`, `stop_amt`, `target_amt`, `time_exit`, `margin_anchor` — the rupee pair
+  needs no anchor and outranks the %; the console's Alerts card arms exactly those two on
+  a manual-mode run, `LiveConsole.arm_alert` → `update_params`, rows flagged `rail` and
+  labelled EXITS BOOK); "Resume strategy" (`POST
   /live/{id}/resume-strategy`, tile banner/menu) works on a FLAT book only — no family
   ever re-derives state from a foreign book. `Lot.tag` (STRATEGY/MANUAL, additive) is the
   provenance the snapshot/console badge; reconciliation still counts every lot. The
@@ -1235,6 +1238,8 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   (`SKAS_CONSOLE_DIR`, tmp in tests); `⤒ load` opens a new session from it. Never
   persist the BOOK: it is re-derived from the tape on load, so a file cannot disagree
   with the store. Registry: 8 sessions, 3h idle.
+- The track's "iv ›" jump (`next_iv_spike`, vol points) reads `iv_series()` — the ATM
+  CE's last print solved per minute on the parity spot, cached per day+expiry.
 - The replay track's "next 1% move" reads a per-day spot series built in ONE pass over
   the tape with a scratch `ReplayMarket` (14 ms, cached per day) — never by stepping the
   live cursor minute by minute (376 rebuilds ≈ 6 s, and it would move the book).

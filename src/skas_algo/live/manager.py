@@ -1431,6 +1431,7 @@ class LiveRun:
         if getattr(self.session, "managed_by", "strategy") == "manual":
             r = self.session.strategy.rail_status()
             return {"editable_params": {"stop_pct": r["stop_pct"], "target_pct": r["target_pct"],
+                                        "stop_amt": r["stop_amt"], "target_amt": r["target_amt"],
                                         "time_exit": r["time_exit"] or "",
                                         "margin_anchor": getattr(self.session.strategy,
                                                                  "margin_anchor", 0.0)},
@@ -1484,9 +1485,9 @@ class LiveRun:
             try:
                 applied = rail.update(**accepted)
             except ValueError as exc:
-                raise ValueError(f"{exc} — the strategy is paused (manual rail); only "
-                                 "stop_pct, target_pct, time_exit and margin_anchor "
-                                 "can be edited until it is resumed") from exc
+                raise ValueError(f"{exc} — the strategy is paused (manual mode); only "
+                                 "stop_pct, target_pct, stop_amt, target_amt, time_exit and "
+                                 "margin_anchor can be edited until it is resumed") from exc
             self._persist_state()
             logger.warning("run %s manual rail edited: %s", self.run_id, sorted(applied))
             self.broadcaster.publish({"type": "snapshot", "run_id": self.run_id,

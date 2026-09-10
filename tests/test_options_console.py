@@ -1305,3 +1305,23 @@ def test_vix_comes_from_the_injected_reader_and_is_asked_once_per_day():
     s.step(5)
     s.state()
     assert asked == [DAY]
+
+
+def test_next_iv_spike_jumps_to_the_first_minute_the_atm_iv_rises_enough():
+    store.write_day(DAY, _day())
+    s = ConsoleSession(underlying="NIFTY", day=DAY, at="09:30", expiry=EXP)
+    series = s.iv_series()
+    assert series and all(0 < iv < 200 for _, iv in series)
+    here = next(iv for mk, iv in series if mk[11:] >= "09:30")
+    later = [(mk, iv) for mk, iv in series if mk[11:] > "09:30"]
+    rise = max(iv - here for _, iv in later)
+    if rise <= 0:
+        s.jump("next_iv_spike", pct=0.5)
+        assert s.clock.strftime("%H:%M") == "09:30"           # nothing to jump to
+        return
+    target = min(mk for mk, iv in later if iv - here >= rise / 2)
+    s.jump("next_iv_spike", pct=rise / 2)
+    assert s.clock.strftime("%H:%M") == target[11:]
+    s.seek("09:30")
+    s.jump("next_iv_spike", pct=rise + 1)                     # more than ever happened
+    assert s.clock.strftime("%H:%M") == "09:30"
