@@ -803,17 +803,16 @@ function RunCard({
            (kept intact) and the manual rail manages the book. Resume only when flat. */
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 px-3 py-2 text-sm">
           <span>
-            ✋ MANUAL BOOK · {run.handover?.strategy_id ?? run.strategy_id} paused since {run.handover?.at?.replace("T", " ") ?? "?"}
-            {" · "}
-            {run.rail?.no_stop
-              ? <b>NO STOP set — set one in Edit params</b>
-              : `stop −${run.rail?.stop_pct ?? 0}% of ${run.rail?.margin_base ? `₹${Math.round(run.rail.margin_base).toLocaleString("en-IN")} (${run.rail.margin_source})` : "the margin anchor (pending)"}`}
-            {run.rail?.target_pct ? ` · target +${run.rail.target_pct}%` : ""}
-            {run.rail?.time_exit ? ` · square-off ${run.rail.time_exit}` : ""}
+            ✋ <b>Manual mode</b> · {run.handover?.strategy_id ?? run.strategy_id} paused since {run.rail?.handover_label ?? run.handover?.at?.slice(0, 16).replace("T", " ") ?? "?"}.
+            {" "}You handle adjustments and exits.
+            {run.rail?.stop_pct || run.rail?.target_pct
+              ? ` ${[run.rail?.stop_pct ? `stop −${run.rail.stop_pct}%` : "", run.rail?.target_pct ? `target +${run.rail.target_pct}%` : ""].filter(Boolean).join(" · ")} of ${run.rail?.margin_base ? `₹${Math.round(run.rail.margin_base).toLocaleString("en-IN")}` : "the margin anchor"}.`
+              : " A target or stop is optional (Edit params)."}
+            {run.rail?.time_exit ? ` Square-off ${run.rail.time_exit}.` : ""}
           </span>
           <button
             disabled={busy || (run.positions ?? []).length > 0}
-            title={(run.positions ?? []).length > 0 ? "Flatten the book first — the strategy cannot take over legs it did not open" : "Reinstall the paused strategy on the flat book"}
+            title={(run.positions ?? []).length > 0 ? "Exit the positions first — the strategy cannot take over legs it did not open" : "Reinstall the paused strategy on the flat book"}
             onClick={() => { if (confirm("Reinstall the paused strategy? Its own rules decide whether it re-enters.")) act(() => api.liveResumeStrategy(run.run_id)); }}
             className="rounded bg-amber-700 hover:bg-amber-800 disabled:opacity-40 text-white px-2.5 py-1 text-xs font-medium"
           >
@@ -1486,12 +1485,9 @@ function DeploymentTile({
             )}
             {dep.managed_by === "manual" && (
               <Tag bg="var(--warn-bg)" color="var(--warn-text)"
-                title={`A manual change left this book held: ${dep.handover?.strategy_id ?? dep.strategy_id} is paused (kept intact) and the manual rail manages the book. Resume once flat.`}>
-                MANUAL · paused {dep.handover?.at?.slice(11) ?? ""}
+                title={`Manual mode: ${dep.handover?.strategy_id ?? dep.strategy_id} is paused after your change — you handle adjustments and exits. A target or stop is optional. Resume once flat.`}>
+                manual mode
               </Tag>
-            )}
-            {dep.managed_by === "manual" && dep.rail?.no_stop && (
-              <Tag bg="var(--danger)" color="#fff" title="The manual rail has no stop. Set stop_pct in Edit params.">NO STOP</Tag>
             )}
             {dep.history_thin != null && dep.history_thin > 0 && (
               <Tag bg="var(--warn-bg)" color="var(--warn-text)"

@@ -1035,8 +1035,9 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   rule; it is not applied at all. The rail re-derives its legs from the PORTFOLIO every
   slice (a second edit needs no sync), measures P&L from the lots' real fills, and runs
   ONLY: a stop as `stop_pct` of the margin anchor (inherited from the paused strategy's
-  own %-of-margin `stop_pct` where it has one — NEVER invented: 0 = NO STOP, shouted by
-  `strategy_alert`, a red chip and the console), an optional `target_pct`, the paused
+  own %-of-margin `stop_pct` where it has one — NEVER invented: a target or stop in
+  manual mode is OPTIONAL, owner wording "you handle adjustments and exits", so an unset
+  one is stated on the banner, never alarmed), an optional `target_pct`, the paused
   intraday deck's hard `time_exit`, and the engine's expiry settlement. Exits are plain
   `EXIT_ALL`s through the executor (charges/events/reconcile/§1 gates identical), tagged
   `rail_*`. Hot-edit on a handed-over run edits the RAIL's knobs only (`stop_pct`,

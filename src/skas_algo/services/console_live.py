@@ -318,10 +318,8 @@ class LiveConsole(AlertBook):
         sid = self.live.config.strategy_id
         if h["managed_by"] == "manual":
             r = h["rail"] or {}
-            stop = (f"stop −{r['stop_pct']:g}% of the margin anchor" if r.get("stop_pct")
-                    else "NO STOP set")
-            return (f"This book is already on the manual rail ({sid} paused since "
-                    f"{r.get('handover_at') or '?'}; {stop}). The change lands on it as is.")
+            return (f"This run is already in manual mode ({sid} paused since "
+                    f"{r.get('handover_label') or '?'}). The change lands on the book as is.")
         # would the book be flat afterwards? (every held symbol closed in full, nothing opened)
         held = {leg["symbol"]: leg["units"] for leg in self.legs()}
         closing = {}
@@ -337,13 +335,13 @@ class LiveConsole(AlertBook):
 
         preview = ManualBookStrategy.from_paused(paused, underlying=self.underlying,
                                                  ts=self._clock(), reason="manual_order")
-        stop = (f"stop −{preview.stop_pct:g}% of the margin anchor" if preview.stop_pct > 0
-                else "NO STOP until you set one")
-        exit_t = f" · square-off {preview.time_exit.strftime('%H:%M')}" if preview.time_exit else ""
-        return (f"Committing HANDS THIS BOOK OVER: {sid} is paused (kept intact, never told "
-                f"about these legs) and the manual rail manages the whole book — {stop}"
-                f"{exit_t}, expiry settles to intrinsic. Resume the strategy once the book "
-                "is flat.")
+        stop = (f" Its −{preview.stop_pct:g}%-of-margin stop is carried over."
+                if preview.stop_pct > 0 else " A target or stop is optional (Edit params).")
+        exit_t = (f" The {preview.time_exit.strftime('%H:%M')} square-off stays."
+                  if preview.time_exit else "")
+        return (f"Committing puts this run in MANUAL MODE: {sid} is paused and you handle "
+                f"adjustments and exits yourself.{stop}{exit_t} Expiry still settles. "
+                "Resume the strategy once the book is flat.")
 
     def closed_legs(self, since: str | None) -> list[dict]:
         """Legs the run closed in the CURRENT cycle (rows at or after ``since``), one entry per

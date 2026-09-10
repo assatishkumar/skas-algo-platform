@@ -87,7 +87,7 @@ def test_every_family_hands_over_and_the_next_slice_raises_nothing(sid, strategy
     assert {leg["symbol"] for leg in sess.strategy.legs} == {CE, PE}
     snap = sess.snapshot()
     assert snap["managed_by"] == "manual" and snap["rail"]["paused_strategy_id"] == sid
-    assert snap["exit_rules"][0].startswith("Manual rail")
+    assert snap["exit_rules"][0].startswith("Manual mode")
 
 
 def test_a_manual_flatten_keeps_the_strategy_installed():
@@ -107,7 +107,7 @@ def test_the_rail_inherits_a_margin_stop_and_an_intraday_exit_but_never_invents_
     delta.margin_base, delta.margin_source = 150_000.0, "broker"
     rail = ManualBookStrategy.from_paused(delta, underlying="NIFTY", ts=TS, reason="manual_order")
     assert rail.stop_pct == 2.0 and rail.margin_base == 150_000.0 and rail.margin_source == "broker"
-    assert rail.time_exit is None and rail.strategy_alert is None
+    assert rail.time_exit is None and getattr(rail, "strategy_alert", None) is None
     assert rail.exit_amounts() == (None, 3000.0)
     intraday = IntradayStraddleStrategy(universe=["NIFTY"], initial_capital=1_000_000)
     rail = ManualBookStrategy.from_paused(intraday, underlying="NIFTY", ts=TS, reason="x")
@@ -115,8 +115,9 @@ def test_the_rail_inherits_a_margin_stop_and_an_intraday_exit_but_never_invents_
     # the ratio family's stop is a fraction of CAPITAL, not margin: NOT inherited → NO STOP
     rail = ManualBookStrategy.from_paused(fams["call_ratio_monthly"], underlying="NIFTY",
                                           ts=TS, reason="x")
-    assert rail.stop_pct == 0 and "NO STOP" in (rail.strategy_alert or "")
+    assert rail.stop_pct == 0 and getattr(rail, "strategy_alert", None) is None  # optional, no alarm
     assert rail.rail_status()["no_stop"] is True
+    assert any("optional" in r for r in rail.exit_rules())
 
 
 def test_the_rail_stop_closes_every_lot_including_a_manual_one():

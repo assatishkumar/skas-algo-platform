@@ -36,6 +36,17 @@ _MARGIN_STOP_ATTRS = ("stop_pct",)            # delta family: whole percents of 
 _INTRADAY_EXIT_ATTRS = ("exit_time", "eod_exit", "cycle_exit_time")
 
 
+def _when(iso: str | None) -> str:
+    """'2026-09-10T18:00+05:30' → '10 Sep 18:00' for the banner."""
+    if not iso:
+        return "?"
+    try:
+        dt = datetime.fromisoformat(str(iso))
+        return dt.strftime("%d %b %H:%M")
+    except ValueError:
+        return str(iso)[:16].replace("T", " ")
+
+
 def _hhmm(v) -> time | None:
     if v is None or v == "":
         return None
@@ -191,15 +202,8 @@ class ManualBookStrategy(OpenSettleGuard):
         return [Signal(leg["symbol"], SignalAction.EXIT_ALL, reason=reason) for leg in ordered]
 
     # ------------------------------------------------------------ surfaces
-    @property
-    def strategy_alert(self) -> str | None:
-        if self.stop_pct <= 0:
-            return ("MANUAL BOOK · NO STOP — the strategy is paused and no stop is set; "
-                    "set one from Edit params or the console.")
-        if self.margin_base is None:
-            return ("MANUAL BOOK · stop waits for the broker margin (no anchor yet); "
-                    "set a manual anchor to arm it now.")
-        return None
+    # No `strategy_alert`: a target or stop on a manual-mode book is OPTIONAL (owner,
+    # 2026-09-10) — the banner says "manual mode", never an alarm about what is unset.
 
     def strategy_pnl(self, closes: dict) -> float | None:
         return self._pnl(self.legs, closes.get) if self.legs else None
@@ -214,12 +218,14 @@ class ManualBookStrategy(OpenSettleGuard):
     def exit_rules(self) -> list[str]:
         anchor = (f"₹{self.margin_base:,.0f} ({self.margin_source} anchor)"
                   if self.margin_base else "the margin anchor (pending)")
-        rules = [f"Manual rail — {self.paused_strategy_id or 'the strategy'} is paused since "
-                 f"{self.handover_at or '?'}; only these rules run"]
-        rules.append(f"Stop out at −{self.stop_pct:g}% of {anchor}" if self.stop_pct > 0
-                     else "NO STOP set")
+        rules = [f"Manual mode — {self.paused_strategy_id or 'the strategy'} paused since "
+                 f"{_when(self.handover_at)}; you handle adjustments and exits"]
+        if self.stop_pct > 0:
+            rules.append(f"Stop out at −{self.stop_pct:g}% of {anchor}")
         if self.target_pct > 0:
             rules.append(f"Book profit at +{self.target_pct:g}% of {anchor}")
+        if self.stop_pct <= 0 and self.target_pct <= 0:
+            rules.append("No stop or target set (optional — Edit params)")
         if self.time_exit is not None:
             rules.append(f"Square off at {self.time_exit.strftime('%H:%M')}")
         rules.append("Expiry settles to intrinsic (engine)")
@@ -230,7 +236,8 @@ class ManualBookStrategy(OpenSettleGuard):
                 "time_exit": self.time_exit.strftime("%H:%M") if self.time_exit else None,
                 "margin_base": self.margin_base, "margin_source": self.margin_source,
                 "no_stop": self.stop_pct <= 0, "paused_strategy_id": self.paused_strategy_id,
-                "handover_at": self.handover_at, "handover_reason": self.handover_reason,
+                "handover_at": self.handover_at, "handover_label": _when(self.handover_at),
+                "handover_reason": self.handover_reason,
                 "exited_at": self.exited_at, "exit_reason": self.exit_reason}
 
     def basket_status(self, market=None, portfolio=None, margin=None) -> dict:

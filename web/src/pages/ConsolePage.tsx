@@ -1966,9 +1966,9 @@ export default function ConsolePage() {
               {isReal ? "REAL ORDERS" : "paper fills"} · {state?.session.run_name} · live clock
               {state?.session.managed_by === "manual" && (
                 <span className="ml-1.5 px-1.5 rounded-[3px] font-bold"
-                  title={`A hand-edit left this book held: ${state.session.handover?.strategy_id ?? state.session.strategy_id} is paused and the manual rail manages it (${state.session.rail?.no_stop ? "NO STOP set" : `stop −${state.session.rail?.stop_pct}%`}). Resume from the Live page once flat.`}
-                  style={{ background: state.session.rail?.no_stop ? "var(--oc-neg)" : "var(--oc-caution)", color: "#fff" }}>
-                  MANUAL · {state.session.handover?.strategy_id ?? "strategy"} paused{state.session.rail?.no_stop ? " · NO STOP" : ""}
+                  title={`Manual mode: ${state.session.handover?.strategy_id ?? state.session.strategy_id} is paused after your change — you handle adjustments and exits. A target or stop is optional (Edit params on the Live tile). Resume from the Live page once flat.`}
+                  style={{ background: "var(--oc-caution)", color: "#fff" }}>
+                  manual mode · {state.session.handover?.strategy_id ?? "strategy"} paused
                 </span>
               )}
             </span>

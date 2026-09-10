@@ -546,7 +546,8 @@ export interface ManualOrderInput {
 export interface ManualRail {
   stop_pct: number; target_pct: number; time_exit: string | null;
   margin_base: number | null; margin_source: string; no_stop: boolean;
-  paused_strategy_id: string | null; handover_at: string | null; handover_reason: string | null;
+  paused_strategy_id: string | null; handover_at: string | null; handover_label?: string | null;
+  handover_reason: string | null;
   exited_at: string | null; exit_reason: string | null;
 }
 

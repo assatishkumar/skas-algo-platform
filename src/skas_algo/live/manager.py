@@ -1640,17 +1640,17 @@ class LiveRun:
     def _announce_handover(self) -> None:
         """One WARNING push + alert the moment a hand-edit pauses the strategy."""
         rail = getattr(self.session.strategy, "rail_status", lambda: {})()
-        stop = (f"stop −{rail['stop_pct']:g}% of the margin anchor" if rail.get("stop_pct")
-                else "NO STOP set")
+        stop = (f" A stop of −{rail['stop_pct']:g}% of the margin anchor was carried over."
+                if rail.get("stop_pct") else " A target or stop is optional (Edit params).")
         try:
             from skas_algo.notify import Alert, AlertLevel, build_notifier
 
             build_notifier().send(Alert(
-                f"HANDOVER: {self.config.name}",
-                f"{self.config.strategy_id} is PAUSED after a manual change; the manual rail "
-                f"manages the book ({stop}"
-                f"{' · exit ' + rail['time_exit'] if rail.get('time_exit') else ''}). "
-                "Resume is possible once the book is flat.", AlertLevel.WARNING))
+                f"Manual mode: {self.config.name}",
+                f"{self.config.strategy_id} is paused after your change — you handle "
+                f"adjustments and exits.{stop}"
+                f"{' Square-off ' + rail['time_exit'] + ' stays.' if rail.get('time_exit') else ''}"
+                " Resume the strategy once the book is flat.", AlertLevel.WARNING))
         except Exception:  # pragma: no cover
             pass
 

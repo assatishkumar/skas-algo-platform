@@ -234,8 +234,9 @@ are validated paper-first.
   When the owner's hand changes a running option book (Live page manual order, console
   Commit, mark-closed-at-broker) and lots remain, the strategy is PAUSED intact and this
   rail manages the book: stop as a % of the margin anchor (inherited where the paused
-  strategy had a %-of-margin stop, otherwise NO STOP and said loudly), optional target,
-  the paused intraday deck's square-off time, expiry settlement. Tile: "MANUAL · paused",
+  strategy had a %-of-margin stop; otherwise none — a target or stop in manual mode is
+  optional), optional target, the paused intraday deck's square-off time, expiry
+  settlement. Tile: "manual mode · you handle adjustments and exits",
   Resume strategy once flat. A strategy exception on a held book halts visibly
   (`strategy_error`) instead of being swallowed.
 - **`call_put_ratio_expiry` — expiry-day 1:3 premium seller.** Only on each index's weekly
