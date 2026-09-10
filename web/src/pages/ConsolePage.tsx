@@ -66,9 +66,9 @@ const JOGS_FWD: typeof JOGS = [
  *  the keydown handler below implements exactly these rows — three copies of a keymap is
  *  how a shortcut quietly stops matching what the screen claims it does. */
 const KEYS: { keys: string; does: string }[] = [
-  { keys: ", .", does: "back / forward 1 minute" },
+  { keys: ", .", does: "back / forward 1 hour" },
   { keys: "Shift + , .", does: "15 minutes" },
-  { keys: "Alt + , .", does: "1 hour" },
+  { keys: "Alt + , .", does: "1 minute" },
   { keys: "[  ]", does: "previous / next trading day (keeps the time)" },
   { keys: "Home / End", does: "session open / close" },
   { keys: "U", does: "undo the last action" },
@@ -86,6 +86,7 @@ const SPEEDS: { label: string; minutes: number; ms: number }[] = [
   { label: "1m/1s", minutes: 1, ms: 1000 },
   { label: "5m/1s", minutes: 5, ms: 1000 },
   { label: "15m/1s", minutes: 15, ms: 1000 },
+  { label: "1h/1s", minutes: 60, ms: 1000 },   // a whole session in ~7 s (owner, 2026-09-10)
 ];
 const ALERT_KINDS: { kind: ConsoleAlert["kind"]; label: string; hint: string }[] = [
   { kind: "target", label: "Target", hint: "₹ total MTM at or above" },
@@ -1458,7 +1459,8 @@ export default function ConsolePage() {
       else if (eod) move.mutate({ op: "eod" });
       else if (prevDay || nextDay) move.mutate({ op: "day", days: prevDay ? -1 : 1 });
       else {
-        const step = e.altKey ? 60 : e.shiftKey ? 15 : 1;
+        // owner 2026-09-10: the bare keys walk the HOUR (the common move), Alt the minute
+        const step = e.altKey ? 1 : e.shiftKey ? 15 : 60;
         move.mutate({ op: "step", minutes: (back ? -1 : 1) * step });
       }
     };
