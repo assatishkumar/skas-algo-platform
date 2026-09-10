@@ -1050,7 +1050,7 @@ export default function ConsolePage() {
   const switchSource = (v: string) => {
     setPendingSwitch(null);
     if (v === "replay") {
-      opened.current = false; setState(null); setParams({}, { replace: true }); open.mutate({ underlying });
+      opened.current = false; setState(null); setParams({}, { replace: true }); open.mutate({ underlying, expiry: null });
     } else {
       openLive.mutate(Number(v.slice(4)));
     }
@@ -1136,9 +1136,11 @@ export default function ConsolePage() {
   });
 
   const open = useMutation({
-    mutationFn: (body: { underlying: string; day?: string | null; at?: string }) =>
+    // `expiry: null` = a NEW day or underlying: let the backend land on that month's chip
+    // (owner, 2026-09-10). Otherwise the URL's chip is kept, so a reload does not move it.
+    mutationFn: ({ expiry, ...body }: { underlying: string; day?: string | null; at?: string; expiry?: string | null }) =>
       api.consoleOpen({ ...body, at: body.at ?? params.get("at") ?? "09:20",
-        expiry: params.get("expiry") ?? undefined }),
+        expiry: expiry === null ? undefined : (expiry ?? params.get("expiry") ?? undefined) }),
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
       setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
@@ -1899,7 +1901,7 @@ export default function ConsolePage() {
           lot {state?.session.lot_size ?? "—"}
         </span>
         <input type="date" value={day} min={days?.first ?? undefined} max={days?.last ?? undefined}
-          onChange={(e) => { setDay(e.target.value); open.mutate({ underlying, day: e.target.value, at: "09:30" }); }}
+          onChange={(e) => { setDay(e.target.value); open.mutate({ underlying, day: e.target.value, at: "09:30", expiry: null }); }}
           className={`h-[22px] rounded-[5px] px-1.5 text-[11px] ${isLive ? "!hidden" : ""}`}
           style={{ background: "var(--oc-chip)", color: "var(--oc-ink)", border: "none" }} />
         <div className="w-px h-5" style={{ background: "var(--oc-line)" }} />
