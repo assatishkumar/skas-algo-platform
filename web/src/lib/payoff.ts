@@ -51,7 +51,16 @@ export function bsDelta(
 export function impliedVol(
   price: number, spot: number, strike: number, t: number, r: number, right: string, q = 0,
 ): number | null {
-  if (t <= 0 || price <= intrinsic(right, spot, strike) + 1e-9) return null;
+  if (t <= 0) return null;
+  // The no-arbitrage floor is the DISCOUNTED one — S − K·e^(−rt) for a call, K·e^(−rt) − S for
+  // a put — not the raw intrinsic. A deep-ITM put legitimately trades below (K − S) when r > 0
+  // (26,400 PE at 558 against 577 of raw intrinsic, 21 DTE, 2025-12-09); the raw floor refused
+  // it, the caller fell back to 15% vol, and the console's T+0 line sat ₹44k below the book
+  // (owner, 2026-09-10). Mirrors the 2026-09-09 fix in engine/options/black_scholes.py.
+  const floor = right === "CE"
+    ? Math.max(spot * Math.exp(-q * t) - strike * Math.exp(-r * t), 0)
+    : Math.max(strike * Math.exp(-r * t) - spot * Math.exp(-q * t), 0);
+  if (price <= floor + 1e-9) return null;
   let lo = 1e-4;
   let hi = 5.0;
   if (bsPrice(spot, strike, t, r, hi, right, q) < price) return null;

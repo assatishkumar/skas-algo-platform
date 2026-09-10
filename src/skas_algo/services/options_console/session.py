@@ -209,6 +209,8 @@ class ConsoleSession(AlertBook):
         # where the underlying stood when the cycle began — the reference every "how far
         # has it moved since I entered" reads (owner, 2026-09-10)
         self._cycle_entry: dict | None = None
+        # legs closed in the CURRENT cycle — shown under the open ones, never silently gone
+        self.closed: list[dict] = []
         self._margin_detail: dict | None = None
         self._spot_series: dict[str, list[tuple[str, float]]] = {}
         # per-symbol (minutes, closes) for the open day — the tape regrouped once, so a
@@ -372,6 +374,7 @@ class ConsoleSession(AlertBook):
                 self._leg_seq = 0
                 self._cycle_realized_before = 0.0
                 self._cycle_entry = None
+                self.closed = []
             return
         kept = [f for f in self.journal if f["at"] <= key]
         if not force and len(kept) == len(self.fills) and self.legs:
@@ -380,6 +383,7 @@ class ConsoleSession(AlertBook):
         self._leg_seq = 0
         self._cycle_realized_before = 0.0
         self._cycle_entry = None
+        self.closed = []
         self._replaying = True
         try:
             for f in kept:
@@ -1005,6 +1009,7 @@ class ConsoleSession(AlertBook):
         every entry if the history is ever wanted."""
         if not self.legs:                # flat → open: a new cycle begins here
             self._cycle_realized_before = self.realized
+            self.closed = []                # a new cycle: last cycle's closes leave the table
             sp = self.market.index_spot(self.underlying)
             self._cycle_entry = {"at": minute, "spot": round(float(sp), 2) if sp else None}
         if lots <= 0:
@@ -1043,11 +1048,20 @@ class ConsoleSession(AlertBook):
         pnl = (price - leg.entry) * units * leg.direction
         # SETTLE pays no brokerage and no STT — the batch replay's convention, and the
         # exchange's: an expiry is not an order.
-        pnl -= self._charge(action or ("COVER" if leg.side == "S" else "SELL"), units, price,
+        # GROSS: the Live KPI's basis — costs are kept apart in `charges` and shown as
+        # costs, so a lot trimmed at its entry price books ₹0, not −₹36 (owner: "why a
+        # loss the moment I enter?", 2026-09-10)
+        self._charge(action or ("COVER" if leg.side == "S" else "SELL"), units, price,
                             minute, leg.symbol)
         leg.realized += pnl
         leg.exited_lots += n
         self.realized += pnl
+        self.closed.append({
+            "symbol": leg.symbol, "right": leg.right, "strike": leg.strike, "expiry": leg.expiry,
+            "side": leg.side, "lots": lots, "units": units, "entry": round(leg.entry, 2),
+            "exit": round(price, 2), "pnl": round(pnl, 2), "at": minute,
+            "action": action or ("COVER" if leg.side == "S" else "SELL"),
+        })
         leg.lots -= n
         if leg.lots <= 0:
             self.legs.remove(leg)
@@ -1101,10 +1115,11 @@ class ConsoleSession(AlertBook):
         structure can be re-shaped without the discarded leg leaving a trade behind
         (owner, 2026-09-10)."""
         leg = next((x for x in self.legs if x.id == leg_id), None)
-        if leg is None:
+        symbol = leg.symbol if leg is not None else (leg_id if "|" in str(leg_id) else None)
+        if symbol is None:
             return False
         before = len(self.journal)
-        self.journal = [f for f in self.journal if f["symbol"] != leg.symbol]
+        self.journal = [f for f in self.journal if f["symbol"] != symbol]
         if len(self.journal) == before:
             return False
         self._replay_book(self.clock, force=True)
@@ -1121,6 +1136,7 @@ class ConsoleSession(AlertBook):
         self.realized = self.charges = 0.0
         self._cycle_realized_before = 0.0
         self._cycle_entry = None
+        self.closed = []
         self._leg_seq = 0
         self.staged = None
         for a in self.alerts:
@@ -1407,6 +1423,7 @@ class ConsoleSession(AlertBook):
                 "rows": rows,
             },
             "legs": legs_out,
+            "closed": list(self.closed),
             "staged": self._staged_out(),
             "risk": {**risk, "greeks": greeks},
             "fills": self.fills[-40:],

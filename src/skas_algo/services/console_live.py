@@ -293,6 +293,41 @@ class LiveConsole(AlertBook):
             )
         return out
 
+    def closed_legs(self, since: str | None) -> list[dict]:
+        """Legs the run closed in the CURRENT cycle (rows at or after ``since``), one entry per
+        closing fill, for the table's closed rows."""
+        out = []
+        for t in self.session.transactions:
+            act = str(t.get("action") or "").upper()
+            if act not in ("SELL", "COVER", "SETTLE"):
+                continue
+            when = str(t.get("date") or "")[:16].replace(" ", "T")
+            if since and when < since:
+                continue
+            sym = str(t.get("ticker") or "")
+            inst = parse(sym)
+            if inst is None:
+                continue
+            units = int(t.get("units") or 0)
+            lot = int(inst.lot_size or 1)
+            out.append(
+                {
+                    "symbol": sym,
+                    "right": inst.right,
+                    "strike": float(inst.strike),
+                    "expiry": inst.expiry.isoformat(),
+                    "side": "S" if act == "COVER" else "B",
+                    "lots": max(1, units // lot),
+                    "units": units,
+                    "entry": round(float(t.get("entry_premium") or 0.0), 2),
+                    "exit": round(float(t.get("price") or 0.0), 2),
+                    "pnl": round(float(t.get("profit") or 0.0), 2),
+                    "at": when,
+                    "action": act,
+                }
+            )
+        return out
+
     def held_by_strike(self) -> dict:
         return {
             f"{leg['expiry']}|{int(leg['strike'])}|{leg['right']}": {
@@ -1079,6 +1114,7 @@ class LiveConsole(AlertBook):
                 "rows": rows,
             },
             "legs": legs,
+            "closed": self.closed_legs(entry_at) if legs else [],
             "staged": (
                 {
                     "items": self.staged["items"],

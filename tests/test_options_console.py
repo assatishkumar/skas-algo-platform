@@ -1063,3 +1063,24 @@ def test_deleting_a_leg_in_replay_is_as_if_it_was_never_traded():
     # the PE's history is untouched, the CE's is gone — no P&L was booked for it
     assert st["risk"]["realised_total"] != 0
     assert s.delete_leg("nope") is False
+
+
+def test_realised_is_gross_and_a_closed_leg_stays_on_the_table():
+    """Trimming a lot at its entry price books ₹0 (costs live in `charges`, the Live KPI's
+    basis), and a closed leg is listed under `closed` with entry, exit and P&L for the
+    rest of the cycle — never silently gone. A new cycle clears the list."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
+    s.stage(kind="resize", leg_id=s.legs[0].id, lots=1)          # same minute, same price
+    r = s.state()["risk"]
+    assert r["realised"] == 0.0 and r["charges"] > 0
+    c = s.state()["closed"]
+    assert len(c) == 1 and c[0]["lots"] == 1 and c[0]["exit"] == c[0]["entry"] and c[0]["pnl"] == 0.0
+    s.seek("11:00")
+    s.stage(kind="flatten", replace=True)
+    c = s.state()["closed"]
+    assert len(c) == 2 and c[1]["pnl"] == pytest.approx(s.state()["risk"]["realised"], abs=0.01)
+    assert s.delete_leg(c[1]["symbol"]) is True and s.state()["closed"] == []   # by symbol
+    s.stage(kind="add", right="PE", strike=24000, side="B", lots=1)             # a new cycle
+    assert s.state()["closed"] == []

@@ -1993,6 +1993,8 @@ export interface ConsoleState {
     rows: ConsoleChainRow[];
   };
   legs: ConsoleLeg[];
+  // legs closed in the current cycle, one row per closing fill
+  closed: ConsoleClosedLeg[];
   staged: ConsoleStaged | null;
   risk: ConsoleRisk;
   fills: { at: string; symbol: string; action: string; units: number; price: number; charges: number }[];
@@ -2058,6 +2060,12 @@ export interface ConsoleLeg {
   // day, Vega per 1% of IV. null when the leg has no solvable print.
   iv: number | null; delta: number | null; gamma: number | null;
   theta: number | null; vega: number | null;
+}
+
+export interface ConsoleClosedLeg {
+  symbol: string; right: "CE" | "PE"; strike: number; expiry: string; side: "B" | "S";
+  lots: number; units: number; entry: number; exit: number; pnl: number; at: string;
+  action: string;    // SELL / COVER / SETTLE
 }
 
 export interface ConsoleGreeks {

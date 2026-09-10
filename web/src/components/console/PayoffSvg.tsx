@@ -34,6 +34,9 @@ export function toPayoffLegs(legs: ConsoleLeg[]): LiveLeg[] {
   return legs.filter((l) => l.enabled).map((l) => ({
     strike: l.strike, right: l.right, direction: l.direction, units: l.units,
     entry: l.entry, ltp: l.ltp, expiry: l.expiry,
+    // the backend's per-leg IV (a PERCENT there) as the fallback the library uses when its
+    // own solve fails — never the library's flat 15%
+    iv: l.iv != null ? l.iv / 100 : undefined,
   }));
 }
 
@@ -45,10 +48,11 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   expiry: string | null;
   today: string;
   minHeight?: number;
-  // Armed levels, drawn amber. A target/stop is a level of TOTAL MTM, and the chart's y is
-  // the open book's P&L, so the line sits at (level − realised): the chart shows where the
-  // book has to get to, not where the number is.
+  // Armed levels, drawn amber at their own level: the chart's y IS the cycle's MTM.
   alerts?: ConsoleAlert[];
+  // The cycle's realised P&L so far. Every curve carries it, so after a leg is closed at a
+  // profit the whole payoff sits that much higher and its breakevens move — the chart reads
+  // as "where this cycle ends up", the way StockMock draws it (owner, 2026-09-10).
   realised?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -109,12 +113,12 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   }, [spot, zoom, custom, live, ghost, metrics]);
   const data = useMemo(
     () => (spot && expiry && live.length && range
-      ? buildLivePayoff(live, spot, expiry, today, null, undefined, { range }) : null),
-    [live, spot, expiry, today, range]);
+      ? buildLivePayoff(live, spot, expiry, today, null, undefined, { range, offset: realised }) : null),
+    [live, spot, expiry, today, range, realised]);
   const ghostData = useMemo(
     () => (spot && expiry && ghost?.length && range
-      ? buildLivePayoff(ghost, spot, expiry, today, null, undefined, { range }) : null),
-    [ghost, spot, expiry, today, range]);
+      ? buildLivePayoff(ghost, spot, expiry, today, null, undefined, { range, offset: realised }) : null),
+    [ghost, spot, expiry, today, range, realised]);
 
   if (!spot || !expiry || (!data && !ghostData)) {
     return (
@@ -129,8 +133,8 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   const gpts = ghostData?.data ?? [];
   const xs = pts.map((p) => p.spot);
   const hLines = alerts.flatMap((a) =>
-    a.kind === "target" ? [{ a, y: a.value - realised }]
-    : a.kind === "stop" ? [{ a, y: -Math.abs(a.value) - realised }] : []);
+    a.kind === "target" ? [{ a, y: a.value }]
+    : a.kind === "stop" ? [{ a, y: -Math.abs(a.value) }] : []);
   const vLines = alerts.filter((a) => a.kind === "above" || a.kind === "below");
   const ys = [...pts.map((p) => p.expiry), ...pts.map((p) => p.now),
               ...gpts.map((p) => p.expiry), ...hLines.map((h) => h.y)];
@@ -142,7 +146,16 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
 
   const line = (get: (p: { spot: number; expiry: number; now: number }) => number,
                 src = pts) => src.map((p, i) => `${i ? "L" : "M"}${px(p.spot)},${py(get(p))}`).join(" ");
-  const be = (metrics?.breakevens ?? []).filter((b) => b >= x0 && b <= x1);
+  // breakevens = where the DRAWN expiry line crosses zero (it carries the cycle's realised,
+  // so they are the cycle's breakevens, not the open book's)
+  const be: number[] = [];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    if ((a.expiry < 0 && b.expiry >= 0) || (a.expiry >= 0 && b.expiry < 0)) {
+      const f = a.expiry / (a.expiry - b.expiry);
+      be.push(a.spot + f * (b.spot - a.spot));
+    }
+  }
   // The expiry line is drawn as one path per SIGN RUN — green where the structure makes
   // money at expiry, red where it loses — so a straddle reads green between its two
   // breakevens and a spread green up to its one. (A split at the first breakeven alone
@@ -288,13 +301,13 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
         </text>
 
         {metrics && Number.isFinite(metrics.maxProfit) && (
-          <text x={w - R + 4} y={py(metrics.maxProfit) + 3} fontSize={9.5} fill="var(--oc-pos)">
-            {inr(metrics.maxProfit)}
+          <text x={w - R + 4} y={py(metrics.maxProfit + realised) + 3} fontSize={9.5} fill="var(--oc-pos)">
+            {inr(metrics.maxProfit + realised)}
           </text>
         )}
         {metrics && Number.isFinite(metrics.maxLoss) && (
-          <text x={w - R + 4} y={py(metrics.maxLoss) + 3} fontSize={9.5} fill="var(--oc-neg)">
-            {inr(metrics.maxLoss)}
+          <text x={w - R + 4} y={py(metrics.maxLoss + realised) + 3} fontSize={9.5} fill="var(--oc-neg)">
+            {inr(metrics.maxLoss + realised)}
           </text>
         )}
         {at && (

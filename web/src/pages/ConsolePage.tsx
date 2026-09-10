@@ -1290,6 +1290,10 @@ export default function ConsolePage() {
     onSuccess: setState,
   });
 
+  const setFifty = useMutation({
+    mutationFn: (on: boolean) => call((id) => api.consoleChain(id, { allow_fifty_strikes: on })),
+    onSuccess: setState,
+  });
   const pickExpiry = useMutation({
     mutationFn: (expiry: string) => call((id) => api.consoleChain(id, { expiry })),
     onSuccess: (s) => {
@@ -1421,6 +1425,26 @@ export default function ConsolePage() {
     const n = d.data.length;
     return [d.data[0].now, d.data[Math.floor(n / 2)].now, d.data[n - 1].now];
     }, [legsShown, spotNow, expNow, state?.session.date]);
+  // the cycle's breakevens: zero crossings of the expiry curve WITH the cycle's realised
+  // added — the open book's own crossings move once something has been banked
+  const cycleBE = useMemo(() => {
+    const legs = toPayoffLegs(legsShown);
+    if (!spotNow || !expNow || !legs.length) return [] as number[];
+    const off = risk?.realised ?? 0;
+    const lo = Math.min(spotNow, ...legs.map((l) => l.strike)) * 0.9;
+    const hi = Math.max(spotNow, ...legs.map((l) => l.strike)) * 1.1;
+    const d = buildLivePayoff(legs, spotNow, expNow, state?.session.date, null, undefined,
+      { range: [lo, hi], offset: off });
+    const out: number[] = [];
+    const pts = d?.data ?? [];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      if ((a.expiry < 0 && b.expiry >= 0) || (a.expiry >= 0 && b.expiry < 0)) {
+        out.push(a.spot + (a.expiry / (a.expiry - b.expiry)) * (b.spot - a.spot));
+      }
+    }
+    return out;
+  }, [legsShown, spotNow, expNow, state?.session.date, risk?.realised]);
   const busy = open.isPending || move.isPending;
   const breach = state?.alerts.find((a) => a.kind === "stop" && a.state === "fired") ?? null;
   // legs the MARKET closed (expiry settlement) that are in the cursor's past
@@ -1512,7 +1536,13 @@ export default function ConsolePage() {
                         {pctOf(risk.mtm, risk.margin)} of margin
                       </span>
                     )}
-                  </div>
+                    {mNow?.rewardRisk ? (
+                      <span className="text-[11px] font-semibold" style={{ color: "var(--oc-muted)" }}
+                        title="reward : risk — max profit over max loss of the open book">
+                        R:R {mNow.rewardRisk.toFixed(1)}
+                      </span>
+                    ) : null}
+                    </div>
                   <div className="text-[11px] mt-0.5" style={{ color: "var(--oc-muted)" }}>
                     {risk?.legs_open ? `${risk.legs_open} legs open` : "no open position"}
                     {risk?.legs_open && state?.cycle?.entry_at
@@ -1543,18 +1573,20 @@ export default function ConsolePage() {
                         : `${risk?.margin_source ?? "model"} · ${pctOf(risk?.margin, risk?.capital)} of capital`} />
                     <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
                       sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
+                    {/* cycle basis: the open book's max P/L shifted by what the cycle has already banked,
+                        and the breakevens of that shifted curve — the same line the chart draws */}
                     <Tile label="Max profit" tone="pos"
-                      value={mNow ? (mNow.maxProfitUnlimited ? "unlimited" : inr0(mNow.maxProfit)) : "—"}
-                      sub={pctOf(mNow?.maxProfit, risk?.margin) + " of margin"} />
+                      value={mNow ? (mNow.maxProfitUnlimited ? "unlimited" : inr0(mNow.maxProfit + (risk?.realised ?? 0))) : "—"}
+                      sub={pctOf(mNow ? mNow.maxProfit + (risk?.realised ?? 0) : undefined, risk?.margin) + " of margin"} />
                     <Tile label="Max loss" tone="neg"
-                      value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss)) : "—"}
-                      sub={pctOf(mNow?.maxLoss, risk?.margin) + " of margin"} />
+                      value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss + (risk?.realised ?? 0))) : "—"}
+                      sub={pctOf(mNow ? mNow.maxLoss + (risk?.realised ?? 0) : undefined, risk?.margin) + " of margin"} />
                     <Tile label="Breakeven"
-                      value={mNow?.breakevens.length
-                        ? mNow.breakevens.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ")
+                      value={cycleBE.length
+                        ? cycleBE.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ")
                         : "—"}
-                      sub={mNow?.breakevens.length && state?.market.spot
-                        ? `${signed(100 * (mNow.breakevens[0] / state.market.spot - 1))}% from spot` : "—"} />
+                      sub={cycleBE.length && state?.market.spot
+                        ? `${signed(100 * (cycleBE[0] / state.market.spot - 1))}% from spot` : "—"} />
                     <Tile label="Open P&L" tone={(risk?.unrealised ?? 0) >= 0 ? "pos" : "neg"}
                       value={`${inr0(risk?.unrealised ?? 0)}${risk?.margin ? ` · ${pctOf(risk.unrealised, risk.margin)}` : ""}`}
                       sub={`banked ${inr0(risk?.realised ?? 0)} · ${inr0(-(risk?.charges ?? 0))} costs`} />
@@ -1674,7 +1706,7 @@ export default function ConsolePage() {
                 ) : null}
               </span>
             </div>
-            {!legsShown.length ? (
+            {!legsShown.length && !state?.closed?.length ? (
               <div className="py-4 text-center text-[12px]" style={{ color: "var(--oc-faint)" }}>
                 {settled.length ? (
                   <div className="mb-1" style={{ color: "var(--oc-caution)" }}>
@@ -1714,6 +1746,34 @@ export default function ConsolePage() {
                   </tr>
                 </thead>
                 <tbody>
+                  {(state?.closed ?? []).map((c, i) => (
+                    /* a leg closed this cycle stays on the table — muted, with its exit and P&L —
+                       instead of vanishing (owner, 2026-09-10) */
+                    <tr key={`c${i}`} style={{ opacity: 0.6 }} title={`closed ${c.at.replace("T", " ")} · ${c.action}`}>
+                      <td className="py-1.5 text-[9px] font-bold uppercase" style={{ color: "var(--oc-faint)" }}>closed</td>
+                      <td><span className="px-1 rounded-[3px] text-[10px] font-bold"
+                        style={{ color: c.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)",
+                          background: c.side === "S" ? "var(--oc-neg-fill)" : "var(--oc-pos-fill)" }}>{c.side}</span></td>
+                      <td className="whitespace-nowrap"><b className="line-through" style={{ color: "var(--oc-muted)" }}>
+                        {Math.round(c.strike).toLocaleString("en-IN")} {c.right}</b>
+                        <span className="ml-1.5 text-[10px]" style={{ color: "var(--oc-faint)" }}>{c.action === "SETTLE" ? "settled" : "exited"} {c.at.slice(11)}</span></td>
+                      <td className="whitespace-nowrap text-[11px]" style={{ color: "var(--oc-muted)" }}>{expiryChip(c.expiry)}</td>
+                      <td className="whitespace-nowrap">×{c.lots}<span style={{ color: "var(--oc-faint)" }}> · {c.units.toLocaleString("en-IN")}</span></td>
+                      <td className="text-right pl-3">{num(c.entry)}</td>
+                      <td className="text-right pl-3" title="exit price">{num(c.exit)}</td>
+                      <td className="text-right pl-3" style={{ color: "var(--oc-faint)" }}>—</td>
+                      <td className="text-right pl-3 font-semibold" style={{ color: c.pnl >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>{inr0(c.pnl)}</td>
+                      <td className="text-right" style={{ color: "var(--oc-faint)" }}>—</td>
+                      <td className="text-right whitespace-nowrap">
+                        {!isLive && (
+                          <button type="button" onClick={() => unstage.mutate({ leg_id: c.symbol })}
+                            title="delete this leg as if it was never traded (its P&L leaves the cycle)"
+                            className="w-[22px] h-[20px] rounded-[4px] text-[12px]"
+                            style={{ border: "1px solid var(--oc-line)", color: "var(--oc-muted)" }}>🗑</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
                   {legsShown.map((l) => (
                     <LegRow key={l.id} leg={l} grid={gridStep} chainExpiry={state?.chain.expiry ?? null}
                       resetKey={state?.staged ? "staged" : "clean"}
@@ -2082,6 +2142,13 @@ export default function ConsolePage() {
               ⟨⟨</button>
             <span className="text-[9.5px] font-semibold uppercase tracking-[.07em] pr-1"
               style={{ color: "var(--oc-faint)" }}>Expiry</span>
+            {!isLive && (
+              /* the §8 escape hatch: NIFTY lists 50-point strikes, the automated strategies never
+                 select one, so the ladder is coarsened to 100s by default; this shows the 50s */
+              <Chip active={!!state?.chain.listing_grid} disabled={!state}
+                title={state?.chain.listing_grid ? "showing every listed strike — click for 100s only" : "show the 50-point strikes too"}
+                onClick={() => setFifty.mutate(!state?.chain.listing_grid)}>50s</Chip>
+            )}
             {/* the size a B/S click stages — kept beside the ladder because it is part of
                 the click, not a property of the position */}
             <span className="flex items-center gap-1 mr-1.5 shrink-0"
