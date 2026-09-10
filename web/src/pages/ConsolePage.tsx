@@ -1450,7 +1450,7 @@ export default function ConsolePage() {
                   )}
                   <div className="flex items-start justify-between">
                     <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
-                      style={{ color: "var(--oc-faint)" }}>Total MTM · realised + open
+                      style={{ color: "var(--oc-faint)" }}>Cycle MTM · realised + open
                       <InfoIcon title="how the numbers are made" text={risk?.margin_source === "model"
                         ? "Margin is estimated the way SPAN is: the book's worst loss over a ±6% move (hedges offset) plus 2% exposure on every short unit. Within ~10% of a Kite basket on a spread; still an estimate. Every % here is of that margin."
                         : "Margin is the run's own figure (a Zerodha basket where it has one). Every % here is of that margin. POP, max P/L and breakevens come from the same calculator as the chart."} />
@@ -1480,12 +1480,13 @@ export default function ConsolePage() {
                       made. Said plainly, because "MTM ₹5,487 · NO POSITION" reads as a bug, and
                       a later structure's rail would otherwise show the previous one's profit as
                       if it were its own. Reset clears it. */}
-                  {!!risk?.realised && (
+                  {!!(risk?.realised || risk?.realised_total) && (
                     <div className="text-[11px] mt-1 flex items-center gap-2">
-                      <span style={{ color: "var(--oc-faint)" }}>
+                      <span style={{ color: "var(--oc-faint)" }} title="the cycle = since the book last opened from flat">
                         {risk.legs_open
-                          ? `includes ${inr0(risk.realised)} banked from closed legs`
-                          : `${inr0(risk.realised)} banked this session · nothing open`}
+                          ? `cycle banked ${inr0(risk.realised)} from closed legs`
+                          : `${inr0(risk.realised)} banked this cycle · nothing open`}
+                        {risk.realised_total !== risk.realised ? ` · ${inr0(risk.realised_total)} in total` : ""}
                       </span>
                       <button type="button" onClick={() => reset.mutate()}
                         className="underline" style={{ color: "var(--oc-muted)" }}>reset</button>
@@ -1513,7 +1514,11 @@ export default function ConsolePage() {
                     <Tile label="Open P&L" tone={(risk?.unrealised ?? 0) >= 0 ? "pos" : "neg"}
                       value={`${inr0(risk?.unrealised ?? 0)}${risk?.margin ? ` · ${pctOf(risk.unrealised, risk.margin)}` : ""}`}
                       sub={`banked ${inr0(risk?.realised ?? 0)} · ${inr0(-(risk?.charges ?? 0))} costs`} />
-                  </div>
+                    <Tile label={risk?.net_credit != null && risk.net_credit < 0 ? "Net debit" : "Net credit"}
+                      tone={risk?.net_credit == null ? undefined : risk.net_credit >= 0 ? "pos" : "neg"}
+                      value={risk?.net_credit == null ? "—" : inr0(Math.abs(risk.net_credit))}
+                      sub={risk?.net_credit == null ? "—" : risk.net_credit >= 0 ? "premium received at entry" : "premium paid at entry"} />
+                    </div>
 
                 </Panel>
   );
@@ -1542,7 +1547,7 @@ export default function ConsolePage() {
         </div>
       )}
       <div className="flex flex-wrap gap-1.5 [&>*]:flex-1 [&>*]:min-w-[110px]">
-        <Tile label={`Total MTM · ${!risk?.legs_open ? "no position" : mNow && !mNow.maxLossUnlimited ? "defined risk" : "undefined risk"}`}
+        <Tile label={`Cycle MTM · ${!risk?.legs_open ? "no position" : mNow && !mNow.maxLossUnlimited ? "defined risk" : "undefined risk"}`}
           tone={!risk?.mtm ? undefined : risk.mtm > 0 ? "pos" : "neg"}
           value={`${inr0(risk?.mtm ?? 0)}${risk?.margin ? ` · ${pctOf(risk.mtm, risk.margin)}` : ""}`}
           sub={risk?.realised ? `banked ${inr0(risk.realised)}` : `${risk?.legs_open ?? 0} legs open`} />
@@ -1566,6 +1571,10 @@ export default function ConsolePage() {
         <Tile label="Open P&L" tone={(risk?.unrealised ?? 0) >= 0 ? "pos" : "neg"}
           value={`${inr0(risk?.unrealised ?? 0)}${risk?.margin ? ` · ${pctOf(risk.unrealised, risk.margin)}` : ""}`}
           sub={`${inr0(-(risk?.charges ?? 0))} costs`} />
+        <Tile label={risk?.net_credit != null && risk.net_credit < 0 ? "Net debit" : "Net credit"}
+          tone={risk?.net_credit == null ? undefined : risk.net_credit >= 0 ? "pos" : "neg"}
+          value={risk?.net_credit == null ? "—" : inr0(Math.abs(risk.net_credit))}
+          sub={risk?.net_credit == null ? "—" : "at entry"} />
       </div>
     </Panel>
   );
@@ -2100,7 +2109,7 @@ export default function ConsolePage() {
             : state?.session.requires_confirm ? "changes are shown as done but STAGED — Commit fills on the paper broker · Revert drops them"
             : "clicks trade at once · U undoes"}
         </span>
-        <span>REALISED <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.realised ?? 0)}</b></span>
+        <span title="this cycle's realised">REALISED <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.realised ?? 0)}</b></span>
         <span>UNREALISED <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.unrealised ?? 0)}</b></span>
         <span>TOTAL <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.mtm ?? 0)}</b>
           <span> ({pctOf(risk?.mtm, risk?.margin)} of margin)</span></span>

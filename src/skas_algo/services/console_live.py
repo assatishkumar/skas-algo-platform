@@ -20,6 +20,7 @@ from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.instrument import make as make_option
 from skas_algo.engine.options.instrument import parse
 from skas_algo.live.manager import manager
+from skas_algo.services.live_cycles import cycle_info
 from skas_algo.services.options_console import presets as _presets
 from skas_algo.services.options_console.alerts import AlertBook
 from skas_algo.services.options_console.margin import MarginLeg, span_like
@@ -944,8 +945,18 @@ class LiveConsole(AlertBook):
             if have
             else {"delta": None, "gamma": None, "theta": None, "vega": None}
         )
-        realised = float(snap.get("realized_pnl") or 0.0)
+        realised_total = float(snap.get("realized_pnl") or 0.0)
+        # the CYCLE's realised: the platform's own cycle finder (the Live tile's basis)
+        try:
+            before = float(
+                cycle_info(list(self.session.transactions), self.underlying).get("realized_before")
+                or 0.0
+            )
+        except Exception:  # pragma: no cover - a malformed log must not blank the console
+            before = 0.0
+        realised = realised_total - before
         open_pnl = sum(x["pnl"] or 0.0 for x in enabled)
+        net_credit = sum(-x["direction"] * x["entry"] * x["units"] for x in enabled)
         margin, src, detail = self.margin(enabled, spot, snap)
         mtm = realised + open_pnl
         self._evaluate_alerts(
@@ -965,8 +976,11 @@ class LiveConsole(AlertBook):
                 for k in tot_a:
                     tot_a[k] += float(x[k]) * float(x["units"])
             open_after = sum(x.get("pnl") or 0.0 for x in en_after)
+            net_after = sum(-x["direction"] * x["entry"] * x["units"] for x in en_after)
             risk_after = {
                 "realised": round(realised, 2),
+                "realised_total": round(realised_total, 2),
+                "net_credit": round(net_after, 2) if en_after else None,
                 "unrealised": round(open_after, 2),
                 "mtm": round(realised + open_after, 2),
                 "charges": 0.0,
@@ -1076,8 +1090,10 @@ class LiveConsole(AlertBook):
             ),
             "risk": {
                 "realised": round(realised, 2),
+                "realised_total": round(realised_total, 2),
                 "unrealised": round(open_pnl, 2),
                 "mtm": round(mtm, 2),
+                "net_credit": round(net_credit, 2) if enabled else None,
                 "charges": 0.0,
                 "margin": margin,
                 "margin_source": src,

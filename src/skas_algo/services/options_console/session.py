@@ -200,6 +200,11 @@ class ConsoleSession(AlertBook):
         # between them. The per-minute spot series backs "next 1% move" and is built once
         # per day, lazily, from a separate pass over the tape.
         self.bookmarks: list[str] = []
+        # Realised P&L booked BEFORE the current cycle began (the book last went from flat
+        # to open). The MTM on screen is the CYCLE's: realised since then + open — never
+        # the session's cumulative, which made a fresh structure wear the last one's
+        # profit (owner, 2026-09-10). `_open` stamps it; a rebuild re-derives it.
+        self._cycle_realized_before = 0.0
         self._margin_detail: dict | None = None
         self._spot_series: dict[str, list[tuple[str, float]]] = {}
         self.market = ReplayMarket(u, allow_fifty_strikes=self.allow_fifty_strikes)
@@ -358,12 +363,14 @@ class ConsoleSession(AlertBook):
             if force:                    # an undo that emptied the journal empties the book
                 self.legs, self.realized, self.charges, self.fills = [], 0.0, 0.0, []
                 self._leg_seq = 0
+                self._cycle_realized_before = 0.0
             return
         kept = [f for f in self.journal if f["at"] <= key]
         if not force and len(kept) == len(self.fills) and self.legs:
             return                       # already the right slice — nothing to rebuild
         self.legs, self.realized, self.charges, self.fills = [], 0.0, 0.0, []
         self._leg_seq = 0
+        self._cycle_realized_before = 0.0
         self._replaying = True
         try:
             for f in kept:
@@ -899,6 +906,8 @@ class ConsoleSession(AlertBook):
         (owner, 2026-09-09). The rare case this forecloses — holding two tranches of the same
         contract separately — is not what this screen is for, and the fills journal still has
         every entry if the history is ever wanted."""
+        if not self.legs:                # flat → open: a new cycle begins here
+            self._cycle_realized_before = self.realized
         if lots <= 0:
             return
         exp = expiry or str(self.expiry)
@@ -995,6 +1004,7 @@ class ConsoleSession(AlertBook):
         clean slate without reopening the day."""
         self.legs, self.journal, self.fills = [], [], []
         self.realized = self.charges = 0.0
+        self._cycle_realized_before = 0.0
         self._leg_seq = 0
         self.staged = None
         for a in self.alerts:
@@ -1157,10 +1167,17 @@ class ConsoleSession(AlertBook):
         detail = self._margin_detail
         open_pnl = sum(x["pnl"] or 0.0 for x in (self._leg_out(leg) for leg in self.legs
                                                  if leg.enabled))
+        enabled = [leg for leg in self.legs if leg.enabled]
+        cycle_realised = self.realized - self._cycle_realized_before
+        # what the book collected at entry: + for premium received, − for premium paid
+        net_credit = sum(-leg.direction * leg.entry * leg.units for leg in enabled)
         return {
-            "realised": round(self.realized, 2),
+            # the CYCLE's numbers — realised since the book last opened from flat
+            "realised": round(cycle_realised, 2),
+            "realised_total": round(self.realized, 2),
             "unrealised": round(open_pnl, 2),
-            "mtm": round(self.realized + open_pnl, 2),
+            "mtm": round(cycle_realised + open_pnl, 2),
+            "net_credit": round(net_credit, 2) if enabled else None,
             "charges": round(self.charges, 2),
             "margin": margin,
             # NEVER just a number: the model is an estimate (SPAN-shaped, calibrated to one

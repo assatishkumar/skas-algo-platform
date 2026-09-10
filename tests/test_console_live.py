@@ -80,8 +80,9 @@ def test_the_live_console_reads_the_runs_book_and_answers_the_replay_dto(run):
     from skas_algo.data import option_intraday_store as store
     assert set(st) >= {"session", "market", "chain", "legs", "staged", "risk", "fills",
                        "journal", "alerts", "bookmarks", "cycle", "track", "pricing", "notes"}
-    assert set(st["risk"]) == {"realised", "unrealised", "mtm", "charges", "margin",
-                               "margin_source", "margin_detail", "capital", "legs_open", "greeks"}
+    assert set(st["risk"]) == {"realised", "realised_total", "net_credit", "unrealised", "mtm",
+                               "charges", "margin", "margin_source", "margin_detail", "capital",
+                               "legs_open", "greeks"}
     _ = (store, ConsoleSession)
 
 

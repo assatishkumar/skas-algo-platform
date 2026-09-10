@@ -2099,7 +2099,10 @@ export interface ConsoleStaged {
   }
 
 export interface ConsoleRisk {
-  realised: number; unrealised: number; mtm: number; charges: number;
+  realised: number;          // the CYCLE's realised (since the book last opened from flat)
+  realised_total: number;    // the session's / run's cumulative realised
+  net_credit: number | null; // + premium received, − premium paid, on the enabled legs
+  unrealised: number; mtm: number; charges: number;
   margin: number;
   margin_source: string;   // "manual" = a measured anchor, "model" = SPAN-shaped estimate
   margin_detail: { span: number; exposure: number; total: number; worst_move_pct: number } | null;

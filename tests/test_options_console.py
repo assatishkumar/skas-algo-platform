@@ -971,3 +971,28 @@ def test_the_multiplier_scales_every_leg_as_one_action():
     with pytest.raises(ValueError):
         s.scale_book(0.1)                       # a leg would go below one lot
     assert [leg.lots for leg in s.legs] == [2, 4]   # nothing partial applied
+
+
+def test_the_mtm_is_the_cycles_not_the_sessions_and_net_credit_is_what_entry_collected():
+    """Close a first structure at a profit, open a second: the second's MTM starts near
+    zero (its own realised is 0), while `realised_total` still carries the first cycle's
+    banked profit. Net credit is +premium received on shorts, −premium paid on longs."""
+    store.write_day(DAY, _day())
+    s = _open(at="09:20")
+    s.stage(kind="add", right="CE", strike=24000, side="B", lots=1)     # drifts up: a profit
+    s.seek("11:00")
+    s.stage(kind="flatten", replace=True)
+    r1 = s.state()["risk"]
+    assert r1["realised_total"] > 0 and r1["mtm"] == pytest.approx(r1["realised"])
+    banked = r1["realised_total"]
+    s.stage(kind="add", right="PE", strike=24000, side="S", lots=1)     # a NEW cycle
+    r2 = s.state()["risk"]
+    assert r2["realised"] == 0.0 and r2["realised_total"] == pytest.approx(banked)
+    assert r2["mtm"] == pytest.approx(r2["unrealised"])                # not banked + open
+    entry = s.legs[0].entry
+    assert r2["net_credit"] == pytest.approx(entry * s.legs[0].units)   # a short: credit
+    # the cycle survives a rewind-and-replay (it is re-derived from the journal)
+    s.seek("11:30")
+    assert s.state()["risk"]["realised"] == 0.0
+    s.reset_book()
+    assert s.state()["risk"]["net_credit"] is None
