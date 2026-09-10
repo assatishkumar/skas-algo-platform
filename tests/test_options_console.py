@@ -8,7 +8,7 @@ in the chain actually reprice the premium they were solved from.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 import pandas as pd
 import pytest
@@ -1363,3 +1363,20 @@ def test_the_minute_vix_store_round_trips_a_day(tmp_path, monkeypatch):
     lo, hi = ib.vix_cached_range()
     assert lo.startswith(str(DAY)) and hi.startswith(str(DAY)) and lo < hi
     assert ib._chunk_days(1) == 60 and ib._chunk_days(15) == 190
+
+
+def test_a_leg_carries_the_intraday_t_its_iv_was_solved_with():
+    """The payoff's T+0 must reprice with the SAME t the ladder solved IV with. A whole-day
+    floor on expiry morning invented time value on legs priced at intrinsic and put the
+    T+0 line ₹70k+ away from the book (owner screens, 2026-09-10)."""
+    store.write_day(DAY, _day())
+    exp_day = date.fromisoformat(EXP)
+    store.write_day(exp_day, _day(exp_day))
+    s = ConsoleSession(underlying="NIFTY", day=exp_day, at="09:54", expiry=EXP)
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    leg = s.state()["legs"][0]
+    assert leg["dte"] == 0
+    hours_left = (datetime.combine(exp_day, time(15, 30)) - s.clock).total_seconds() / 3600
+    assert 0 < leg["t"] < 1 / 365 and abs(leg["t"] * 365 * 24 - hours_left) < 0.05
+    s.step(60)
+    assert s.state()["legs"][0]["t"] < leg["t"]                 # t shrinks with the cursor

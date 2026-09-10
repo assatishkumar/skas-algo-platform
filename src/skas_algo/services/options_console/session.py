@@ -1357,6 +1357,10 @@ class ConsoleSession(AlertBook):
                "pnl": round(pnl, 2) if pnl is not None else None,
                "enabled": leg.enabled, "realized": round(leg.realized, 2)}
         out["dte"] = (date.fromisoformat(leg.expiry) - self.day).days if leg.expiry else None
+        # the EXACT time to expiry the greeks/IV were solved with (years, intraday) — the
+        # payoff's T+0 must reprice with this, not with whole days: on expiry morning a
+        # day-floored t invented time value on legs the ladder priced at intrinsic
+        out["t"] = round(_t_years(leg.expiry, self.clock), 9) if leg.expiry else None
         out.update(self._leg_greeks(leg, out))
         return out
 

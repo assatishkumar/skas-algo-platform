@@ -290,6 +290,7 @@ class LiveConsole(AlertBook):
                     "enabled": symbol not in self.disabled,
                     "realized": 0.0,
                     "dte": (inst.expiry - self._today()).days,
+                    "t": round(_t_years(exp, self._clock()), 9),
                     # who opened it — STRATEGY / MANUAL / MIXED (both on one contract)
                     "tag": (lots[0].tag if all(lot.tag == lots[0].tag for lot in lots)
                             else "MIXED"),

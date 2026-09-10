@@ -157,6 +157,11 @@ export interface LiveLeg {
   // point-in-time snapshot whose leg has no store mark → its entry IV). Never overrides an
   // LTP-derived IV, so a live position with a mark values exactly as before.
   iv?: number | null;
+  // The EXACT years to expiry the backend solved the leg's IV/greeks with (intraday, floored
+  // at ~2 min). When present it replaces the whole-day t below: on expiry morning the day
+  // floor invented time value on legs the ladder priced at intrinsic, and the T+0 line sat
+  // ₹70k+ away from the book it was meant to pass through (console, 2026-09-10).
+  t?: number | null;
 }
 
 export interface LivePayoffData {
@@ -184,7 +189,8 @@ interface LegMeta { iv: number; tLeg: number; tRemain: number }
 function legTerminalMeta(legs: LiveLeg[], spot: number, asOf: string, term: string): LegMeta[] {
   return legs.map((l) => {
     const exp = l.expiry ?? term;
-    const tLeg = Math.max(daysBetween(asOf, exp) / 365, 1 / 365); // ≥ ~1 day keeps BS sane
+    // the backend's intraday t when the leg carries one; else whole days, ≥ ~1 day
+    const tLeg = l.t != null && l.t > 0 ? l.t : Math.max(daysBetween(asOf, exp) / 365, 1 / 365);
     const iv =
       (l.ltp != null ? impliedVol(l.ltp, spot, l.strike, tLeg, RISK_FREE, l.right) : null) ?? l.iv ?? 0.15;
     const tRemain = Math.max(daysBetween(term, exp) / 365, 0);
@@ -327,7 +333,9 @@ export function computeMetrics(
 ): PositionMetrics | null {
   if (!legs.length || !spot) return null;
   const asOf = today ?? new Date().toISOString().slice(0, 10);
-  const t = Math.max(daysBetween(asOf, expiryDate) / 365, 1 / 365);
+  // the POP horizon: the nearest leg's exact intraday t when the legs carry one
+  const tLegs = legs.map((l) => l.t).filter((v): v is number => v != null && v > 0);
+  const t = tLegs.length ? Math.min(...tLegs) : Math.max(daysBetween(asOf, expiryDate) / 365, 1 / 365);
 
   // Terminal payoff = value at the NEAREST leg expiry (near legs → intrinsic, a calendar's far
   // legs → BS at their residual DTE). For a single-expiry position this is plain intrinsic, so

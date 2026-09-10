@@ -37,6 +37,7 @@ export function toPayoffLegs(legs: ConsoleLeg[]): LiveLeg[] {
     // the backend's per-leg IV (a PERCENT there) as the fallback the library uses when its
     // own solve fails — never the library's flat 15%
     iv: l.iv != null ? l.iv / 100 : undefined,
+    t: l.t ?? undefined,
   }));
 }
 

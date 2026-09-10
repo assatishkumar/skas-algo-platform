@@ -2081,6 +2081,7 @@ export interface ConsoleSaved {
 
 export interface ConsoleLeg {
   tag?: "STRATEGY" | "MANUAL" | "MIXED"; // live: who opened it
+  t?: number | null; // years to expiry at the cursor, INTRADAY — what the IV/greeks were solved with
   id: string; symbol: string; right: "CE" | "PE"; strike: number; expiry: string;
   side: "B" | "S"; lots: number; lot_size: number; units: number; direction: number;
   entry: number; ltp: number | null; pnl: number | null;
