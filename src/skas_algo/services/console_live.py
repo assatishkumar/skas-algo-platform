@@ -1001,8 +1001,13 @@ def drop_console(session_id: str) -> bool:
         return _CONSOLES.pop(run_id, None) is not None
 
 
+def recovering() -> bool:
+    return bool(getattr(manager, "recovering", False))
+
+
 def runs() -> list[dict]:
-    """The DERIV deployments the console can drive, paper and live."""
+    """The DERIV deployments the console can drive, paper and live. PARTIAL while the
+    manager is still recovering after a restart — see `recovering()`."""
     out = []
     for live in manager.list():
         if str(live.config.instrument_class).upper() != "DERIV" or not live.config.underlying:

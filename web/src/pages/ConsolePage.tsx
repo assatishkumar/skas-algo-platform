@@ -823,7 +823,9 @@ export default function ConsolePage() {
   const isLive = !!state && state.session.mode !== "replay";
   const isReal = !!state && state.session.mode === "live";
   const { data: liveRuns } = useQuery({
-    queryKey: ["console-live-runs"], queryFn: api.consoleLiveRuns, refetchInterval: 30_000,
+    queryKey: ["console-live-runs"], queryFn: api.consoleLiveRuns,
+    // a backend that just restarted is still rebuilding its runs: poll fast until it says done
+    refetchInterval: (q) => (q.state.data?.recovering ? 3_000 : 30_000),
   });
   const openLive = useMutation({
     mutationFn: (run_id: number) => api.consoleOpenLive({ run_id }),
@@ -1565,6 +1567,9 @@ export default function ConsolePage() {
           style={{ border: `1px solid ${isReal ? "var(--oc-neg)" : "var(--oc-accent)"}`,
             color: isReal ? "var(--oc-neg)" : "var(--oc-accent)", background: "transparent" }}>
           <option value="replay">REPLAY</option>
+          {liveRuns?.recovering && (
+            <option value="__recovering" disabled>… backend recovering runs — list is partial</option>
+          )}
           {/* populated runs first — the first option in a list of thirty was an empty book,
               which read as "selecting a run shows no legs" (owner, 2026-09-10) */}
           {[...(liveRuns?.runs ?? [])]

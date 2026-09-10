@@ -14,6 +14,8 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 def health() -> dict:
+    from skas_algo.live.manager import manager  # lazy: the manager imports half the platform
+
     """Liveness + DB connectivity check."""
     settings = get_settings()
     db_ok = True
@@ -27,6 +29,8 @@ def health() -> dict:
 
     return {
         "status": "ok" if db_ok else "degraded",
+        # startup recovery still rebuilding runs: every run listing is PARTIAL until false
+        "recovering": bool(getattr(manager, "recovering", False)),
         "version": __version__,
         "environment": settings.environment,
         "database": {"ok": db_ok, "error": db_error},

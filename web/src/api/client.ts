@@ -177,7 +177,7 @@ export const api = {
     restore?: { journal: ConsoleState["journal"]; alerts: ConsoleState["alerts"] };
   }) => request<ConsoleState>("/console/sessions", { method: "POST", body: JSON.stringify(body) }),
   consoleGet: (id: string) => request<ConsoleState>(`/console/sessions/${id}`),
-  consoleLiveRuns: () => request<{ runs: ConsoleLiveRun[] }>("/console/live-runs"),
+  consoleLiveRuns: () => request<{ runs: ConsoleLiveRun[]; recovering?: boolean }>("/console/live-runs"),
   consoleOpenLive: (body: { run_id: number; expiry?: string | null }) =>
     request<ConsoleState>("/console/sessions/live", { method: "POST", body: JSON.stringify(body) }),
   consoleTransport: (id: string, body: {

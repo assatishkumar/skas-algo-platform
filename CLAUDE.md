@@ -203,7 +203,19 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   If you touch the shared path, these must stay green.
 
 ## 4. Local dev data is real and irreplaceable
-- `skas_algo.db` (~75 MB, gitignored) holds actual deployments + run history. **Do not reset/delete it.**
+- `skas_algo.db` (~390 MB as of 2026-09, gitignored; the "~75 MB" of early 2026 is long
+  gone) holds actual deployments + run history — **33 running paper deployments** on the
+  Mac, run ids in the hundreds (the VPS's are in the tens). **Do not reset/delete it.**
+- **Startup recovery runs on a BACKGROUND thread and the API answers before it is done.**
+  A `GET /live` (or the console's run list) seconds after a restart returns a PARTIAL
+  table — three of thirty-three on 2026-09-09, the lowest ids first — which was misread as
+  "the VPS database was copied over the local one". It was not; the file was the same
+  inode since June and the Drive series shows it growing 52→64 MB gzipped over a month.
+  `manager.recovering` is True until recovery finishes; `/health` and
+  `/console/live-runs` carry it. Never infer the fleet from a listing taken while it is set.
+  Also: every restart writes a pre-recovery backup and `backups/` keeps SEVEN — a burst of
+  dev restarts prunes days of history from that folder (the Drive off-box series is the
+  durable one).
 - Tests are fully isolated: `tests/conftest.py` spins a temp SQLite DB + throwaway Fernet key before any
   import, so `pytest` is always safe to run.
 - Secrets: broker creds are Fernet-encrypted at rest; `.env` and tokens are gitignored — never commit them.

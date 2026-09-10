@@ -63,7 +63,7 @@ def _replay_only(session, what: str) -> ConsoleSession:
 @router.get("/live-runs")
 def live_runs() -> dict:
     """The DERIV deployments the console can drive (paper and live)."""
-    return {"runs": console_live.runs()}
+    return {"runs": console_live.runs(), "recovering": console_live.recovering()}
 
 
 @router.post("/sessions/live")

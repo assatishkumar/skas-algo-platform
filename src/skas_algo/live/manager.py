@@ -2177,6 +2177,10 @@ class LiveRunManager:
     def get(self, run_id: int) -> LiveRun | None:
         return self.runs.get(run_id)
 
+    # True from process start until startup recovery has rebuilt every running run. While it
+    # is set, `list()` is a PARTIAL table — readers that enumerate runs must say so.
+    recovering: bool = False
+
     def list(self) -> list[LiveRun]:
         return list(self.runs.values())
 

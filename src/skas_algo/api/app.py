@@ -73,7 +73,13 @@ async def lifespan(app: FastAPI):
                 recover_running_sessions()
             except Exception:  # pragma: no cover - never crash the app
                 logger.exception("live-session recovery failed")
+            finally:
+                # The API answers while this thread is still rebuilding runs, so a caller a
+                # few seconds after a restart sees a PARTIAL run table (three of thirty-three
+                # on 2026-09-09, read as "the database was swapped"). Say so until done.
+                manager.recovering = False
 
+        manager.recovering = True
         threading.Thread(target=_recover, daemon=True, name="skas-recovery").start()
     except Exception:  # pragma: no cover - never block startup
         logger.exception("live-session recovery failed to start")
