@@ -113,6 +113,16 @@ class LiveConsole(AlertBook):
         return sorted(out)
 
     def _default_expiry(self) -> str | None:
+        """The chip a run opens on: the NEAREST expiry it actually HOLDS (a calendar's near
+        leg), else the strategy's own entry expiry, else the nearest listed. Opening on the
+        strategy's expiry put a ⚠ on every row of a book held on a later series."""
+        held = sorted(
+            inst.expiry.isoformat()
+            for inst in (parse(sym) for sym in self.session.portfolio.lot_symbols())
+            if inst is not None
+        )
+        if held:
+            return held[0]
         e = getattr(self.session.strategy, "entry_expiry", None)
         if e:
             return e.isoformat() if hasattr(e, "isoformat") else str(e)[:10]

@@ -1565,9 +1565,14 @@ export default function ConsolePage() {
           style={{ border: `1px solid ${isReal ? "var(--oc-neg)" : "var(--oc-accent)"}`,
             color: isReal ? "var(--oc-neg)" : "var(--oc-accent)", background: "transparent" }}>
           <option value="replay">REPLAY</option>
-          {(liveRuns?.runs ?? []).map((r: ConsoleLiveRun) => (
+          {/* populated runs first — the first option in a list of thirty was an empty book,
+              which read as "selecting a run shows no legs" (owner, 2026-09-10) */}
+          {[...(liveRuns?.runs ?? [])]
+            .sort((a, b) => (b.open_positions ?? 0) - (a.open_positions ?? 0) || a.run_id - b.run_id)
+            .map((r: ConsoleLiveRun) => (
             <option key={r.run_id} value={`run:${r.run_id}`}>
               {r.mode === "LIVE" && r.order_broker === "live" ? "LIVE" : "PAPER"} · #{r.run_id} {r.name} · {r.underlying}
+              {" · "}{r.open_positions ? `${r.open_positions} leg${r.open_positions === 1 ? "" : "s"}` : "flat"}
             </option>
           ))}
         </select>
