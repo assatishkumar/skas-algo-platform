@@ -41,7 +41,7 @@ export function toPayoffLegs(legs: ConsoleLeg[]): LiveLeg[] {
 }
 
 export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight = 220,
-  alerts = [], realised = 0 }: {
+  alerts = [], realised = 0, sigma = null, underlying = "" }: {
   legs: ConsoleLeg[];
   staged: ConsoleLeg[] | null;
   spot: number | null;
@@ -50,6 +50,10 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   minHeight?: number;
   // Armed levels, drawn amber at their own level: the chart's y IS the cycle's MTM.
   alerts?: ConsoleAlert[];
+  // One standard deviation of the underlying to the drawn expiry (spot × ATM IV × √t), for
+  // the ±1σ / ±2σ markers; undefined = no ATM IV at the cursor.
+  sigma?: number | null;
+  underlying?: string;
   // The cycle's realised P&L so far. Every curve carries it, so after a leg is closed at a
   // profit the whole payoff sits that much higher and its breakevens move — the chart reads
   // as "where this cycle ends up", the way StockMock draws it (owner, 2026-09-10).
@@ -294,10 +298,26 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
             </text>
           </g>
         ))}
+        {/* ±1σ / ±2σ to the drawn expiry: faint verticals with a rotated label, the way
+            the StockMock chart marks them (owner, 2026-09-10) */}
+        {sigma ? [-2, -1, 1, 2].map((k) => {
+          const v = spot + k * sigma;
+          if (v < x0 || v > x1) return null;
+          return (
+            <g key={k}>
+              <line x1={px(v)} x2={px(v)} y1={T} y2={height - B} stroke="var(--oc-line)"
+                strokeWidth={1} strokeDasharray="2 3" />
+              <text x={px(v) - 3} y={T + 8} fontSize={9} fill="var(--oc-muted)"
+                transform={`rotate(-90 ${px(v) - 3} ${T + 8})`} textAnchor="end">
+                {k > 0 ? `+${k}σ` : `${MINUS}${-k}σ`}
+              </text>
+            </g>
+          );
+        }) : null}
         <line x1={px(spot)} x2={px(spot)} y1={T} y2={height - B} stroke="var(--oc-accent)"
-          strokeWidth={1} strokeDasharray="3 3" />
-        <text x={px(spot) + 4} y={T + 10} fontSize={9.5} fill="var(--oc-accent)">
-          spot {Math.round(spot).toLocaleString("en-IN")}
+          strokeWidth={1.4} />
+        <text x={px(spot) + 5} y={T + 11} fontSize={11} fontWeight={700} fill="var(--oc-accent)">
+          {underlying ? `${underlying} spot ` : "spot "}{Math.round(spot).toLocaleString("en-IN")}
         </text>
 
         {metrics && Number.isFinite(metrics.maxProfit) && (

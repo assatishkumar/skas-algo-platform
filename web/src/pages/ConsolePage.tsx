@@ -1445,6 +1445,15 @@ export default function ConsolePage() {
     }
     return out;
   }, [legsShown, spotNow, expNow, state?.session.date, risk?.realised]);
+  // one standard deviation of the underlying to the selected expiry: spot × ATM IV × √t,
+  // the ATM IV being the ladder's own (the OTM side's), t the chain's DTE (floored at a day)
+  const sigma1 = useMemo(() => {
+    const atm = state?.chain.rows.find((r) => r.atm);
+    const iv = atm?.iv;
+    const dte = state?.market.dte;
+    if (!spotNow || iv == null || dte == null) return null;
+    return spotNow * (iv / 100) * Math.sqrt(Math.max(dte, 1) / 365);
+  }, [state?.chain.rows, state?.market.dte, spotNow]);
   const busy = open.isPending || move.isPending;
   const breach = state?.alerts.find((a) => a.kind === "stop" && a.state === "fired") ?? null;
   // legs the MARKET closed (expiry settlement) that are in the cursor's past
@@ -1481,7 +1490,7 @@ export default function ConsolePage() {
                       <PayoffSvg legs={legsShown} staged={staging ? null : (state?.staged?.after_legs ?? null)}
                         spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
                         today={state?.session.date ?? ""} alerts={state?.alerts ?? []}
-                        realised={risk?.realised ?? 0} />
+                        realised={risk?.realised ?? 0} sigma={sigma1} underlying={state?.session.underlying} />
                     )}
                   </div>
                   {/* NET GREEKS: Σ per-share greek × units over the enabled legs, the same
