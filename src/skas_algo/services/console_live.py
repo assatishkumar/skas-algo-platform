@@ -948,12 +948,17 @@ class LiveConsole(AlertBook):
         realised_total = float(snap.get("realized_pnl") or 0.0)
         # the CYCLE's realised: the platform's own cycle finder (the Live tile's basis)
         try:
-            before = float(
-                cycle_info(list(self.session.transactions), self.underlying).get("realized_before")
-                or 0.0
-            )
+            cyc = cycle_info(list(self.session.transactions), self.underlying)
         except Exception:  # pragma: no cover - a malformed log must not blank the console
-            before = 0.0
+            cyc = {}
+        before = float(cyc.get("realized_before") or 0.0)
+        entry_at = cyc.get("entry_at") if legs else None
+        entry_spot = cyc.get("entry_spot") if legs else None
+        if entry_at is not None:
+            # a datetime or an ISO string with seconds/offset → "YYYY-MM-DDTHH:MM"
+            entry_at = (entry_at.isoformat() if hasattr(entry_at, "isoformat") else str(entry_at))[
+                :16
+            ]
         realised = realised_total - before
         open_pnl = sum(x["pnl"] or 0.0 for x in enabled)
         net_credit = sum(-x["direction"] * x["entry"] * x["units"] for x in enabled)
@@ -1106,7 +1111,7 @@ class LiveConsole(AlertBook):
             "journal": [],
             "alerts": self._alerts_out(),
             "bookmarks": [],
-            "cycle": None,
+            "cycle": ({"entry_at": entry_at, "entry_spot": entry_spot} if legs else None),
             "track": {"fills": [], "alerts": [], "bookmarks": []},
             "pricing": {
                 "r": RISK_FREE,

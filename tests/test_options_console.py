@@ -1032,3 +1032,17 @@ def test_next_alert_jumps_to_the_minute_the_armed_alert_would_fire():
     before = s.clock
     s.jump("next_alert")
     assert s.clock == before
+
+
+def test_the_cycle_remembers_where_the_underlying_stood_at_entry():
+    store.write_day(DAY, _day())
+    s = _open(at="09:40")
+    spot_then = s.state()["market"]["spot"]
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    s.seek("11:00")
+    c = s.state()["cycle"]
+    assert c["entry_at"] == f"{DAY.isoformat()}T09:40" and c["entry_spot"] == pytest.approx(spot_then, abs=0.5)
+    s.stage(kind="flatten", replace=True)
+    s.stage(kind="add", right="PE", strike=24000, side="S", lots=1)     # a new cycle, new entry
+    c2 = s.state()["cycle"]
+    assert c2["entry_at"] == f"{DAY.isoformat()}T11:00" and c2["entry_spot"] != c["entry_spot"]

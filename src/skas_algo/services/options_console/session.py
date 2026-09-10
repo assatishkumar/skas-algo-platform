@@ -206,6 +206,9 @@ class ConsoleSession(AlertBook):
         # the session's cumulative, which made a fresh structure wear the last one's
         # profit (owner, 2026-09-10). `_open` stamps it; a rebuild re-derives it.
         self._cycle_realized_before = 0.0
+        # where the underlying stood when the cycle began — the reference every "how far
+        # has it moved since I entered" reads (owner, 2026-09-10)
+        self._cycle_entry: dict | None = None
         self._margin_detail: dict | None = None
         self._spot_series: dict[str, list[tuple[str, float]]] = {}
         # per-symbol (minutes, closes) for the open day — the tape regrouped once, so a
@@ -368,6 +371,7 @@ class ConsoleSession(AlertBook):
                 self.legs, self.realized, self.charges, self.fills = [], 0.0, 0.0, []
                 self._leg_seq = 0
                 self._cycle_realized_before = 0.0
+                self._cycle_entry = None
             return
         kept = [f for f in self.journal if f["at"] <= key]
         if not force and len(kept) == len(self.fills) and self.legs:
@@ -375,6 +379,7 @@ class ConsoleSession(AlertBook):
         self.legs, self.realized, self.charges, self.fills = [], 0.0, 0.0, []
         self._leg_seq = 0
         self._cycle_realized_before = 0.0
+        self._cycle_entry = None
         self._replaying = True
         try:
             for f in kept:
@@ -852,7 +857,11 @@ class ConsoleSession(AlertBook):
         else:
             pct = 100.0
         last_captured = self.days[-1].isoformat() if self.days else today
+        entry = self._cycle_entry if self.legs else None
         return {"start": start, "end": end, "sessions": total,
+                # the current cycle's entry: minute and underlying level
+                "entry_at": entry["at"] if entry else None,
+                "entry_spot": entry["spot"] if entry else None,
                 "session_no": min(total, len([d for d in span if d <= today]) or 1),
                 "pct": round(min(100.0, pct), 2), "done": self.cycle_done(),
                 "legs_open": len(self.legs),
@@ -996,6 +1005,8 @@ class ConsoleSession(AlertBook):
         every entry if the history is ever wanted."""
         if not self.legs:                # flat → open: a new cycle begins here
             self._cycle_realized_before = self.realized
+            sp = self.market.index_spot(self.underlying)
+            self._cycle_entry = {"at": minute, "spot": round(float(sp), 2) if sp else None}
         if lots <= 0:
             return
         exp = expiry or str(self.expiry)
@@ -1093,6 +1104,7 @@ class ConsoleSession(AlertBook):
         self.legs, self.journal, self.fills = [], [], []
         self.realized = self.charges = 0.0
         self._cycle_realized_before = 0.0
+        self._cycle_entry = None
         self._leg_seq = 0
         self.staged = None
         for a in self.alerts:

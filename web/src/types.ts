@@ -2004,9 +2004,13 @@ export interface ConsoleState {
   bookmarks: string[];                       // full minutes "2026-04-01T11:40"
   // The cycle: first fill's day → the last expiry among the legs held, in captured
   // sessions. null until something has traded. `done` = every leg has expired.
-  cycle: { start: string; end: string; sessions: number; session_no: number; pct: number;
-    done: boolean; legs_open: number;
-    beyond_data: boolean; data_until: string } | null;   // expiry past the last captured day
+  cycle: {
+    // replay: the cycle bar (a deployment carries only the entry fields)
+    start?: string; end?: string; sessions?: number; session_no?: number; pct?: number;
+    done?: boolean; legs_open?: number; beyond_data?: boolean; data_until?: string;
+    // where the underlying stood when the current cycle began
+    entry_at?: string | null; entry_spot?: number | null;
+  } | null;
   track: {                                   // markers on the OPEN day, "HH:MM"
     fills: { at: string; action: string }[];
     alerts: { at: string; kind: string }[];

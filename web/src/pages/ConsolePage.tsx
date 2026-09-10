@@ -1503,8 +1503,11 @@ export default function ConsolePage() {
                     )}
                   </div>
                   <div className="text-[11px] mt-0.5" style={{ color: "var(--oc-muted)" }}>
-                    {risk?.legs_open ? `${risk.legs_open} legs open` : "no open position"} · paused{" "}
-                    {state?.session.clock ?? "—"}
+                    {risk?.legs_open ? `${risk.legs_open} legs open` : "no open position"}
+                    {risk?.legs_open && state?.cycle?.entry_at
+                      ? ` · entered ${state.cycle.entry_at.slice(11)}${state.cycle.entry_at.slice(0, 10) !== state.session.date ? ` on ${expiryChip(state.cycle.entry_at.slice(0, 10))}` : ""}${state.cycle.entry_spot ? ` at ${num(state.cycle.entry_spot, 0)}` : ""}`
+                      : ""}
+                    {" · "}{isLive ? "as of" : "paused"} {state?.session.clock ?? "—"}
                   </div>
                   {/* A session's realised P&L survives closing the position — it is money you
                       made. Said plainly, because "MTM ₹5,487 · NO POSITION" reads as a bug, and
@@ -1901,13 +1904,13 @@ export default function ConsolePage() {
         )}
         {/* the CYCLE bar: first fill → last expiry, in sessions. The day bar above says
             where in the session you are; this says where in the trade (owner, 2026-09-09). */}
-        {state?.cycle && (
+        {state?.cycle?.sessions != null && (
           <>
             <div className="w-px h-3.5" style={{ background: "var(--oc-line)" }} />
             <div className="flex items-center gap-1.5 shrink-0"
-              title={`cycle: ${state.cycle.start} → expiry ${state.cycle.end} · NSE session ${state.cycle.session_no} of ${state.cycle.sessions}${state.cycle.beyond_data ? ` · the store's last captured day is ${state.cycle.data_until}; later sessions appear once captured (~16:00 IST daily)` : ""}`}>
+              title={`cycle: ${state.cycle.start!} → expiry ${state.cycle.end!} · NSE session ${state.cycle.session_no} of ${state.cycle.sessions}${state.cycle.beyond_data ? ` · the store's last captured day is ${state.cycle.data_until!}; later sessions appear once captured (~16:00 IST daily)` : ""}`}>
               <span className="text-[9px] whitespace-nowrap" style={{ color: "var(--oc-faint)" }}>
-                {expiryChip(state.cycle.start)}
+                {expiryChip(state.cycle.start!)}
               </span>
               <div className="relative w-[140px] h-1 rounded" style={{ background: "var(--oc-chip)" }}>
                 <div className="absolute left-0 top-0 h-1 rounded"
@@ -1916,10 +1919,10 @@ export default function ConsolePage() {
               </div>
               <span className="text-[9px] whitespace-nowrap font-semibold"
                 style={{ color: state.cycle.done ? "var(--oc-muted)" : "var(--oc-caution)" }}>
-                {state.cycle.done ? "expired" : `exp ${expiryChip(state.cycle.end)}`}
+                {state.cycle.done ? "expired" : `exp ${expiryChip(state.cycle.end!)}`}
                 <span className="font-normal" style={{ color: "var(--oc-faint)" }}>
                   {" "}· session {state.cycle.session_no}/{state.cycle.sessions}
-                  {state.cycle.beyond_data ? ` · data to ${expiryChip(state.cycle.data_until)}` : ""}
+                  {state.cycle.beyond_data ? ` · data to ${expiryChip(state.cycle.data_until!)}` : ""}
                 </span>
               </span>
             </div>
@@ -1958,7 +1961,18 @@ export default function ConsolePage() {
             </span>
           )}
         </div>
-        <StripItem label={`${underlying} (parity)`}>{num(state?.market.spot ?? null)}</StripItem>
+        <StripItem label={isLive ? underlying : `${underlying} (parity)`}>
+          {num(state?.market.spot ?? null)}
+          {state?.cycle?.entry_spot && state.market.spot ? (
+            <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}
+              title={`the underlying when this cycle opened (${state.cycle.entry_at?.replace("T", " ") ?? ""})`}>
+              entered {num(state.cycle.entry_spot, 0)}
+              <span style={{ color: state.market.spot >= state.cycle.entry_spot ? "var(--oc-pos)" : "var(--oc-neg)" }}>
+                {" "}{signed(100 * (state.market.spot / state.cycle.entry_spot - 1))}%
+              </span>
+            </span>
+          ) : null}
+        </StripItem>
         <StripItem label={`FUT ${state?.market.expiry ?? ""}`}>
           {num(state?.market.fut ?? null)}
           <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}>
