@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from skas_algo.brokers.base import BrokerOrder
+from skas_algo.brokers.base import BrokerOrder, OrderType
 from skas_algo.db.enums import OrderSide
 from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.options.instrument import is_option_symbol
@@ -166,6 +166,9 @@ class SliceExecutor:
 
     # ------------------------------------------------------------ internals
     def _execute(self, ts, action, lots_at_start) -> list[dict]:
+        # A caller's limit (console ticket) rides the order as LIMIT+price; every strategy
+        # action leaves it None and the BrokerOrder is built exactly as before.
+        self._limit = getattr(action, "limit_price", None)
         if isinstance(action, CloseLot):
             lot = self.portfolio.get_lot(action.symbol, action.lot_id)
             if lot is None:
@@ -204,10 +207,19 @@ class SliceExecutor:
             return [ev] if ev else []
         return []
 
+    def _order(self, symbol, side, units, *, reduce_only: bool = False) -> BrokerOrder:
+        """The BrokerOrder for the action being executed: MARKET as ever, or the caller's
+        LIMIT when the action carried one (`_limit`, set per action in `_execute`)."""
+        lim = getattr(self, "_limit", None)
+        if lim:
+            return BrokerOrder(symbol, side, units, order_type=OrderType.LIMIT,
+                               price=float(lim), reduce_only=reduce_only)
+        return BrokerOrder(symbol, side, units, reduce_only=reduce_only)
+
     def _sell(self, ts, symbol, lot_id, units, entry, tag, lots) -> dict | None:
         if units <= 0:
             return None
-        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.SELL, units, reduce_only=True))
+        fill = self.broker.execute(self._order(symbol, OrderSide.SELL, units, reduce_only=True))
         profit = self.portfolio.reduce_lot(symbol, lot_id, units, fill.price)
         pnl_pct = (fill.price - entry) / entry if entry else 0.0
         return trade_event(ts, symbol, "SELL", units, fill.price, profit, pnl_pct, lots, tag,
@@ -220,7 +232,7 @@ class SliceExecutor:
         total_units = sum(lot.units for lot in lots)
         n_lots = len(lots)
         fill = self.broker.execute(
-            BrokerOrder(symbol, OrderSide.SELL, total_units, reduce_only=True))
+            self._order(symbol, OrderSide.SELL, total_units, reduce_only=True))
         closed = self.portfolio.close_position(symbol, fill.price)
         if closed is None:
             return None
@@ -237,7 +249,7 @@ class SliceExecutor:
         if units <= 0:
             return None
         label = "BUY" if not self.portfolio.lots(symbol) else "AVG_BUY"
-        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.BUY, units))
+        fill = self.broker.execute(self._order(symbol, OrderSide.BUY, units))
         self.portfolio.buy(symbol, units, fill.price, ts, tag=tag)
         return trade_event(
             ts,
@@ -256,7 +268,7 @@ class SliceExecutor:
         """Write (sell-to-open) a short lot at the option's market price."""
         if units <= 0:
             return None
-        fill = self.broker.execute(BrokerOrder(symbol, OrderSide.SELL, units))
+        fill = self.broker.execute(self._order(symbol, OrderSide.SELL, units))
         self.portfolio.sell_to_open(symbol, units, fill.price, ts, multiplier, tag=tag)
         return trade_event(
             ts, symbol, "SHORT", units, fill.price, 0.0, 0.0,
@@ -269,12 +281,13 @@ class SliceExecutor:
         (None = the whole lot) covers part of it and leaves the rest in the same lot — the
         whole-lot path is byte-identical to before."""
         if units is None or units >= lot.units:
-            fill = self.broker.execute(BrokerOrder(symbol, OrderSide.BUY, lot.units, reduce_only=True))
+            fill = self.broker.execute(
+                self._order(symbol, OrderSide.BUY, lot.units, reduce_only=True))
             profit = self.portfolio.buy_to_close(symbol, lot_id, fill.price)
             done = lot.units
         else:
             n = max(1, int(units))
-            fill = self.broker.execute(BrokerOrder(symbol, OrderSide.BUY, n, reduce_only=True))
+            fill = self.broker.execute(self._order(symbol, OrderSide.BUY, n, reduce_only=True))
             profit = self.portfolio.reduce_short_lot(symbol, lot_id, n, fill.price)
             done = n
         pnl_pct = (lot.price - fill.price) / lot.price if lot.price else 0.0

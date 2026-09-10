@@ -2014,6 +2014,10 @@ export interface ConsoleState {
     vix?: { prev_close?: number | null; open?: number | null; prev_date?: string | null; last?: number | null;
       rank_1y?: number | null; rank_basis?: string | null; has_minutes?: boolean } | null;
     atm_iv?: number | null;  // front expiry's ATM implied vol % at the cursor (replay) / on the live chain
+    // the ~30-DTE expiry's ATM IV (the measure the daily history samples) and its TRUE rank over
+    // the trailing year of that history: `rank` = percentile, `ivr` = (now−low)/(high−low)
+    iv30?: { iv: number; expiry: string; dte: number; atm: number } | null;
+    iv_rank?: { rank: number; ivr: number | null; n: number; low: number; high: number } | null;
     expiry: string | null; dte: number | null;
   };
   chain: {

@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException
 from skas_algo.api.models import (
     ConsoleAlert,
     ConsoleBasket,
+    ConsoleCommit,
     ConsoleJump,
     ConsoleLoad,
     ConsoleMarginAnchor,
@@ -32,7 +33,7 @@ from skas_algo.api.models import (
     ConsoleUnstage,
 )
 from skas_algo.data.option_intraday_store import captured_days
-from skas_algo.services import console_live, console_margin, console_market
+from skas_algo.services import atm_iv_history, console_live, console_margin, console_market
 from skas_algo.services.options_console import registry
 from skas_algo.services.options_console import store as console_store
 from skas_algo.services.options_console.session import UNDERLYINGS, ConsoleSession
@@ -109,6 +110,7 @@ async def open_session(body: ConsoleOpen) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     session.margin_fn = console_margin.kite_equivalent
     session.vix_fn = console_market.vix_for_day
+    session.iv_rank_fn = atm_iv_history.iv_rank
     console_margin.warm(session.underlying)
     if body.restore and (body.restore.journal or body.restore.alerts):
         try:
@@ -293,6 +295,7 @@ async def load_session(body: ConsoleLoad) -> dict:
             margin_per_lot_set=j.get("margin_per_lot_set", 0.0))
         session.margin_fn = console_margin.kite_equivalent
         session.vix_fn = console_market.vix_for_day
+        session.iv_rank_fn = atm_iv_history.iv_rank
         console_margin.warm(session.underlying)
         await asyncio.to_thread(session.restore, j.get("journal", []), j.get("alerts", []),
                                 j.get("bookmarks", []))
@@ -331,11 +334,16 @@ def undo(session_id: str) -> dict:
 
 
 @router.post("/sessions/{session_id}/commit")
-async def commit(session_id: str) -> dict:
+async def commit(session_id: str, body: ConsoleCommit | None = None) -> dict:
     session = _get(session_id)
+    limits = body.limits if body is not None else None
     try:
-        await asyncio.to_thread(session.commit)
+        if limits and hasattr(session, "_apply_limits"):      # a live console; replay ignores
+            await asyncio.to_thread(session.commit, limits)
+        else:
+            await asyncio.to_thread(session.commit)
     except ValueError as exc:
+        # includes LimitNotMarketable: refused before anything executed, never a halt
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return session.state()
 

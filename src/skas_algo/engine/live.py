@@ -19,6 +19,7 @@ from datetime import date, datetime, time
 
 from skas_algo.brokers.base import Fill
 from skas_algo.brokers.sim_broker import PaperBroker
+from skas_algo.db.enums import OrderSide
 from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.execution import SliceExecutor
 from skas_algo.engine.live_market import LiveMarketView
@@ -39,6 +40,15 @@ from skas_algo.engine.sim_fill import FillModel
 from skas_algo.engine.stops import StopBook
 
 logger = logging.getLogger(__name__)
+
+
+def _limit_of(spec: dict) -> float | None:
+    """A caller's limit from a manual-order leg spec; None/0 = the broker prices it."""
+    v = spec.get("limit_price")
+    try:
+        return float(v) if v else None
+    except (TypeError, ValueError):
+        return None
 
 class _SettledPriceBroker:
     """Fills at prices the caller states — used ONLY by ``adopt_broker_close``.
@@ -323,6 +333,7 @@ class LiveSession:
             held = self.portfolio.lots(symbol)
             if not held:
                 continue
+            lim = _limit_of(c)
             want_units = c.get("units")
             if want_units is not None:
                 remaining = max(0, int(want_units))
@@ -332,34 +343,62 @@ class LiveSession:
                     take = min(remaining, lot.units)
                     if lot.direction == -1:
                         actions.append(CloseShort(symbol, lot.id, tag=tag, reason="manual",
-                                                  units=take))
+                                                  units=take, limit_price=lim))
                     else:
-                        actions.append(CloseLot(symbol, lot.id, take, tag=tag))
+                        actions.append(CloseLot(symbol, lot.id, take, tag=tag, limit_price=lim))
                     remaining -= take
                 continue
             n = c.get("lots")
             chosen = held if n is None else held[: max(0, int(n))]
             for lot in chosen:
                 if lot.direction == -1:
-                    actions.append(CloseShort(symbol, lot.id, tag=tag, reason="manual"))
+                    actions.append(CloseShort(symbol, lot.id, tag=tag, reason="manual",
+                                              limit_price=lim))
                 else:
-                    actions.append(CloseLot(symbol, lot.id, lot.units, tag=tag))
+                    actions.append(CloseLot(symbol, lot.id, lot.units, tag=tag, limit_price=lim))
         for o in opens or []:
             symbol, units = self._build_manual_leg(o)
             side = str(o.get("side", "")).lower()
+            lim = _limit_of(o)
             if side in ("sell", "short"):
-                actions.append(OpenShort(symbol, units, int(o.get("multiplier", 1)), tag=tag))
+                actions.append(OpenShort(symbol, units, int(o.get("multiplier", 1)), tag=tag,
+                                         limit_price=lim))
             elif side in ("buy", "long"):
-                actions.append(BuyLot(symbol, units, tag=tag))
+                actions.append(BuyLot(symbol, units, tag=tag, limit_price=lim))
             else:
                 raise ValueError(f"manual open side must be buy/sell, got {o.get('side')!r}")
         if not actions:
             raise ValueError("no manual actions to apply")
+        self._precheck_limits(actions)
         events = self.executor.execute_actions(ts, actions)
         self.transactions.extend(events)
         self._after_book_change(ts, "manual_order")
         self._record_history(ts)
         return events
+
+    def _precheck_limits(self, actions: list) -> None:
+        """Refuse the WHOLE basket before anything executes if a caller's limit would not
+        trade against the touch right now — a ValueError (422), never an order failure,
+        and never a half-filled basket. Live orders are checked the same way (the ladder
+        then works up to the cap; the owner's price was marketable when sent)."""
+        from skas_algo.brokers.base import LimitNotMarketable
+
+        fill_px = getattr(self.market, "fill_price", None)
+        for a in actions:
+            lim = getattr(a, "limit_price", None)
+            if not lim:
+                continue
+            buying = isinstance(a, (BuyLot, CloseShort))
+            side = OrderSide.BUY if buying else OrderSide.SELL
+            try:
+                touch = float(fill_px(a.symbol, side)) if fill_px else float(
+                    self.market.close(a.symbol))
+            except Exception:
+                touch = None
+            if not touch:
+                continue                     # no price to check against: let the broker decide
+            if (buying and float(lim) < touch) or (not buying and float(lim) > touch):
+                raise LimitNotMarketable(a.symbol, side.value, float(lim), touch)
 
     # ----------------------------------------------- handover
     def _after_book_change(self, ts: date | datetime, reason: str) -> None:

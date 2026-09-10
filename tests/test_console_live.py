@@ -102,7 +102,7 @@ def test_a_commit_reaches_the_run_only_through_manual_order(run):
     assert out["committed"] == 2 and len(run.calls) == 1
     call = run.calls[0]
     assert call["opens"] == [{"right": "PE", "strike": 24800.0, "lots": 2, "side": "buy",
-                              "expiry": later}]
+                              "expiry": later, "symbol": f"NIFTY|{later}|24800|PE"}]
     assert call["closes"] == [{"symbol": short["symbol"], "units": 65}]   # 1 of 3 lots, FIFO
     assert c.staged is None
     book = run.session.portfolio
@@ -117,7 +117,8 @@ def test_roll_flatten_and_scale_become_closes_and_opens(run):
     closes, opens = c._orders(c.staged["items"])
     assert closes == [{"symbol": short["symbol"]}]
     assert opens == [{"right": "CE", "strike": short["strike"] + 100, "lots": 3, "side": "sell",
-                      "expiry": short["expiry"]}]
+                      "expiry": short["expiry"],
+                      "symbol": f"NIFTY|{short['expiry']}|{int(short['strike'] + 100)}|CE"}]
     c.discard()
     c.scale_book(2)
     closes, opens = c._orders(c.staged["items"])
@@ -199,7 +200,7 @@ def test_the_ticket_is_the_orders_commit_will_send_with_their_cash(run):
     assert buy_close["units"] == 65 and buy_close["cash"] == pytest.approx(-buy_close["price"] * 65)
     assert buy_open["units"] == 130 and buy_open["expiry"] == c.expiry
     assert t["net_cash"] == pytest.approx(buy_close["cash"] + buy_open["cash"])
-    assert t["limit_orders"] is False and "paper" in t["fill_basis"]
+    assert t["limit_orders"] is True and "paper" in t["fill_basis"]   # D5 LMT, 2026-09-10
     assert run.calls == []                                  # a ticket orders nothing
 
 

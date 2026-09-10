@@ -28,6 +28,17 @@ class Funds:
     used: float = 0.0
 
 
+class LimitNotMarketable(ValueError):
+    """A caller's LIMIT would not trade against the current touch. Raised BEFORE anything is
+    placed (the session's pre-check, and the paper broker as a backstop) — a ValueError,
+    never an order failure, so a refused ticket does not halt the run."""
+
+    def __init__(self, symbol: str, side: str, limit: float, touch: float) -> None:
+        self.symbol, self.side, self.limit, self.touch = symbol, side, limit, touch
+        super().__init__(f"{side} {symbol}: limit ₹{limit:.2f} is not marketable "
+                         f"(touch ₹{touch:.2f})")
+
+
 @dataclass
 class BrokerOrder:
     """An order request handed to a broker adapter."""

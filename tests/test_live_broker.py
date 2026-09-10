@@ -1164,3 +1164,55 @@ def test_the_retry_re_reads_the_touch_and_an_exit_retries_too():
                                   reduce_only=True))
     assert fill.broker_order_id == "KITE-2"
     assert a.placed[1].price == pytest.approx(107.15)     # 104 × 1.03, tick-snapped up
+
+
+# ------------------------------------------------------------ a caller's LIMIT (console D5)
+def _sym():
+    return "NIFTY|2026-07-14|24000|CE"
+
+
+def test_a_buy_limit_is_placed_at_the_better_of_touch_and_limit_and_never_rises_above_it():
+    from skas_algo.brokers.base import BrokerOrder
+    from skas_algo.brokers.live_broker import OrderExecutionError
+    from skas_algo.db.enums import OrderSide, OrderType
+
+    # touch 100, the owner's limit 95: placed AT 95; no rung may go past it → cancelled
+    adapter = FakeAdapter(initial={"status": "OPEN", "filled_quantity": 0},
+                          after_cancel={"status": "CANCELLED", "filled_quantity": 0})
+    b = make(adapter, touch_fn=lambda s, side: 100.0, retry_after_cancel=False)
+    with pytest.raises(OrderExecutionError):
+        b.execute(BrokerOrder(_sym(), OrderSide.BUY, 65, order_type=OrderType.LIMIT,
+                              price=95.0, reduce_only=True))
+    assert adapter.placed[0].order_type is OrderType.LIMIT and adapter.placed[0].price == 95.0
+    assert all(p <= 95.0 for _, _, p in adapter.modified if p is not None)
+    # touch 90 (better than the limit): placed at the touch; the ladder is CAPPED at 95
+    adapter = FakeAdapter(initial={"status": "OPEN", "filled_quantity": 0},
+                          after_modify={**COMPLETE, "average_price": 95.0})
+    b = make(adapter, touch_fn=lambda s, side: 90.0)
+    fill = b.execute(BrokerOrder(_sym(), OrderSide.BUY, 65, order_type=OrderType.LIMIT,
+                                 price=95.0, reduce_only=True))
+    assert adapter.placed[0].price == 90.0 and fill.quantity == 65
+    assert adapter.modified and all(p <= 95.0 for _, _, p in adapter.modified if p)
+
+
+def test_a_sell_limit_never_takes_below_it():
+    from skas_algo.brokers.base import BrokerOrder
+    from skas_algo.db.enums import OrderSide, OrderType
+
+    adapter = FakeAdapter(initial={"status": "OPEN", "filled_quantity": 0},
+                          after_modify={**COMPLETE, "average_price": 100.0})
+    b = make(adapter, touch_fn=lambda s, side: 102.0)
+    b.execute(BrokerOrder(_sym(), OrderSide.SELL, 65, order_type=OrderType.LIMIT,
+                          price=100.0, reduce_only=True))
+    assert adapter.placed[0].price == 102.0                      # the better touch
+    assert all(p >= 100.0 for _, _, p in adapter.modified if p)  # rungs floor at the limit
+
+
+def test_a_strategy_order_without_a_limit_is_untouched():
+    from skas_algo.brokers.base import BrokerOrder
+    from skas_algo.db.enums import OrderSide
+
+    adapter = FakeAdapter(initial=COMPLETE)
+    b = make(adapter, touch_fn=lambda s, side: 100.0)
+    b.execute(BrokerOrder(_sym(), OrderSide.BUY, 65))
+    assert adapter.placed[0].price == 100.0 and adapter.placed[0].order_type.value == "LIMIT"

@@ -39,6 +39,9 @@ class CloseLot:
     lot_id: int
     units: int
     tag: str = "STRATEGY"
+    # A caller's LIMIT price (the console's ticket, 2026-09-10). None = every strategy
+    # path: the broker prices it (paper at the touch, live through its ladder).
+    limit_price: float | None = None
 
 
 @dataclass
@@ -54,6 +57,9 @@ class BuyLot:
     # (e.g. the covered call's cc_t1/cc_t2/cc_t3 tranches); default keeps every
     # existing BUY event byte-identical.
     tag: str = "STRATEGY"
+    # A caller's LIMIT price (the console's ticket, 2026-09-10). None = every strategy
+    # path: the broker prices it (paper at the touch, live through its ladder).
+    limit_price: float | None = None
 
 
 @dataclass
@@ -65,6 +71,9 @@ class ClosePosition:
     # Why the position is being closed ("target"/"stop"/"time"/"" → none). Carried for the
     # options report's long legs; equity SST leaves it "" so its SELL event is unchanged.
     reason: str = ""
+    # A caller's LIMIT price (the console's ticket, 2026-09-10). None = every strategy
+    # path: the broker prices it (paper at the touch, live through its ladder).
+    limit_price: float | None = None
 
 
 @dataclass
@@ -78,6 +87,9 @@ class OpenShort:
     # manual order, the console's Commit) says so, instead of reading as the strategy's
     # doing in the trade log (a console short on run 111 did, 2026-09-10).
     tag: str = "STRATEGY"
+    # A caller's LIMIT price (the console's ticket, 2026-09-10). None = every strategy
+    # path: the broker prices it (paper at the touch, live through its ladder).
+    limit_price: float | None = None
 
 
 @dataclass
@@ -95,6 +107,9 @@ class CloseShort:
     # one lot-record for all its lots, so "exit 4 of 10" had no representation short of
     # closing everything. The console's exit stepper is the first user.
     units: int | None = None
+    # A caller's LIMIT price (the console's ticket, 2026-09-10). None = every strategy
+    # path: the broker prices it (paper at the touch, live through its ladder).
+    limit_price: float | None = None
 
 
 _PRECEDENCE = {"POSITION": 0, "SYMBOL": 1, "ALGO": 2}

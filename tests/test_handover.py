@@ -267,3 +267,40 @@ def test_the_console_arms_a_manual_mode_target_or_stop_on_the_rail(monkeypatch):
     assert [(x["kind"], x["value"], x["state"]) for x in rail_rows] == [("stop", 4000.0, "armed")]
     assert c.clear_alert("rail:stop") and sess.strategy.stop_amt == 0.0
     assert not [x for x in c.state()["alerts"] if x.get("rail")]
+
+
+# ------------------------------------------------------------- a caller's LIMIT (console D5)
+def test_a_paper_limit_fills_at_the_better_price_and_a_non_marketable_one_is_refused_whole():
+    from skas_algo.brokers.base import LimitNotMarketable
+
+    fams = dict(_families())
+    sess = _session(fams["call_ratio_monthly"])
+    sess.update_quotes({CE: 100.0, PE: 100.0, WING: 20.0})
+    # buy back the CE with a limit ABOVE the touch: marketable → fills at the touch (100)
+    events = sess.manual_order(TS, closes=[{"symbol": CE, "limit_price": 104.0}])
+    assert len(events) == 1 and events[0]["price"] == 100.0
+    # a basket with one non-marketable leg is refused BEFORE anything executes
+    before = dict(sess.portfolio.export_state()["lots"])
+    with pytest.raises(LimitNotMarketable):
+        sess.manual_order(TS, closes=[{"symbol": WING, "limit_price": 25.0},   # sell above ask
+                                       {"symbol": PE, "limit_price": 120.0}])  # this one is fine
+    assert sess.portfolio.export_state()["lots"] == before
+    assert sess.managed_by == "manual"                              # the first order handed over
+
+
+def test_the_console_commit_stamps_the_ticket_limits_onto_the_request(monkeypatch):
+    from skas_algo.services import console_live
+    from tests.test_console_live import FakeLiveRun
+
+    fams = dict(_families())
+    sess = _session(fams["call_ratio_monthly"])
+    live = FakeLiveRun(sess)
+    monkeypatch.setattr(console_live, "_ist_now", lambda: TS)
+    c = console_live.LiveConsole(live, expiry=EXP)
+    c.stage(kind="exit", leg_id=CE, lots=1)
+    c.stage(kind="add", right="PE", strike=24600, side="B", lots=1)
+    closes, opens = c._orders(c.staged["items"])
+    assert opens[0]["symbol"] == f"NIFTY|{EXP}|24600|PE"
+    n = c._apply_limits(closes, opens, {f"close:{CE}": 104.0, f"open:NIFTY|{EXP}|24600|PE": 30.0,
+                                        "open:NOPE": 1.0})
+    assert n == 2 and closes[0]["limit_price"] == 104.0 and opens[0]["limit_price"] == 30.0

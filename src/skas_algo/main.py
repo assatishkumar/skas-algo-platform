@@ -122,6 +122,19 @@ def _backfill_vix(args) -> None:
     print(f"done: {out['rows']} rows in [{since}, today]; store range {out['after']}")
 
 
+def _build_iv_history(args) -> None:
+    """`skas-algo build-iv-history [--underlying U]` — append every captured day the daily
+    ATM IV history lacks (the console's true IV rank). ~0.35 s a day; safe to re-run."""
+    from skas_algo.services.atm_iv_history import build
+
+    unders = [args.underlying.upper()] if args.underlying else ["NIFTY", "BANKNIFTY", "SENSEX"]
+    for u in unders:
+        def prog(i, n, _u=u):
+            if i % 100 == 0:
+                print(f"  {_u}: {i}/{n}", flush=True)
+        print(u, build(u, progress=prog))
+
+
 def main() -> None:
     """CLI entry point (``skas-algo``): run the API server, or export the Obsidian vault."""
     import argparse
@@ -145,6 +158,10 @@ def main() -> None:
     )
     bv.add_argument("--since", default="2021-07-29",
                     help="first day to fetch (default 2021-07-29, the option store's first day)")
+    ih = sub.add_parser(
+        "build-iv-history", help="Append the daily ATM IV history from the 1-min option store"
+    )
+    ih.add_argument("--underlying", default=None, help="one underlying (default: all three)")
     rb = sub.add_parser(
         "restore-option-bars", help="Pull missed 1-min option-bar days from a remote (VPS) store"
     )
@@ -182,6 +199,9 @@ def main() -> None:
         return
     if args.cmd == "backfill-vix":
         _backfill_vix(args)
+        return
+    if args.cmd == "build-iv-history":
+        _build_iv_history(args)
         return
     if args.cmd == "restore-option-bars":
         _restore_option_bars(args)

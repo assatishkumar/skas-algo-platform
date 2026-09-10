@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from itertools import count
 
+from skas_algo.brokers.base import LimitNotMarketable
+from skas_algo.db.enums import OrderSide, OrderType
 from skas_algo.engine.sim_fill import FillModel
 
 from .base import BrokerOrder, Fill, Funds, Session
@@ -34,6 +36,16 @@ class SimBroker(ABC):
     def execute(self, order: BrokerOrder) -> Fill:
         ref = self.reference_price(order.symbol, order.side)
         price = self.fill_model.fill_price(ref, order.side)
+        if order.order_type is OrderType.LIMIT and order.price:
+            # A caller's LIMIT (console ticket): a sim has no resting book, so it fills only
+            # when MARKETABLE against the touch — and at the better price — else it refuses.
+            # The session pre-checks this before anything executes, so a basket is never
+            # half-filled by a limit that was never going to trade.
+            lim = float(order.price)
+            if order.side is OrderSide.BUY and lim < price:
+                raise LimitNotMarketable(order.symbol, order.side.value, lim, price)
+            if order.side is OrderSide.SELL and lim > price:
+                raise LimitNotMarketable(order.symbol, order.side.value, lim, price)
         commission = self.fill_model.commission(price, order.quantity)
         return Fill(
             symbol=order.symbol,

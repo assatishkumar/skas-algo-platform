@@ -190,8 +190,9 @@ export const api = {
     leg_id?: string; enabled?: boolean; replace?: boolean;
   }) => request<ConsoleState>(`/console/sessions/${id}/stage`,
     { method: "POST", body: JSON.stringify(body) }),
-  consoleCommit: (id: string) =>
-    request<ConsoleState>(`/console/sessions/${id}/commit`, { method: "POST" }),
+  consoleCommit: (id: string, body?: { limits?: Record<string, number> | null }) =>
+    request<ConsoleState>(`/console/sessions/${id}/commit`,
+      { method: "POST", body: JSON.stringify(body ?? {}) }),
   consoleUndo: (id: string) =>
     request<ConsoleState>(`/console/sessions/${id}/undo`, { method: "POST" }),
   consoleReset: (id: string) =>

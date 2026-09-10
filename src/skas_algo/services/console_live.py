@@ -20,7 +20,7 @@ from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.instrument import make as make_option
 from skas_algo.engine.options.instrument import parse
 from skas_algo.live.manager import manager
-from skas_algo.services import console_margin, console_market
+from skas_algo.services import atm_iv_history, console_margin, console_market
 from skas_algo.services.live_cycles import cycle_info
 from skas_algo.services.options_console import presets as _presets
 from skas_algo.services.options_console.alerts import AlertBook
@@ -32,6 +32,7 @@ from skas_algo.services.options_console.session import (
     SESSION_OPEN,
     T_FLOOR_S,
     _t_years,
+    pick_iv30_expiry,
 )
 
 logger = logging.getLogger("skas_algo.console")
@@ -296,6 +297,40 @@ class LiveConsole(AlertBook):
                             else "MIXED"),
                 }
             )
+        return out
+
+    def iv30(self) -> dict | None:
+        """The ~30-DTE expiry's ATM IV on the live chain (the rank's own measure), read at
+        most once a minute — it is a second chain call on a throttled broker."""
+        now = self._clock()
+        hit = getattr(self, "_iv30_cache", None)
+        if hit and (now - hit[0]).total_seconds() < 60:
+            return hit[1]
+        out = None
+        try:
+            expiries = [e["iso"] if isinstance(e, dict) else str(e)
+                        for e in (self.expiries() or [])]
+            exp = pick_iv30_expiry(expiries, now.date())
+            snap = self.market.live_chain(self.underlying, exp) if exp else None
+            rows = (snap or {}).get("rows") or []
+            atm = (snap or {}).get("atm_strike")
+            spot = float((snap or {}).get("spot") or 0.0)
+            if exp and rows and atm and spot:
+                row = min(rows, key=lambda r: abs(float(r.get("strike", 0)) - float(atm)))
+                t = _t_years(exp, now)
+                for right in ("CE", "PE"):
+                    cell = row.get(right.lower()) or row.get(right) or {}
+                    px = cell.get("ltp") or cell.get("last_price")
+                    if px:
+                        iv = bs.implied_vol(float(px), spot, float(atm), t, RISK_FREE, right)
+                        if iv:
+                            out = {"iv": round(iv * 100, 2), "expiry": exp,
+                                   "dte": (date.fromisoformat(exp) - now.date()).days,
+                                   "atm": float(atm)}
+                            break
+        except Exception:
+            logger.debug("console: live iv30 unavailable", exc_info=True)
+        self._iv30_cache = (now, out)
         return out
 
     def _atm_iv(self) -> float | None:
@@ -904,7 +939,25 @@ class LiveConsole(AlertBook):
                     )
             elif k == "flatten":
                 closes.extend({"symbol": leg["symbol"]} for leg in legs.values())
+        # the contract each open resolves to — the key the ticket's LIMIT rows use
+        for o in opens:
+            o["symbol"] = f"{self.underlying}|{o['expiry']}|{int(float(o['strike']))}|{o['right']}"
         return closes, opens
+
+    @staticmethod
+    def _apply_limits(closes: list[dict], opens: list[dict],
+                      limits: dict[str, float] | None) -> int:
+        """Stamp the owner's LMT prices ("<role>:<symbol>" → ₹) onto the request legs.
+        Returns how many rows took one."""
+        n = 0
+        for key, px in (limits or {}).items():
+            role, _, symbol = str(key).partition(":")
+            rows = closes if role == "close" else opens if role == "open" else []
+            for r in rows:
+                if r.get("symbol") == symbol and px and float(px) > 0:
+                    r["limit_price"] = float(px)
+                    n += 1
+        return n
 
     def ticket(self) -> dict | None:
         """Design D5: the orders the basket becomes, one row each, at the price the run
@@ -970,18 +1023,24 @@ class LiveConsole(AlertBook):
                 if self.mode == "live"
                 else "the run's paper broker, at the touch"
             ),
-            "limit_orders": False,
+            # LMT is offered (2026-09-10): paper fills a MARKETABLE limit at the better price
+            # and refuses one that is not; live places it and caps the ladder at it
+            "limit_orders": True,
         }
 
-    def commit(self) -> dict:
+    def commit(self, limits: dict[str, float] | None = None) -> dict:
         """Hand the basket to the run. Paper fills on its PaperBroker; a LIVE run with every
-        §1 key set fills through LiveBroker — the gate is the run's, not ours."""
+        §1 key set fills through LiveBroker — the gate is the run's, not ours. ``limits``
+        (D5 LMT, 2026-09-10): "<role>:<symbol>" → ₹ for the ticket rows the owner switched
+        to LMT; the run prices every other row itself. A limit that would not trade against
+        the touch is refused by the session before anything executes (422), never a halt."""
         if not self.staged:
             raise ValueError("nothing staged")
         closes, opens = self._orders(self.staged["items"])
         if not closes and not opens:
             self.staged = None
             return {"committed": 0, "events": []}
+        self._apply_limits(closes, opens, limits)
         events = self.live.manual_order(closes=closes, opens=opens)
         n = len(self.staged["items"])
         self.staged = None
@@ -1204,6 +1263,7 @@ class LiveConsole(AlertBook):
                 "No live chain: the run's quote source has no chain (cache source, or "
                 "no broker session). Legs still show; the ladder needs a broker source."
             )
+        iv30 = self.iv30()
         return {
             "session": {
                 "id": self.id,
@@ -1237,6 +1297,9 @@ class LiveConsole(AlertBook):
                 "cycle_high": None,
                 "vix": {"last": console_market.vix_live()},
                 "atm_iv": self._atm_iv(),
+                "iv30": iv30,
+                "iv_rank": (atm_iv_history.iv_rank(self.underlying, today, iv30["iv"])
+                            if iv30 else None),
                 "day_high": None,
                 "day_low": None,
                 "expiry": self.expiry,

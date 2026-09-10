@@ -132,6 +132,13 @@ class ConsoleScale(BaseModel):
     factor: float                     # every leg's lots × factor, one action
 
 
+class ConsoleCommit(BaseModel):
+    """Commit the staged basket. ``limits`` = {"<role>:<symbol>": price} for the rows the
+    owner switched to LMT on the ticket (role = open | close); absent rows go at market."""
+
+    limits: dict[str, float] | None = None
+
+
 class ConsoleMarginAnchor(BaseModel):
     """The measured broker margin for ONE lot-set of the book (the `margin_per_set`
     precedent); 0 clears it and the session goes back to Kite's figure / the model."""
@@ -944,6 +951,7 @@ class ManualLegClose(BaseModel):
     symbol: str
     lots: int | None = None  # None = close every lot-record of this symbol
     units: int | None = None  # close exactly this many contracts (FIFO across records)
+    limit_price: float | None = None  # a LIMIT for the close; None = the run's own pricing
 
 
 class ManualLegOpen(BaseModel):
@@ -954,6 +962,7 @@ class ManualLegOpen(BaseModel):
     lots: int  # lot-sets (× the contract lot size)
     side: str  # "buy" | "sell"
     expiry: str | None = None  # ISO; None = the strategy's current expiry
+    limit_price: float | None = None  # a LIMIT for the open; None = the run's own pricing
 
 
 class ManualOrderInput(BaseModel):

@@ -193,6 +193,11 @@ class LiveBroker:
         logger.info("ORDER %-9s cid=%s %s", event, cid, kv)
 
     # ------------------------------------------------------------------ rails
+    @staticmethod
+    def _clamp(price: float, side, cap: float) -> float:
+        """A BUY never pays above ``cap``, a SELL never takes below it."""
+        return min(price, cap) if side is OrderSide.BUY else max(price, cap)
+
     def _check_rails(self, order: BrokerOrder, ref_price: float | None) -> None:
         # ONE definition of the session window, shared with the live loop. This used to be a
         # second inline copy of the weekday/holiday/09:15-15:30 triplet — and that is exactly
@@ -299,8 +304,17 @@ class LiveBroker:
                 touch = None
         self._check_rails(order, touch)
 
+        # A CALLER'S LIMIT (the console ticket, 2026-09-10): the order is placed at the
+        # better of the touch and the limit, and every rung of the ladder — and the one
+        # retry — is CLAMPED to it: a BUY never pays above it, a SELL never takes below.
+        # Unfilled at the cap it cancels and raises like any unfilled order; the owner set
+        # the price, and the platform never places an order the owner did not ask for.
+        cap = (float(order.price) if order.order_type is OrderType.LIMIT and order.price
+               else None)
         client_id = uuid.uuid4().hex[:16]
         place_price = float(price_hint) if price_hint else (float(touch) if touch else None)
+        if cap is not None:
+            place_price = self._clamp(place_price if place_price else cap, order.side, cap)
         req = BrokerOrder(
             symbol=order.symbol, side=order.side, quantity=order.quantity,
             order_type=OrderType.LIMIT if place_price else OrderType.MARKET,
@@ -313,6 +327,7 @@ class LiveBroker:
         self._trace(client_id, "place", symbol=order.symbol, side=order.side.value,
                     qty=order.quantity, type=req.order_type.value,
                     price=f"{place_price:.2f}" if place_price else "none",
+                    cap=f"{cap:.2f}" if cap is not None else None,
                     touch=f"{touch:.2f}" if (touch and price_hint) else
                     ("book" if touch else "MISSING"),
                     basis="retry-protected" if price_hint else None,
@@ -376,6 +391,18 @@ class LiveBroker:
                         fresh = None
                 base = float(fresh or touch or 0.0)
                 want = self._protected_price(base, order.side, pct=pct) if base > 0 else None
+                if want is not None and cap is not None:
+                    want = self._clamp(want, order.side, cap)
+                    if abs(want - float(place_price or 0.0)) < 0.011:
+                        # already resting AT the owner's limit: a rung cannot go past it
+                        self._trace(client_id, "noescal", rung=f"{i + 1}/{len(ladder)}",
+                                    reason=f"at the caller's limit {cap:.2f}")
+                        st = self._await_terminal(
+                            broker_id, deadline_s=self.order_timeout_s / 2,
+                            cid=client_id, phase=f"rung{i + 1}")
+                        if st["status"] in _TERMINAL:
+                            break
+                        continue
                 try:
                     self._governor.wait()
                     if base > 0:
@@ -538,6 +565,8 @@ class LiveBroker:
                  else self.protect_ladder_equity)
         pct = float(rungs[0]) if rungs else 0.0
         want = self._protected_price(base, order.side, pct=pct) if base > 0 else None
+        if want is not None and order.order_type is OrderType.LIMIT and order.price:
+            want = self._clamp(want, order.side, float(order.price))
         self._trace(cid, "retry", attempt="2/2",
                     reason="broker confirmed the cancel with nothing filled",
                     touch=f"{base:.2f}" if base > 0 else "MISSING",

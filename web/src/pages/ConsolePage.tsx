@@ -13,7 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleLiveRun, ConsoleTicket, ConsolePreset, ConsoleProbe, ConsoleRisk,
+  ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleLiveRun, ConsoleTicket, ConsoleTicketRow, ConsolePreset, ConsoleProbe, ConsoleRisk,
   ConsoleState,
 } from "../types";
 import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
@@ -436,11 +436,22 @@ function OrderTicket({ ticket, staged, risk, riskAfter, mNow, mBefore, isReal, r
   mNow: ReturnType<typeof computeMetrics> | null; mBefore: ReturnType<typeof computeMetrics> | null;
   isReal: boolean; realTyped: string; setRealTyped: (v: string) => void;
   capital: number; orderError: string | null; busy: boolean;
-  onSend: () => void; onClose: () => void; onRevert: () => void;
+  onSend: (limits: Record<string, number>) => void; onClose: () => void; onRevert: () => void;
 }) {
   const before = risk.margin, after = staged.margin_after;
   const free = capital - after;
-  const canSend = !busy && !orderError && ticket.rows.length > 0 && (!isReal || realTyped === "REAL");
+  // D5 LMT (2026-09-10): a row switched to LMT carries the owner's price to the run. Paper
+  // fills a MARKETABLE limit at the better price and refuses one that is not (nothing is
+  // placed); live places it and caps its own ladder at it. Keyed "<role>:<symbol>".
+  const [lmt, setLmt] = useState<Record<string, { on: boolean; price: string }>>({});
+  const keyOf = (r: ConsoleTicketRow) => `${r.role}:${r.symbol}`;
+  const limits: Record<string, number> = {};
+  for (const r of ticket.rows) {
+    const e = lmt[keyOf(r)];
+    if (e?.on) { const v = Number(e.price); if (Number.isFinite(v) && v > 0) limits[keyOf(r)] = v; }
+  }
+  const badLimit = ticket.rows.some((r) => lmt[keyOf(r)]?.on && !(Number(lmt[keyOf(r)].price) > 0));
+  const canSend = !busy && !orderError && !badLimit && ticket.rows.length > 0 && (!isReal || realTyped === "REAL");
   return (
     <div className="fixed inset-0 z-40 flex items-start justify-center pt-16"
       style={{ background: "rgba(20,24,40,.45)" }} onClick={onClose}>
@@ -490,12 +501,29 @@ function OrderTicket({ ticket, staged, risk, riskAfter, mNow, mBefore, isReal, r
                   <span className="ml-1.5 text-[10.5px]" style={{ color: "var(--oc-muted)" }}>{expiryChip(r.expiry)}</span></td>
                 <td className="text-right">×{r.lots}</td>
                 <td className="text-right">{r.units.toLocaleString("en-IN")}</td>
-                <td className="text-right">
-                  <span className="font-semibold">MKT</span>
-                  <span className="ml-1 text-[10px]" title="a limit price is not offered here: the run fills at its own touch ladder"
-                    style={{ color: "var(--oc-faint)", textDecoration: "line-through" }}>LMT</span>
+                <td className="text-right whitespace-nowrap">
+                  {ticket.limit_orders ? (
+                    <button type="button"
+                      title={lmt[keyOf(r)]?.on ? "LMT — the price you type; click for MKT" : "MKT — the run prices it; click for LMT"}
+                      onClick={() => setLmt((m) => ({ ...m, [keyOf(r)]: { on: !m[keyOf(r)]?.on, price: m[keyOf(r)]?.price ?? String(r.price) } }))}
+                      className="px-1.5 rounded-[3px] text-[10px] font-bold"
+                      style={{ background: lmt[keyOf(r)]?.on ? "var(--oc-accent)" : "var(--oc-chip)", color: lmt[keyOf(r)]?.on ? "#fff" : "var(--oc-muted)" }}>
+                      {lmt[keyOf(r)]?.on ? "LMT" : "MKT"}
+                    </button>
+                  ) : (
+                    <><span className="font-semibold">MKT</span>
+                      <span className="ml-1 text-[10px]" title="a limit price is not offered here"
+                        style={{ color: "var(--oc-faint)", textDecoration: "line-through" }}>LMT</span></>
+                  )}
                 </td>
-                <td className="text-right">{num(r.price)}</td>
+                <td className="text-right">
+                  {lmt[keyOf(r)]?.on ? (
+                    <input value={lmt[keyOf(r)].price} inputMode="decimal" aria-label="limit price"
+                      onChange={(e) => setLmt((m) => ({ ...m, [keyOf(r)]: { on: true, price: e.target.value } }))}
+                      className="w-[72px] h-[22px] px-1 rounded-[4px] text-right text-[12px] tabular-nums"
+                      style={{ background: "var(--oc-panel)", border: "1px solid var(--oc-accent)", color: "var(--oc-ink)" }} />
+                  ) : num(r.price)}
+                </td>
                 <td className="text-right font-semibold" style={{ color: r.cash >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>{inr0(r.cash)}</td>
               </tr>
             ))}
@@ -555,7 +583,7 @@ function OrderTicket({ ticket, staged, risk, riskAfter, mNow, mBefore, isReal, r
             <button type="button" onClick={onClose}
               className="px-2.5 h-[26px] rounded-[5px] text-[11.5px]"
               style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>Back esc</button>
-            <button type="button" disabled={!canSend} onClick={onSend}
+            <button type="button" disabled={!canSend} onClick={() => onSend(limits)}
               className="px-3 h-[26px] rounded-[5px] text-[11.5px] font-semibold disabled:opacity-40"
               style={{ background: isReal ? "var(--oc-neg)" : "var(--oc-accent)", color: "#fff" }}>
               {isReal ? `Send ${ticket.rows.length} order${ticket.rows.length === 1 ? "" : "s"} to broker` : `Commit ${ticket.rows.length} order${ticket.rows.length === 1 ? "" : "s"} ⏎`}
@@ -1345,7 +1373,8 @@ export default function ConsolePage() {
     onError: (e: Error) => setError(e.message),
   });
   const commit = useMutation({
-    mutationFn: () => call((id) => api.consoleCommit(id)),
+    mutationFn: (limits?: Record<string, number>) =>
+      call((id) => api.consoleCommit(id, limits && Object.keys(limits).length ? { limits } : undefined)),
     onSuccess: (s) => { setState(s); setError(null); },
     onError: (e: Error) => setError(e.message),
   });
@@ -1429,7 +1458,7 @@ export default function ConsolePage() {
         return;
       }
       if (e.key === "Enter" && state?.staged && state.session.mode !== "replay") {
-        e.preventDefault(); if (ticketOpen) { if (!isReal) commit.mutate(); } else setTicketOpen(true); return;
+        e.preventDefault(); if (ticketOpen) { if (!isReal) commit.mutate(undefined); } else setTicketOpen(true); return;
       }
       if ((e.key === "u" || e.key === "U") && state?.session.can_undo) {
         e.preventDefault(); undo.mutate(); return;
@@ -2214,6 +2243,21 @@ export default function ConsolePage() {
             </span>
           </StripItem>
         )}
+        {state?.market.iv30 && (
+          <StripItem label="IV30">
+            <span title={`ATM implied vol on the ~30-day expiry (${state.market.iv30.expiry}, ${state.market.iv30.dte} DTE) — the measure the IV rank is built on`}>
+              {num(state.market.iv30.iv, 1)}%
+            </span>
+            {state.market.iv_rank ? (
+              <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}
+                title={`over the last ${state.market.iv_rank.n} sessions before this day: IVR = (now − low ${num(state.market.iv_rank.low, 1)}) / (high ${num(state.market.iv_rank.high, 1)} − low); rank = the share of those days with a lower IV30`}>
+                IVR {state.market.iv_rank.ivr != null ? Math.round(state.market.iv_rank.ivr) : "—"} · rank {Math.round(state.market.iv_rank.rank)}%
+              </span>
+            ) : (
+              <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-faint)" }} title="fewer than 60 sessions of IV history before this day">no rank yet</span>
+            )}
+          </StripItem>
+        )}
         <StripItem label="Expiry">
           {state?.market.expiry ?? "—"}
           <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}>
@@ -2236,7 +2280,7 @@ export default function ConsolePage() {
           isReal={isReal} realTyped={realTyped} setRealTyped={setRealTyped}
           capital={state.session.capital} orderError={state.session.order_error ?? null}
           busy={commit.isPending}
-          onSend={() => { commit.mutate(); setRealTyped(""); setTicketOpen(false); }}
+          onSend={(limits) => { commit.mutate(limits); setRealTyped(""); setTicketOpen(false); }}
           onClose={() => setTicketOpen(false)}
           onRevert={() => { discard.mutate(); setTicketOpen(false); }} />
       )}

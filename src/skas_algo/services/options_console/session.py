@@ -75,6 +75,18 @@ UNDERLYINGS = ("NIFTY", "BANKNIFTY", "SENSEX")
 logger = logging.getLogger("skas_algo.console")
 
 
+def pick_iv30_expiry(expiries: list[str], day: date) -> str | None:
+    """The expiry nearest 30 DTE inside 20–45 days; else the nearest with ≥ 7 DTE — the
+    30-day ATM IV the true IV rank is measured on (`services/atm_iv_history`), so a rank
+    compares like with like rather than a front weekly against a year of monthlies."""
+    dted = sorted(((date.fromisoformat(e) - day).days, e) for e in expiries)
+    mid = [(abs(d - 30), e) for d, e in dted if 20 <= d <= 45]
+    if mid:
+        return min(mid)[1]
+    far = [(d, e) for d, e in dted if d >= 7]
+    return far[0][1] if far else None
+
+
 def _t_years(expiry_iso: str, now: datetime) -> float:
     exp = datetime.combine(date.fromisoformat(expiry_iso[:10]), EXPIRY_TIME)
     return max(T_FLOOR_S, (exp - now).total_seconds()) / _YEAR_S
@@ -177,6 +189,10 @@ class ConsoleSession(AlertBook):
         # DuckDB the package must not open on its own — tests never touch it):
         # `fn(day) -> {"prev_close", "open"} | None`. Cached per day.
         self.vix_fn: Callable[[date], dict | None] | None = None
+        # `fn(underlying, day, iv_now) -> {"rank", "ivr", "n", ...} | None` — the true IV
+        # rank over the daily ~30-DTE ATM IV history (services/atm_iv_history), injected
+        # by the route; None → the strip shows the IV30 alone.
+        self.iv_rank_fn: Callable[[str, date, float | None], dict | None] | None = None
         self._vix: dict[str, dict | None] = {}
         self._day_range: dict[str, tuple[float, float]] = {}
 
@@ -974,6 +990,44 @@ class ConsoleSession(AlertBook):
         out["has_minutes"] = bool(mins)
         return out
 
+    def iv30_at_cursor(self) -> dict | None:
+        """The ~30-DTE expiry's ATM implied vol at the cursor — the same rule the daily
+        history samples at 15:20, so the rank beside it compares like with like."""
+        expiry = pick_iv30_expiry(self.tape.expiries, self.day)
+        if not expiry:
+            return None
+        spot = self.market.index_spot(self.underlying)
+        if not spot:
+            return None
+        per = self._series_for_day()
+        strikes = sorted({float(s.split("|")[2]) for s in per
+                          if s.split("|")[1] == expiry})
+        if not strikes:
+            return None
+        atm = min(strikes, key=lambda k: abs(k - spot))
+        key = self._minute_key()
+        t = _t_years(expiry, self.clock)
+        for right in ("CE", "PE"):
+            series = per.get(f"{self.underlying}|{expiry}|{int(atm)}|{right}")
+            if not series:
+                continue
+            i = bisect.bisect_right(series[0], key) - 1
+            if i < 0:
+                continue
+            iv = bs.implied_vol(series[1][i], spot, atm, t, RISK_FREE, right)
+            if iv:
+                return {"iv": round(iv * 100.0, 2), "expiry": expiry,
+                        "dte": (date.fromisoformat(expiry) - self.day).days, "atm": atm}
+        return None
+
+    def _iv_rank(self, iv30: dict | None) -> dict | None:
+        if self.iv_rank_fn is None or not iv30:
+            return None
+        try:
+            return self.iv_rank_fn(self.underlying, self.day, iv30["iv"])
+        except Exception:  # pragma: no cover - a rank must never break the state
+            return None
+
     def _atm_iv_at_cursor(self) -> float | None:
         series = self.iv_series()
         if not series:
@@ -1634,6 +1688,7 @@ class ConsoleSession(AlertBook):
         played = (self.clock - open_dt).total_seconds() / max(
             1.0, (close_dt - open_dt).total_seconds())
         cyc = self.cycle_range()
+        iv30 = self.iv30_at_cursor()
         return {
             "session": {
                 "id": self.id, "mode": self.mode, "underlying": self.underlying,
@@ -1657,6 +1712,9 @@ class ConsoleSession(AlertBook):
                 "vix": self._vix_at_cursor(),
                 # the front expiry's ATM implied vol at the cursor (the "iv ›" series)
                 "atm_iv": self._atm_iv_at_cursor(),
+                # the ~30-DTE ATM IV and its rank over the trailing year (None = no history)
+                "iv30": iv30,
+                "iv_rank": self._iv_rank(iv30),
                 "expiry": self.expiry,
                 "dte": ((date.fromisoformat(self.expiry) - self.day).days
                         if self.expiry else None),

@@ -2950,6 +2950,14 @@ class LiveRunManager:
             out["vix"] = backfill_vix(adapter, since=days[-1])
         except Exception:  # pragma: no cover - best-effort
             logger.exception("minute VIX top-up failed")
+        # The daily ATM IV history (the console's true IV rank): the new day-files, ~0.35 s
+        # each, appended to `~/.skas_data/console/atm_iv_<U>.csv`. Never recomputes a day.
+        try:
+            from skas_algo.services.atm_iv_history import build as build_iv_history
+
+            out["iv_history"] = {u: build_iv_history(u, limit=10) for u in unders}
+        except Exception:  # pragma: no cover - best-effort
+            logger.exception("ATM IV history top-up failed")
         # Off-box durability: mirror the whole store into the backup dir (Google Drive
         # folder) after every run — copy-only, never deletes; best-effort.
         if settings.option_bars_backup_dir:

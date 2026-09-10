@@ -1253,6 +1253,31 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   `atm_iv` beside it is `iv_series()` at the cursor — our own minute-by-minute gauge,
   the live chain's ATM row on a deployment.
 - **The console's source list shows only runs HOLDING positions** (owner 2026-09-10).
+- **A TRUE IV rank (2026-09-10):** `services/atm_iv_history.py` keeps one row per captured
+  day — the ATM IV at 15:20 on the expiry nearest 30 DTE (20–45 d, else the nearest ≥ 7;
+  `pick_iv30_expiry`, which lives in the session module because both sides need it) — in
+  `~/.skas_data/console/atm_iv_<U>.csv`, built once by `skas-algo build-iv-history`
+  (~0.35 s a day) and topped up by the daily capture (`build(u, limit=10)`), never
+  recomputing a day. `iv_rank(u, day, iv_now)` ranks over the trailing 252 rows STRICTLY
+  before the day (≥ 60 needed): percentile + IVR = (now−low)/(high−low). The strip's
+  "IV30" is the SAME measure at the cursor (`session.iv30_at_cursor`; the live console
+  reads the ~30-DTE chain once a minute), so the rank compares like with like — never the
+  front weekly against a year of monthlies. Hook: `session.iv_rank_fn`, injected by the
+  route. SENSEX/BANKNIFTY have too few captured days for a rank yet.
+- **LIMIT orders from the ticket (D5 LMT, 2026-09-10) — the ONE place a caller prices an
+  order.** Every action (`BuyLot/OpenShort/CloseShort/CloseLot/ClosePosition`) carries
+  `limit_price: None`; the executor turns a set one into `BrokerOrder(LIMIT, price)` and
+  every strategy path is byte-identical (all None). Semantics, by broker: **paper** fills a
+  MARKETABLE limit at the better price (the touch) and REFUSES one that is not
+  (`LimitNotMarketable`, a ValueError → 422, nothing placed); **live** places at the
+  better of touch and limit and CLAMPS every ladder rung and the one retry to it
+  (`LiveBroker._clamp`; a rung already at the cap traces `noescal … at the caller's
+  limit`), so an unfilled limit cancels and raises like any unfilled order. The session
+  pre-checks the WHOLE basket against the touch before anything executes
+  (`_precheck_limits`) — a half-filled basket is the failure this avoids. The ticket keys
+  limits `"<role>:<symbol>"` (`ConsoleCommit.limits`, `LiveConsole._apply_limits`);
+  `ticket.limit_orders` is True now. Coverage: the LIMIT block in
+  `tests/test_live_broker.py`, the two limit tests in `tests/test_handover.py`.
 - The track's "iv ›" jump (`next_iv_spike`, vol points) reads `iv_series()` — the ATM
   CE's last print solved per minute on the parity spot, cached per day+expiry.
 - The replay track's "next 1% move" reads a per-day spot series built in ONE pass over
