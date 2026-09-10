@@ -959,11 +959,12 @@ function BsCell({ onB, onS, disabled, tint, left, held }: {
       {/* where the position IS. Reading a ladder against a position you are holding in your
           head is how the wrong strike gets clicked. */}
       {held && (
-        <span className="px-1 rounded-[3px] text-[9px] font-bold leading-[15px]"
+        /* a SOLID chip: an outlined one on the ITM tint was too faint to spot (owner,
+           2026-09-10) — the held marker is the one thing on the ladder that must jump out */
+        <span className="px-1.5 rounded-[3px] text-[9px] font-bold leading-[16px] shadow-sm"
           title={`you hold ${held.lots} lot(s) here`}
-          style={{ opacity: held.enabled ? 1 : 0.45,
-            color: held.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)",
-            border: `1px solid ${held.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)"}` }}>
+          style={{ opacity: held.enabled ? 1 : 0.5, color: "#fff",
+            background: held.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)" }}>
           {held.side}×{held.lots}
         </span>
       )}
