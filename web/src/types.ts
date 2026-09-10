@@ -2011,7 +2011,8 @@ export interface ConsoleState {
     // the underlying's range since the cycle opened (replay only; null while flat)
     cycle_low?: number | null; cycle_high?: number | null;
     // India VIX as the day could know it: replay = prior close (+ open), live = last print
-    vix?: { prev_close?: number | null; open?: number | null; prev_date?: string | null; last?: number | null } | null;
+    vix?: { prev_close?: number | null; open?: number | null; prev_date?: string | null; last?: number | null;
+      rank_1y?: number | null; rank_basis?: string | null } | null;
     expiry: string | null; dte: number | null;
   };
   chain: {

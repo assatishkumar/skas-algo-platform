@@ -895,9 +895,26 @@ function StripItem({ label, children }: { label: string; children: React.ReactNo
  * (55% opacity → 100% on hover) so a row NEVER reflows on hover — the handoff calls that
  * out explicitly and it is the difference between a usable ladder and a jumpy one. */
 const COLS = "48px 78px 72px 72px 52px 72px 78px 48px";
+// The D9 reflow (design handoff): under 1536px the ladder's columns tighten (456px instead
+// of 520px), the chain panel and the rail narrow, and the payoff keeps what is left — at
+// 1280px that is ~440px, still a readable chart, where the fixed widths pushed the rail
+// off the right edge.
+const COLS_NARROW = "40px 70px 62px 66px 46px 62px 70px 40px";
 
-function ChainRow({ row, onPick, onProbe, probed }: {
-  row: ConsoleChainRow;
+function useNarrow(): boolean {
+  const q = "(max-width: 1535px)";
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.matchMedia(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia(q);
+    const on = () => setNarrow(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return narrow;
+}
+
+function ChainRow({ row, onPick, onProbe, probed, cols = COLS }: {
+  row: ConsoleChainRow; cols?: string;
   onPick: (side: "B" | "S", right: "CE" | "PE", strike: number) => void;
   onProbe: (right: "CE" | "PE", strike: number) => void;
   probed: Record<string, ConsoleProbe>;
@@ -906,7 +923,7 @@ function ChainRow({ row, onPick, onProbe, probed }: {
   return (
     <div className="grid items-center text-[12px] group"
       style={{
-        gridTemplateColumns: COLS, height: 32,
+        gridTemplateColumns: cols, height: 32,
         opacity: dead ? 0.45 : 1,
         borderBottom: "1px solid var(--oc-hair)",
         background: (row.ce.held || row.pe.held) ? "var(--oc-accent-dim)"
@@ -1060,6 +1077,7 @@ export default function ConsolePage() {
     return () => window.clearTimeout(t);
   }, [notice]);
   const [chainOpen, setChainOpen] = useState(true);
+  const narrow = useNarrow();
   const [showPresets, setShowPresets] = useState(false);
   const [showSaves, setShowSaves] = useState(false);
   const [showSaveBox, setShowSaveBox] = useState(false);
@@ -2162,6 +2180,12 @@ export default function ConsolePage() {
           <StripItem label={isLive ? "India VIX" : "VIX · prev close"}>
             <span title={isLive ? "the live print" : `India VIX at the prior session's close${state.market.vix.prev_date ? ` (${state.market.vix.prev_date})` : ""} — a replayed day's own close would be the future`}>
               {num(isLive ? (state.market.vix.last ?? null) : (state.market.vix.prev_close ?? null), 2)}
+              {!isLive && state.market.vix.rank_1y != null && (
+                <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}
+                  title="where the prior close sits among the last year of VIX closes (0% = the year's low, 100% = its high) — a VIX rank, not an IV rank">
+                  rank {Math.round(state.market.vix.rank_1y)}%
+                </span>
+              )}
               {!isLive && state.market.vix.open != null && state.market.vix.prev_close != null
                 && Math.abs(state.market.vix.open - state.market.vix.prev_close) > 0.005 && (
                 <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}>
@@ -2248,7 +2272,7 @@ export default function ConsolePage() {
             </span>
           </button>
         )}
-        <div className="w-[560px] shrink-0 rounded-[10px] overflow-hidden"
+        <div className={`${narrow ? "w-[496px]" : "w-[560px]"} shrink-0 rounded-[10px] overflow-hidden`}
           hidden={!chainOpen}
           style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)" }}>
           {/* expiry chips */}
@@ -2289,7 +2313,7 @@ export default function ConsolePage() {
           </div>
           {/* column header */}
           <div className="grid text-[9px] font-semibold uppercase tracking-[.06em] h-5 items-center"
-            style={{ gridTemplateColumns: COLS, color: "var(--oc-faint)",
+            style={{ gridTemplateColumns: narrow ? COLS_NARROW : COLS, color: "var(--oc-faint)",
               borderBottom: "1px solid var(--oc-hair)" }}>
             <div className="text-right px-2">Δ</div><div className="text-right px-2">Call LTP</div>
             <div className="text-right px-1.5">B/S</div>
@@ -2304,7 +2328,7 @@ export default function ConsolePage() {
               </div>
             )}
             {rows.map((r) => (
-              <ChainRow key={r.strike} row={r} probed={probed} onProbe={probe}
+              <ChainRow key={r.strike} row={r} probed={probed} onProbe={probe} cols={narrow ? COLS_NARROW : COLS}
                 onPick={(side, right, strike) =>
                   stage.mutate({ kind: "add", side, right, strike, lots })} />
             ))}
@@ -2324,7 +2348,7 @@ export default function ConsolePage() {
               <div className="flex-1 min-w-0 flex flex-col">
                 {payoffPanel}
               </div>
-              <div className="w-[348px] shrink-0 relative">
+              <div className={`${narrow ? "w-[300px]" : "w-[348px]"} shrink-0 relative`}>
                 <div className="absolute inset-0 overflow-y-auto space-y-2.5">
                   {railColumn}
                 </div>
@@ -2335,7 +2359,7 @@ export default function ConsolePage() {
         ) : (
           /* chain hidden: [risk strip + Positions + alerts | payoff] */
           <div className="flex-1 min-w-0 flex gap-2.5 items-start">
-            <div className="w-[54%] min-w-[520px] space-y-2.5">
+            <div className={`w-[54%] ${narrow ? "min-w-[440px]" : "min-w-[520px]"} space-y-2.5`}>
               {riskStrip}
               {positionsPanel}
               {alertsCard}

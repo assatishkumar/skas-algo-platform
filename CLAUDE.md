@@ -1238,6 +1238,13 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   (`SKAS_CONSOLE_DIR`, tmp in tests); `⤒ load` opens a new session from it. Never
   persist the BOOK: it is re-derived from the tape on load, so a file cannot disagree
   with the store. Registry: 8 sessions, 3h idle.
+- **Below 1536px the console reflows (D9, 2026-09-10):** `useNarrow()` (matchMedia) swaps
+  the ladder to `COLS_NARROW` (456px), the chain panel to 496px and the rail to 300px, so
+  a 1280px window keeps ~460px of payoff instead of pushing the rail off the right edge.
+  Verified by measurement, not by eye — Chrome ignored the resize on the maximised window.
+- The strip's VIX carries `rank_1y` (percentile of the prior close within the last 252
+  cached closes, ≥60 needed; `rank_basis: "vix_rank_1y"`) — a VIX rank, labelled so,
+  never called an IV rank.
 - The track's "iv ›" jump (`next_iv_spike`, vol points) reads `iv_series()` — the ATM
   CE's last print solved per minute on the parity spot, cached per day+expiry.
 - The replay track's "next 1% move" reads a per-day spot series built in ONE pass over

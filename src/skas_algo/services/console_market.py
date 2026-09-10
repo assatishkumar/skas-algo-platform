@@ -39,8 +39,10 @@ def vix_for_day(day: date) -> dict | None:
         from skas_algo.data.provider import get_data_cache
 
         sd = get_data_cache()
+        # ~400 calendar days back: the prior close AND its rank over the last year of
+        # closes (the console plan's "VIX rank" in place of a real IVR, labelled as such)
         df = sd.get_prices(symbol=VIX_SYMBOL, asset_type="stock",
-                           start_date=day - timedelta(days=14), end_date=day)
+                           start_date=day - timedelta(days=400), end_date=day)
         if df is not None and len(df):
             f = df.copy()
             f["date"] = pd.to_datetime(f["date"]).dt.date
@@ -48,9 +50,15 @@ def vix_for_day(day: date) -> dict | None:
             today = f[f["date"] == day]
             prev_close = float(before["close"].iloc[-1]) if len(before) else None
             open_ = float(today["open"].iloc[0]) if len(today) and "open" in today else None
+            rank = None
+            if prev_close is not None and len(before) >= 60:
+                window = before["close"].astype(float).tail(252)
+                rank = round(100.0 * float((window < prev_close).mean()), 1)
             if prev_close is not None or open_ is not None:
                 out = {"prev_close": prev_close, "open": open_,
-                       "prev_date": before["date"].iloc[-1].isoformat() if len(before) else None}
+                       "prev_date": before["date"].iloc[-1].isoformat() if len(before) else None,
+                       # percentile of the prior close within the last 252 closes (≥60 needed)
+                       "rank_1y": rank, "rank_basis": "vix_rank_1y" if rank is not None else None}
     except Exception:
         logger.debug("console: VIX for %s unavailable", key, exc_info=True)
     with _LOCK:
