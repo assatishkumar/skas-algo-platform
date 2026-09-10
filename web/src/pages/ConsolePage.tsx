@@ -637,10 +637,15 @@ function LegRow({ leg, grid, onStage, onUnstage, chainExpiry, resetKey }: {
     : leg.pending === "roll" && from ? `rolled from ${Math.round(from.strike).toLocaleString("en-IN")}`
     : leg.pending === "resize" && from ? `resized from ×${from.lots}`
     : null;
-  const pendingStyle = { background: "var(--oc-caution-dim)", color: "var(--oc-caution)" };
   return (
     <>
-    <tr style={{ opacity: leg.enabled ? 1 : 0.45 }}>
+    {/* A pending add is the whole ROW tinted, with a stripe on its left edge and a small
+        "new" under the side chip — a badge inside the strike cell widened the column and
+        scrolled the table (owner, 2026-09-10). */}
+    <tr style={{ opacity: leg.enabled ? 1 : 0.45,
+        background: leg.pending === "add" ? "var(--oc-caution-dim)" : undefined,
+        boxShadow: leg.pending === "add" ? "inset 3px 0 0 var(--oc-caution)" : undefined }}
+      title={leg.pending === "add" ? "new leg — staged, not yet committed" : undefined}>
       <td className="py-1.5">
         <button type="button" title={leg.enabled ? "exclude from the payoff" : "include"}
           onClick={() => onStage({ kind: "toggle", leg_id: leg.id })}
@@ -655,7 +660,11 @@ function LegRow({ leg, grid, onStage, onUnstage, chainExpiry, resetKey }: {
           style={{ color: leg.side === "S" ? "var(--oc-neg)" : "var(--oc-pos)",
             background: leg.side === "S" ? "var(--oc-neg-fill)" : "var(--oc-pos-fill)" }}>
           {leg.side}</span>
-      </td>
+        {leg.pending === "add" && (
+          <span className="ml-1 text-[8.5px] font-bold uppercase align-middle"
+            style={{ color: "var(--oc-caution)" }}>new</span>
+        )}
+        </td>
       {/* Strike and size are steppers in their OWN columns and ALWAYS visible (a
           hover-reveal moved the button out from under the second click). */}
       <td className="whitespace-nowrap">
@@ -665,10 +674,7 @@ function LegRow({ leg, grid, onStage, onUnstage, chainExpiry, resetKey }: {
           <b className="whitespace-nowrap">
             {Math.round(leg.strike).toLocaleString("en-IN")} {leg.right}</b>
         </Stepper>
-        {leg.pending === "add" && (
-          <span className="ml-1.5 px-1 py-[1px] rounded-[3px] text-[8.5px] font-bold align-middle"
-            title="staged on the deployment — not yet committed" style={pendingStyle}>NEW · PENDING</span>
-        )}
+
       </td>
       {/* the leg's OWN expiry + DTE, amber when it is not the ladder's */}
       <td className="whitespace-nowrap text-[11px]"
