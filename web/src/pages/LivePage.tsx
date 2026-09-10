@@ -780,6 +780,47 @@ function RunCard({
           </button>
         </div>
       )}
+      {run.strategy_error && (
+        /* The strategy raised mid-decision on a held book. Until 2026-09-10 this was a
+           swallowed log line and the run kept ticking with a dead stop. */
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-rose-300 bg-rose-100 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300 px-3 py-2 text-sm">
+          <span>🛑 STRATEGY HALTED: {run.strategy_error}. Decisions are stopped; exits from the menu still work. The same code runs again on the next slice — fix or flatten first.</span>
+          <button
+            disabled={busy}
+            onClick={() => {
+              if (confirm("Acknowledge the strategy error and resume decisions? The strategy will run the same code on the next slice.")) {
+                act(() => api.liveAckStrategyError(run.run_id));
+              }
+            }}
+            className="rounded bg-rose-700 hover:bg-rose-800 text-white px-2.5 py-1 text-xs font-medium"
+          >
+            {busy ? "Resuming…" : <>Acknowledge &amp; resume</>}
+          </button>
+        </div>
+      )}
+      {run.managed_by === "manual" && (
+        /* HANDOVER (owner 2026-09-10): a hand-edit left lots, so the strategy is PAUSED
+           (kept intact) and the manual rail manages the book. Resume only when flat. */
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 px-3 py-2 text-sm">
+          <span>
+            ✋ MANUAL BOOK · {run.handover?.strategy_id ?? run.strategy_id} paused since {run.handover?.at?.replace("T", " ") ?? "?"}
+            {" · "}
+            {run.rail?.no_stop
+              ? <b>NO STOP set — set one in Edit params</b>
+              : `stop −${run.rail?.stop_pct ?? 0}% of ${run.rail?.margin_base ? `₹${Math.round(run.rail.margin_base).toLocaleString("en-IN")} (${run.rail.margin_source})` : "the margin anchor (pending)"}`}
+            {run.rail?.target_pct ? ` · target +${run.rail.target_pct}%` : ""}
+            {run.rail?.time_exit ? ` · square-off ${run.rail.time_exit}` : ""}
+          </span>
+          <button
+            disabled={busy || (run.positions ?? []).length > 0}
+            title={(run.positions ?? []).length > 0 ? "Flatten the book first — the strategy cannot take over legs it did not open" : "Reinstall the paused strategy on the flat book"}
+            onClick={() => { if (confirm("Reinstall the paused strategy? Its own rules decide whether it re-enters.")) act(() => api.liveResumeStrategy(run.run_id)); }}
+            className="rounded bg-amber-700 hover:bg-amber-800 disabled:opacity-40 text-white px-2.5 py-1 text-xs font-medium"
+          >
+            Resume strategy
+          </button>
+        </div>
+      )}
       {run.quote_error && (
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-rose-300 bg-rose-100 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300 px-3 py-2 text-sm">
           <span>⚠ {run.quote_error} LTP, greeks &amp; live margin stay frozen until then.</span>
@@ -1329,6 +1370,13 @@ function DeploymentTile({
           ...(dep.mode === "PAPER" ? [{ label: "⚡ Go LIVE", onClick: () => setShowGoLive(true) }] : []),
           { label: "Exit positions", tone: "warn", onClick: () => { if (positions > 0 && confirm("Exit ALL open positions for this strategy now, at live prices?")) act(() => api.liveFlatten(dep.run_id)); } },
           { label: "Mark closed at broker", onClick: () => setShowAdopt(true) },
+          ...(dep.managed_by === "manual" ? [{
+            label: positions > 0 ? "Resume strategy (flatten first)" : "Resume strategy",
+            onClick: () => {
+              if (positions > 0) { alert("The book still holds positions — flatten it first. The strategy cannot take over legs it did not open."); return; }
+              if (confirm("Reinstall the paused strategy on the flat book?")) act(() => api.liveResumeStrategy(dep.run_id));
+            },
+          }] : []),
           // Equity only. It forces the platform's unit count for a SYMBOL to match the
           // broker, and was built for an over-counted ETF; an options book is keyed by
           // contract, where the equivalent repair is "Mark closed at broker". Offering it
@@ -1432,6 +1480,18 @@ function DeploymentTile({
             )}
             {dep.order_error && (
               <Tag bg="var(--danger)" color="#fff" title={dep.order_error}>orders halted</Tag>
+            )}
+            {dep.strategy_error && (
+              <Tag bg="var(--danger)" color="#fff" title={dep.strategy_error}>strategy halted</Tag>
+            )}
+            {dep.managed_by === "manual" && (
+              <Tag bg="var(--warn-bg)" color="var(--warn-text)"
+                title={`A manual change left this book held: ${dep.handover?.strategy_id ?? dep.strategy_id} is paused (kept intact) and the manual rail manages the book. Resume once flat.`}>
+                MANUAL · paused {dep.handover?.at?.slice(11) ?? ""}
+              </Tag>
+            )}
+            {dep.managed_by === "manual" && dep.rail?.no_stop && (
+              <Tag bg="var(--danger)" color="#fff" title="The manual rail has no stop. Set stop_pct in Edit params.">NO STOP</Tag>
             )}
             {dep.history_thin != null && dep.history_thin > 0 && (
               <Tag bg="var(--warn-bg)" color="var(--warn-text)"

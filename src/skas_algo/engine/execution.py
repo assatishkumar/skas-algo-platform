@@ -238,7 +238,7 @@ class SliceExecutor:
             return None
         label = "BUY" if not self.portfolio.lots(symbol) else "AVG_BUY"
         fill = self.broker.execute(BrokerOrder(symbol, OrderSide.BUY, units))
-        self.portfolio.buy(symbol, units, fill.price, ts)
+        self.portfolio.buy(symbol, units, fill.price, ts, tag=tag)
         return trade_event(
             ts,
             symbol,
@@ -257,7 +257,7 @@ class SliceExecutor:
         if units <= 0:
             return None
         fill = self.broker.execute(BrokerOrder(symbol, OrderSide.SELL, units))
-        self.portfolio.sell_to_open(symbol, units, fill.price, ts, multiplier)
+        self.portfolio.sell_to_open(symbol, units, fill.price, ts, multiplier, tag=tag)
         return trade_event(
             ts, symbol, "SHORT", units, fill.price, 0.0, 0.0,
             len(self.portfolio.lots(symbol)), tag,

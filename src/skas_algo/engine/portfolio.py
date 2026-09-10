@@ -44,6 +44,11 @@ class Lot:
     price: float
     opened_at: date | datetime
     direction: int = 1
+    # WHO opened it: "STRATEGY" (the run's own decision) or "MANUAL" (the owner's hand —
+    # Live page manual order, console Commit). Additive, default = every existing path;
+    # the trade event carried this tag since day one but the lot never did, so once a
+    # manual leg was in the book nothing downstream could tell it apart (2026-09-10).
+    tag: str = "STRATEGY"
     multiplier: int = 1
 
 
@@ -66,19 +71,21 @@ class Portfolio:
     total_withdrawals: float = 0.0
 
     # ------------------------------------------------------------------ trades
-    def buy(self, symbol: str, units: int, price: float, when: date | datetime) -> Lot:
+    def buy(self, symbol: str, units: int, price: float, when: date | datetime,
+            *, tag: str = "STRATEGY") -> Lot:
         """Open a new lot, paying cash."""
         self.cash -= units * price
-        lot = Lot(id=next(self._ids), symbol=symbol, units=units, price=price, opened_at=when)
+        lot = Lot(id=next(self._ids), symbol=symbol, units=units, price=price, opened_at=when,
+                  tag=tag)
         self._lots.setdefault(symbol, []).append(lot)
         return lot
 
     def sell_to_open(self, symbol: str, units: int, price: float, when: date | datetime,
-                     multiplier: int = 1) -> Lot:
+                     multiplier: int = 1, *, tag: str = "STRATEGY") -> Lot:
         """Open a SHORT lot, receiving premium into cash (used for option writing)."""
         self.cash += units * price * multiplier
         lot = Lot(id=next(self._ids), symbol=symbol, units=units, price=price,
-                  opened_at=when, direction=-1, multiplier=multiplier)
+                  opened_at=when, direction=-1, multiplier=multiplier, tag=tag)
         self._lots.setdefault(symbol, []).append(lot)
         return lot
 
@@ -214,6 +221,7 @@ class Portfolio:
                         "opened_at": str(lot.opened_at),
                         "direction": lot.direction,
                         "multiplier": lot.multiplier,
+                        "tag": lot.tag,
                     }
                     for lot in lots
                 ]
@@ -243,6 +251,7 @@ class Portfolio:
                     opened_at=_parse_opened_at(lot["opened_at"]),
                     direction=lot.get("direction", 1),
                     multiplier=lot.get("multiplier", 1),
+                    tag=str(lot.get("tag") or "STRATEGY"),
                 )
                 for lot in lots
             ]

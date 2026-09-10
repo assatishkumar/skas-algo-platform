@@ -191,7 +191,7 @@ def test_live_flatten_closes_all_legs():
     assert not strat.legs                     # strategy adopted the flat book
 
 
-def test_live_manual_order_close_and_open_adopts_book():
+def test_live_manual_order_close_and_open_hands_the_book_over():
     cal = _biz(date(2026, 1, 1), date(2026, 1, 20))
     sd = FakeLiveSD(cal)
     sess, mv, strat = _session(sd, datetime(2026, 1, 5, 9, 50))
@@ -209,8 +209,16 @@ def test_live_manual_order_close_and_open_adopts_book():
     book = set(sess.portfolio.lot_symbols())
     assert hedge not in book                          # closed
     assert "NIFTY|2026-01-13|24800|PE" in book        # opened (1 lot-set = 65 units)
-    # "Strategy adopts the book": its tracked legs now mirror exactly what's held.
-    assert {leg["symbol"] for leg in strat.legs} == book
+    # HANDOVER (owner, 2026-09-10): the book is held, so the strategy is PAUSED untouched
+    # — its legs still name the hedge it opened — and the manual rail manages what is held.
+    assert sess.managed_by == "manual" and sess.paused_strategy is strat
+    assert hedge in {leg["symbol"] for leg in strat.legs}
+    assert sess.strategy.strategy_id == "manual_book"
+    sess.run_decision(datetime(2026, 1, 5, 10, 5))
+    assert {leg["symbol"] for leg in sess.strategy.legs} == book
+    assert sess.snapshot()["managed_by"] == "manual"
+    tags = {p["symbol"]: p["tag"] for p in sess.snapshot()["positions"]}
+    assert tags["NIFTY|2026-01-13|24800|PE"] == "MANUAL"
 
 
 def test_live_expiry_settles_legs():
@@ -295,7 +303,8 @@ def test_adopt_broker_close_books_a_leg_the_broker_already_closed():
     assert ev.get("charge", 0) > 0                      # F&O charges still apply
 
     assert victim not in sess.portfolio.lot_symbols()   # gone from the book
-    assert victim not in {leg["symbol"] for leg in strat.legs}  # and the strategy adopted it
+    # the book still holds the other legs → the strategy is PAUSED, the rail takes over
+    assert sess.managed_by == "manual" and sess.paused_strategy is strat
     assert sess.portfolio.cash == pytest.approx(
         cash_before - settled * units - ev["charge"]
     )

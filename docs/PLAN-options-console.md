@@ -224,3 +224,194 @@ Plus the isolation pin (`services/options_console/**` imports no order path) and
 - Any change to `live/`, `brokers/` or the order path before P5.
 - Touching `skas_algo.db` or the VPS.
 - Reworking `/trade?tab=build`; it stays until the console demonstrably replaces it.
+
+---
+---
+
+## Part 2 — What a hand-edit does to a strategy-managed run (2026-09-10)
+
+> Part 1 above is the console build plan (P0–P8 shipped; kept verbatim, also committed as
+> `docs/PLAN-options-console.md`). Part 2 is the question the console's Commit button
+> raised: **"if I open an algo-managed run, change some legs and commit, what happens to
+> the algo?"** Applies to PAPER and LIVE alike — the code path is identical, only the
+> broker differs.
+
+### Context — the question, restated
+
+The strategy is a state machine over *its own* leg list and latches. A manual order
+changes the *portfolio* (units held). The question is who owns the legs afterwards and
+whether the strategy's logic still means anything on a book it did not build.
+
+### What the code does today (verified 2026-09-10, read-only trace)
+
+Console Commit → `LiveRun.manual_order` → `LiveSession.manual_order`
+(`engine/live.py:299-353`) → fills through the run's broker (PaperBroker, or LiveBroker
+when every §1 key is set) → **`sync_strategy_book(ts)`** (`engine/live.py:389-426`).
+
+`sync_strategy_book` is ONE generic rebuild: `strat.legs = [{symbol, dir, units, entry}]`
+from the portfolio (entry re-based to the realised average fill), plus `entry_expiry` /
+`entry_date` only if `None`, plus `_flat()` if empty. It touches nothing else (`phase`,
+`cycle_expiry`, `margin_base`, `entered_month`, `cycle`, `sides`, per-leg maps …).
+
+Three incompatible leg models meet that rebuild:
+
+| family | leg model | after a manual order |
+|---|---|---|
+| ratio (call/put/batman/hni), intraday_straddle, weekly_intraday_straddle | `{symbol, dir, units, entry}` | **adopts** — manual legs join the P&L, `_exit_all` closes them. Caveats: frozen margin not re-frozen; a manual leg with no print freezes ALL exits (`all(has_print)`); a manual open on a FLAT run resurrects a finished cycle; weekly straddle's VWAP still watches `cycle["strike"]`, so a hand-roll exits the new legs on the old strike's signal. |
+| delta family (delta_neutral, iron_fly, fair_value_calendar, volcano, double_diagonal, monthly_butterfly) | `{symbol, right, dir, units, entry, fill_seen, entry_fill}` | rebuild **drops `right`** → the first slice that reaches a roll / adjust / `_adopt_settled` branch raises `KeyError: 'right'` (`delta_neutral_monthly.py:861`, `:1031`, `:1088` …). The tick loop swallows it (`manager.py:2987`): **no `order_error`, no banner, decisions silently dead — including the stop.** (P&L exits sit above the adjust branch, so a target/stop firing on the SAME slice still exits; hard time exits survive.) |
+| custom_options | `list[str]` | rebuild writes dicts into a string list → `TypeError: unhashable type: 'dict'` on every slice, **persisted** by `export_state` so a restart does not heal it. Per-leg maps (`entry_close`, `units`, `leg_index`) are never updated either. |
+| donchian_strangle_monthly | `list[str]` + own `sync_to_book` | prunes closed legs; a manual OPEN is invisible forever (by design). |
+| intraday_strangle_combo | no `legs` attr (`sides[u][right]`) | sync is a no-op; a manual close drops out via `ctx.lots`; a manual OPEN is entirely unmanaged (no EOD square-off, no MTM stop). |
+
+Two structural facts underneath: **`Lot` has no provenance** (`engine/portfolio.py:30`;
+the `MANUAL` tag lives only on the trade event and is display-only — no `tag ==` anywhere
+in engine/strategies/reconciler/snapshot), and **EXIT_ALL resolves by SYMBOL to every lot
+record** (`overrides.py:149-158`), so a manual leg on a strategy's contract is merged by
+construction — the broker nets per contract anyway. Reconciliation counts manual legs
+like any other (correct: the platform book must equal the broker's). No snapshot field or
+tile says "this run was hand-edited"; only the trade row's tag badge and a server journal
+line record it. Tests cover manual orders ONLY on `hni_weekly` (the one family the
+rebuild fits): `tests/test_live_options.py`, `tests/test_console_live.py`.
+
+### First-principles floor (what is true regardless of design)
+
+1. LAW — the broker's book is per contract; two lots on one contract are one position.
+   "Coexist on the same symbol" is impossible; only different-symbol coexistence is.
+2. LAW — a strategy's exits are functions of ITS leg list and entry prices; a threshold on
+   a book it did not build is a different rule, not the same rule on more legs.
+3. MEASURED — 4 of 6 strategy families cannot represent a hand-edited book (table above);
+   two of them fail silently today, on LIVE as on paper.
+4. MEASURED — the only whole-book exits that exist outside a strategy are `flatten` and
+   `adopt_broker_close`; there is no generic stop for a book nobody manages.
+5. RULE (owner, CLAUDE.md §1) — an unmanaged live position with no stop is the failure
+   mode the platform exists to prevent.
+
+**Load-bearing assumption to settle with the owner:** what the algo should DO after an
+edit — adopt the merged book, or step aside. The answer is different per family, so the
+honest design is a per-strategy DECLARED contract, never one generic rebuild.
+
+### The contract (owner decision, 2026-09-10): **ALWAYS HAND OVER**
+
+A manual order that leaves a run holding positions ends algorithmic management of that
+run. The strategy is PAUSED, the book goes onto a generic **manual rail**, and every
+screen says so. No family adopts, no family guesses. A manual order that flattens the
+book keeps today's flat semantics (the strategy sees flat; its own latches decide
+whether it may re-enter — the smoke-test rule in CLAUDE.md), because a flat book has no
+structure to disagree about.
+
+### 1. The handover itself (`engine/live.py`)
+- `LiveSession.manual_order` (and `adopt_broker_close`; `flatten` only when it leaves lots)
+  ends with `self._hand_over(ts, reason)` instead of `sync_strategy_book` whenever the
+  portfolio is non-empty afterwards:
+  - `self.paused_strategy = self.strategy`, `self.strategy = ManualBookStrategy.from_book(
+    portfolio, underlying, rail_params)`, `self.managed_by = "manual"`,
+    `self.handover = {"at": ts, "reason": "manual_order", "strategy_id": …}`.
+  - `sync_strategy_book` is no longer called on a non-flat book (it stays for the flat
+    branch: `legs = []` + `_flat()`), so the delta/custom_options corruption cannot happen.
+- `export_state` gains `managed_by`, `handover`, `paused_strategy` (the paused strategy's
+  own `export_state()`); `load_state` rebuilds the rail from the portfolio and re-hydrates
+  the paused strategy from `paused_strategy` (recovery.py `_rebuild` builds the ORIGINAL
+  strategy from `params_snapshot` as today, then `load_state` swaps it into
+  `paused_strategy` and installs the rail — no recovery-code change beyond that).
+- `_rewire` hooks the manager applies to `session.strategy` (`set_broker_margin`,
+  `set_index_spot`, quote-source wiring in `_wire_quote_source`, `_tag_underlying_spot`)
+  must reach the rail: it implements the same duck-typed surface (`legs`, `underlying`,
+  `set_broker_margin`, `margin_base`/`margin_source`, `export_state`, `basket_status`,
+  `exit_rules`, `strategy_alert`). `update_params` refuses on a handed-over run except for
+  the rail's own knobs (`stop_pct`, `target_pct`, `time_exit`).
+
+### 2. `ManualBookStrategy` (`strategies/manual_book.py`) — the rail
+Built from `custom_options`' MANAGEMENT half (its `_manage` is already leg target/stop +
+basket target/stop + spot bands; only its entry half and string/dict maps are replaced):
+- state from the book: `legs` = symbols held, `entry` = the lots' average price, `units`,
+  side from `direction`; all re-derived from the portfolio on every slice so a later
+  manual edit needs no sync at all (the rail never "owns" anything).
+- **stop**: `stop_pct` of the margin anchor (`margin_base` = last broker push, or the
+  paused strategy's frozen `margin_base`/`margin_per_set` where it has one — same
+  `_threshold_anchor` probe the tile uses); **target**: `target_pct`, off by default;
+  **time exit**: inherited from the paused strategy when it is an intraday deck
+  (`exit_time` / `eod_exit` / `cycle_exit_time` probed by `getattr`), else none;
+  expiry settlement is the engine's (`settle_expiries`) and needs nothing.
+- Defaults at handover: `stop_pct` = the paused strategy's own stop where it declares one
+  (`stop_loss_pct` in %-of-margin families), else **OFF with a loud amber "NO STOP" chip**
+  — the platform must never place an order the owner did not ask for on a book they just
+  took by hand; the console and tile make the absence unmissable and one click sets it.
+- Exits are ordinary `EXIT_ALL` signals per symbol through `SliceExecutor`, so charges,
+  trade events (`reason="rail_stop"` etc., tag `RAIL`), reconcile and the §1 order gates
+  are byte-identical to a strategy exit. `OpenSettleGuard` applies (no exit before 09:20).
+- Hot-editable via the tile's Edit params and settable from the console's Alerts card in
+  live mode (a ₹ stop/target armed on a handed-over run writes the rail, not a console
+  alert).
+
+### 3. The strategy exception is a visible halt (independent, ship first)
+`LiveRun.run_decision`: an exception from `strategy.on_slice` while the book is non-flat
+sets `self.strategy_error = f"{type}: {msg}"` with `order_error` semantics (decisions halt,
+banner + tile chip + one push, `POST /live/{id}/ack-strategy-error`), logged as one
+`STRATEGY error run=… exc=…` line. Today it is swallowed at `manager.py:2987` and a run can
+tick for weeks with a dead stop. Pinned by `test_a_strategy_exception_halts_visibly`.
+
+### 4. Resume
+"Resume strategy" (`POST /live/{id}/resume-strategy`, tile menu + console) is offered ONLY
+when the book is FLAT: the paused strategy is reinstalled, its `legs` cleared, its latches
+untouched (so a monthly does not re-enter the same cycle, an intraday does not re-enter
+the same day). On a non-flat book the button explains why it is disabled. No family
+re-derives state from a foreign book — that is the whole point of the decision.
+
+### 5. Provenance (small, additive)
+`Lot.tag` (default `"STRATEGY"`; every existing constructor path unchanged, parity suites
+pin it). Manual lots carry `"MANUAL"`, rail exits `"RAIL"`. The snapshot's `positions[]`
+gains `tag`, the Live tile and the console's Positions badge foreign lots. Reconciliation
+is untouched (it must count everything).
+
+### 6. Surfaces
+- Snapshot: `managed_by`, `handover{at, reason, strategy_id}`, `rail{stop_pct, target_pct,
+  time_exit, anchor, no_stop}`, `strategy_error`. Persisted; survives restart.
+- Live tile: chip **"MANUAL · <strategy> paused 11:04"** (amber), red **"NO STOP"** when the
+  rail has none; KPI band prints the rail's rules under "exit"; menu gains Resume strategy.
+- Console (live mode): the ticket's first line before Commit — *"Committing hands this book
+  over: volcano_calendar pauses, the manual rail takes it (stop 2% of ₹1,34,612 · exit
+  15:15). Resume is possible once flat."* Typed REAL unchanged. Positions badges MANUAL lots.
+- Mobile: `managed_by` + `strategy_error` in the snapshot it already reads; chip only.
+- `/live/summary` + alerts: one WARNING alert at handover, one at resume.
+
+### Files (representative)
+- `engine/live.py` — `_hand_over`, `manual_order`/`adopt_broker_close`/`flatten` tail,
+  `export_state`/`load_state`, snapshot `managed_by`
+- `strategies/manual_book.py` (new) + registry entry (`_DEPLOYS_ELSEWHERE`: never deployed
+  directly — installed only by a handover); `strategies/custom_options.py` (factor the
+  management half into a shared mixin, byte-identical behaviour)
+- `live/manager.py` — `strategy_error` (mirror the `order_error` plumbing at :486/:1346/
+  :1665/:2933), `update_params` guard, rewire hooks reach the rail, resume route
+- `api/routes/live.py` — `ack-strategy-error`, `resume-strategy`; `api/models.py`
+- `engine/portfolio.py::Lot.tag`; `engine/execution.py` carries the tag into events
+- `services/console_live.py` (ticket consequence line, rail in `risk`, alerts → rail),
+  `web/src/pages/ConsolePage.tsx`, `LivePage.tsx` tile chips + menu, `types.ts`,
+  `web-mobile` snapshot fields
+- Docs: CLAUDE.md §1 (the handover rule — a fresh session must not "fix" the delta family
+  to adopt), §8d console; FEATURES §3 entry for the rail; the console guide.
+
+### Tests
+- A manual order against EVERY family on a fake broker: after commit `managed_by ==
+  "manual"`, the paused strategy is intact (its `export_state` unchanged), the next slice
+  raises nothing, the rail's stop fires on a marked-down book and closes every lot
+  (including a manual one on the strategy's own strike).
+- Flatten by hand → strategy stays installed, `legs == []`, no re-entry that cycle (the
+  existing smoke-test pin).
+- Recovery round-trip: `export_state` → `load_state` reinstalls rail + paused strategy.
+- `test_a_strategy_exception_halts_visibly`; `test_resume_is_refused_on_a_held_book`.
+- Parity/mode-equivalence suites green (Lot.tag default, custom_options refactor).
+
+### Verification
+- `./scripts/preflight.sh` green.
+- Paper run in Chrome (never a LIVE armed run, §1): open volcano run 282 in the console,
+  resize one leg, Commit → tile reads "MANUAL · volcano_calendar paused", NO STOP chip until
+  a stop is set, next slice logs no exception; flatten from the tile → Resume strategy
+  enabled → strategy reinstalled, tile normal.
+- Kill-switch check: `order_error` / ack still work on a handed-over run.
+
+### Out of scope here
+- Adopt-style re-derivation for any family (explicitly rejected by the owner).
+- Per-leg rules richer than custom_options' (leg target/stop, basket target/stop, bands).
+
+
+**Status (2026-09-10): SHIPPED** — see CLAUDE.md §1 "always hand over" and `tests/test_handover.py`.

@@ -538,6 +538,10 @@ export const api = {
     request<{ armed: boolean; note: string }>(`/live/${id}/force-entry`, { method: "POST" }),
   liveAckOrderError: (id: number) =>
     request<{ cleared: string | null }>(`/live/${id}/ack-order-error`, { method: "POST" }),
+  liveAckStrategyError: (id: number) =>
+    request<{ cleared: string | null }>(`/live/${id}/ack-strategy-error`, { method: "POST" }),
+  liveResumeStrategy: (id: number) =>
+    request<{ run_id: number }>(`/live/${id}/resume-strategy`, { method: "POST" }),
   liveArchive: (id: number) => request(`/live/${id}/archive`, { method: "POST" }),
   liveUnarchive: (id: number) => request(`/live/${id}/unarchive`, { method: "POST" }),
   liveDelete: (id: number) => request(`/live/${id}`, { method: "DELETE" }),

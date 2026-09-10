@@ -879,9 +879,12 @@ async def manual_order(run_id: int, body: ManualOrderInput) -> dict:
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     from skas_algo.services.vault_export import journal_safe
+    handed = getattr(live.session, "managed_by", "strategy") == "manual"
     journal_safe("intervene", f"Manual order on {live.config.name}", strategy=live.config.strategy_id,
-                 run_id=run_id, detail=f"closed {len(body.closes)} / opened {len(body.opens)}")
-    return {"run_id": run_id, "executed": len(events), "snapshot": live.snapshot()}
+                 run_id=run_id, detail=f"closed {len(body.closes)} / opened {len(body.opens)}"
+                 + (" · strategy paused (manual rail)" if handed else ""))
+    return {"run_id": run_id, "executed": len(events), "snapshot": live.snapshot(),
+            "managed_by": "manual" if handed else "strategy"}
 
 
 @router.post("/{run_id}/overrides")
@@ -1009,6 +1012,32 @@ async def ironfly_adjust(run_id: int, body: dict) -> dict:
     # (a plain refresh only re-broadcasts on the next decision tick).
     manager.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
     return {"ironfly_adjust": strategy.ironfly_adjust, "note": note}
+
+
+@router.post("/{run_id}/ack-strategy-error")
+async def ack_strategy_error(run_id: int) -> dict:
+    """Owner acknowledges a strategy exception halt: clears it so decisions resume. The
+    same code will run again on the next slice — fix or flatten first."""
+    live = manager.get(run_id)
+    if live is None:
+        raise HTTPException(status_code=404, detail="run is not active")
+    prev = live.strategy_error
+    live.strategy_error = None
+    return {"cleared": prev}
+
+
+@router.post("/{run_id}/resume-strategy")
+async def resume_strategy(run_id: int) -> dict:
+    """Reinstall the paused strategy after a handover — FLAT book only (409 otherwise)."""
+    live = _get(run_id)
+    try:
+        snap = live.resume_strategy()
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    from skas_algo.services.vault_export import journal_safe
+    journal_safe("intervene", f"Strategy resumed on {live.config.name}",
+                 strategy=live.config.strategy_id, run_id=run_id)
+    return {"run_id": run_id, "snapshot": snap}
 
 
 @router.post("/{run_id}/ack-order-error")

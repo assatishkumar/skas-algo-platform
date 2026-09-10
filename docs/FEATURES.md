@@ -230,6 +230,14 @@ intraday stop or a strike picked off the live chain). Most are now backtested by
 the self-captured 1-min option store through the same class the deploy runs (§4); the rest
 are validated paper-first.
 
+- **Manual rail (`strategies/manual_book.py`, not deployable — installed by a HANDOVER, 2026-09-10).**
+  When the owner's hand changes a running option book (Live page manual order, console
+  Commit, mark-closed-at-broker) and lots remain, the strategy is PAUSED intact and this
+  rail manages the book: stop as a % of the margin anchor (inherited where the paused
+  strategy had a %-of-margin stop, otherwise NO STOP and said loudly), optional target,
+  the paused intraday deck's square-off time, expiry settlement. Tile: "MANUAL · paused",
+  Resume strategy once flat. A strategy exception on a held book halts visibly
+  (`strategy_error`) instead of being swallowed.
 - **`call_put_ratio_expiry` — expiry-day 1:3 premium seller.** Only on each index's weekly
   expiry day (NIFTY Tue / SENSEX Thu), 09:20–09:27: BUY an ATM straddle, SELL 3 lots/side at
   the strikes trading nearest ⅓ of each ATM premium (live-chain lookup; >30% miss → skip the

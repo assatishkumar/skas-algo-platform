@@ -290,9 +290,60 @@ class LiveConsole(AlertBook):
                     "enabled": symbol not in self.disabled,
                     "realized": 0.0,
                     "dte": (inst.expiry - self._today()).days,
+                    # who opened it — STRATEGY / MANUAL / MIXED (both on one contract)
+                    "tag": (lots[0].tag if all(lot.tag == lots[0].tag for lot in lots)
+                            else "MIXED"),
                 }
             )
         return out
+
+    # ---------------------------------------------------------------- handover
+    def handover_state(self) -> dict:
+        """managed_by / handover / rail straight from the session (the snapshot carries the
+        same three; read here so a fake run in tests needs no snapshot plumbing)."""
+        sess = self.session
+        managed_by = getattr(sess, "managed_by", "strategy")
+        rail = None
+        if managed_by == "manual" and hasattr(sess.strategy, "rail_status"):
+            rail = sess.strategy.rail_status()
+        return {"managed_by": managed_by, "handover": getattr(sess, "handover", None),
+                "rail": rail}
+
+    def consequence(self, closes: list[dict], opens: list[dict]) -> str | None:
+        """What Commit does to the RUN, in one line, before the owner presses it (owner
+        rule 2026-09-10: a hand-edit that leaves lots pauses the strategy)."""
+        if not closes and not opens:
+            return None
+        h = self.handover_state()
+        sid = self.live.config.strategy_id
+        if h["managed_by"] == "manual":
+            r = h["rail"] or {}
+            stop = (f"stop −{r['stop_pct']:g}% of the margin anchor" if r.get("stop_pct")
+                    else "NO STOP set")
+            return (f"This book is already on the manual rail ({sid} paused since "
+                    f"{r.get('handover_at') or '?'}; {stop}). The change lands on it as is.")
+        # would the book be flat afterwards? (every held symbol closed in full, nothing opened)
+        held = {leg["symbol"]: leg["units"] for leg in self.legs()}
+        closing = {}
+        for c in closes:
+            closing[c["symbol"]] = closing.get(c["symbol"], 0) + int(
+                c.get("units") or held.get(c["symbol"], 0))
+        flat_after = not opens and all(closing.get(s, 0) >= u for s, u in held.items())
+        if flat_after:
+            return (f"This flattens the book: {sid} stays installed and sees a flat book "
+                    "(its own rules decide whether it re-enters).")
+        paused = self.session.strategy
+        from skas_algo.strategies.manual_book import ManualBookStrategy
+
+        preview = ManualBookStrategy.from_paused(paused, underlying=self.underlying,
+                                                 ts=self._clock(), reason="manual_order")
+        stop = (f"stop −{preview.stop_pct:g}% of the margin anchor" if preview.stop_pct > 0
+                else "NO STOP until you set one")
+        exit_t = f" · square-off {preview.time_exit.strftime('%H:%M')}" if preview.time_exit else ""
+        return (f"Committing HANDS THIS BOOK OVER: {sid} is paused (kept intact, never told "
+                f"about these legs) and the manual rail manages the whole book — {stop}"
+                f"{exit_t}, expiry settles to intrinsic. Resume the strategy once the book "
+                "is flat.")
 
     def closed_legs(self, since: str | None) -> list[dict]:
         """Legs the run closed in the CURRENT cycle (rows at or after ``since``), one entry per
@@ -857,6 +908,7 @@ class LiveConsole(AlertBook):
         return {
             "rows": rows,
             "net_cash": round(sum(r["cash"] for r in rows), 2),
+            "consequence": self.consequence(closes, opens),
             "fill_basis": (
                 "the run's LIMIT-at-touch ladder"
                 if self.mode == "live"
@@ -1116,6 +1168,8 @@ class LiveConsole(AlertBook):
                 "run_name": self.live.config.name,
                 "strategy_id": self.live.config.strategy_id,
                 "order_error": snap.get("order_error"),
+                "strategy_error": snap.get("strategy_error"),
+                **self.handover_state(),
             },
             "market": {
                 "spot": spot,

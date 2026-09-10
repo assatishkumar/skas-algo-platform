@@ -1020,6 +1020,36 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   SECOND REAL BUY four seconds after the owner's exit filled (run 21: BUY 267.90 → manual SELL
   269.15 → BUY 269.20). The flat-book branch now also stops on `entry_at is not None` — set
   once at entry, never cleared, persisted. Generalise the lesson: **`sync_strategy_book` wipes
+  **A HAND-EDIT THAT LEAVES LOTS PAUSES THE STRATEGY — "always hand over" (owner decision,
+  2026-09-10).** `LiveSession._after_book_change` (manual_order / adopt_broker_close /
+  flatten): a FLAT book afterwards is adopted as before (`sync_strategy_book`, legs=[],
+  the strategy's own latches decide re-entry); a HELD book is HANDED OVER —
+  `paused_strategy` keeps the strategy whole, `strategies/manual_book.py::
+  ManualBookStrategy` (the manual RAIL) is installed as `session.strategy`,
+  `managed_by="manual"`, all persisted and reinstalled by `load_state` after a restart.
+  Why: the old generic leg rebuild fitted ONE leg model (the ratio family's) and met three
+  — it dropped the delta family's `right` (KeyError on the first roll/adjust slice) and
+  wrote dicts into `custom_options`' string list (TypeError every slice, persisted) —
+  and the tick loop SWALLOWED both, so a hand-edited run ticked for weeks with a dead
+  stop, on LIVE as on paper. A strategy's rule on a book it did not build is a different
+  rule; it is not applied at all. The rail re-derives its legs from the PORTFOLIO every
+  slice (a second edit needs no sync), measures P&L from the lots' real fills, and runs
+  ONLY: a stop as `stop_pct` of the margin anchor (inherited from the paused strategy's
+  own %-of-margin `stop_pct` where it has one — NEVER invented: 0 = NO STOP, shouted by
+  `strategy_alert`, a red chip and the console), an optional `target_pct`, the paused
+  intraday deck's hard `time_exit`, and the engine's expiry settlement. Exits are plain
+  `EXIT_ALL`s through the executor (charges/events/reconcile/§1 gates identical), tagged
+  `rail_*`. Hot-edit on a handed-over run edits the RAIL's knobs only (`stop_pct`,
+  `target_pct`, `time_exit`, `margin_anchor`); "Resume strategy" (`POST
+  /live/{id}/resume-strategy`, tile banner/menu) works on a FLAT book only — no family
+  ever re-derives state from a foreign book. `Lot.tag` (STRATEGY/MANUAL, additive) is the
+  provenance the snapshot/console badge; reconciliation still counts every lot. The
+  console's ticket states the consequence BEFORE Commit (`LiveConsole.consequence`).
+  Companion rail: a strategy EXCEPTION mid-decision now sets `LiveRun.strategy_error`
+  (order_error semantics: decisions halt, banner + chip + push,
+  `POST /live/{id}/ack-strategy-error`, `STRATEGY error` log line) instead of vanishing
+  into "live loop tick failed". Coverage: `tests/test_handover.py` (every leg model,
+  restart round-trip, flat-only resume, the rail's stop closing a MANUAL lot, the halt).
   a strategy's `legs`, so any "have I traded?" test that reads `legs` is wrong after a manual
   intervention.**
   Sizes are hard-coded 1 lot / 1 share (not params). Deploy-only, no backtest (paper fills

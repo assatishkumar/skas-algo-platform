@@ -543,8 +543,16 @@ export interface ManualOrderInput {
   opens: ManualLegOpen[];
 }
 
+export interface ManualRail {
+  stop_pct: number; target_pct: number; time_exit: string | null;
+  margin_base: number | null; margin_source: string; no_stop: boolean;
+  paused_strategy_id: string | null; handover_at: string | null; handover_reason: string | null;
+  exited_at: string | null; exit_reason: string | null;
+}
+
 export interface LivePosition {
   symbol: string;
+  tag?: "STRATEGY" | "MANUAL" | "MIXED"; // who opened it (MIXED = both on one contract)
   units: number;
   lots: number; // count of lot-records (fills) — the manual-close cap, NOT tradable lots
   lot_size?: number | null; // contract lot size (options); tradable lots = units / lot_size
@@ -612,6 +620,12 @@ export interface LiveRunSnapshot {
   history_prepared_at?: string | null;
   strategy_alert?: string | null; // strategy-surfaced warning: data health, or an
   // operational one like value_investing's fund source running dry. Self-clearing.
+  strategy_error?: string | null; // the strategy raised mid-decision on a held book: decisions halt (ack to resume)
+  // HANDOVER (owner 2026-09-10): "manual" = a hand-edit left lots, the strategy is PAUSED and
+  // the manual rail (stop / target / time exit) manages the book until it is flat and resumed
+  managed_by?: "strategy" | "manual";
+  handover?: { at: string; reason: string; strategy_id: string | null } | null;
+  rail?: ManualRail | null;
   supports_force_entry?: boolean;
   ironfly_adjust?: boolean | null; // delta_neutral/iron_fly: null unless the strategy has it
   realized_taxes: number;
@@ -1497,6 +1511,12 @@ export interface Deployment {
   history_prepared_at?: string | null;
   strategy_alert?: string | null; // strategy-surfaced warning: data health, or an
   // operational one like value_investing's fund source running dry. Self-clearing.
+  strategy_error?: string | null; // the strategy raised mid-decision on a held book: decisions halt (ack to resume)
+  // HANDOVER (owner 2026-09-10): "manual" = a hand-edit left lots, the strategy is PAUSED and
+  // the manual rail (stop / target / time exit) manages the book until it is flat and resumed
+  managed_by?: "strategy" | "manual";
+  handover?: { at: string; reason: string; strategy_id: string | null } | null;
+  rail?: ManualRail | null;
   underlying_spot?: number | null; // live underlying spot (tile subline)
   cycle?: DeploymentCycle | null; // the open cycle (entry stamp/spot, realized before it) + the last closed one
 }
@@ -1977,6 +1997,9 @@ export interface ConsoleState {
     has_prev_day: boolean; has_next_day: boolean;
     // live/paper only: the deployment behind the console
     run_id?: number; run_name?: string; strategy_id?: string; order_error?: string | null;
+    strategy_error?: string | null;
+    managed_by?: "strategy" | "manual"; handover?: { at: string; reason: string; strategy_id: string | null } | null;
+    rail?: ManualRail | null;
     };
   market: {
     spot: number | null; fut: number | null;
@@ -2053,6 +2076,7 @@ export interface ConsoleSaved {
 }
 
 export interface ConsoleLeg {
+  tag?: "STRATEGY" | "MANUAL" | "MIXED"; // live: who opened it
   id: string; symbol: string; right: "CE" | "PE"; strike: number; expiry: string;
   side: "B" | "S"; lots: number; lot_size: number; units: number; direction: number;
   entry: number; ltp: number | null; pnl: number | null;
@@ -2114,6 +2138,7 @@ export interface ConsoleStaged {
   }
   export interface ConsoleTicket {
     rows: ConsoleTicketRow[]; net_cash: number; fill_basis: string; limit_orders: boolean;
+    consequence?: string | null; // what Commit does to the RUN (handover / flat / already manual)
   }
 
 export interface ConsoleRisk {

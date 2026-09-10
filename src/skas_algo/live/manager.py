@@ -135,7 +135,7 @@ class LiveConfig:
     ignore_market_hours: bool = False
     auto: bool = False  # whether the background refresh/decision loop runs
     # Options PAPER only: replay from this past date as a backtest, then continue live.
-    warm_from_date: "date | None" = None
+    warm_from_date: date | None = None
 
     @property
     def segment(self) -> str:
@@ -160,7 +160,7 @@ def _serialize_event(ev: dict) -> dict:
 
 
 def _build_session(
-    config: "LiveConfig", strategy, loader, is_deriv: bool, underlying: str
+    config: LiveConfig, strategy, loader, is_deriv: bool, underlying: str
 ) -> LiveSession:
     """A LiveSession wired for the deployment's instrument class. DERIV builds the live
     options stack (chain/lazy-marks/settler/charges/margin); STOCK is the Donchian view."""
@@ -484,6 +484,12 @@ class LiveRun:
         # A REAL order failed (rejected/unfillable) or the broker book mismatched — halts
         # decisions until the owner acknowledges (POST /live/{id}/ack-order-error).
         self.order_error: str | None = None
+        # The STRATEGY raised mid-decision while the book holds positions. Until 2026-09-10
+        # the tick loop swallowed this into a log line and the run kept ticking with a dead
+        # stop — a delta-family run hand-edited through sync_strategy_book did exactly that.
+        # Same halt semantics as order_error: decisions stop, banner + chip + one push,
+        # cleared by POST /live/{id}/ack-strategy-error. Manual flatten still works.
+        self.strategy_error: str | None = None
         # A run that got a REAL-order broker must reconcile its book against the broker
         # BEFORE its first decision — so a pre-existing/manual position, or a fill a crash
         # left unpersisted (the double-fill window), is DETECTED and halts instead of being
@@ -1357,6 +1363,23 @@ class LiveRun:
             # the log desyncs from the book (2026-07-27: run 10's filled CE cover vanished
             # → realized overstated by its loss, cycle stuck "open").
             events = list(getattr(exc, "partial_events", []) or [])
+        except Exception as exc:
+            # The strategy itself blew up. Whatever filled before it is real (partial
+            # events, as above); then HALT VISIBLY rather than let the loop swallow it.
+            self.strategy_error = f"{type(exc).__name__}: {exc}"
+            logger.exception("STRATEGY error run=%s strategy=%s exc=%s", self.run_id,
+                             self.config.strategy_id, self.strategy_error)
+            try:
+                from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+                held = ", ".join(self.session.portfolio.lot_symbols()) or "flat"
+                build_notifier().send(Alert(
+                    f"STRATEGY HALTED: {self.config.name}",
+                    f"{self.strategy_error} — decisions stopped; book: {held}. Review, "
+                    "then acknowledge on the Live page.", AlertLevel.ERROR))
+            except Exception:  # pragma: no cover
+                pass
+            events = list(getattr(exc, "partial_events", []) or [])
         self._tag_underlying_spot(events)
         snap = self.snapshot()  # wrapper: real margin override + greeks + target/stop, etc.
         with session_scope() as db:
@@ -1405,6 +1428,13 @@ class LiveRun:
 
         from skas_algo.strategies.registry import get_strategy
 
+        if getattr(self.session, "managed_by", "strategy") == "manual":
+            r = self.session.strategy.rail_status()
+            return {"editable_params": {"stop_pct": r["stop_pct"], "target_pct": r["target_pct"],
+                                        "time_exit": r["time_exit"] or "",
+                                        "margin_anchor": getattr(self.session.strategy,
+                                                                 "margin_anchor", 0.0)},
+                    "param_defaulted": []}
         try:
             factory = get_strategy(self.config.strategy_id)
             sig = inspect.signature(factory.__init__ if isinstance(factory, type) else factory)
@@ -1447,6 +1477,21 @@ class LiveRun:
         if not accepted:
             raise ValueError("no editable params in the request (infra keys are "
                              "blocked — stop + redeploy to change them)")
+        if getattr(self.session, "managed_by", "strategy") == "manual":
+            # The strategy is PAUSED (handover): its knobs are frozen with it. Only the
+            # manual rail's own rules are editable until the book is flat and resumed.
+            rail = self.session.strategy
+            try:
+                applied = rail.update(**accepted)
+            except ValueError as exc:
+                raise ValueError(f"{exc} — the strategy is paused (manual rail); only "
+                                 "stop_pct, target_pct, time_exit and margin_anchor "
+                                 "can be edited until it is resumed") from exc
+            self._persist_state()
+            logger.warning("run %s manual rail edited: %s", self.run_id, sorted(applied))
+            self.broadcaster.publish({"type": "snapshot", "run_id": self.run_id,
+                                      **self.snapshot()})
+            return {"applied": sorted(applied), "params": rail.rail_status()}
         # Reject keys the ctor wouldn't take — strategy_kwargs silently DROPS unknowns
         # (right for recovery, wrong here: a typo'd knob would report "applied" as a no-op).
         import inspect
@@ -1499,6 +1544,23 @@ class LiveRun:
         return self._manual_guarded(
             lambda: self.session.manual_order(datetime.now(IST), closes=closes, opens=opens)
         )
+
+    def resume_strategy(self) -> dict:
+        """Reinstall the paused strategy on a FLAT book (refused otherwise — ValueError)."""
+        self.session.resume_strategy(datetime.now(IST))
+        self._persist_state()
+        try:
+            from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+            build_notifier().send(Alert(
+                f"Strategy resumed: {self.config.name}",
+                f"{self.config.strategy_id} is managing the run again (flat book).",
+                AlertLevel.WARNING))
+        except Exception:  # pragma: no cover
+            pass
+        snap = self.snapshot()
+        self.broadcaster.publish({"type": "snapshot", "run_id": self.run_id, **snap})
+        return snap
 
     def adopt_broker_close(self, prices: dict[str, float]) -> list[dict]:
         """Book legs the BROKER already closed, at the stated settled prices — no orders.
@@ -1560,6 +1622,7 @@ class LiveRun:
         dropped the filled legs' trade events."""
         from skas_algo.brokers.live_broker import OrderExecutionError
 
+        was_manual = getattr(self.session, "managed_by", "strategy") == "manual"
         try:
             events = fn()
         except OrderExecutionError as exc:
@@ -1570,7 +1633,26 @@ class LiveRun:
                 self._after_manual(partial)
             raise
         self._after_manual(events)
+        if not was_manual and getattr(self.session, "managed_by", "strategy") == "manual":
+            self._announce_handover()
         return events
+
+    def _announce_handover(self) -> None:
+        """One WARNING push + alert the moment a hand-edit pauses the strategy."""
+        rail = getattr(self.session.strategy, "rail_status", lambda: {})()
+        stop = (f"stop −{rail['stop_pct']:g}% of the margin anchor" if rail.get("stop_pct")
+                else "NO STOP set")
+        try:
+            from skas_algo.notify import Alert, AlertLevel, build_notifier
+
+            build_notifier().send(Alert(
+                f"HANDOVER: {self.config.name}",
+                f"{self.config.strategy_id} is PAUSED after a manual change; the manual rail "
+                f"manages the book ({stop}"
+                f"{' · exit ' + rail['time_exit'] if rail.get('time_exit') else ''}). "
+                "Resume is possible once the book is flat.", AlertLevel.WARNING))
+        except Exception:  # pragma: no cover
+            pass
 
     def _after_manual(self, events: list[dict]) -> None:
         """Persist + broadcast after a manual flatten/order (mirrors run_decision)."""
@@ -1663,6 +1745,7 @@ class LiveRun:
             "quote_source": self.config.quote_source,
             "on_cache_fallback": self.on_cache_fallback,
             "order_error": self.order_error,
+            "strategy_error": self.strategy_error,
             "reconcile_pending": self.reconcile_pending,
             "supports_force_entry": hasattr(
                 getattr(self.session, "strategy", None), "request_force_entry"
@@ -1789,7 +1872,7 @@ class LiveRunManager:
         # None when idle. Read by GET /data/options/intraday-store → the Data-page indicator.
         self.option_capture_progress: dict | None = None
 
-    def _maybe_inject_live_broker(self, session, config: "LiveConfig", quote_source) -> None:
+    def _maybe_inject_live_broker(self, session, config: LiveConfig, quote_source) -> None:
         """THE real-order gate. Replace the session's PaperBroker with a LiveBroker ONLY
         when every key turns: mode LIVE, account armed, SKAS_LIVE_TRADING_ENABLED, and the
         quote source's adapter exposes the full order surface. Any other combination —
@@ -1876,7 +1959,7 @@ class LiveRunManager:
             "REAL-ORDER broker injected for %s (account %s)", config.name, config.broker_account_id
         )
 
-    def _rebind_order_adapter(self, live: "LiveRun") -> None:
+    def _rebind_order_adapter(self, live: LiveRun) -> None:
         """Keep the ORDER path on the same Kite session as the READ path.
 
         A LiveBroker freezes the adapter it was injected with; a quote-source rebuild
@@ -1924,7 +2007,7 @@ class LiveRunManager:
             except Exception:  # pragma: no cover - maintenance must never die
                 logger.exception("order-adapter sweep failed for run %s", live.run_id)
 
-    def _maybe_remint_order_adapter(self, live: "LiveRun") -> None:
+    def _maybe_remint_order_adapter(self, live: LiveRun) -> None:
         """Close the WS-masked rollover hole: _rebind_order_adapter converges the order
         path onto the QUOTE adapter, which only helps once the read path has noticed the
         ~06:00 token kill. A KiteTicker that keeps serving marks (auto-reconnect, an
@@ -2272,7 +2355,7 @@ class LiveRunManager:
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
         return live
 
-    def _retry_quotes(self, live: "LiveRun") -> bool:
+    def _retry_quotes(self, live: LiveRun) -> bool:
         """Self-heal a zerodha run stuck on a quote_error: if a VALID session exists (honest
         expiry → False once the token truly dies, so we never hammer a dead token), rebuild the
         adapter from the current DB token and clear the error so the loop polls again. Throttled
@@ -2336,7 +2419,7 @@ class LiveRunManager:
         self.broadcaster.publish({"type": "snapshot", "run_id": run_id, **live.snapshot()})
         return True
 
-    def _maybe_resume_orders(self, live: "LiveRun") -> None:
+    def _maybe_resume_orders(self, live: LiveRun) -> None:
         """Finish a recovery-time real-order resume that had NO adapter to inject into.
 
         The daily VPS reality: the backend restarts ~08:30, the Kite login happens ~08:35 —
@@ -2409,7 +2492,7 @@ class LiveRunManager:
         threading.Thread(target=_job, daemon=True).start()
 
     @staticmethod
-    def _due_offhours_refresh(live: "LiveRun", now: datetime) -> bool:
+    def _due_offhours_refresh(live: LiveRun, now: datetime) -> bool:
         """Throttle OFF-HOURS mark refreshes to ~once / 5 min (None → fire now, e.g. right after a
         login or self-heal). Post-market prices are static, so this keeps unrealized P&L correct
         without hammering the broker overnight."""
@@ -2482,7 +2565,7 @@ class LiveRunManager:
                 self._notify_watchdog(live)
                 self._start_loop_on_loop(run_id)
 
-    def _notify_watchdog(self, live: "LiveRun") -> None:
+    def _notify_watchdog(self, live: LiveRun) -> None:
         try:
             from skas_algo.notify import Alert, AlertLevel, build_notifier
 
@@ -2893,7 +2976,8 @@ class LiveRunManager:
         mkt = is_market_open(now, segment=live.config.segment)
         # refresh() ran the reconcile; a still-pending run has NOT verified its book yet
         # (no session / transient failure) → do not decide/trade until it clears.
-        if mkt and not live.quote_error and not live.order_error and not live.reconcile_pending:
+        if (mkt and not live.quote_error and not live.order_error
+                and not getattr(live, "strategy_error", None) and not live.reconcile_pending):
             # Decisions / orders ONLY during market hours.
             if tick_driven:
                 # Decide EVERY tick — the strategy's own gates decide what fires
@@ -2930,7 +3014,7 @@ class LiveRunManager:
             return False
         if live.session.portfolio.lot_symbols():
             return False  # still holding — never abandon a live book
-        if live.order_error:
+        if live.order_error or getattr(live, "strategy_error", None):
             return False  # halted — stay visible until the owner acks the failure
         logger.info(
             "run %s (%s) completed its lifecycle — stopping itself", live.run_id, live.config.name

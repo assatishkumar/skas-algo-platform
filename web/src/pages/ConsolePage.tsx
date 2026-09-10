@@ -459,6 +459,14 @@ function OrderTicket({ ticket, staged, risk, riskAfter, mNow, mBefore, isReal, r
             {mNow && !mNow.maxLossUnlimited ? "DEFINED RISK" : "UNDEFINED RISK"} after
           </span>
         </div>
+        {ticket.consequence && (
+          /* what Commit does to the RUN — a hand-edit that leaves lots pauses the strategy
+             (owner 2026-09-10); said here, before the button, not after */
+          <div className="mt-3 px-2.5 py-2 rounded-[6px] text-[11.5px] leading-snug"
+            style={{ background: "var(--oc-caution-dim)", borderLeft: "3px solid var(--oc-caution)", color: "var(--oc-ink)" }}>
+            {ticket.consequence}
+          </div>
+        )}
         <table className="w-full mt-3 text-[12px] tabular-nums whitespace-nowrap">
           <thead>
             <tr className="text-[9px] uppercase tracking-[.06em]" style={{ color: "var(--oc-faint)" }}>
@@ -731,6 +739,11 @@ function LegRow({ leg, grid, onStage, onUnstage, chainExpiry, resetKey, replay }
           <b className="whitespace-nowrap">
             {Math.round(leg.strike).toLocaleString("en-IN")} {leg.right}</b>
         </Stepper>
+        {leg.tag && leg.tag !== "STRATEGY" && (
+          <span className="ml-1 px-1 rounded-[3px] text-[8.5px] font-bold align-middle"
+            title={leg.tag === "MIXED" ? "the strategy and your hand both hold this contract" : "opened by hand"}
+            style={{ background: "var(--oc-caution-dim)", color: "var(--oc-caution)" }}>{leg.tag}</span>
+        )}
 
       </td>
       {/* the leg's OWN expiry + DTE, amber when it is not the ladder's */}
@@ -1951,6 +1964,13 @@ export default function ConsolePage() {
               style={{ background: isReal ? "var(--oc-neg-fill)" : "var(--oc-accent-dim)",
                 color: isReal ? "var(--oc-neg)" : "var(--oc-accent)" }}>
               {isReal ? "REAL ORDERS" : "paper fills"} · {state?.session.run_name} · live clock
+              {state?.session.managed_by === "manual" && (
+                <span className="ml-1.5 px-1.5 rounded-[3px] font-bold"
+                  title={`A hand-edit left this book held: ${state.session.handover?.strategy_id ?? state.session.strategy_id} is paused and the manual rail manages it (${state.session.rail?.no_stop ? "NO STOP set" : `stop −${state.session.rail?.stop_pct}%`}). Resume from the Live page once flat.`}
+                  style={{ background: state.session.rail?.no_stop ? "var(--oc-neg)" : "var(--oc-caution)", color: "#fff" }}>
+                  MANUAL · {state.session.handover?.strategy_id ?? "strategy"} paused{state.session.rail?.no_stop ? " · NO STOP" : ""}
+                </span>
+              )}
             </span>
           )}
           <Chip disabled={!state || isLive} title="bookmark this minute (B)"

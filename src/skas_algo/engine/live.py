@@ -14,6 +14,7 @@ uses, replaying history through a LiveSession reproduces the backtest trade-for-
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time
 
 from skas_algo.brokers.base import Fill
@@ -37,6 +38,7 @@ from skas_algo.engine.portfolio import Portfolio
 from skas_algo.engine.sim_fill import FillModel
 from skas_algo.engine.stops import StopBook
 
+logger = logging.getLogger(__name__)
 
 class _SettledPriceBroker:
     """Fills at prices the caller states — used ONLY by ``adopt_broker_close``.
@@ -77,6 +79,13 @@ class LiveSession:
         margin_model=None,
     ):
         self.strategy = strategy
+        # HANDOVER (owner, 2026-09-10): a manual order that leaves lots pauses the strategy
+        # and installs the manual rail (strategies/manual_book.py) in its place. The paused
+        # strategy is kept whole here — never told about legs it did not build — and comes
+        # back only through `resume_strategy` on a FLAT book. Persisted; survives restarts.
+        self.paused_strategy = None
+        self.managed_by: str = "strategy"          # "strategy" | "manual"
+        self.handover: dict | None = None
         self.lookback = lookback
         self.tax_rate = tax_rate
         self.withdrawal_rate = withdrawal_rate
@@ -174,7 +183,7 @@ class LiveSession:
                 actions.append(ClosePosition(symbol, tag=tag, reason=reason))
         events = self.executor.execute_actions(ts, actions)
         self.transactions.extend(events)
-        self.sync_strategy_book(ts)
+        self._after_book_change(ts, "flatten")
         self._record_history(ts)
         return events
 
@@ -213,7 +222,7 @@ class LiveSession:
         finally:
             self.executor.broker = real_broker  # a raise must never strand the real broker
         self.transactions.extend(events)
-        self.sync_strategy_book(ts)
+        self._after_book_change(ts, "broker_closed")
         self._record_history(ts)
         return events
 
@@ -348,9 +357,68 @@ class LiveSession:
             raise ValueError("no manual actions to apply")
         events = self.executor.execute_actions(ts, actions)
         self.transactions.extend(events)
-        self.sync_strategy_book(ts)
+        self._after_book_change(ts, "manual_order")
         self._record_history(ts)
         return events
+
+    # ----------------------------------------------- handover
+    def _after_book_change(self, ts: date | datetime, reason: str) -> None:
+        """What the strategy learns after the owner's hand touched the book.
+
+        FLAT afterwards → the strategy adopts the flat book exactly as before (its own
+        latches decide whether it may re-enter: the smoke-test rule). HOLDING afterwards →
+        HAND OVER: the strategy is paused untouched and the manual rail takes the book.
+        Owner decision 2026-09-10 ("always hand over"): the generic leg rebuild fitted one
+        family's leg model and silently broke two (KeyError/TypeError every slice, swallowed
+        by the loop, no halt, no stop — on LIVE as on paper); a strategy's rule on a book it
+        did not build is a different rule, so it is not applied at all."""
+        if not self.portfolio.lot_symbols():
+            if self.managed_by == "manual":
+                # the rail's book went flat by hand — the rail stays until the owner resumes
+                self.strategy.legs = []
+            else:
+                self.sync_strategy_book(ts)
+            return
+        self._hand_over(ts, reason)
+
+    def _hand_over(self, ts: date | datetime, reason: str) -> None:
+        from skas_algo.strategies.manual_book import ManualBookStrategy
+
+        if self.managed_by == "manual":
+            return                          # already on the rail; it re-derives its legs
+        paused = self.strategy
+        rail = ManualBookStrategy.from_paused(
+            paused, underlying=getattr(paused, "underlying", None), ts=ts, reason=reason,
+            initial_capital=self.portfolio.cash + self.portfolio.invested_capital(),
+        )
+        self.paused_strategy = paused
+        self.strategy = rail
+        self.managed_by = "manual"
+        self.handover = {
+            "at": ts.isoformat(timespec="minutes") if isinstance(ts, datetime) else ts.isoformat(),
+            "reason": reason,
+            "strategy_id": getattr(paused, "strategy_id", None),
+        }
+        logger.warning("HANDOVER %s: %s paused, manual rail installed (%s)",
+                       reason, getattr(paused, "strategy_id", "?"), rail.rail_status())
+
+    def resume_strategy(self, ts: date | datetime) -> None:
+        """Reinstall the paused strategy — on a FLAT book only. Its legs are cleared and its
+        latches untouched, so a monthly does not re-enter the cycle it was pulled from and an
+        intraday deck does not re-enter the same day. On a held book this is refused: no
+        family re-derives its state from a book it did not build."""
+        if self.managed_by != "manual" or self.paused_strategy is None:
+            raise ValueError("the strategy is not paused")
+        if self.portfolio.lot_symbols():
+            raise ValueError("the book still holds positions — flatten it first; the strategy "
+                             "cannot take over legs it did not open")
+        self.strategy = self.paused_strategy
+        self.paused_strategy = None
+        self.managed_by = "strategy"
+        self.handover = None
+        self.sync_strategy_book(ts)          # flat: legs = [] and the strategy's _flat()
+        logger.warning("RESUME: %s reinstalled on a flat book",
+                       getattr(self.strategy, "strategy_id", "?"))
 
     def _build_manual_leg(self, o: dict) -> tuple[str, int]:
         """Resolve a manual-open spec to an (option_symbol, units) pair."""
@@ -490,6 +558,16 @@ class LiveSession:
             "strategy": (
                 self.strategy.export_state() if hasattr(self.strategy, "export_state") else {}
             ),
+            # handover: the rail's state sits in "strategy" above; the paused strategy's own
+            # state travels beside it so a restart reinstalls both exactly
+            "managed_by": self.managed_by,
+            "handover": self.handover,
+            "paused_strategy": (
+                self.paused_strategy.export_state()
+                if self.paused_strategy is not None
+                and hasattr(self.paused_strategy, "export_state")
+                else ({} if self.paused_strategy is not None else None)
+            ),
             "overrides": [
                 {"scope": o.scope, "target": o.target, "rule": o.rule, "active": o.active}
                 for o in self.resolver.overrides
@@ -530,7 +608,21 @@ class LiveSession:
         self.stops.load(state.get("stops", []))
         if state.get("marks") and hasattr(self.market, "load_marks"):
             self.market.load_marks(state["marks"])  # last live quotes → price legs while disconnected
-        if hasattr(self.strategy, "load_state"):
+        if state.get("managed_by") == "manual":
+            # Recovery built the ORIGINAL strategy from params_snapshot; hydrate it as the
+            # paused one and put the rail back in front of it.
+            from skas_algo.strategies.manual_book import ManualBookStrategy
+
+            paused = self.strategy
+            if hasattr(paused, "load_state"):
+                paused.load_state(state.get("paused_strategy") or {})
+            rail = ManualBookStrategy(underlying=getattr(paused, "underlying", None))
+            rail.load_state(state.get("strategy", {}))
+            self.paused_strategy = paused
+            self.strategy = rail
+            self.managed_by = "manual"
+            self.handover = state.get("handover")
+        elif hasattr(self.strategy, "load_state"):
             self.strategy.load_state(state.get("strategy", {}))
         self.resolver.overrides = [
             OverrideRule(
@@ -619,6 +711,9 @@ class LiveSession:
                     # Earliest lot's open date (the position's entry date) as YYYY-MM-DD.
                     "entry_date": (opened.isoformat()[:10] if hasattr(opened, "isoformat")
                                    else (str(opened)[:10] if opened else None)),
+                    # who opened it: STRATEGY / MANUAL, or MIXED when both share the contract
+                    "tag": (lots[0].tag if all(lot.tag == lots[0].tag for lot in lots)
+                            else "MIXED"),
                 }
             )
         net_delta, net_iv = self._enrich_greeks(positions)
@@ -679,6 +774,13 @@ class LiveSession:
             # None unless the strategy has the iron-fly adjustment (delta_neutral / iron_fly) —
             # lets the live UI show + toggle it.
             "ironfly_adjust": getattr(getattr(self, "strategy", None), "ironfly_adjust", None),
+            # "manual" = the owner's hand changed this book and the strategy is PAUSED;
+            # the manual rail (stop/target/time exit) is what manages it now
+            "managed_by": self.managed_by,
+            "handover": self.handover,
+            "rail": (self.strategy.rail_status()
+                     if self.managed_by == "manual" and hasattr(self.strategy, "rail_status")
+                     else None),
         }
 
     def _strategy_pnl(self, closes: dict, attr: str = "strategy_pnl") -> float | None:
