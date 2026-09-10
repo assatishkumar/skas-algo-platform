@@ -132,7 +132,7 @@ input[type="number"] {
   --oc-ground: #F1F4F5;  --oc-surface: #FFFFFF;  --oc-panel2: #F7F9FA;
   --oc-strike: #F2F5F6;  --oc-chip: #EDF1F3;
   --oc-line: #D5DEE2;    --oc-hair: #E7EDF0;
-  --oc-ink: #0F171C;     --oc-muted: #697A83;    --oc-faint: #93A1A8;
+  --oc-ink: #0F171C;     --oc-muted: #3F4C58;    --oc-faint: #66737F;
   --oc-accent: #3A44C8;
   --oc-accent-dim: rgba(58, 68, 200, .09);
   --oc-accent-tint: rgba(58, 68, 200, .045);

@@ -1496,9 +1496,11 @@ export default function ConsolePage() {
                     <GreekCell label="Vega /1%" v={risk?.greeks.vega} dp={0} inr />
                   </div>
                   <div className="mt-1.5 grid grid-cols-3 gap-1.5">
-                    <ScenarioCell label={`${MINUS}1%`} v={scen?.[0]} base={scen?.[1]} />
-                    <ScenarioCell label="spot" v={scen?.[1]} base={scen?.[1]} />
-                    <ScenarioCell label="+1%" v={scen?.[2]} base={scen?.[1]} />
+                    {/* cumulative: the cycle's realised rides on every T+0 figure, so "T+0 spot" IS the
+                        cycle MTM and the ±1% tiles are where the cycle would stand (owner, 2026-09-10) */}
+                    <ScenarioCell label={`${MINUS}1%`} v={scen ? scen[0] + (risk?.realised ?? 0) : null} base={scen ? scen[1] + (risk?.realised ?? 0) : null} />
+                    <ScenarioCell label="spot" v={scen ? scen[1] + (risk?.realised ?? 0) : null} base={scen ? scen[1] + (risk?.realised ?? 0) : null} />
+                    <ScenarioCell label="+1%" v={scen ? scen[2] + (risk?.realised ?? 0) : null} base={scen ? scen[1] + (risk?.realised ?? 0) : null} />
                   </div>
                 </Panel>
   );
@@ -1537,8 +1539,8 @@ export default function ConsolePage() {
                       </span>
                     )}
                     {mNow?.rewardRisk ? (
-                      <span className="text-[11px] font-semibold" style={{ color: "var(--oc-muted)" }}
-                        title="reward : risk — max profit over max loss of the open book">
+                      <span className="text-[12px] font-semibold" style={{ color: "var(--oc-ink)" }}
+                        title="reward : risk — max profit over max loss on the cycle basis">
                         R:R {mNow.rewardRisk.toFixed(1)}
                       </span>
                     ) : null}
@@ -1634,16 +1636,16 @@ export default function ConsolePage() {
         <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
           sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
         <Tile label="Max profit" tone="pos"
-          value={mNow ? (mNow.maxProfitUnlimited ? "unlimited" : inr0(mNow.maxProfit)) : "—"}
-          sub={pctOf(mNow?.maxProfit, risk?.margin) + " of margin"} />
+          value={mNow ? (mNow.maxProfitUnlimited ? "unlimited" : inr0(mNow.maxProfit + (risk?.realised ?? 0))) : "—"}
+          sub={pctOf(mNow ? mNow.maxProfit + (risk?.realised ?? 0) : undefined, risk?.margin) + " of margin"} />
         <Tile label="Max loss" tone="neg"
-          value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss)) : "—"}
-          sub={pctOf(mNow?.maxLoss, risk?.margin) + " of margin"} />
+          value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss + (risk?.realised ?? 0))) : "—"}
+          sub={pctOf(mNow ? mNow.maxLoss + (risk?.realised ?? 0) : undefined, risk?.margin) + " of margin"} />
         <Tile label="Breakeven"
-          value={mNow?.breakevens.length
-            ? mNow.breakevens.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ") : "—"}
-          sub={mNow?.breakevens.length && state?.market.spot
-            ? `${signed(100 * (mNow.breakevens[0] / state.market.spot - 1))}% from spot` : "—"} />
+          value={cycleBE.length
+            ? cycleBE.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ") : "—"}
+          sub={cycleBE.length && state?.market.spot
+            ? `${signed(100 * (cycleBE[0] / state.market.spot - 1))}% from spot` : "—"} />
         <Tile label="Open P&L" tone={(risk?.unrealised ?? 0) >= 0 ? "pos" : "neg"}
           value={`${inr0(risk?.unrealised ?? 0)}${risk?.margin ? ` · ${pctOf(risk.unrealised, risk.margin)}` : ""}`}
           sub={`${inr0(-(risk?.charges ?? 0))} costs`} />
