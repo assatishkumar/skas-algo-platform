@@ -475,7 +475,8 @@ class ZerodhaAdapter:
                 return []
             end = datetime.now()
             bars = kite.historical_data(
-                token, end - timedelta(days=days), end, f"{minutes}minute"
+                token, end - timedelta(days=days), end,
+                "minute" if minutes <= 1 else f"{minutes}minute",  # Kite's 1-min name
             )
         except Exception:  # pragma: no cover - network/permission hiccup → cold start
             return []

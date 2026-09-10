@@ -2941,6 +2941,15 @@ class LiveRunManager:
                 logger.exception("option-bar capture failed for %s", day)
         self.option_capture_progress = None
         out = {"account": label, "days": summaries}
+        # India VIX minute bars ride the same daily pass (the console's strip reads them at
+        # the cursor's minute in replay): top up the csv.gz store from its last bar to today.
+        # One or two 60-day-capped requests; a failure never fails the option capture.
+        try:
+            from skas_algo.data.intraday_bars import backfill_vix
+
+            out["vix"] = backfill_vix(adapter, since=days[-1])
+        except Exception:  # pragma: no cover - best-effort
+            logger.exception("minute VIX top-up failed")
         # Off-box durability: mirror the whole store into the backup dir (Google Drive
         # folder) after every run — copy-only, never deletes; best-effort.
         if settings.option_bars_backup_dir:

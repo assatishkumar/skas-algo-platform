@@ -297,6 +297,23 @@ class LiveConsole(AlertBook):
             )
         return out
 
+    def _atm_iv(self) -> float | None:
+        """The ATM row's solved IV on the live chain (the CE's; the PE's when the CE has
+        none), the same figure the ladder prints."""
+        try:
+            snap = self._live_chain() or {}
+            atm = snap.get("atm_strike")
+            rows = self.chain_rows()
+        except Exception:
+            return None
+        if atm is None or not rows:
+            return None
+        # Kite's ATM sits on the LISTING grid (NIFTY 50s); the console's rows are coarsened
+        # to the 100s (§8), so take the nearest row rather than an exact strike match.
+        row = min(rows, key=lambda r: abs(float(r.get("strike", 0)) - float(atm)))
+        ce, pe = row.get("ce") or {}, row.get("pe") or {}
+        return ce.get("iv") or pe.get("iv")
+
     # ---------------------------------------------------------------- alerts → rail
     def arm_alert(self, kind: str, value: float, *, note: str | None = None) -> dict:
         """On a MANUAL-MODE run a ₹ target/stop is not a page-side alert: it is written to
@@ -1218,6 +1235,7 @@ class LiveConsole(AlertBook):
                 "cycle_low": None,
                 "cycle_high": None,
                 "vix": {"last": console_market.vix_live()},
+                "atm_iv": self._atm_iv(),
                 "day_high": None,
                 "day_low": None,
                 "expiry": self.expiry,

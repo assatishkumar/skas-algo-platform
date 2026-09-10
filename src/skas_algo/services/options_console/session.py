@@ -955,6 +955,33 @@ class ConsoleSession(AlertBook):
                 self._vix[key] = None
         return self._vix[key]
 
+    def _vix_at_cursor(self) -> dict | None:
+        """The day's VIX record plus `last`: the minute close at or before the cursor when
+        the minute store has the day (else None — the strip then shows the prior close)."""
+        v = self.vix()
+        if not v:
+            return None
+        out = {k: x for k, x in v.items() if k != "minutes"}
+        mins = v.get("minutes") or []
+        now = self.clock.strftime("%H:%M")
+        at = None
+        for hhmm, close in mins:
+            if hhmm <= now:
+                at = close
+            else:
+                break
+        out["last"] = at
+        out["has_minutes"] = bool(mins)
+        return out
+
+    def _atm_iv_at_cursor(self) -> float | None:
+        series = self.iv_series()
+        if not series:
+            return None
+        key = self._minute_key()
+        i = bisect.bisect_right([m for m, _ in series], key) - 1
+        return series[i][1] if i >= 0 else None
+
     def cycle_info(self) -> dict | None:
         """The cycle's progress bar: from the first fill's day to the LAST expiry among the
         legs held, in captured sessions. None until something has traded."""
@@ -1623,7 +1650,9 @@ class ConsoleSession(AlertBook):
                 "day_open": self.market.spot_open, "day_high": self.market.spot_high,
                 "day_low": self.market.spot_low,
                 "cycle_low": cyc[0] if cyc else None, "cycle_high": cyc[1] if cyc else None,
-                "vix": self.vix(),
+                "vix": self._vix_at_cursor(),
+                # the front expiry's ATM implied vol at the cursor (the "iv ›" series)
+                "atm_iv": self._atm_iv_at_cursor(),
                 "expiry": self.expiry,
                 "dte": ((date.fromisoformat(self.expiry) - self.day).days
                         if self.expiry else None),

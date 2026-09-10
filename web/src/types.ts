@@ -2012,7 +2012,8 @@ export interface ConsoleState {
     cycle_low?: number | null; cycle_high?: number | null;
     // India VIX as the day could know it: replay = prior close (+ open), live = last print
     vix?: { prev_close?: number | null; open?: number | null; prev_date?: string | null; last?: number | null;
-      rank_1y?: number | null; rank_basis?: string | null } | null;
+      rank_1y?: number | null; rank_basis?: string | null; has_minutes?: boolean } | null;
+    atm_iv?: number | null;  // front expiry's ATM implied vol % at the cursor (replay) / on the live chain
     expiry: string | null; dte: number | null;
   };
   chain: {

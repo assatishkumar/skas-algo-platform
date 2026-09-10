@@ -1244,7 +1244,15 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   Verified by measurement, not by eye — Chrome ignored the resize on the maximised window.
 - The strip's VIX carries `rank_1y` (percentile of the prior close within the last 252
   cached closes, ≥60 needed; `rank_basis: "vix_rank_1y"`) — a VIX rank, labelled so,
-  never called an IV rank.
+  never called an IV rank. **Minute VIX (owner 2026-09-10):** `data/intraday_bars.py`
+  keeps `NSEINDIAVIX_1min.csv.gz` (`VIX_SYMBOL`, 60-day Kite chunks — `_chunk_days`),
+  filled once by `skas-algo backfill-vix --since 2021-07-29` and topped up by the daily
+  option capture (`_run_option_capture` → `backfill_vix`, Mac data box only);
+  `console_market.vix_for_day` attaches the day's `minutes`, the session reads `last`
+  at the cursor (`_vix_at_cursor`; the prior close when the day is uncaptured), and
+  `atm_iv` beside it is `iv_series()` at the cursor — our own minute-by-minute gauge,
+  the live chain's ATM row on a deployment.
+- **The console's source list shows only runs HOLDING positions** (owner 2026-09-10).
 - The track's "iv ›" jump (`next_iv_spike`, vol points) reads `iv_series()` — the ATM
   CE's last print solved per minute on the parity spot, cached per day+expiry.
 - The replay track's "next 1% move" reads a per-day spot series built in ONE pass over

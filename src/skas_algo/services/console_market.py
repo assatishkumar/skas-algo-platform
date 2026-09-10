@@ -56,6 +56,8 @@ def vix_for_day(day: date) -> dict | None:
                 rank = round(100.0 * float((window < prev_close).mean()), 1)
             if prev_close is not None or open_ is not None:
                 out = {"prev_close": prev_close, "open": open_,
+                       # the day's minute closes from the self-captured store ([] = not captured)
+                       "minutes": _minutes(day),
                        "prev_date": before["date"].iloc[-1].isoformat() if len(before) else None,
                        # percentile of the prior close within the last 252 closes (≥60 needed)
                        "rank_1y": rank, "rank_basis": "vix_rank_1y" if rank is not None else None}
@@ -64,6 +66,16 @@ def vix_for_day(day: date) -> dict | None:
     with _LOCK:
         _DAY[key] = out
     return out
+
+
+def _minutes(day: date) -> list[tuple[str, float]]:
+    try:
+        from skas_algo.data.intraday_bars import vix_minutes
+
+        return vix_minutes(day)
+    except Exception:
+        logger.debug("console: minute VIX for %s unavailable", day, exc_info=True)
+        return []
 
 
 def vix_live() -> float | None:

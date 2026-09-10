@@ -1924,7 +1924,10 @@ export default function ConsolePage() {
           )}
           {/* populated runs first — the first option in a list of thirty was an empty book,
               which read as "selecting a run shows no legs" (owner, 2026-09-10) */}
+          {/* only runs HOLDING positions (owner, 2026-09-10) — a flat run has nothing to
+              adjust here; build a fresh book on the Trade page instead */}
           {[...(liveRuns?.runs ?? [])]
+            .filter((r: ConsoleLiveRun) => (r.open_positions ?? 0) > 0)
             .sort((a, b) => (b.open_positions ?? 0) - (a.open_positions ?? 0) || a.run_id - b.run_id)
             .map((r: ConsoleLiveRun) => (
             <option key={r.run_id} value={`run:${r.run_id}`}>
@@ -2177,9 +2180,16 @@ export default function ConsolePage() {
           </StripItem>
         )}
         {state?.market.vix && (state.market.vix.last != null || state.market.vix.prev_close != null) && (
-          <StripItem label={isLive ? "India VIX" : "VIX · prev close"}>
-            <span title={isLive ? "the live print" : `India VIX at the prior session's close${state.market.vix.prev_date ? ` (${state.market.vix.prev_date})` : ""} — a replayed day's own close would be the future`}>
-              {num(isLive ? (state.market.vix.last ?? null) : (state.market.vix.prev_close ?? null), 2)}
+          <StripItem label={isLive ? "India VIX" : state.market.vix.last != null ? "India VIX" : "VIX · prev close"}>
+            <span title={isLive ? "the live print" : state.market.vix.last != null
+              ? `India VIX at the cursor's minute (self-captured minute bars); prev close ${num(state.market.vix.prev_close ?? null, 2)}`
+              : `India VIX at the prior session's close${state.market.vix.prev_date ? ` (${state.market.vix.prev_date})` : ""} — no minute bars captured for this day; a replayed day's own close would be the future`}>
+              {num(state.market.vix.last ?? (isLive ? null : state.market.vix.prev_close ?? null), 2)}
+              {!isLive && state.market.vix.last != null && state.market.vix.prev_close != null && (
+                <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}>
+                  prev {num(state.market.vix.prev_close, 2)}
+                </span>
+              )}
               {!isLive && state.market.vix.rank_1y != null && (
                 <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}
                   title="where the prior close sits among the last year of VIX closes (0% = the year's low, 100% = its high) — a VIX rank, not an IV rank">
@@ -2192,6 +2202,13 @@ export default function ConsolePage() {
                   open {num(state.market.vix.open, 2)}
                 </span>
               )}
+            </span>
+          </StripItem>
+        )}
+        {state?.market.atm_iv != null && (
+          <StripItem label="ATM IV">
+            <span title="the front expiry's at-the-money implied vol at this minute, solved from the last print the same way the ladder does — our own volatility gauge, minute by minute">
+              {num(state.market.atm_iv, 1)}%
             </span>
           </StripItem>
         )}

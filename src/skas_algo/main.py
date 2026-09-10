@@ -102,6 +102,26 @@ def _restore_option_bars(args) -> None:
         print("  errors:", ", ".join(result["errors"]))
 
 
+def _backfill_vix(args) -> None:
+    """`skas-algo backfill-vix --since YYYY-MM-DD` — fill the minute India VIX store from
+    Kite through any logged-in Zerodha account (read-only historical calls, ~60-day chunks,
+    ~3 req/s). The console's strip reads it at the cursor's minute in replay."""
+    from datetime import date
+
+    from skas_algo.data.intraday_bars import backfill_vix, vix_cached_range
+    from skas_algo.services.console_margin import _account
+
+    acct = _account()
+    if acct is None:
+        raise SystemExit("no logged-in Zerodha account — log in on the Brokers page first")
+    label, adapter = acct
+    since = date.fromisoformat(args.since)
+    print(f"backfilling INDIA VIX 1-min bars since {since} via {label}; store now: "
+          f"{vix_cached_range()}")
+    out = backfill_vix(adapter, since)
+    print(f"done: {out['rows']} rows in [{since}, today]; store range {out['after']}")
+
+
 def main() -> None:
     """CLI entry point (``skas-algo``): run the API server, or export the Obsidian vault."""
     import argparse
@@ -120,6 +140,11 @@ def main() -> None:
         "import-gfd", help="Import GlobalDataFeeds 1-min CSVs into the option-bar store"
     )
     ig.add_argument("paths", nargs="+", help="GFD csv files and/or directories of them")
+    bv = sub.add_parser(
+        "backfill-vix", help="Fill the minute India VIX store from Kite (needs a Zerodha login)"
+    )
+    bv.add_argument("--since", default="2021-07-29",
+                    help="first day to fetch (default 2021-07-29, the option store's first day)")
     rb = sub.add_parser(
         "restore-option-bars", help="Pull missed 1-min option-bar days from a remote (VPS) store"
     )
@@ -154,6 +179,9 @@ def main() -> None:
         return
     if args.cmd == "import-gfd":
         _import_gfd(args)
+        return
+    if args.cmd == "backfill-vix":
+        _backfill_vix(args)
         return
     if args.cmd == "restore-option-bars":
         _restore_option_bars(args)

@@ -1325,3 +1325,41 @@ def test_next_iv_spike_jumps_to_the_first_minute_the_atm_iv_rises_enough():
     s.seek("09:30")
     s.jump("next_iv_spike", pct=rise + 1)                     # more than ever happened
     assert s.clock.strftime("%H:%M") == "09:30"
+
+
+def test_the_strip_reads_the_vix_at_the_cursor_when_minute_bars_exist_else_the_prior_close():
+    store.write_day(DAY, _day())
+    s = ConsoleSession(underlying="NIFTY", day=DAY, at="10:00", expiry=EXP)
+    s.vix_fn = lambda d: {"prev_close": 13.78, "open": 13.9, "prev_date": "2026-07-13",
+                          "minutes": [("09:15", 14.0), ("09:30", 14.5), ("10:00", 13.2),
+                                      ("11:00", 15.1)]}
+    v = s.state()["market"]["vix"]
+    assert v["last"] == 13.2 and v["has_minutes"] and "minutes" not in v
+    s.step(30)
+    assert s.state()["market"]["vix"]["last"] == 13.2           # 10:30: the 10:00 bar holds
+    s.seek("11:05")
+    assert s.state()["market"]["vix"]["last"] == 15.1
+    s2 = ConsoleSession(underlying="NIFTY", day=DAY, at="10:00", expiry=EXP)
+    s2.vix_fn = lambda d: {"prev_close": 13.78, "open": 13.78, "minutes": []}
+    v = s2.state()["market"]["vix"]
+    assert v["last"] is None and v["has_minutes"] is False and v["prev_close"] == 13.78
+    # the ATM implied vol at the cursor, from the same series the "iv ›" jump walks
+    iv = s2.state()["market"]["atm_iv"]
+    assert iv is None or 0 < iv < 200
+
+
+def test_the_minute_vix_store_round_trips_a_day(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from skas_algo.data import intraday_bars as ib
+
+    monkeypatch.setattr(ib, "INTRADAY_DIR", tmp_path)
+    assert ib.vix_minutes(DAY) == [] and ib.vix_cached_range() is None
+    rows = pd.DataFrame({"start": [f"{DAY}T09:15:00", f"{DAY}T09:16:00"],
+                         "open": [14.0, 14.1], "high": [14.2, 14.2], "low": [13.9, 14.0],
+                         "close": [14.1, 14.05]})
+    rows.to_csv(ib._store_path(ib.VIX_SYMBOL, 1), index=False)
+    assert ib.vix_minutes(DAY) == [("09:15", 14.1), ("09:16", 14.05)]
+    lo, hi = ib.vix_cached_range()
+    assert lo.startswith(str(DAY)) and hi.startswith(str(DAY)) and lo < hi
+    assert ib._chunk_days(1) == 60 and ib._chunk_days(15) == 190
