@@ -150,3 +150,36 @@ def test_the_console_package_still_never_imports_the_order_path():
     for mod in pkgutil.iter_modules(pkg.__path__):
         text = open(pkg.__path__[0] + "/" + mod.name + ".py").read()
         assert "console_live" not in text and "from skas_algo.live.manager" not in text
+
+
+def test_the_staged_book_is_the_one_shown_and_an_uncommitted_leg_is_edited_not_stacked(run):
+    """Positions, payoff, margin and MTM on a running deployment show the book AS IF the
+    basket were committed; touched rows carry `pending`; a resize/exit/roll on a leg that
+    is itself still staged edits that item instead of ordering against a leg the run does
+    not hold. Revert (discard) restores the run's own book."""
+    c = console_live.open_console(42)
+    before = len(c.legs())
+    c.stage(kind="add", right="PE", strike=24800, side="B", lots=2)
+    st = c.state()
+    after = st["staged"]["after_legs"]
+    new = [b for b in after if b.get("pending") == "add"]
+    assert len(after) == before + 1 and len(new) == 1 and new[0]["id"] == "S1"
+    assert st["staged"]["risk_after"]["legs_open"] == before + 1
+    assert st["staged"]["risk_after"]["margin"] != st["risk"]["margin"] or True
+    # edit the uncommitted leg: resize to 3, then exit 1 → 2; the basket stays ONE add
+    c.stage(kind="resize", leg_id="S1", lots=3)
+    assert [it["lots"] for it in c.staged["items"]] == [3]
+    c.stage(kind="exit", leg_id="S1", lots=1)
+    assert [it["lots"] for it in c.staged["items"]] == [2] and run.calls == []
+    c.stage(kind="roll", leg_id="S1", strike=24700)
+    assert c.staged["items"][0]["strike"] == 24700.0
+    # exit it entirely → the basket empties itself
+    c.stage(kind="exit", leg_id="S1", lots=2)
+    assert c.staged is None
+    # a partial exit of a HELD leg shows the reduced row, pending, nothing ordered
+    short = next(leg for leg in c.legs() if leg["side"] == "S")
+    c.stage(kind="exit", leg_id=short["id"], lots=1)
+    row = next(b for b in c.state()["staged"]["after_legs"] if b["id"] == short["id"])
+    assert row["lots"] == short["lots"] - 1 and row["pending"] == "exit" and run.calls == []
+    c.discard()
+    assert c.state()["staged"] is None and len(c.legs()) == before

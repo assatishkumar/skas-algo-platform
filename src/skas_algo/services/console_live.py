@@ -416,6 +416,47 @@ class LiveConsole(AlertBook):
             }
         raise ValueError(f"unknown staged change {kind!r}")
 
+    def _edit_staged(self, *, kind: str, leg_id: str, strike=None, lots: int = 1) -> bool:
+        """A change to a leg that is itself still STAGED edits the staged add in place —
+        a resize sets its lots, a roll moves its strike, an exit trims it (to zero =
+        drops it). Stacking a second item on an uncommitted leg would have sent the run
+        an exit for a leg it does not hold."""
+        if not self.staged or not str(leg_id).startswith("S"):
+            return False
+        adds = [it for it in self.staged["items"] if it["kind"] == "add"]
+        try:
+            idx = int(str(leg_id)[1:]) - 1
+        except ValueError:
+            return False
+        if idx < 0 or idx >= len(adds):
+            return False
+        it = adds[idx]
+        if kind == "resize":
+            n = max(0, int(lots))
+            if n == 0:
+                self.staged["items"].remove(it)
+            else:
+                it["lots"] = n
+        elif kind == "exit":
+            n = max(0, it["lots"] - max(1, int(lots)))
+            if n == 0:
+                self.staged["items"].remove(it)
+            else:
+                it["lots"] = n
+        elif kind == "roll":
+            px = self._price(it["right"], float(strike), it.get("expiry"))
+            if px is None:
+                raise ValueError(f"{int(strike)} {it['right']} has no live price")
+            it["strike"], it["price"] = float(strike), px
+        else:
+            return False
+        it["label"] = f"{it['side']} {int(it['strike'])} {it['right']} ×{it['lots']}"
+        items = self.staged["items"]
+        self.staged = (
+            {"items": items, "label": " · ".join(i["label"] for i in items)} if items else None
+        )
+        return True
+
     def stage(
         self,
         *,
@@ -428,6 +469,10 @@ class LiveConsole(AlertBook):
         enabled=None,
         replace: bool = False,
     ) -> dict | None:
+        if kind in ("exit", "resize", "roll") and self._edit_staged(
+            kind=kind, leg_id=leg_id or "", strike=strike, lots=lots
+        ):
+            return self.staged
         item = self._item(
             kind=kind,
             right=right,
@@ -480,8 +525,9 @@ class LiveConsole(AlertBook):
                 [
                     {
                         "id": f"P{x['i']}",
-                        "symbol": (f"{self.underlying}|{self.expiry}|"
-                                   f"{int(x['strike'])}|{x['right']}"),
+                        "symbol": (
+                            f"{self.underlying}|{self.expiry}|" f"{int(x['strike'])}|{x['right']}"
+                        ),
                         "right": x["right"],
                         "strike": x["strike"],
                         "expiry": self.expiry or "",
@@ -644,6 +690,8 @@ class LiveConsole(AlertBook):
 
     # ---------------------------------------------------------------- the DTO
     def _project(self, legs: list[dict]) -> list[dict]:
+        """The book AS IF the staged basket were applied — what the page shows on a
+        running deployment until Commit. Touched rows carry ``pending``."""
         if not self.staged:
             return legs
         book = [dict(leg) for leg in legs]
@@ -653,14 +701,22 @@ class LiveConsole(AlertBook):
             if k == "add":
                 sym = f"{self.underlying}|{st['expiry']}|{int(st['strike'])}|{st['right']}"
                 same = next(
-                    (b for b in book if b["symbol"] == sym and b["side"] == st["side"]), None
+                    (
+                        b
+                        for b in book
+                        if b["symbol"] == sym
+                        and b["side"] == st["side"]
+                        and not str(b["id"]).startswith("S")
+                    ),
+                    None,
                 )
                 lot = st["lot_size"] or 1
+                seq += 1
                 if same:
                     same["lots"] += st["lots"]
                     same["units"] = same["lots"] * lot
+                    same["pending"] = "add"
                 else:
-                    seq += 1
                     book.append(
                         {
                             "id": f"S{seq}",
@@ -678,7 +734,12 @@ class LiveConsole(AlertBook):
                             "pnl": 0.0,
                             "enabled": True,
                             "realized": 0.0,
-                            "dte": None,
+                            "dte": (
+                                (date.fromisoformat(st["expiry"]) - self._today()).days
+                                if st.get("expiry")
+                                else None
+                            ),
+                            "pending": "add",
                         }
                     )
             elif k == "exit":
@@ -686,6 +747,7 @@ class LiveConsole(AlertBook):
                     if b["id"] == st["leg_id"]:
                         b["lots"] -= st["lots"]
                         b["units"] = b["lots"] * b["lot_size"]
+                        b["pending"] = "exit"
                 book = [b for b in book if b["lots"] > 0]
             elif k == "roll":
                 for b in book:
@@ -693,14 +755,24 @@ class LiveConsole(AlertBook):
                         b["strike"] = st["strike"]
                         b["entry"] = st["price"]
                         b["ltp"] = st["price"]
+                        b["symbol"] = (
+                            f"{self.underlying}|{b['expiry']}|" f"{int(b['strike'])}|{b['right']}"
+                        )
+                        b["pnl"] = 0.0
+                        b["pending"] = "roll"
             elif k == "resize":
                 for b in book:
                     if b["id"] == st["leg_id"]:
                         b["lots"] = int(st["lots"])
                         b["units"] = b["lots"] * b["lot_size"]
+                        b["pending"] = "resize"
                 book = [b for b in book if b["lots"] > 0]
             elif k == "flatten":
                 book = []
+        spot = self.spot()
+        for b in book:
+            if b.get("pending"):
+                b.update(self._greeks(b, spot))
         return book
 
     def state(self) -> dict:
@@ -740,11 +812,42 @@ class LiveConsole(AlertBook):
             now.strftime("%Y-%m-%dT%H:%M"), mtm, greeks["delta"], spot, rewindable=False
         )
         after = self._project(legs)
-        m_after, src_after, _ = (
-            self.margin([b for b in after if b["enabled"]], spot, {})
-            if self.staged
-            else (margin, src, None)
-        )
+        risk_after = None
+        if self.staged:
+            en_after = [b for b in after if b["enabled"]]
+            m_after, src_after, d_after = self.margin(en_after, spot, {})
+            tot_a = {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+            have_a = False
+            for x in en_after:
+                if x.get("delta") is None:
+                    continue
+                have_a = True
+                for k in tot_a:
+                    tot_a[k] += float(x[k]) * float(x["units"])
+            open_after = sum(x.get("pnl") or 0.0 for x in en_after)
+            risk_after = {
+                "realised": round(realised, 2),
+                "unrealised": round(open_after, 2),
+                "mtm": round(realised + open_after, 2),
+                "charges": 0.0,
+                "margin": m_after,
+                "margin_source": src_after,
+                "margin_detail": d_after,
+                "capital": float(self.live.config.capital),
+                "legs_open": len(en_after),
+                "greeks": (
+                    {
+                        "delta": round(tot_a["delta"], 2),
+                        "gamma": round(tot_a["gamma"], 4),
+                        "theta": round(tot_a["theta"], 0),
+                        "vega": round(tot_a["vega"], 0),
+                    }
+                    if have_a
+                    else {"delta": None, "gamma": None, "theta": None, "vega": None}
+                ),
+            }
+        else:
+            m_after, src_after = margin, src
         exps = self.expiries()
         open_dt = datetime.combine(today, SESSION_OPEN)
         close_dt = datetime.combine(today, SESSION_CLOSE)
@@ -825,6 +928,7 @@ class LiveConsole(AlertBook):
                     "margin_before": margin,
                     "margin_after": m_after,
                     "margin_source": src_after,
+                    "risk_after": risk_after,
                 }
                 if self.staged
                 else None

@@ -500,6 +500,12 @@ function LegRow({ leg, grid, onStage, chainExpiry }: {
           <b className="whitespace-nowrap">
             {Math.round(leg.strike).toLocaleString("en-IN")} {leg.right}</b>
         </Stepper>
+        {leg.pending && (
+          <span className="ml-1.5 px-1 py-[1px] rounded-[3px] text-[8.5px] font-bold align-middle"
+            title="staged on the deployment — not yet committed"
+            style={{ background: "var(--oc-caution-dim)", color: "var(--oc-caution)" }}>
+            {leg.pending.toUpperCase()} · PENDING</span>
+        )}
       </td>
       {/* the leg's OWN expiry, with its DTE — and flagged when it is not the ladder's,
           because a 1-DTE leg under an 11 Aug chip settled overnight and read as "my
@@ -803,6 +809,15 @@ export default function ConsolePage() {
   const [showSaveBox, setShowSaveBox] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [realTyped, setRealTyped] = useState("");
+  const [pendingSwitch, setPendingSwitch] = useState<string | null>(null);
+  const switchSource = (v: string) => {
+    setPendingSwitch(null);
+    if (v === "replay") {
+      opened.current = false; setState(null); setParams({}, { replace: true }); open.mutate({ underlying });
+    } else {
+      openLive.mutate(Number(v.slice(4)));
+    }
+  };
   // The console over a RUNNING deployment: same DTO, no transport, every click staged and
   // applied through the run's own manual-order path. `isLive` = "not a replay".
   const isLive = !!state && state.session.mode !== "replay";
@@ -835,6 +850,12 @@ export default function ConsolePage() {
   // The latest state, readable from inside a mutation without re-creating it.
   const stateRef = useRef<ConsoleState | null>(null);
   useEffect(() => { stateRef.current = state; }, [state]);
+  // On a running deployment the STAGED book is the one shown — Positions, payoff, margin,
+  // MTM, greeks — until Commit applies it or Revert drops it (owner, 2026-09-10). In
+  // replay a click already IS the trade, so shown == held.
+  const staging = !!state && state.session.mode !== "replay" && !!state.staged;
+  const legsShown = staging ? state!.staged!.after_legs : (state?.legs ?? []);
+  const risk = staging && state?.staged?.risk_after ? state.staged.risk_after : state?.risk;
 
   // A session lives in the backend's memory. A restart or an eviction drops it, and until
   // 2026-09-09 every click after that failed with a 404 nobody read — "the lots stepper
@@ -876,8 +897,8 @@ export default function ConsolePage() {
   });
 
   const open = useMutation({
-    mutationFn: (body: { underlying: string; day?: string | null }) =>
-      api.consoleOpen({ ...body, at: params.get("at") ?? "09:20",
+    mutationFn: (body: { underlying: string; day?: string | null; at?: string }) =>
+      api.consoleOpen({ ...body, at: body.at ?? params.get("at") ?? "09:20",
         expiry: params.get("expiry") ?? undefined }),
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
@@ -946,8 +967,8 @@ export default function ConsolePage() {
   // counter drifted the moment Undo rebuilt the book (×2 shown against ×3 held).
   const mult = useMemo(() => {
     const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
-    return (state?.legs ?? []).map((l) => l.lots).reduce((g, n) => gcd(g, n), 0) || 1;
-  }, [state?.legs]);
+    return legsShown.map((l) => l.lots).reduce((g, n) => gcd(g, n), 0) || 1;
+    }, [legsShown]);
   const scale = useMutation({
     mutationFn: (next: number) => call((id) => api.consoleScale(id, next / mult)),
     onSuccess: (s) => { setState(s); setError(null); },
@@ -1144,7 +1165,6 @@ export default function ConsolePage() {
   // §9: this page renders BEFORE the query resolves, so every read below must survive a
   // null state. Nothing here dot-accesses into a derived map without a guard.
   const rows = state?.chain.rows ?? [];
-  const risk = state?.risk;
   // The ladder's own strike step, so "roll a strike" moves exactly one row rather than a
   // guessed 100 — SENSEX and BANKNIFTY do not share NIFTY's grid.
   const gridStep = useMemo(() => {
@@ -1158,11 +1178,11 @@ export default function ConsolePage() {
   const spotNow = state?.market.spot ?? null;
   const expNow = state?.chain.expiry ?? null;
   const mNow = useMemo(() => {
-    const legs = toPayoffLegs(state?.legs ?? []);
+    const legs = toPayoffLegs(legsShown);
     return spotNow && expNow && legs.length
       ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
-  }, [state?.legs, spotNow, expNow, state?.session.date]);
-  const mStaged = useMemo(() => {
+      }, [legsShown, spotNow, expNow, state?.session.date]);
+      const mStaged = useMemo(() => {
     const legs = toPayoffLegs(state?.staged?.after_legs ?? []);
     return spotNow && expNow && legs.length
       ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
@@ -1170,14 +1190,14 @@ export default function ConsolePage() {
   // T+0 at −1% / spot / +1%: the open book's model value across a narrow window, read at
   // its three ends. The same curve the chart draws dashed, so the tiles and the chart agree.
   const scen = useMemo(() => {
-    const legs = toPayoffLegs(state?.legs ?? []);
+    const legs = toPayoffLegs(legsShown);
     if (!spotNow || !expNow || !legs.length) return null;
     const d = buildLivePayoff(legs, spotNow, expNow, state?.session.date, null, undefined,
       { range: [spotNow * 0.99, spotNow * 1.01] });
     if (!d?.data.length) return null;
     const n = d.data.length;
     return [d.data[0].now, d.data[Math.floor(n / 2)].now, d.data[n - 1].now];
-  }, [state?.legs, spotNow, expNow, state?.session.date]);
+    }, [legsShown, spotNow, expNow, state?.session.date]);
   const busy = open.isPending || move.isPending;
   const breach = state?.alerts.find((a) => a.kind === "stop" && a.state === "fired") ?? null;
   // legs the MARKET closed (expiry settlement) that are in the cursor's past
@@ -1188,8 +1208,8 @@ export default function ConsolePage() {
                 <Panel className="flex flex-col min-h-0">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[13px] font-semibold">
-                      {showPresets || !state?.legs.length ? "Presets" : "Payoff"}
-                      {(showPresets || !state?.legs.length) && (
+                      {showPresets || !legsShown.length ? "Presets" : "Payoff"}
+                      {(showPresets || !legsShown.length) && (
                         <span className="ml-2 text-[10.5px] font-normal" style={{ color: "var(--oc-faint)" }}>
                           resolved at {state?.session.clock ?? "—"} on {state?.chain.expiry ? expiryChip(state.chain.expiry) : "—"} · ×{lots}
                         </span>
@@ -1201,17 +1221,17 @@ export default function ConsolePage() {
                           title="prebuilt structures, resolved against the chain at the cursor">
                           {showPresets ? "payoff" : "presets"}</Chip>
                       ) : null}
-                      {!showPresets && state?.legs.length ? "expiry · T+0 dashed · staged dotted" : null}
+                      {!showPresets && legsShown.length ? "expiry · T+0 dashed · staged dotted" : null}
                     </span>
                   </div>
                   {/* a fixed chart height, so Positions sits right under it instead of at the
                       bottom of a chart stretched to the rail's height (owner, 2026-09-09) */}
                   <div style={{ height: chainOpen ? 300 : 420 }}>
-                    {(showPresets || !state?.legs.length) ? (
+                    {(showPresets || !legsShown.length) ? (
                       <PresetGallery presets={presetData?.presets ?? []} state={state} lots={lots}
                         onApply={(id) => applyPreset.mutate({ preset: id, lots })} />
                     ) : (
-                      <PayoffSvg legs={state?.legs ?? []} staged={state?.staged?.after_legs ?? null}
+                      <PayoffSvg legs={legsShown} staged={staging ? null : (state?.staged?.after_legs ?? null)}
                         spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
                         today={state?.session.date ?? ""} alerts={state?.alerts ?? []}
                         realised={risk?.realised ?? 0} />
@@ -1247,7 +1267,7 @@ export default function ConsolePage() {
                         style={{ background: "var(--oc-accent)", color: "#fff" }}>STAGED</span>
                       <b className="text-[12.5px]">{state.staged.label}</b>
                       <span className="text-[11px]" style={{ color: "var(--oc-muted)" }}>
-                        previewed on the chart before commit
+                        shown everywhere as if done — nothing reaches the run until Commit
                       </span>
                       <span className="ml-auto flex items-center gap-2">
                         {isReal && (
@@ -1262,11 +1282,11 @@ export default function ConsolePage() {
                           title={isReal ? "sends REAL orders through the run's LiveBroker" : "fills on the run's paper broker"}
                           className="px-2.5 h-[24px] rounded-[5px] text-[11.5px] font-semibold disabled:opacity-40"
                           style={{ background: isReal ? "var(--oc-neg)" : "var(--oc-accent)", color: "#fff" }}>
-                          {isReal ? "Send to broker" : "Apply to paper ⏎"}</button>
+                          {isReal ? "Commit to broker" : "Commit ⏎"}</button>
                         <button type="button" onClick={() => discard.mutate()}
                           className="px-2.5 h-[24px] rounded-[5px] text-[11.5px]"
                           style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
-                          Discard esc</button>
+                            Revert esc</button>
                       </span>
                     </div>
                     <div className="mt-1.5 flex gap-5 text-[11.5px] flex-wrap tabular-nums">
@@ -1434,7 +1454,23 @@ export default function ConsolePage() {
                     <MiniBtn onClick={() => scale.mutate(mult + 1)}>+</MiniBtn>
                   </span>
                 ) : null}
-                {state?.legs.length ?? 0} legs · lot {state?.session.lot_size ?? "—"}
+                {legsShown.length} legs · lot {state?.session.lot_size ?? "—"}
+                {staging ? (
+                  <span className="ml-3 inline-flex items-center gap-2">
+                    <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
+                      style={{ background: "var(--oc-caution-dim)", color: "var(--oc-caution)" }}>
+                      {state!.staged!.items.length} UNCOMMITTED
+                    </span>
+                    <button type="button"
+                      disabled={commit.isPending || (isReal && realTyped !== "REAL") || !!state?.session.order_error}
+                      onClick={() => { commit.mutate(); setRealTyped(""); }}
+                      className="px-2 h-[20px] rounded-[4px] text-[10.5px] font-semibold disabled:opacity-40"
+                      style={{ background: isReal ? "var(--oc-neg)" : "var(--oc-accent)", color: "#fff" }}>
+                      {isReal ? "Commit to broker" : "Commit"}</button>
+                    <button type="button" onClick={() => discard.mutate()} className="underline"
+                      style={{ color: "var(--oc-muted)" }}>Revert</button>
+                  </span>
+                ) : null}
                 {state?.session.can_undo ? (
                   <button type="button" className="ml-3 underline"
                     title="undo the last action (U) — the whole action, roll and basket included"
@@ -1454,7 +1490,7 @@ export default function ConsolePage() {
                 ) : null}
               </span>
             </div>
-            {!state?.legs.length ? (
+            {!legsShown.length ? (
               <div className="py-4 text-center text-[12px]" style={{ color: "var(--oc-faint)" }}>
                 {settled.length ? (
                   <div className="mb-1" style={{ color: "var(--oc-caution)" }}>
@@ -1494,8 +1530,8 @@ export default function ConsolePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {state.legs.map((l) => (
-                    <LegRow key={l.id} leg={l} grid={gridStep} chainExpiry={state.chain.expiry}
+                  {legsShown.map((l) => (
+                    <LegRow key={l.id} leg={l} grid={gridStep} chainExpiry={state?.chain.expiry ?? null}
                       onStage={(b) => stage.mutate(b)} />
                   ))}
                 </tbody>
@@ -1521,8 +1557,9 @@ export default function ConsolePage() {
         <select value={isLive ? `run:${state?.session.run_id}` : "replay"}
           onChange={(e) => {
             const v = e.target.value;
-            if (v === "replay") { opened.current = false; setState(null); setParams({}, { replace: true }); open.mutate({ underlying }); }
-            else openLive.mutate(Number(v.slice(4)));
+            // uncommitted changes on a running deployment: ask before they are lost
+            if (staging) { setPendingSwitch(v); return; }
+            switchSource(v);
           }}
           className="h-[22px] rounded-[5px] px-1.5 text-[10px] font-bold tracking-wide"
           style={{ border: `1px solid ${isReal ? "var(--oc-neg)" : "var(--oc-accent)"}`,
@@ -1544,7 +1581,7 @@ export default function ConsolePage() {
           lot {state?.session.lot_size ?? "—"}
         </span>
         <input type="date" value={day} min={days?.first ?? undefined} max={days?.last ?? undefined}
-          onChange={(e) => { setDay(e.target.value); open.mutate({ underlying, day: e.target.value }); }}
+          onChange={(e) => { setDay(e.target.value); open.mutate({ underlying, day: e.target.value, at: "09:30" }); }}
           className={`h-[22px] rounded-[5px] px-1.5 text-[11px] ${isLive ? "!hidden" : ""}`}
           style={{ background: "var(--oc-chip)", color: "var(--oc-ink)", border: "none" }} />
         <div className="w-px h-5" style={{ background: "var(--oc-line)" }} />
@@ -1759,6 +1796,21 @@ export default function ConsolePage() {
         <div className="px-3 py-2 text-[12px]"
           style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>{error}</div>
       )}
+      {pendingSwitch && (
+        <div className="px-3 py-2 text-[12px] flex items-center gap-3 flex-wrap"
+          style={{ background: "var(--oc-caution-dim)", color: "var(--oc-caution)" }}>
+          <b>{state?.staged?.items.length ?? 0} uncommitted change{(state?.staged?.items.length ?? 0) === 1 ? "" : "s"}</b>
+          on {state?.session.run_name ?? "this run"} will be lost if you leave. Commit or Revert them first, or leave anyway.
+          <span className="ml-auto flex gap-2">
+            <button type="button" onClick={() => setPendingSwitch(null)}
+              className="px-2 h-[22px] rounded-[5px] text-[11px] font-semibold"
+              style={{ background: "var(--oc-accent)", color: "#fff" }}>Stay</button>
+            <button type="button" onClick={() => { discard.mutate(); switchSource(pendingSwitch); }}
+              className="px-2 h-[22px] rounded-[5px] text-[11px] font-semibold"
+              style={{ background: "var(--oc-neg)", color: "#fff" }}>Discard and leave</button>
+          </span>
+        </div>
+      )}
       {isLive && state?.session.order_error && (
         <div className="px-3 py-2 text-[12px] font-semibold"
           style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>
@@ -1887,8 +1939,8 @@ export default function ConsolePage() {
         style={{ background: "var(--oc-panel2)", borderTop: "1px solid var(--oc-line)",
           color: "var(--oc-faint)" }}>
         <span style={{ color: "var(--oc-accent)" }}>
-          {isReal ? "every click is STAGED — Send to broker places REAL orders"
-            : state?.session.requires_confirm ? "every click is STAGED — Apply fills on the paper broker"
+          {isReal ? "changes are shown as done but STAGED — Commit to broker places REAL orders"
+            : state?.session.requires_confirm ? "changes are shown as done but STAGED — Commit fills on the paper broker · Revert drops them"
             : "clicks trade at once · U undoes"}
         </span>
         <span>REALISED <b style={{ color: "var(--oc-ink)" }}>{inr0(risk?.realised ?? 0)}</b></span>

@@ -2046,6 +2046,7 @@ export interface ConsoleLeg {
   entry: number; ltp: number | null; pnl: number | null;
   enabled: boolean; realized: number;
   dte: number | null;
+  pending?: "add" | "exit" | "roll" | "resize" | null;   // live/paper: staged, not yet committed
   // Per-SHARE, position-signed greeks off the leg's own contract — the convention of the
   // Live page (`_enrich_greeks`): a short leg reads Θ > 0, Γ and Vega < 0. Θ per calendar
   // day, Vega per 1% of IV. null when the leg has no solvable print.
@@ -2080,7 +2081,9 @@ export interface ConsoleStaged {
   label: string;
   after_legs: ConsoleLeg[];
   margin_before: number; margin_after: number; margin_source: string;
-}
+  // live/paper: the whole risk block AS IF the basket were committed
+  risk_after?: ConsoleRisk | null;
+  }
 
 export interface ConsoleRisk {
   realised: number; unrealised: number; mtm: number; charges: number;

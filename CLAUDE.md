@@ -1068,6 +1068,13 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   FIFO for a units close. Coverage: `test_manual_order_takes_an_expiry_and_a_partial_short_cover`,
   `tests/test_console_live.py` (a fake LiveRun around a REAL LiveSession — every commit is
   asserted to arrive as `manual_order(closes, opens)`, expiry on every open).
+- **On a running deployment the STAGED book is the one on screen** (owner, 2026-09-10):
+  `staged.after_legs` (rows flagged `pending`) and `staged.risk_after` drive Positions, the
+  payoff, margin, MTM and greeks until Commit hands the basket to `manual_order` or Revert
+  drops it — the replay's click-is-trade feel, with the order held back. A resize/exit/roll
+  on a leg whose id is `S<n>` (still staged) EDITS that staged add (`_edit_staged`) — a
+  second item on an uncommitted leg would have sent the run an exit for a leg it does not
+  hold. Leaving the run with uncommitted changes asks first.
 - A LIVE-mode run whose orders are on the paper broker (the restart demotion) reads
   `mode: "paper"` in the console too — the label follows `order_broker`, never the config.
 - Margin in live mode is the RUN's own figure when it has one (`margin_used`/`margin_source`
