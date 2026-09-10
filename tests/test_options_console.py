@@ -1261,3 +1261,47 @@ def test_the_kite_equivalent_prices_a_mapped_basket_and_caches_it(monkeypatch):
     monkeypatch.setattr(cm, "_account", lambda: None)
     cm.clear_cache()
     assert cm.kite_equivalent("NIFTY", legs, spot=24000.0, day=_d(2026, 4, 14)) is None
+
+
+# ------------------------------------------------------------- cycle range + VIX on the strip
+def test_the_cycle_range_runs_from_the_entry_minute_to_the_cursor_across_days():
+    store.write_day(DAY, _day())
+    day2 = date(2026, 7, 15)
+    store.write_day(day2, _day(day2))
+    s = ConsoleSession(underlying="NIFTY", day=DAY, at="10:00", expiry=EXP)
+    assert s.state()["market"]["cycle_low"] is None            # flat: no cycle, no range
+    s.stage(kind="add", right="CE", strike=24000, side="S", lots=1)
+    s.seek("11:00")
+    series = dict(s.spot_series())
+    window = [sp for m, sp in series.items() if "10:00" <= m[11:] <= "11:00"]
+    mk = s.state()["market"]
+    assert (mk["cycle_low"], mk["cycle_high"]) == (round(min(window), 2), round(max(window), 2))
+    # the next day widens it with the entry day's tail AND today's path up to the cursor
+    s.shift_day(1)
+    s.seek("10:30")
+    day1_tail = [sp for m, sp in series.items() if m[11:] >= "10:00"]
+    day2_head = [sp for m, sp in dict(s.spot_series()).items() if m[11:] <= "10:30"]
+    mk = s.state()["market"]
+    assert mk["cycle_low"] == round(min(day1_tail + day2_head), 2)
+    assert mk["cycle_high"] == round(max(day1_tail + day2_head), 2)
+    # rewinding before the entry unwinds the cycle — and its range
+    s.shift_day(-1)
+    s.seek("09:30")
+    assert s.state()["market"]["cycle_low"] is None
+
+
+def test_vix_comes_from_the_injected_reader_and_is_asked_once_per_day():
+    store.write_day(DAY, _day())
+    s = ConsoleSession(underlying="NIFTY", day=DAY, at="10:00", expiry=EXP)
+    assert s.state()["market"]["vix"] is None                  # no reader: nothing faked
+    asked: list[date] = []
+
+    def fn(d):
+        asked.append(d)
+        return {"prev_close": 13.78, "open": 14.1, "prev_date": "2026-07-13"}
+
+    s.vix_fn = fn
+    assert s.state()["market"]["vix"]["prev_close"] == 13.78
+    s.step(5)
+    s.state()
+    assert asked == [DAY]

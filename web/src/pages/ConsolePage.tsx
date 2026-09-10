@@ -856,7 +856,7 @@ function MiniBtn({ children, onClick, disabled }: {
 
 function StripItem({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline gap-1.5 px-3 h-full"
+    <div className="flex items-baseline gap-1.5 px-3 h-full shrink-0 whitespace-nowrap"
       style={{ borderRight: "1px solid var(--oc-hair)" }}>
       <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
         style={{ color: "var(--oc-faint)" }}>{label}</span>
@@ -2119,6 +2119,26 @@ export default function ConsolePage() {
         <StripItem label="Day (so far)">
           {num(state?.market.day_low ?? null, 0)}–{num(state?.market.day_high ?? null, 0)}
         </StripItem>
+        {state?.market.cycle_low != null && state.market.cycle_high != null && (
+          <StripItem label="Cycle (so far)">
+            <span title={`the underlying's low–high since this cycle opened${state.cycle?.entry_at ? ` (${state.cycle.entry_at.replace("T", " ")})` : ""}`}>
+              {num(state.market.cycle_low, 0)}–{num(state.market.cycle_high, 0)}
+            </span>
+          </StripItem>
+        )}
+        {state?.market.vix && (state.market.vix.last != null || state.market.vix.prev_close != null) && (
+          <StripItem label={isLive ? "India VIX" : "VIX · prev close"}>
+            <span title={isLive ? "the live print" : `India VIX at the prior session's close${state.market.vix.prev_date ? ` (${state.market.vix.prev_date})` : ""} — a replayed day's own close would be the future`}>
+              {num(isLive ? (state.market.vix.last ?? null) : (state.market.vix.prev_close ?? null), 2)}
+              {!isLive && state.market.vix.open != null && state.market.vix.prev_close != null
+                && Math.abs(state.market.vix.open - state.market.vix.prev_close) > 0.005 && (
+                <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}>
+                  open {num(state.market.vix.open, 2)}
+                </span>
+              )}
+            </span>
+          </StripItem>
+        )}
         <StripItem label="Expiry">
           {state?.market.expiry ?? "—"}
           <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: "var(--oc-muted)" }}>

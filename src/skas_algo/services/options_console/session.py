@@ -173,6 +173,12 @@ class ConsoleSession(AlertBook):
         self.margin_fn: Callable[..., dict | None] | None = None
         self._broker_margin: dict[tuple, tuple[datetime, dict | None]] = {}
         self._margin_note: dict | None = None
+        # India VIX for a day, injected by the ROUTE layer (the skas-data cache is a
+        # DuckDB the package must not open on its own — tests never touch it):
+        # `fn(day) -> {"prev_close", "open"} | None`. Cached per day.
+        self.vix_fn: Callable[[date], dict | None] | None = None
+        self._vix: dict[str, dict | None] = {}
+        self._day_range: dict[str, tuple[float, float]] = {}
 
         self.days = self._replayable_days()
         if not self.days:
@@ -691,14 +697,20 @@ class ConsoleSession(AlertBook):
     def spot_series(self) -> list[tuple[str, float]]:
         """(minute, parity spot) for every minute of the open day — one pass over the tape
         with a scratch market, cached per day. Backs "next 1% move" and the track."""
-        key = self.day.isoformat()
+        return self._spot_series_of(self.day, self.tape)
+
+    def _spot_series_of(self, day: date, tape: _Tape | None = None) -> list[tuple[str, float]]:
+        """The parity-spot path of ANY captured day (the open day's tape when handed one,
+        else loaded fresh) — the cycle range walks the days since entry through this."""
+        key = day.isoformat()
         if key in self._spot_series:
             return self._spot_series[key]
+        if tape is None:
+            tape = _Tape.load(self.underlying, day)
         m = ReplayMarket(self.underlying)
-        m.start_day(self.day, self.tape.all_symbols)
+        m.start_day(day, tape.all_symbols)
         q = m.quotes
-        mins, syms, closes, ois = (self.tape.minutes, self.tape.symbols,
-                                   self.tape.closes, self.tape.ois)
+        mins, syms, closes, ois = (tape.minutes, tape.symbols, tape.closes, tape.ois)
         out: list[tuple[str, float]] = []
         prev = None
         for i in range(len(mins)):
@@ -857,6 +869,53 @@ class ConsoleSession(AlertBook):
             return False
         last = max(sym.split("|")[1] for sym in syms)
         return last <= self.day.isoformat()
+
+    def cycle_range(self) -> tuple[float, float] | None:
+        """The underlying's LOW–HIGH since the cycle opened — the "Day (so far)" idea over
+        the whole cycle (owner, 2026-09-10). The entry day from the entry minute, every
+        captured day between in full, today up to the cursor; the same de-carried parity
+        spot the strip prints, so a range and the spot beside it never disagree. A past
+        day's range is derived once and remembered."""
+        entry = self._cycle_entry if self.legs else None
+        if not entry or not entry.get("at"):
+            return None
+        start_day = date.fromisoformat(entry["at"][:10])
+        now_key = self.clock.strftime("%Y-%m-%dT%H:%M")
+        lo, hi = float("inf"), float("-inf")
+        for d in self.days:
+            if d < start_day or d > self.day:
+                continue
+            key = d.isoformat()
+            if d == self.day or d == start_day:
+                series = self._spot_series_of(d, self.tape if d == self.day else None)
+                pts = [sp for m, sp in series
+                       if (d != start_day or m >= entry["at"]) and (d != self.day or m <= now_key)]
+                if not pts:
+                    continue
+                dlo, dhi = min(pts), max(pts)
+            elif key in self._day_range:
+                dlo, dhi = self._day_range[key]
+            else:
+                series = self._spot_series_of(d)
+                if not series:
+                    continue
+                dlo, dhi = min(sp for _, sp in series), max(sp for _, sp in series)
+                self._day_range[key] = (dlo, dhi)
+            lo, hi = min(lo, dlo), max(hi, dhi)
+        return (round(lo, 2), round(hi, 2)) if hi >= lo else None
+
+    def vix(self) -> dict | None:
+        """India VIX as the day could know it: the PRIOR close and today's OPEN, never the
+        settled close (a replayed day's close is the future). None without the hook."""
+        if self.vix_fn is None:
+            return None
+        key = self.day.isoformat()
+        if key not in self._vix:
+            try:
+                self._vix[key] = self.vix_fn(self.day)
+            except Exception:  # pragma: no cover - the data layer logs its own failures
+                self._vix[key] = None
+        return self._vix[key]
 
     def cycle_info(self) -> dict | None:
         """The cycle's progress bar: from the first fill's day to the LAST expiry among the
@@ -1505,6 +1564,7 @@ class ConsoleSession(AlertBook):
         close_dt = datetime.combine(self.day, SESSION_CLOSE)
         played = (self.clock - open_dt).total_seconds() / max(
             1.0, (close_dt - open_dt).total_seconds())
+        cyc = self.cycle_range()
         return {
             "session": {
                 "id": self.id, "mode": self.mode, "underlying": self.underlying,
@@ -1524,6 +1584,8 @@ class ConsoleSession(AlertBook):
                 "prev_close": prev_close,
                 "day_open": self.market.spot_open, "day_high": self.market.spot_high,
                 "day_low": self.market.spot_low,
+                "cycle_low": cyc[0] if cyc else None, "cycle_high": cyc[1] if cyc else None,
+                "vix": self.vix(),
                 "expiry": self.expiry,
                 "dte": ((date.fromisoformat(self.expiry) - self.day).days
                         if self.expiry else None),

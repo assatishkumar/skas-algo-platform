@@ -1159,6 +1159,15 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   share one calculator; the frontend reuses `lib/payoff.ts::computeMetrics` for max P/L,
   breakevens, POP and the staged before→after, so the rail and the chart cannot disagree.
   `pricing {r,q,t_floor_s,expiry_time}` ships in the DTO so nothing hardcodes a second `r`.
+- **The strip's VIX and "Cycle (so far)" come from OUTSIDE the package too** (2026-09-10).
+  `services/console_market.py`: `vix_for_day` reads the cached "INDIA VIX" daily series
+  (skas-data is a DuckDB the package never opens; tests inject a stub) and answers the
+  PRIOR close + the day's open, never the settled close (a replayed day's close is the
+  future); `vix_live` is `NSE:INDIA VIX` off any logged-in Zerodha account, 60 s TTL.
+  `session.cycle_range()` is the underlying's low–high since the cycle opened — entry
+  minute → cursor, over the same de-carried parity spot the strip prints, past days
+  derived once (`_spot_series_of(day)` loads a scratch tape, ~0.3 s a day). The live
+  console has no spot history, so it reports no cycle range.
 - **A fresh day opens on ITS MONTH's expiry chip** (owner 2026-09-10): the last listed
   expiry inside the day's calendar month that has not passed, else the nearest future one.
   A chip the owner chose is kept across ±1d while it is still listed; the date picker

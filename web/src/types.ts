@@ -1983,6 +1983,10 @@ export interface ConsoleState {
     carry: number | null;   // fut − spot, i.e. what de-carrying removed; NOT a cash basis
     prev_close: number | null;
     day_open: number | null; day_high: number | null; day_low: number | null;
+    // the underlying's range since the cycle opened (replay only; null while flat)
+    cycle_low?: number | null; cycle_high?: number | null;
+    // India VIX as the day could know it: replay = prior close (+ open), live = last print
+    vix?: { prev_close?: number | null; open?: number | null; prev_date?: string | null; last?: number | null } | null;
     expiry: string | null; dte: number | null;
   };
   chain: {

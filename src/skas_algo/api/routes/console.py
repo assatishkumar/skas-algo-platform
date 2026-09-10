@@ -32,7 +32,7 @@ from skas_algo.api.models import (
     ConsoleUnstage,
 )
 from skas_algo.data.option_intraday_store import captured_days
-from skas_algo.services import console_live, console_margin
+from skas_algo.services import console_live, console_margin, console_market
 from skas_algo.services.options_console import registry
 from skas_algo.services.options_console import store as console_store
 from skas_algo.services.options_console.session import UNDERLYINGS, ConsoleSession
@@ -108,6 +108,7 @@ async def open_session(body: ConsoleOpen) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     session.margin_fn = console_margin.kite_equivalent
+    session.vix_fn = console_market.vix_for_day
     console_margin.warm(session.underlying)
     if body.restore and (body.restore.journal or body.restore.alerts):
         try:
@@ -291,6 +292,7 @@ async def load_session(body: ConsoleLoad) -> dict:
             allow_fifty_strikes=j.get("allow_fifty_strikes", False),
             margin_per_lot_set=j.get("margin_per_lot_set", 0.0))
         session.margin_fn = console_margin.kite_equivalent
+        session.vix_fn = console_market.vix_for_day
         console_margin.warm(session.underlying)
         await asyncio.to_thread(session.restore, j.get("journal", []), j.get("alerts", []),
                                 j.get("bookmarks", []))

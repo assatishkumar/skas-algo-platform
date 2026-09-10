@@ -20,7 +20,7 @@ from skas_algo.engine.options import black_scholes as bs
 from skas_algo.engine.options.instrument import make as make_option
 from skas_algo.engine.options.instrument import parse
 from skas_algo.live.manager import manager
-from skas_algo.services import console_margin
+from skas_algo.services import console_margin, console_market
 from skas_algo.services.live_cycles import cycle_info
 from skas_algo.services.options_console import presets as _presets
 from skas_algo.services.options_console.alerts import AlertBook
@@ -1123,6 +1123,9 @@ class LiveConsole(AlertBook):
                 "carry": None,
                 "prev_close": None,
                 "day_open": None,
+                "cycle_low": None,
+                "cycle_high": None,
+                "vix": {"last": console_market.vix_live()},
                 "day_high": None,
                 "day_low": None,
                 "expiry": self.expiry,
