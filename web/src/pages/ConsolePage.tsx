@@ -180,6 +180,25 @@ function Panel({ children, className = "", style }: {
   );
 }
 
+/** An ⓘ that opens a short explanation on click. Explanatory paragraphs inside a panel
+ *  changed the panel's height as state changed, which moved everything under it. */
+function InfoIcon({ text, title }: { text: string; title?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-block align-middle ml-1">
+      <button type="button" onClick={() => setOpen((v) => !v)} title={title ?? "what this means"}
+        className="w-[14px] h-[14px] rounded-full text-[9.5px] font-bold leading-[14px]"
+        style={{ background: open ? "var(--oc-accent)" : "var(--oc-chip)",
+          color: open ? "#fff" : "var(--oc-muted)" }}>i</button>
+      {open && (
+        <span className="absolute z-30 left-0 top-[18px] w-[260px] rounded-[8px] p-2.5 text-[11px] font-normal normal-case tracking-normal leading-snug shadow-lg"
+          style={{ background: "var(--oc-surface)", color: "var(--oc-ink)", border: "1px solid var(--oc-line)" }}
+          onClick={() => setOpen(false)}>{text}</span>
+      )}
+    </span>
+  );
+}
+
 function Tile({ label, value, sub, tone }: {
   label: string; value: string; sub?: string; tone?: "pos" | "neg";
 }) {
@@ -190,7 +209,8 @@ function Tile({ label, value, sub, tone }: {
       <div className="text-[13px] font-semibold tabular-nums"
         style={{ color: tone === "pos" ? "var(--oc-pos)"
           : tone === "neg" ? "var(--oc-neg)" : "var(--oc-ink)" }}>{value}</div>
-      {sub && <div className="text-[10px]" style={{ color: "var(--oc-faint)" }}>{sub}</div>}
+      {sub && <div className="text-[10px] whitespace-nowrap overflow-hidden text-ellipsis" title={sub}
+        style={{ color: "var(--oc-faint)" }}>{sub}</div>}
     </div>
   );
 }
@@ -545,7 +565,9 @@ function AlertsCard({ alerts, disabled, onArm, onClear }: {
     <Panel>
       <div className="flex items-center justify-between">
         <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
-          style={{ color: "var(--oc-faint)" }}>Alerts · fire once, pause the replay</span>
+          style={{ color: "var(--oc-faint)" }}>Alerts
+          <InfoIcon title="how alerts work" text="An alert fires once, at the first minute it is true, draws on the chart, and pauses playback. Target and Stop are rupees of total MTM (stop as a positive number); |Δ| is net delta in units; spot above/below are index levels. In replay a rewind re-arms it." />
+        </span>
         <span className="text-[10px]" style={{ color: "var(--oc-faint)" }}>
           {alerts.length ? `${alerts.filter((a) => a.state === "fired").length}/${alerts.length} fired` : ""}
         </span>
@@ -570,9 +592,7 @@ function AlertsCard({ alerts, disabled, onArm, onClear }: {
           ))}
         </div>
       ) : (
-        <div className="mt-1.5 text-[11px]" style={{ color: "var(--oc-faint)" }}>
-          None armed. A target or stop is rupees of total MTM; |Δ| is net delta in units.
-        </div>
+        <div className="mt-1.5 text-[11px]" style={{ color: "var(--oc-faint)" }}>None armed.</div>
       )}
       <div className="mt-2 flex items-center gap-1.5">
         <select value={kind} onChange={(e) => setKind(e.target.value as ConsoleAlert["kind"])}
@@ -599,9 +619,10 @@ function AlertsCard({ alerts, disabled, onArm, onClear }: {
  *  thinks about it. Both go through staging like everything else: a strike change is a
  *  roll (close here, open there) and a size change is a partial exit or a top-up, so the
  *  payoff previews it and the charges are real. */
-function LegRow({ leg, grid, onStage, chainExpiry, resetKey }: {
+function LegRow({ leg, grid, onStage, onUnstage, chainExpiry, resetKey }: {
   leg: ConsoleLeg; grid: number; chainExpiry: string | null;
   onStage: (b: Parameters<typeof api.consoleStage>[1]) => void;
+  onUnstage?: (legId: string, kind?: string | null) => void;   // live/paper only
   resetKey: string;      // changes when the basket is reverted → the exit selector resets
 }) {
   const [exitLots, setExitLots] = useState(leg.lots);
@@ -610,7 +631,15 @@ function LegRow({ leg, grid, onStage, chainExpiry, resetKey }: {
   // "1" — which read as "the exit was not reverted" (owner, 2026-09-10).
   useEffect(() => { setExitLots(leg.lots); /* eslint-disable-line */ }, [resetKey]);
   const value = leg.ltp == null ? null : leg.ltp * leg.units;
+  const from = leg.pending_from ?? null;
+  const exitedLots = leg.pending === "exit" && from ? from.lots - leg.lots : 0;
+  const pendingNote = leg.pending === "exit" ? `PARTIAL EXIT ×${exitedLots}`
+    : leg.pending === "roll" && from ? `rolled from ${Math.round(from.strike).toLocaleString("en-IN")}`
+    : leg.pending === "resize" && from ? `resized from ×${from.lots}`
+    : null;
+  const pendingStyle = { background: "var(--oc-caution-dim)", color: "var(--oc-caution)" };
   return (
+    <>
     <tr style={{ opacity: leg.enabled ? 1 : 0.45 }}>
       <td className="py-1.5">
         <button type="button" title={leg.enabled ? "exclude from the payoff" : "include"}
@@ -627,27 +656,21 @@ function LegRow({ leg, grid, onStage, chainExpiry, resetKey }: {
             background: leg.side === "S" ? "var(--oc-neg-fill)" : "var(--oc-pos-fill)" }}>
           {leg.side}</span>
       </td>
-      {/* Strike and size are steppers in their OWN fixed columns and ALWAYS visible.
-          Revealing them on hover re-flowed the row as the pointer arrived, so the button
-          moved out from under the click; and inside a narrow column the cell wrapped onto
-          three lines (owner, 2026-09-09). */}
-      <td>
+      {/* Strike and size are steppers in their OWN columns and ALWAYS visible (a
+          hover-reveal moved the button out from under the second click). */}
+      <td className="whitespace-nowrap">
         <Stepper title={`roll a strike (${grid} pts)`}
           onDown={() => onStage({ kind: "roll", leg_id: leg.id, strike: leg.strike - grid })}
           onUp={() => onStage({ kind: "roll", leg_id: leg.id, strike: leg.strike + grid })}>
           <b className="whitespace-nowrap">
             {Math.round(leg.strike).toLocaleString("en-IN")} {leg.right}</b>
         </Stepper>
-        {leg.pending && (
+        {leg.pending === "add" && (
           <span className="ml-1.5 px-1 py-[1px] rounded-[3px] text-[8.5px] font-bold align-middle"
-            title="staged on the deployment — not yet committed"
-            style={{ background: "var(--oc-caution-dim)", color: "var(--oc-caution)" }}>
-            {leg.pending.toUpperCase()} · PENDING</span>
+            title="staged on the deployment — not yet committed" style={pendingStyle}>NEW · PENDING</span>
         )}
       </td>
-      {/* the leg's OWN expiry, with its DTE — and flagged when it is not the ladder's,
-          because a 1-DTE leg under an 11 Aug chip settled overnight and read as "my
-          position vanished" (owner, 2026-09-09) */}
+      {/* the leg's OWN expiry + DTE, amber when it is not the ladder's */}
       <td className="whitespace-nowrap text-[11px]"
         title={leg.expiry !== chainExpiry ? "not the expiry the chain is showing" : undefined}
         style={{ color: leg.expiry !== chainExpiry ? "var(--oc-caution)" : "var(--oc-muted)" }}>
@@ -656,7 +679,7 @@ function LegRow({ leg, grid, onStage, chainExpiry, resetKey }: {
           {leg.dte == null ? "" : ` ${leg.dte}d`}</span>
         {leg.expiry !== chainExpiry ? " ⚠" : ""}
       </td>
-      <td>
+      <td className="whitespace-nowrap">
         <Stepper title="add to or trim this position"
           onDown={() => onStage({ kind: "resize", leg_id: leg.id, lots: leg.lots - 1 })}
           onUp={() => onStage({ kind: "resize", leg_id: leg.id, lots: leg.lots + 1 })}>
@@ -683,32 +706,55 @@ function LegRow({ leg, grid, onStage, chainExpiry, resetKey }: {
       <td className="text-right" style={{ color: "var(--oc-muted)" }}>
         {value == null ? "—" : inr0(value)}
       </td>
-      {/* HOW MANY of the held lots to exit — not the position size (that is the Lots
-          column). With one lot held there is nothing to choose, and a − 1 + that could not
-          move read as a broken size stepper (owner, 2026-09-09): the selector only appears
-          for a multi-lot leg, and its buttons grey out at the ends. */}
+      {/* Exit, compact: a lots dropdown and an exit icon (the StockMock idiom the owner
+          asked for, 2026-09-10). One lot held → no dropdown, just the icon. A pending
+          add gets a delete icon instead: it was never held, so "exit" is the wrong word. */}
       <td className="text-right whitespace-nowrap">
-        {leg.lots > 1 && (
-          <span className="inline-flex items-center gap-[3px] mr-1.5"
-            title={`how many of the ${leg.lots} lots to exit`}>
-            <MiniBtn disabled={exitLots <= 1}
-              onClick={() => setExitLots((n) => Math.max(1, n - 1))}>−</MiniBtn>
-            <span className="text-[10.5px] tabular-nums"
-              style={{ minWidth: 16, display: "inline-block", textAlign: "center" }}>
-              {exitLots}</span>
-            <MiniBtn disabled={exitLots >= leg.lots}
-              onClick={() => setExitLots((n) => Math.min(leg.lots, n + 1))}>+</MiniBtn>
+        {leg.pending === "add" && onUnstage ? (
+          <button type="button" onClick={() => onUnstage(leg.id)} title="drop this pending leg"
+            className="w-[22px] h-[20px] rounded-[4px] text-[12px]"
+            style={{ border: "1px solid var(--oc-line)", color: "var(--oc-neg)" }}>🗑</button>
+        ) : (
+          <span className="inline-flex items-center gap-1">
+            {leg.lots > 1 && (
+              <select value={exitLots} onChange={(e) => setExitLots(Number(e.target.value))}
+                title={`how many of the ${leg.lots} lots to exit`}
+                className="h-[20px] rounded-[4px] px-1 text-[10.5px] tabular-nums"
+                style={{ background: "var(--oc-chip)", color: "var(--oc-ink)", border: "none" }}>
+                {Array.from({ length: leg.lots }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            )}
+            <button type="button"
+              onClick={() => onStage({ kind: "exit", leg_id: leg.id, lots: exitLots })}
+              title={leg.lots > 1 ? `exit ${exitLots} of ${leg.lots} lots` : "exit this leg"}
+              className="w-[22px] h-[20px] rounded-full text-[13px] font-bold leading-[18px]"
+              style={{ border: "1px solid var(--oc-neg)", color: "var(--oc-neg)" }}>⊖</button>
           </span>
         )}
-        <button type="button"
-          onClick={() => onStage({ kind: "exit", leg_id: leg.id, lots: exitLots })}
-          title={leg.lots > 1 ? `close ${exitLots} of ${leg.lots} lots at the cursor's price`
-            : "close this leg at the cursor's price"}
-          className="px-2 h-[20px] rounded-[4px] text-[10.5px]"
-          style={{ border: "1px solid var(--oc-line)", color: "var(--oc-accent)" }}>
-          Exit {exitLots === leg.lots ? "all" : `${exitLots} of ${leg.lots}`}</button>
       </td>
     </tr>
+    {pendingNote && (
+      /* the staged change on a HELD leg, as its own muted line — so a partial exit reads
+         as "×1 of the ×30 is leaving", not as a leg that shrank (owner, 2026-09-10) */
+      <tr style={{ background: "var(--oc-caution-dim)" }}>
+        <td /><td />
+        <td colSpan={7} className="py-1 text-[10.5px] font-semibold whitespace-nowrap"
+          style={{ color: "var(--oc-caution)" }}>
+          ↳ {pendingNote} · pending until Commit
+        </td>
+        <td className="text-right whitespace-nowrap py-1">
+          {onUnstage && (
+            <button type="button" onClick={() => onUnstage(leg.id, leg.pending)}
+              title="take this change back (the leg stays as it was)"
+              className="w-[22px] h-[20px] rounded-full text-[12px] leading-[18px]"
+              style={{ border: "1px solid var(--oc-pos)", color: "var(--oc-pos)" }}>↺</button>
+          )}
+        </td>
+      </tr>
+    )}
+    </>
   );
 }
 
@@ -1095,6 +1141,12 @@ export default function ConsolePage() {
     onSuccess: (s) => { setState(s); setError(null); },
     onError: (e: Error) => setError(e.message),
   });
+  const unstage = useMutation({
+    mutationFn: (body: { leg_id: string; kind?: string | null }) =>
+      call((id) => api.consoleUnstage(id, body)),
+    onSuccess: (s) => { setState(s); setError(null); },
+    onError: (e: Error) => setError(e.message),
+  });
   const applyPreset = useMutation({
     mutationFn: (body: { preset: string; lots: number }) =>
       call((id) => api.consoleApplyPreset(id, body)),
@@ -1392,7 +1444,11 @@ export default function ConsolePage() {
                   )}
                   <div className="flex items-start justify-between">
                     <span className="text-[9.5px] font-semibold uppercase tracking-[.07em]"
-                      style={{ color: "var(--oc-faint)" }}>Total MTM · realised + open</span>
+                      style={{ color: "var(--oc-faint)" }}>Total MTM · realised + open
+                      <InfoIcon title="how the numbers are made" text={risk?.margin_source === "model"
+                        ? "Margin is estimated the way SPAN is: the book's worst loss over a ±6% move (hedges offset) plus 2% exposure on every short unit. Within ~10% of a Kite basket on a spread; still an estimate. Every % here is of that margin."
+                        : "Margin is the run's own figure (a Zerodha basket where it has one). Every % here is of that margin. POP, max P/L and breakevens come from the same calculator as the chart."} />
+                    </span>
                     <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
                       style={{ background: risk && risk.legs_open ? "var(--oc-chip)" : "transparent",
                         color: "var(--oc-muted)" }}>
@@ -1432,7 +1488,7 @@ export default function ConsolePage() {
                   <div className="grid grid-cols-3 gap-2 mt-3">
                     <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
                       sub={risk?.margin_detail
-                        ? `est · scan ${inr0(risk.margin_detail.span)} + exposure ${inr0(risk.margin_detail.exposure)}`
+                        ? `est · scan ${inr0(risk.margin_detail.span)} + exp ${inr0(risk.margin_detail.exposure)}`
                         : `${risk?.margin_source ?? "model"} · ${pctOf(risk?.margin, risk?.capital)} of capital`} />
                     <Tile label="POP" value={mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(1)}%`}
                       sub={mNow?.rewardRisk ? `R:R ${mNow.rewardRisk.toFixed(1)}` : "—"} />
@@ -1452,13 +1508,7 @@ export default function ConsolePage() {
                       value={`${inr0(risk?.unrealised ?? 0)}${risk?.margin ? ` · ${pctOf(risk.unrealised, risk.margin)}` : ""}`}
                       sub={`banked ${inr0(risk?.realised ?? 0)} · ${inr0(-(risk?.charges ?? 0))} costs`} />
                   </div>
-                  {risk?.margin_source === "model" && !!risk.margin && (
-                    <div className="mt-2 text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
-                      Estimated the way SPAN is: worst loss over a ±6% move (hedges offset) plus 2%
-                      exposure on every short unit. Within ~10% of a Kite basket on a spread; still
-                      an estimate.
-                    </div>
-                  )}
+
                 </Panel>
   );
 
@@ -1608,7 +1658,8 @@ export default function ConsolePage() {
                   {legsShown.map((l) => (
                     <LegRow key={l.id} leg={l} grid={gridStep} chainExpiry={state?.chain.expiry ?? null}
                       resetKey={state?.staged ? "staged" : "clean"}
-                      onStage={(b) => stage.mutate(b)} />
+                      onStage={(b) => stage.mutate(b)}
+                      onUnstage={isLive ? (legId, kind) => unstage.mutate({ leg_id: legId, kind }) : undefined} />
                   ))}
                 </tbody>
               </table>
@@ -2002,30 +2053,32 @@ export default function ConsolePage() {
             down on every click (owner, 2026-09-10). The staged summary lives in the Positions
             header and the ticket. */}
         {chainOpen ? (
-          /* chain · [payoff | rail] over a full-width Positions */
+          /* chain · [payoff | rail] over a full-width Positions. The row's height is the
+             PAYOFF's alone: the rail is absolutely positioned inside a stretched box and
+             scrolls if it must, so nothing the rail says can move Positions (owner, 2026-09-10). */
           <div className="flex-1 min-w-0 space-y-2.5">
-            <div className="flex gap-2.5 items-start">
+            <div className="flex gap-2.5 items-stretch">
               <div className="flex-1 min-w-0 flex flex-col">
                 {payoffPanel}
               </div>
-              <div className="w-[348px] shrink-0 space-y-2.5">
-                {railColumn}
+              <div className="w-[348px] shrink-0 relative">
+                <div className="absolute inset-0 overflow-y-auto space-y-2.5">
+                  {railColumn}
+                </div>
               </div>
             </div>
             {positionsPanel}
           </div>
         ) : (
-          /* chain hidden: risk strip, full-width Positions, then [payoff | alerts] */
-          <div className="flex-1 min-w-0 space-y-2.5">
-            {riskStrip}
-            {positionsPanel}
-            <div className="flex gap-2.5 items-start">
-              <div className="flex-1 min-w-0 flex flex-col">
-                {payoffPanel}
-              </div>
-              <div className="w-[348px] shrink-0">
-                {alertsCard}
-              </div>
+          /* chain hidden: [risk strip + Positions + alerts | payoff] */
+          <div className="flex-1 min-w-0 flex gap-2.5 items-start">
+            <div className="w-[54%] min-w-[520px] space-y-2.5">
+              {riskStrip}
+              {positionsPanel}
+              {alertsCard}
+            </div>
+            <div className="flex-1 min-w-0 flex flex-col">
+              {payoffPanel}
             </div>
           </div>
         )}

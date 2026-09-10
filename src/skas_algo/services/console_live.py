@@ -479,6 +479,16 @@ class LiveConsole(AlertBook):
         enabled=None,
         replace: bool = False,
     ) -> dict | None:
+        if kind == "toggle" and str(leg_id or "").startswith("S"):
+            # a staged leg is not in the run's book; its on/off is a view flag like any other
+            lid = str(leg_id)
+            if enabled is None:
+                enabled = lid in self.disabled
+            if enabled:
+                self.disabled.discard(lid)
+            else:
+                self.disabled.add(lid)
+            return None
         if kind in ("exit", "resize", "roll") and self._edit_staged(
             kind=kind, leg_id=leg_id or "", strike=strike, lots=lots
         ):
@@ -524,6 +534,33 @@ class LiveConsole(AlertBook):
         items = [] if (replace or not self.staged) else list(self.staged["items"])
         items.append(item)
         self.staged = {"items": items, "label": " · ".join(i["label"] for i in items)}
+        return self.staged
+
+    def unstage(self, leg_id: str, kind: str | None = None) -> dict | None:
+        """Drop the pending change(s) on ONE leg — the ↺ on a partial-exit sub-row, the 🗑
+        on a pending add — leaving the rest of the basket alone. ``S<n>`` ids address the
+        n-th staged add; held-leg ids address items by their ``leg_id``."""
+        if not self.staged:
+            return None
+        items = list(self.staged["items"])
+        lid = str(leg_id)
+        if lid.startswith("S"):
+            adds = [it for it in items if it["kind"] == "add"]
+            try:
+                target = adds[int(lid[1:]) - 1]
+            except (ValueError, IndexError):
+                return self.staged
+            items = [it for it in items if it is not target]
+        else:
+            items = [
+                it
+                for it in items
+                if not (it.get("leg_id") == lid and (kind is None or it["kind"] == kind))
+            ]
+        self.staged = (
+            {"items": items, "label": " · ".join(i["label"] for i in items)} if items else None
+        )
+        self.disabled.discard(lid)
         return self.staged
 
     def apply_basket(self, specs: list[dict], *, label: str | None = None) -> dict | None:
@@ -831,7 +868,7 @@ class LiveConsole(AlertBook):
                             "entry": st["price"],
                             "ltp": st["price"],
                             "pnl": 0.0,
-                            "enabled": True,
+                            "enabled": f"S{seq}" not in self.disabled,
                             "realized": 0.0,
                             "dte": (
                                 (date.fromisoformat(st["expiry"]) - self._today()).days
@@ -839,11 +876,13 @@ class LiveConsole(AlertBook):
                                 else None
                             ),
                             "pending": "add",
+                            "pending_from": None,
                         }
                     )
             elif k == "exit":
                 for b in book:
                     if b["id"] == st["leg_id"]:
+                        b.setdefault("pending_from", {"lots": b["lots"], "strike": b["strike"]})
                         b["lots"] -= st["lots"]
                         b["units"] = b["lots"] * b["lot_size"]
                         b["pending"] = "exit"
@@ -851,6 +890,7 @@ class LiveConsole(AlertBook):
             elif k == "roll":
                 for b in book:
                     if b["id"] == st["leg_id"]:
+                        b.setdefault("pending_from", {"lots": b["lots"], "strike": b["strike"]})
                         b["strike"] = st["strike"]
                         b["entry"] = st["price"]
                         b["ltp"] = st["price"]
@@ -862,6 +902,7 @@ class LiveConsole(AlertBook):
             elif k == "resize":
                 for b in book:
                     if b["id"] == st["leg_id"]:
+                        b.setdefault("pending_from", {"lots": b["lots"], "strike": b["strike"]})
                         b["lots"] = int(st["lots"])
                         b["units"] = b["lots"] * b["lot_size"]
                         b["pending"] = "resize"

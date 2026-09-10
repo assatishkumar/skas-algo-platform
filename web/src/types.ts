@@ -2047,6 +2047,7 @@ export interface ConsoleLeg {
   enabled: boolean; realized: number;
   dte: number | null;
   pending?: "add" | "exit" | "roll" | "resize" | null;   // live/paper: staged, not yet committed
+  pending_from?: { lots: number; strike: number } | null;  // the held leg before the pending change
   // Per-SHARE, position-signed greeks off the leg's own contract — the convention of the
   // Live page (`_enrich_greeks`): a short leg reads Θ > 0, Γ and Vega < 0. Θ per calendar
   // day, Vega per 1% of IV. null when the leg has no solvable print.

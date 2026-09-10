@@ -28,6 +28,7 @@ from skas_algo.api.models import (
     ConsoleScale,
     ConsoleStage,
     ConsoleTransport,
+    ConsoleUnstage,
 )
 from skas_algo.data.option_intraday_store import captured_days
 from skas_algo.services import console_live
@@ -194,6 +195,17 @@ def apply_basket(session_id: str, body: ConsoleBasket) -> dict:
         session.apply_basket(body.legs, label=body.label)
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
+
+
+@router.post("/sessions/{session_id}/unstage")
+def unstage(session_id: str, body: ConsoleUnstage) -> dict:
+    """Drop the pending change(s) on one leg (live/paper only — replay never stages)."""
+    session = _get(session_id)
+    fn = getattr(session, "unstage", None)
+    if fn is None:
+        raise HTTPException(status_code=409, detail="nothing is ever staged in replay")
+    fn(body.leg_id, body.kind)
     return session.state()
 
 

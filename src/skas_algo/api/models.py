@@ -123,6 +123,11 @@ class ConsolePreset(BaseModel):
     lots: int = 1
 
 
+class ConsoleUnstage(BaseModel):
+    leg_id: str
+    kind: str | None = None           # None = every pending change on that leg
+
+
 class ConsoleScale(BaseModel):
     factor: float                     # every leg's lots × factor, one action
 

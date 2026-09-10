@@ -216,3 +216,21 @@ def test_a_roll_up_and_back_is_no_change_and_a_second_resize_replaces_the_first(
     assert [it["lots"] for it in c.staged["items"]] == [4]
     c.stage(kind="resize", leg_id=short["id"], lots=short["lots"])
     assert c.staged is None and run.calls == []
+
+
+def test_a_pending_leg_can_be_toggled_and_each_pending_change_dropped_on_its_own(run):
+    c = console_live.open_console(42)
+    short = next(leg for leg in c.legs() if leg["side"] == "S")
+    c.stage(kind="add", right="PE", strike=24800, side="B", lots=1)
+    c.stage(kind="exit", leg_id=short["id"], lots=1)
+    c.stage(kind="toggle", leg_id="S1")                       # a view flag, never an order
+    after = {b["id"]: b for b in c.state()["staged"]["after_legs"]}
+    assert after["S1"]["enabled"] is False and run.calls == []
+    assert after[short["id"]]["pending"] == "exit"
+    assert after[short["id"]]["pending_from"] == {"lots": short["lots"], "strike": short["strike"]}
+    c.unstage(short["id"], "exit")                            # ↺ on the partial-exit sub-row
+    after = {b["id"]: b for b in c.state()["staged"]["after_legs"]}
+    assert after[short["id"]]["lots"] == short["lots"] and "pending" not in after[short["id"]]
+    assert [it["kind"] for it in c.staged["items"]] == ["add"]
+    c.unstage("S1")                                           # 🗑 on the pending add
+    assert c.staged is None and "S1" not in c.disabled
