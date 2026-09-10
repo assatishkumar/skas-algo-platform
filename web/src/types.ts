@@ -2011,7 +2011,8 @@ export interface ConsoleState {
     fills: { at: string; action: string }[];
     alerts: { at: string; kind: string }[];
     bookmarks: string[];
-  };
+    mtm?: { at: string; pnl: number }[];    // replay: the open book's last 30 minutes
+    };
   pricing: { r: number; q: number; t_floor_s: number; expiry_time: string };
   notes: string[];
   jumped?: boolean;                          // on a /jump answer: did the cursor move

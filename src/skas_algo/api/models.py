@@ -134,7 +134,8 @@ class ConsoleScale(BaseModel):
 
 class ConsoleJump(BaseModel):
     kind: Literal[
-        "next_fill", "prev_fill", "next_bookmark", "prev_bookmark", "next_move", "prev_move"]
+        "next_fill", "prev_fill", "next_bookmark", "prev_bookmark", "next_move", "prev_move",
+        "next_alert"]
     pct: float = 1.0
 
 

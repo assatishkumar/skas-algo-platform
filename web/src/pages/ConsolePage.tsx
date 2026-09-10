@@ -261,6 +261,33 @@ function Track({ state, onSeek }: { state: ConsoleState | null; onSeek: (at: str
   );
 }
 
+/** The open book's last 30 minutes (design D6): a line above/below its own zero, the
+ *  last point emphasised, the latest value beside it. Shape and sign, not a chart. */
+function Sparkline({ points }: { points: { at: string; pnl: number }[] }) {
+  const W = 120, H = 16;
+  const ys = points.map((p) => p.pnl);
+  const lo = Math.min(0, ...ys), hi = Math.max(0, ...ys);
+  const px = (i: number) => (points.length > 1 ? (i / (points.length - 1)) * W : W);
+  const py = (v: number) => 1 + (1 - (v - lo) / ((hi - lo) || 1)) * (H - 2);
+  const last = points[points.length - 1];
+  const tone = last.pnl >= 0 ? "var(--oc-pos)" : "var(--oc-neg)";
+  return (
+    <span className="inline-flex items-center gap-1.5 shrink-0"
+      title={`open P&L, last ${points.length} min · ${points[0].at} → ${last.at}`}>
+      <svg width={W} height={H} style={{ display: "block" }}>
+        <line x1={0} x2={W} y1={py(0)} y2={py(0)} stroke="var(--oc-hair)" strokeWidth={1} />
+        <path fill="none" stroke={tone} strokeWidth={1.3}
+          d={points.map((p, i) => `${i ? "L" : "M"}${px(i).toFixed(1)},${py(p.pnl).toFixed(1)}`).join(" ")} />
+        <circle cx={px(points.length - 1)} cy={py(last.pnl)} r={2} fill={tone} />
+      </svg>
+      <span className="text-[9px] tabular-nums font-semibold whitespace-nowrap" style={{ color: tone }}>
+        {inr0(last.pnl)}
+        <span className="font-normal" style={{ color: "var(--oc-faint)" }}> · 30m</span>
+      </span>
+    </span>
+  );
+}
+
 function TrackChip({ children, onClick, disabled, title }: {
   children: React.ReactNode; onClick: () => void; disabled?: boolean; title?: string;
 }) {
@@ -1863,6 +1890,12 @@ export default function ConsolePage() {
         <span className="text-[9px] w-[30px] text-right" style={{ color: "var(--oc-faint)" }}>
           {state?.session.range[1] ?? "15:40"}
         </span>
+        {!isLive && !!state?.track.mtm?.length && (
+          <>
+            <div className="w-px h-3.5" style={{ background: "var(--oc-line)" }} />
+            <Sparkline points={state.track.mtm} />
+          </>
+        )}
         {/* the CYCLE bar: first fill → last expiry, in sessions. The day bar above says
             where in the session you are; this says where in the trade (owner, 2026-09-09). */}
         {state?.cycle && (
@@ -1894,6 +1927,8 @@ export default function ConsolePage() {
           <TrackChip onClick={() => jump.mutate({ kind: "prev_fill" })} disabled={!state} title="previous fill (K)">‹ fill</TrackChip>
           <TrackChip onClick={() => jump.mutate({ kind: "next_fill" })} disabled={!state} title="next fill (J)">fill ›</TrackChip>
           <TrackChip onClick={() => jump.mutate({ kind: "next_move", pct: 1 })} disabled={!state} title="next 1% move in spot">1% ›</TrackChip>
+          <TrackChip onClick={() => jump.mutate({ kind: "next_alert" })} disabled={!state || !state.alerts.some((a) => a.state === "armed")}
+            title="run forward to the minute an armed alert would fire">alert ›</TrackChip>
           <TrackChip onClick={() => jump.mutate({ kind: "prev_bookmark" })} disabled={!state} title="previous bookmark">‹ ◇</TrackChip>
           <TrackChip onClick={() => jump.mutate({ kind: "next_bookmark" })} disabled={!state} title="next bookmark">◇ ›</TrackChip>
         </div>

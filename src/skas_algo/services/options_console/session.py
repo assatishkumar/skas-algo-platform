@@ -26,6 +26,7 @@ replay track.
 
 from __future__ import annotations
 
+import bisect
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -207,6 +208,9 @@ class ConsoleSession(AlertBook):
         self._cycle_realized_before = 0.0
         self._margin_detail: dict | None = None
         self._spot_series: dict[str, list[tuple[str, float]]] = {}
+        # per-symbol (minutes, closes) for the open day — the tape regrouped once, so a
+        # 30-minute P&L path or an alert scan is a few bisects, not thirty rebuilds
+        self._sym_series: dict[str, dict[str, tuple[list[str], list[float]]]] = {}
         self.market = ReplayMarket(u, allow_fifty_strikes=self.allow_fifty_strikes)
         self.chain_view = ReplayChain(self.market)
         self.tape = _Tape(day=self.day)
@@ -678,6 +682,87 @@ class ConsoleSession(AlertBook):
         self._spot_series[key] = out
         return out
 
+    def _series_for_day(self) -> dict[str, tuple[list[str], list[float]]]:
+        key = self.day.isoformat()
+        if key not in self._sym_series:
+            grouped: dict[str, tuple[list[str], list[float]]] = {}
+            mins, syms, closes = self.tape.minutes, self.tape.symbols, self.tape.closes
+            for i in range(len(mins)):
+                g = grouped.setdefault(syms[i], ([], []))
+                g[0].append(mins[i])
+                g[1].append(float(closes[i]))
+            self._sym_series[key] = grouped
+        return self._sym_series[key]
+
+    def _close_at(self, symbol: str, minute: str) -> float | None:
+        """The last print of ``symbol`` at or before ``minute`` (forward-filled), None if
+        it had not traded yet that day."""
+        g = self._series_for_day().get(symbol)
+        if not g:
+            return None
+        i = bisect.bisect_right(g[0], minute) - 1
+        return g[1][i] if i >= 0 else None
+
+    def mtm_series(self, minutes: int = 30) -> list[dict]:
+        """The open book's P&L over the last ``minutes`` up to the cursor — the design's
+        30-minute sparkline. Marks are the tape's forward-filled prints per minute for the
+        legs held NOW that had been entered by that minute; realised P&L is left out (the
+        line is the open book's path, like the chart's y-axis)."""
+        legs = [leg for leg in self.legs if leg.enabled]
+        if not legs:
+            return []
+        end = self.clock
+        start = max(datetime.combine(self.day, SESSION_OPEN), end - timedelta(minutes=minutes - 1))
+        out: list[dict] = []
+        t = start
+        while t <= end:
+            key = t.strftime("%Y-%m-%dT%H:%M")
+            pnl, any_mark = 0.0, False
+            for leg in legs:
+                if leg.entered_at > key:
+                    continue
+                px = self._close_at(leg.symbol, key)
+                if px is None:
+                    continue
+                any_mark = True
+                pnl += leg.direction * (px - leg.entry) * leg.units
+            if any_mark:
+                out.append({"at": t.strftime("%H:%M"), "pnl": round(pnl, 2)})
+            t += timedelta(minutes=1)
+        return out
+
+    def next_alert_minute(self) -> datetime | None:
+        """The first minute after the cursor at which an ARMED alert would fire, scanning
+        the tape's own prints (the same marks the cursor would see) — or None. A stop or
+        target reads the cycle's realised + the open book's path; a delta alert cannot be
+        scanned cheaply and is skipped."""
+        armed = [a for a in self.alerts if not a["fired_at"] and a["kind"] != "delta"]
+        if not armed:
+            return None
+        legs = [leg for leg in self.legs if leg.enabled]
+        spots = dict(self.spot_series())
+        realised = self.realized - self._cycle_realized_before
+        t = self.clock + timedelta(minutes=1)
+        close = datetime.combine(self.day, SESSION_CLOSE)
+        while t <= close:
+            key = t.strftime("%Y-%m-%dT%H:%M")
+            spot = spots.get(key)
+            open_pnl = 0.0
+            for leg in legs:
+                px = self._close_at(leg.symbol, key)
+                if px is not None:
+                    open_pnl += leg.direction * (px - leg.entry) * leg.units
+            mtm = realised + open_pnl
+            for a in armed:
+                k, v = a["kind"], a["value"]
+                if ((k == "target" and legs and mtm >= v)
+                        or (k == "stop" and legs and mtm <= -abs(v))
+                        or (k == "above" and spot is not None and spot >= v)
+                        or (k == "below" and spot is not None and spot <= v)):
+                    return t
+            t += timedelta(minutes=1)
+        return None
+
     def add_bookmark(self) -> list[str]:
         k = self._minute_key()
         if k not in self.bookmarks:
@@ -698,6 +783,9 @@ class ConsoleSession(AlertBook):
             mins = sorted({f["at"] for f in self.journal if f["at"].startswith(day)})
         elif kind in ("next_bookmark", "prev_bookmark"):
             mins = [b for b in self.bookmarks if b.startswith(day)]
+        elif kind == "next_alert":
+            when = self.next_alert_minute()
+            return self.seek(when) if when is not None else self
         elif kind in ("next_move", "prev_move"):
             series = self.spot_series()
             here = next((sp for mk, sp in series if mk >= now), None) if series else None
@@ -1307,6 +1395,7 @@ class ConsoleSession(AlertBook):
                            if a["fired_at"] and a["fired_at"].startswith(self.day.isoformat())],
                 "bookmarks": [b[11:] for b in self.bookmarks
                               if b.startswith(self.day.isoformat())],
+                "mtm": self.mtm_series(30),      # the open book's last 30 minutes
             },
             "pricing": {"r": RISK_FREE, "q": 0.0, "t_floor_s": T_FLOOR_S,
                         "expiry_time": EXPIRY_TIME.strftime("%H:%M")},

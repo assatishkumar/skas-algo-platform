@@ -996,3 +996,39 @@ def test_the_mtm_is_the_cycles_not_the_sessions_and_net_credit_is_what_entry_col
     assert s.state()["risk"]["realised"] == 0.0
     s.reset_book()
     assert s.state()["risk"]["net_credit"] is None
+
+
+def test_the_sparkline_is_the_open_books_last_thirty_minutes_off_the_tape():
+    store.write_day(DAY, _day())
+    s = _open(at="09:20")
+    s.stage(kind="add", right="CE", strike=24000, side="B", lots=1)      # drifts +1.5 / 5 min
+    s.seek("10:00")
+    pts = s.state()["track"]["mtm"]
+    assert pts and pts[-1]["at"] == "10:00" and pts[0]["at"] >= "09:31"
+    assert pts[-1]["pnl"] == pytest.approx(s.state()["risk"]["unrealised"], abs=0.01)
+    assert pts[-1]["pnl"] > pts[0]["pnl"]                              # it rose
+    assert len(pts) <= 30
+    s.stage(kind="flatten", replace=True)
+    assert s.state()["track"]["mtm"] == []
+
+
+def test_next_alert_jumps_to_the_minute_the_armed_alert_would_fire():
+    store.write_day(DAY, _day())
+    s = _open(at="09:20")
+    s.stage(kind="add", right="CE", strike=24000, side="B", lots=1)
+    s.arm_alert("target", 300.0)
+    assert s.state()["alerts"][0]["state"] == "armed"
+    s.jump("next_alert")
+    st = s.state()
+    assert st["alerts"][0]["state"] == "fired" and st["alerts"][0]["fired_at"][11:] == st["session"]["clock"]
+    assert st["risk"]["mtm"] >= 300.0
+    # one minute earlier it had not fired
+    s.step(-1)
+    assert s.state()["risk"]["mtm"] < 300.0
+    # (stepping back re-armed it — a rewind always does.) Read the state at 11:40 so it
+    # fires there; then nothing is armed ahead and the cursor stays.
+    s.seek("11:40")
+    assert s.state()["alerts"][0]["state"] == "fired"
+    before = s.clock
+    s.jump("next_alert")
+    assert s.clock == before
