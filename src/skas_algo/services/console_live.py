@@ -483,6 +483,29 @@ class LiveConsole(AlertBook):
             kind=kind, leg_id=leg_id or "", strike=strike, lots=lots
         ):
             return self.staged
+        # A roll or resize on a HELD leg: a second one replaces the first, and one that
+        # lands back on the leg's own strike or size is no change at all — it drops the
+        # pending item instead of raising "already that size" (+100 then −100 used to
+        # leave two rolls that cancelled out; owner, 2026-09-10).
+        if kind in ("roll", "resize") and leg_id and not str(leg_id).startswith("S"):
+            leg = next((x for x in self.legs() if x["id"] == leg_id), None)
+            if leg is not None:
+                unchanged = (
+                    kind == "roll" and strike is not None and float(strike) == float(leg["strike"])
+                ) or (kind == "resize" and int(lots) == int(leg["lots"]))
+                items = [
+                    it
+                    for it in (self.staged["items"] if self.staged else [])
+                    if not (it["kind"] == kind and it.get("leg_id") == leg_id)
+                ]
+                if not unchanged:
+                    items.append(self._item(kind=kind, strike=strike, lots=lots, leg_id=leg_id))
+                self.staged = (
+                    {"items": items, "label": " · ".join(i["label"] for i in items)}
+                    if items
+                    else None
+                )
+                return self.staged
         item = self._item(
             kind=kind,
             right=right,

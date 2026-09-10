@@ -200,3 +200,19 @@ def test_the_ticket_is_the_orders_commit_will_send_with_their_cash(run):
     assert t["net_cash"] == pytest.approx(buy_close["cash"] + buy_open["cash"])
     assert t["limit_orders"] is False and "paper" in t["fill_basis"]
     assert run.calls == []                                  # a ticket orders nothing
+
+
+def test_a_roll_up_and_back_is_no_change_and_a_second_resize_replaces_the_first(run):
+    c = console_live.open_console(42)
+    short = next(leg for leg in c.legs() if leg["side"] == "S")
+    k = short["strike"]
+    c.stage(kind="roll", leg_id=short["id"], strike=k + 100)
+    c.stage(kind="roll", leg_id=short["id"], strike=k + 200)
+    assert [it["strike"] for it in c.staged["items"]] == [k + 200]      # replaced, not stacked
+    c.stage(kind="roll", leg_id=short["id"], strike=k)
+    assert c.staged is None                                              # back home: nothing staged
+    c.stage(kind="resize", leg_id=short["id"], lots=5)
+    c.stage(kind="resize", leg_id=short["id"], lots=4)
+    assert [it["lots"] for it in c.staged["items"]] == [4]
+    c.stage(kind="resize", leg_id=short["id"], lots=short["lots"])
+    assert c.staged is None and run.calls == []

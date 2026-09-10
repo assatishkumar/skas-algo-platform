@@ -599,12 +599,16 @@ function AlertsCard({ alerts, disabled, onArm, onClear }: {
  *  thinks about it. Both go through staging like everything else: a strike change is a
  *  roll (close here, open there) and a size change is a partial exit or a top-up, so the
  *  payoff previews it and the charges are real. */
-function LegRow({ leg, grid, onStage, chainExpiry }: {
+function LegRow({ leg, grid, onStage, chainExpiry, resetKey }: {
   leg: ConsoleLeg; grid: number; chainExpiry: string | null;
   onStage: (b: Parameters<typeof api.consoleStage>[1]) => void;
+  resetKey: string;      // changes when the basket is reverted → the exit selector resets
 }) {
   const [exitLots, setExitLots] = useState(leg.lots);
   useEffect(() => { setExitLots((n) => Math.min(Math.max(1, n), leg.lots)); }, [leg.lots]);
+  // A revert clears the STAGED change, but the selector is a local input and kept its
+  // "1" — which read as "the exit was not reverted" (owner, 2026-09-10).
+  useEffect(() => { setExitLots(leg.lots); /* eslint-disable-line */ }, [resetKey]);
   const value = leg.ltp == null ? null : leg.ltp * leg.units;
   return (
     <tr style={{ opacity: leg.enabled ? 1 : 0.45 }}>
@@ -730,29 +734,6 @@ function MiniBtn({ children, onClick, disabled }: {
     <button type="button" onClick={onClick} disabled={disabled}
       className="w-[18px] h-[18px] rounded-[4px] text-[11px] leading-[17px] shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
       style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>{children}</button>
-  );
-}
-
-/** before → after for one risk number, the staged bar's whole job.
- *
- *  "unlimited" is a VALUE here, not a missing one. An em dash where the answer is "this
- *  tail is open" would read as "no data", and the difference between those two on a naked
- *  short is the entire point of adding the wing. */
-function Delta({ label, a, b, unlimitedA, unlimitedB, good }: {
-  label: string; a?: number; b?: number;
-  unlimitedA?: boolean; unlimitedB?: boolean; good?: boolean;
-}) {
-  const col = good ? "var(--oc-pos)" : "var(--oc-neg)";
-  const show = (v?: number, un?: boolean) =>
-    un ? "unlimited" : v == null ? "—" : inr0(v);
-  return (
-    <span>
-      <span style={{ color: "var(--oc-faint)" }}>{label}</span>{" "}
-      <span style={{ color: col }}>{show(a, unlimitedA)}</span>
-      {(b != null || unlimitedB) && (
-        <> → <b style={{ color: col }}>{show(b, unlimitedB)}</b></>
-      )}
-    </span>
   );
 }
 
@@ -1399,52 +1380,6 @@ export default function ConsolePage() {
                 </Panel>
   );
 
-  const stagedBar = (
-    <>
-                {/* Only a book that can reach a broker gets an Apply between the click and the
-                    trade. In replay this block never renders — the click IS the trade, and Undo
-                    is the way back. */}
-                {state?.staged && state.session.requires_confirm && (
-                  <div className="rounded-[10px] p-3"
-                    style={{ border: "1px dashed var(--oc-accent)",
-                      background: "var(--oc-accent-tint)" }}>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
-                        style={{ background: "var(--oc-accent)", color: "#fff" }}>STAGED</span>
-                      <b className="text-[12.5px]">{state.staged.label}</b>
-                      <span className="text-[11px]" style={{ color: "var(--oc-muted)" }}>
-                        shown everywhere as if done — nothing reaches the run until Commit
-                      </span>
-                      <span className="ml-auto flex items-center gap-2">
-                        <button type="button"
-                          disabled={commit.isPending || !!state?.session.order_error}
-                          onClick={() => setTicketOpen(true)}
-                          title="review the orders this basket becomes, then send"
-                          className="px-2.5 h-[24px] rounded-[5px] text-[11.5px] font-semibold disabled:opacity-40"
-                          style={{ background: isReal ? "var(--oc-neg)" : "var(--oc-accent)", color: "#fff" }}>
-                          Review & commit ⏎</button>
-                        <button type="button" onClick={() => discard.mutate()}
-                          className="px-2.5 h-[24px] rounded-[5px] text-[11.5px]"
-                          style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
-                            Revert esc</button>
-                      </span>
-                    </div>
-                    <div className="mt-1.5 flex gap-5 text-[11.5px] flex-wrap tabular-nums">
-                      <Delta label="max profit" good
-                        a={mNow?.maxProfit} unlimitedA={mNow?.maxProfitUnlimited}
-                        b={mStaged?.maxProfit} unlimitedB={mStaged?.maxProfitUnlimited} />
-                      <Delta label="max loss"
-                        a={mNow?.maxLoss} unlimitedA={mNow?.maxLossUnlimited}
-                        b={mStaged?.maxLoss} unlimitedB={mStaged?.maxLossUnlimited} />
-                      <span><span style={{ color: "var(--oc-faint)" }}>margin</span>{" "}
-                        {inr0(state.staged.margin_before)} → <b>{inr0(state.staged.margin_after)}</b>
-                        <span style={{ color: "var(--oc-faint)" }}> · {state.staged.margin_source}</span>
-                      </span>
-                    </div>
-                  </div>
-                )}
-    </>
-  );
 
   const mtmPanel = (
                 <Panel className={breach ? "border-l-4" : ""}
@@ -1494,7 +1429,7 @@ export default function ConsolePage() {
                         className="underline" style={{ color: "var(--oc-muted)" }}>reset</button>
                     </div>
                   )}
-                  <div className="grid grid-cols-2 gap-2 mt-3">
+                  <div className="grid grid-cols-3 gap-2 mt-3">
                     <Tile label="Margin" value={inr0(risk?.margin ?? 0)}
                       sub={risk?.margin_detail
                         ? `est · scan ${inr0(risk.margin_detail.span)} + exposure ${inr0(risk.margin_detail.exposure)}`
@@ -1672,6 +1607,7 @@ export default function ConsolePage() {
                 <tbody>
                   {legsShown.map((l) => (
                     <LegRow key={l.id} leg={l} grid={gridStep} chainExpiry={state?.chain.expiry ?? null}
+                      resetKey={state?.staged ? "staged" : "clean"}
                       onStage={(b) => stage.mutate(b)} />
                   ))}
                 </tbody>
@@ -2061,31 +1997,35 @@ export default function ConsolePage() {
           </div>
         </div>
 
+        {/* Positions has the FULL width in both layouts and nothing is ever inserted above
+            it: a staged bar that appeared between the chart and the table pushed the table
+            down on every click (owner, 2026-09-10). The staged summary lives in the Positions
+            header and the ticket. */}
         {chainOpen ? (
-          /* chain · payoff+positions · rail */
+          /* chain · [payoff | rail] over a full-width Positions */
           <div className="flex-1 min-w-0 space-y-2.5">
             <div className="flex gap-2.5 items-start">
-              <div className="flex-1 min-w-0 space-y-2.5 flex flex-col">
+              <div className="flex-1 min-w-0 flex flex-col">
                 {payoffPanel}
-                {stagedBar}
-                {positionsPanel}
               </div>
               <div className="w-[348px] shrink-0 space-y-2.5">
                 {railColumn}
               </div>
             </div>
+            {positionsPanel}
           </div>
         ) : (
-          /* chain hidden: risk + positions on the left, the chart on the right */
-          <div className="flex-1 min-w-0 flex gap-2.5 items-start">
-            <div className="w-[50%] min-w-[460px] space-y-2.5">
-              {riskStrip}
-              {positionsPanel}
-              {alertsCard}
-            </div>
-            <div className="flex-1 min-w-0 space-y-2.5 flex flex-col">
-              {payoffPanel}
-              {stagedBar}
+          /* chain hidden: risk strip, full-width Positions, then [payoff | alerts] */
+          <div className="flex-1 min-w-0 space-y-2.5">
+            {riskStrip}
+            {positionsPanel}
+            <div className="flex gap-2.5 items-start">
+              <div className="flex-1 min-w-0 flex flex-col">
+                {payoffPanel}
+              </div>
+              <div className="w-[348px] shrink-0">
+                {alertsCard}
+              </div>
             </div>
           </div>
         )}
