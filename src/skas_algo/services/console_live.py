@@ -677,6 +677,72 @@ class LiveConsole(AlertBook):
                 closes.extend({"symbol": leg["symbol"]} for leg in legs.values())
         return closes, opens
 
+    def ticket(self) -> dict | None:
+        """Design D5: the orders the basket becomes, one row each, at the price the run
+        would fill against NOW (its mark; paper fills at the touch, live through the
+        LIMIT-at-touch ladder), with the cash each moves and the net. What Commit sends,
+        in the words a broker's ticket uses — so nothing is sent that was not read."""
+        if not self.staged:
+            return None
+        legs = {leg["id"]: leg for leg in self.legs()}
+        closes, opens = self._orders(self.staged["items"])
+        rows: list[dict] = []
+        lot = self._lot_size() or 1
+        for c in closes:
+            leg = next((x for x in legs.values() if x["symbol"] == c["symbol"]), None)
+            if leg is None:
+                continue
+            units = int(c.get("units") or leg["units"])
+            px = leg.get("ltp") or leg["entry"]
+            closing_short = leg["side"] == "S"
+            rows.append(
+                {
+                    "action": "BUY" if closing_short else "SELL",
+                    "role": "close",
+                    "symbol": leg["symbol"],
+                    "right": leg["right"],
+                    "strike": leg["strike"],
+                    "expiry": leg["expiry"],
+                    "lots": max(1, units // (leg["lot_size"] or 1)),
+                    "units": units,
+                    "price": px,
+                    "order_type": "MKT",
+                    "cash": round((-1 if closing_short else 1) * px * units, 2),
+                }
+            )
+        for o in opens:
+            px = self._price(o["right"], float(o["strike"]), o.get("expiry")) or 0.0
+            units = int(o["lots"]) * lot
+            selling = o["side"] == "sell"
+            rows.append(
+                {
+                    "action": "SELL" if selling else "BUY",
+                    "role": "open",
+                    "symbol": (
+                        f"{self.underlying}|{o.get('expiry') or self.expiry}|"
+                        f"{int(o['strike'])}|{o['right']}"
+                    ),
+                    "right": o["right"],
+                    "strike": float(o["strike"]),
+                    "expiry": o.get("expiry") or self.expiry,
+                    "lots": int(o["lots"]),
+                    "units": units,
+                    "price": px,
+                    "order_type": "MKT",
+                    "cash": round((1 if selling else -1) * px * units, 2),
+                }
+            )
+        return {
+            "rows": rows,
+            "net_cash": round(sum(r["cash"] for r in rows), 2),
+            "fill_basis": (
+                "the run's LIMIT-at-touch ladder"
+                if self.mode == "live"
+                else "the run's paper broker, at the touch"
+            ),
+            "limit_orders": False,
+        }
+
     def commit(self) -> dict:
         """Hand the basket to the run. Paper fills on its PaperBroker; a LIVE run with every
         §1 key set fills through LiveBroker — the gate is the run's, not ours."""
@@ -939,6 +1005,7 @@ class LiveConsole(AlertBook):
                     "margin_after": m_after,
                     "margin_source": src_after,
                     "risk_after": risk_after,
+                    "ticket": self.ticket(),
                 }
                 if self.staged
                 else None

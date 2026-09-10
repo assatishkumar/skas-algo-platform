@@ -2083,6 +2083,18 @@ export interface ConsoleStaged {
   margin_before: number; margin_after: number; margin_source: string;
   // live/paper: the whole risk block AS IF the basket were committed
   risk_after?: ConsoleRisk | null;
+  // live/paper: the ORDERS Commit will send, at the run's mark (design D5)
+  ticket?: ConsoleTicket | null;
+  }
+
+  export interface ConsoleTicketRow {
+    action: "BUY" | "SELL"; role: "open" | "close";
+    symbol: string; right: "CE" | "PE"; strike: number; expiry: string;
+    lots: number; units: number; price: number; order_type: "MKT";
+    cash: number;              // + receives, − pays
+  }
+  export interface ConsoleTicket {
+    rows: ConsoleTicketRow[]; net_cash: number; fill_basis: string; limit_orders: boolean;
   }
 
 export interface ConsoleRisk {

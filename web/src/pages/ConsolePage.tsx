@@ -13,7 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleLiveRun, ConsolePreset, ConsoleProbe,
+  ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleLiveRun, ConsoleTicket, ConsolePreset, ConsoleProbe, ConsoleRisk,
   ConsoleState,
 } from "../types";
 import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
@@ -346,6 +346,140 @@ function PayoffGlyph({ data }: { data: { spot: number; expiry: number }[] | null
           d={r.pts.map((p, j) => `${j ? "L" : "M"}${px(p.spot)},${py(p.expiry)}`).join(" ")} />
       ))}
     </svg>
+  );
+}
+
+/** Design D5, the order ticket: what Commit sends, row by row at the run's own mark, the
+ *  cash it moves, the margin it needs, and the risk before → after. On a REAL run the
+ *  typed REAL lives here and nowhere else. A limit price is not offered: the executor
+ *  builds the broker order without one and LiveBroker works its own touch ladder. */
+function OrderTicket({ ticket, staged, risk, riskAfter, mNow, mBefore, isReal, realTyped,
+  setRealTyped, capital, orderError, busy, onSend, onClose, onRevert }: {
+  ticket: ConsoleTicket; staged: NonNullable<ConsoleState["staged"]>;
+  risk: ConsoleRisk; riskAfter: ConsoleRisk | null;
+  mNow: ReturnType<typeof computeMetrics> | null; mBefore: ReturnType<typeof computeMetrics> | null;
+  isReal: boolean; realTyped: string; setRealTyped: (v: string) => void;
+  capital: number; orderError: string | null; busy: boolean;
+  onSend: () => void; onClose: () => void; onRevert: () => void;
+}) {
+  const before = risk.margin, after = staged.margin_after;
+  const free = capital - after;
+  const canSend = !busy && !orderError && ticket.rows.length > 0 && (!isReal || realTyped === "REAL");
+  return (
+    <div className="fixed inset-0 z-40 flex items-start justify-center pt-16"
+      style={{ background: "rgba(20,24,40,.45)" }} onClick={onClose}>
+      <div className="oc-root font-plex w-[720px] max-w-[95vw] rounded-[12px] p-4 shadow-2xl"
+        style={{ background: "var(--oc-surface)", color: "var(--oc-ink)", border: `1px solid ${isReal ? "var(--oc-neg)" : "var(--oc-line)"}` }}
+        onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-[9.5px] font-semibold uppercase tracking-[.07em]" style={{ color: "var(--oc-faint)" }}>
+              Order ticket · {isReal ? "REAL ORDERS" : "paper"}
+            </div>
+            <div className="text-[14px] font-semibold">{staged.label}</div>
+          </div>
+          <span className="px-1.5 py-[1px] rounded-[3px] text-[9px] font-bold"
+            style={{ color: mNow && !mNow.maxLossUnlimited ? "var(--oc-pos)" : "var(--oc-neg)",
+              border: `1px solid ${mNow && !mNow.maxLossUnlimited ? "var(--oc-pos)" : "var(--oc-neg)"}` }}>
+            {mNow && !mNow.maxLossUnlimited ? "DEFINED RISK" : "UNDEFINED RISK"} after
+          </span>
+        </div>
+        <table className="w-full mt-3 text-[12px] tabular-nums whitespace-nowrap">
+          <thead>
+            <tr className="text-[9px] uppercase tracking-[.06em]" style={{ color: "var(--oc-faint)" }}>
+              <th className="text-left font-semibold py-1">Side</th><th className="text-left font-semibold">Contract</th>
+              <th className="text-right font-semibold">Lots</th><th className="text-right font-semibold">Qty</th>
+              <th className="text-right font-semibold">Type</th><th className="text-right font-semibold">Price</th>
+              <th className="text-right font-semibold">Cash</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ticket.rows.map((r, i) => (
+              <tr key={i} style={{ borderTop: "1px solid var(--oc-hair)" }}>
+                <td className="py-1.5">
+                  <span className="px-1 rounded-[3px] text-[10px] font-bold"
+                    style={{ color: r.action === "SELL" ? "var(--oc-neg)" : "var(--oc-pos)",
+                      background: r.action === "SELL" ? "var(--oc-neg-fill)" : "var(--oc-pos-fill)" }}>{r.action}</span>
+                  <span className="ml-1.5 text-[10px]" style={{ color: "var(--oc-faint)" }}>{r.role === "close" ? "to close" : "to open"}</span>
+                </td>
+                <td><b>{Math.round(r.strike).toLocaleString("en-IN")} {r.right}</b>
+                  <span className="ml-1.5 text-[10.5px]" style={{ color: "var(--oc-muted)" }}>{expiryChip(r.expiry)}</span></td>
+                <td className="text-right">×{r.lots}</td>
+                <td className="text-right">{r.units.toLocaleString("en-IN")}</td>
+                <td className="text-right">
+                  <span className="font-semibold">MKT</span>
+                  <span className="ml-1 text-[10px]" title="a limit price is not offered here: the run fills at its own touch ladder"
+                    style={{ color: "var(--oc-faint)", textDecoration: "line-through" }}>LMT</span>
+                </td>
+                <td className="text-right">{num(r.price)}</td>
+                <td className="text-right font-semibold" style={{ color: r.cash >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>{inr0(r.cash)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="mt-2 flex items-baseline justify-between text-[11.5px]">
+          <span style={{ color: "var(--oc-muted)" }}>fills at {ticket.fill_basis}</span>
+          <span>net <b style={{ color: ticket.net_cash >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}>
+            {ticket.net_cash >= 0 ? "credit" : "debit"} {inr0(Math.abs(ticket.net_cash))}</b></span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="rounded-[8px] p-2.5" style={{ background: "var(--oc-panel2)" }}>
+            <div className="text-[9px] font-semibold uppercase tracking-[.06em]" style={{ color: "var(--oc-faint)" }}>Margin impact</div>
+            <div className="text-[13px] font-semibold tabular-nums">{inr0(before)} → {inr0(after)}
+              <span className="text-[10.5px] font-normal" style={{ color: "var(--oc-faint)" }}> · {staged.margin_source}</span></div>
+            <div className="mt-1 h-1.5 rounded" style={{ background: "var(--oc-chip)" }}>
+              <div className="h-1.5 rounded" style={{ width: `${Math.max(0, Math.min(100, (100 * after) / (capital || 1)))}%`,
+                background: after > capital ? "var(--oc-neg)" : "var(--oc-accent)" }} />
+            </div>
+            <div className="text-[10px] mt-1 tabular-nums" style={{ color: after > capital ? "var(--oc-neg)" : "var(--oc-faint)" }}>
+              {pctOf(after, capital)} of capital · {free >= 0 ? `${inr0(free)} free after` : `${inr0(-free)} SHORT of capital`}
+            </div>
+          </div>
+          <div className="rounded-[8px] p-2.5 text-[11px] tabular-nums" style={{ background: "var(--oc-panel2)" }}>
+            <div className="text-[9px] font-semibold uppercase tracking-[.06em]" style={{ color: "var(--oc-faint)" }}>Risk before → after</div>
+            <div className="grid grid-cols-[auto_1fr_1fr] gap-x-3 gap-y-0.5 mt-1">
+              <span style={{ color: "var(--oc-faint)" }}>max profit</span>
+              <span>{mBefore ? (mBefore.maxProfitUnlimited ? "∞" : inr0(mBefore.maxProfit)) : "—"}</span>
+              <b style={{ color: "var(--oc-pos)" }}>{mNow ? (mNow.maxProfitUnlimited ? "∞" : inr0(mNow.maxProfit)) : "—"}</b>
+              <span style={{ color: "var(--oc-faint)" }}>max loss</span>
+              <span>{mBefore ? (mBefore.maxLossUnlimited ? "unlimited" : inr0(mBefore.maxLoss)) : "—"}</span>
+              <b style={{ color: "var(--oc-neg)" }}>{mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss)) : "—"}</b>
+              <span style={{ color: "var(--oc-faint)" }}>POP</span>
+              <span>{mBefore?.pop == null ? "—" : `${(mBefore.pop * 100).toFixed(0)}%`}</span>
+              <b>{mNow?.pop == null ? "—" : `${(mNow.pop * 100).toFixed(0)}%`}</b>
+              <span style={{ color: "var(--oc-faint)" }}>net Δ</span>
+              <span>{risk.greeks.delta == null ? "—" : signed(risk.greeks.delta, 1)}</span>
+              <b>{riskAfter?.greeks.delta == null ? "—" : signed(riskAfter.greeks.delta, 1)}</b>
+            </div>
+          </div>
+        </div>
+        {orderError && (
+          <div className="mt-3 px-2 py-1.5 rounded-[6px] text-[11px] font-semibold"
+            style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>
+            The run is halted on an order error; acknowledge it on the Live page before sending.
+          </div>
+        )}
+        <div className="mt-4 flex items-center gap-2">
+          <button type="button" onClick={onRevert} className="underline text-[11.5px]" style={{ color: "var(--oc-muted)" }}>Revert all</button>
+          <span className="ml-auto flex items-center gap-2">
+            {isReal && (
+              <input value={realTyped} onChange={(e) => setRealTyped(e.target.value)} autoFocus
+                placeholder="type REAL to send" aria-label="type REAL to confirm real orders"
+                className="h-[26px] w-[160px] rounded-[5px] px-2 text-[11px] font-semibold tracking-wide"
+                style={{ background: "var(--oc-chip)", color: "var(--oc-neg)", border: "1px solid var(--oc-neg)" }} />
+            )}
+            <button type="button" onClick={onClose}
+              className="px-2.5 h-[26px] rounded-[5px] text-[11.5px]"
+              style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>Back esc</button>
+            <button type="button" disabled={!canSend} onClick={onSend}
+              className="px-3 h-[26px] rounded-[5px] text-[11.5px] font-semibold disabled:opacity-40"
+              style={{ background: isReal ? "var(--oc-neg)" : "var(--oc-accent)", color: "#fff" }}>
+              {isReal ? `Send ${ticket.rows.length} order${ticket.rows.length === 1 ? "" : "s"} to broker` : `Commit ${ticket.rows.length} order${ticket.rows.length === 1 ? "" : "s"} ⏎`}
+            </button>
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -810,6 +944,10 @@ export default function ConsolePage() {
   const [saveName, setSaveName] = useState("");
   const [realTyped, setRealTyped] = useState("");
   const [pendingSwitch, setPendingSwitch] = useState<string | null>(null);
+  // Commit on a running deployment opens the TICKET (design D5) — the orders as a broker
+  // would list them — and the send lives there. Esc closes it.
+  const [ticketOpen, setTicketOpen] = useState(false);
+  useEffect(() => { if (!state?.staged) setTicketOpen(false); }, [state?.staged]);
   const switchSource = (v: string) => {
     setPendingSwitch(null);
     if (v === "replay") {
@@ -1106,11 +1244,12 @@ export default function ConsolePage() {
       }
       if (e.key === "Escape") {
         setShowKeys(false);
+        if (ticketOpen) { setTicketOpen(false); return; }
         if (state?.staged) discard.mutate();
         return;
       }
-      if (e.key === "Enter" && state?.staged && state.session.mode !== "live") {
-        e.preventDefault(); commit.mutate(); return;
+      if (e.key === "Enter" && state?.staged && state.session.mode !== "replay") {
+        e.preventDefault(); if (ticketOpen) { if (!isReal) commit.mutate(); } else setTicketOpen(true); return;
       }
       if ((e.key === "u" || e.key === "U") && state?.session.can_undo) {
         e.preventDefault(); undo.mutate(); return;
@@ -1184,6 +1323,11 @@ export default function ConsolePage() {
     return spotNow && expNow && legs.length
       ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
       }, [legsShown, spotNow, expNow, state?.session.date]);
+      const mBeforeStaged = useMemo(() => {
+        const legs = toPayoffLegs(state?.legs ?? []);
+        return spotNow && expNow && legs.length
+          ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
+      }, [state?.legs, spotNow, expNow, state?.session.date]);
       const mStaged = useMemo(() => {
     const legs = toPayoffLegs(state?.staged?.after_legs ?? []);
     return spotNow && expNow && legs.length
@@ -1272,19 +1416,13 @@ export default function ConsolePage() {
                         shown everywhere as if done — nothing reaches the run until Commit
                       </span>
                       <span className="ml-auto flex items-center gap-2">
-                        {isReal && (
-                          <input value={realTyped} onChange={(e) => setRealTyped(e.target.value)}
-                            placeholder="type REAL to send" aria-label="type REAL to confirm real orders"
-                            className="h-[24px] w-[150px] rounded-[5px] px-2 text-[11px] font-semibold tracking-wide"
-                            style={{ background: "var(--oc-chip)", color: "var(--oc-neg)", border: "1px solid var(--oc-neg)" }} />
-                        )}
                         <button type="button"
-                          disabled={commit.isPending || (isReal && realTyped !== "REAL") || !!state?.session.order_error}
-                          onClick={() => { commit.mutate(); setRealTyped(""); }}
-                          title={isReal ? "sends REAL orders through the run's LiveBroker" : "fills on the run's paper broker"}
+                          disabled={commit.isPending || !!state?.session.order_error}
+                          onClick={() => setTicketOpen(true)}
+                          title="review the orders this basket becomes, then send"
                           className="px-2.5 h-[24px] rounded-[5px] text-[11.5px] font-semibold disabled:opacity-40"
                           style={{ background: isReal ? "var(--oc-neg)" : "var(--oc-accent)", color: "#fff" }}>
-                          {isReal ? "Commit to broker" : "Commit ⏎"}</button>
+                          Review & commit ⏎</button>
                         <button type="button" onClick={() => discard.mutate()}
                           className="px-2.5 h-[24px] rounded-[5px] text-[11.5px]"
                           style={{ background: "var(--oc-chip)", color: "var(--oc-muted)" }}>
@@ -1464,11 +1602,11 @@ export default function ConsolePage() {
                       {state!.staged!.items.length} UNCOMMITTED
                     </span>
                     <button type="button"
-                      disabled={commit.isPending || (isReal && realTyped !== "REAL") || !!state?.session.order_error}
-                      onClick={() => { commit.mutate(); setRealTyped(""); }}
+                      disabled={commit.isPending || !!state?.session.order_error}
+                      onClick={() => setTicketOpen(true)}
                       className="px-2 h-[20px] rounded-[4px] text-[10.5px] font-semibold disabled:opacity-40"
                       style={{ background: isReal ? "var(--oc-neg)" : "var(--oc-accent)", color: "#fff" }}>
-                      {isReal ? "Commit to broker" : "Commit"}</button>
+                      {isReal ? "Review & commit to broker" : "Review & commit"}</button>
                     <button type="button" onClick={() => discard.mutate()} className="underline"
                       style={{ color: "var(--oc-muted)" }}>Revert</button>
                   </span>
@@ -1805,6 +1943,16 @@ export default function ConsolePage() {
       {error && (
         <div className="px-3 py-2 text-[12px]"
           style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>{error}</div>
+      )}
+      {ticketOpen && state?.staged?.ticket && (
+        <OrderTicket ticket={state.staged.ticket} staged={state.staged} risk={state.risk}
+          riskAfter={state.staged.risk_after ?? null} mNow={mStaged} mBefore={mBeforeStaged}
+          isReal={isReal} realTyped={realTyped} setRealTyped={setRealTyped}
+          capital={state.session.capital} orderError={state.session.order_error ?? null}
+          busy={commit.isPending}
+          onSend={() => { commit.mutate(); setRealTyped(""); setTicketOpen(false); }}
+          onClose={() => setTicketOpen(false)}
+          onRevert={() => { discard.mutate(); setTicketOpen(false); }} />
       )}
       {pendingSwitch && (
         <div className="px-3 py-2 text-[12px] flex items-center gap-3 flex-wrap"

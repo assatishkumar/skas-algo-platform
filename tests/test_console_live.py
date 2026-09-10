@@ -183,3 +183,20 @@ def test_the_staged_book_is_the_one_shown_and_an_uncommitted_leg_is_edited_not_s
     assert row["lots"] == short["lots"] - 1 and row["pending"] == "exit" and run.calls == []
     c.discard()
     assert c.state()["staged"] is None and len(c.legs()) == before
+
+
+def test_the_ticket_is_the_orders_commit_will_send_with_their_cash(run):
+    """D5: every staged change becomes ticket rows at the run's own mark — a close of a
+    short is a BUY, an open sell is a SELL — and the net is what the basket moves."""
+    c = console_live.open_console(42)
+    short = next(leg for leg in c.legs() if leg["side"] == "S")
+    c.stage(kind="exit", leg_id=short["id"], lots=1)
+    c.stage(kind="add", right="PE", strike=24800, side="B", lots=2)
+    t = c.state()["staged"]["ticket"]
+    assert [(r["action"], r["role"], r["lots"]) for r in t["rows"]] == [("BUY", "close", 1), ("BUY", "open", 2)]
+    buy_close, buy_open = t["rows"]
+    assert buy_close["units"] == 65 and buy_close["cash"] == pytest.approx(-buy_close["price"] * 65)
+    assert buy_open["units"] == 130 and buy_open["expiry"] == c.expiry
+    assert t["net_cash"] == pytest.approx(buy_close["cash"] + buy_open["cash"])
+    assert t["limit_orders"] is False and "paper" in t["fill_basis"]
+    assert run.calls == []                                  # a ticket orders nothing
