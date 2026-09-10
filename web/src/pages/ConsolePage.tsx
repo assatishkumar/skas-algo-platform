@@ -1452,12 +1452,15 @@ export default function ConsolePage() {
                   {/* NET GREEKS: Σ per-share greek × units over the enabled legs, the same
                       convention as the Live tile. Beside them, the T+0 book at ±1% of spot —
                       the question the greeks approximate, answered directly. */}
-                  <div className="mt-2 pt-2 flex flex-wrap gap-1.5 [&>*]:flex-1 [&>*]:min-w-[92px]"
-                    style={{ borderTop: "1px solid var(--oc-hair)" }}>
+                  {/* two fixed rows — greeks, then the T+0 what-ifs — so the last tile never wraps
+                      onto a line of its own (owner, 2026-09-10) */}
+                  <div className="mt-2 pt-2 grid grid-cols-4 gap-1.5" style={{ borderTop: "1px solid var(--oc-hair)" }}>
                     <GreekCell label="Δ net" v={risk?.greeks.delta} dp={1} unit="units" />
                     <GreekCell label="Γ net" v={risk?.greeks.gamma} dp={3} />
                     <GreekCell label="Θ /day" v={risk?.greeks.theta} dp={0} inr />
                     <GreekCell label="Vega /1%" v={risk?.greeks.vega} dp={0} inr />
+                  </div>
+                  <div className="mt-1.5 grid grid-cols-3 gap-1.5">
                     <ScenarioCell label={`${MINUS}1%`} v={scen?.[0]} base={scen?.[1]} />
                     <ScenarioCell label="spot" v={scen?.[1]} base={scen?.[1]} />
                     <ScenarioCell label="+1%" v={scen?.[2]} base={scen?.[1]} />
