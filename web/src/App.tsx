@@ -10,6 +10,7 @@ import BacktestPage from "./pages/BacktestPage";
 import BrokersPage from "./pages/BrokersPage";
 import ComparePage from "./pages/ComparePage";
 import ConsolePage from "./pages/ConsolePage";
+import SimulatorPage from "./pages/SimulatorPage";
 import DataPage from "./pages/DataPage";
 import DonchianLivePage from "./pages/DonchianLivePage";
 import HomePage from "./pages/HomePage";
@@ -59,7 +60,7 @@ function ThemeToggle() {
 /** Mobile-only bottom tab bar (md:hidden) — the installed-PWA navigation. Home indicator
  * safe-area padded; "More" opens a small sheet with the secondary destinations. Desktop
  * keeps the top nav untouched. */
-const MORE_PATHS = ["/trade", "/console", "/portfolio", "/data", "/brokers", "/docs"];
+const MORE_PATHS = ["/trade", "/console", "/simulator", "/portfolio", "/data", "/brokers", "/docs"];
 
 function TabIcon({ d }: { d: string }) {
   return (
@@ -186,6 +187,7 @@ export default function App() {
             <NavItem to="/trade" label="Trade" />
             <NavItem to="/live" label="Live" />
             <NavItem to="/console" label="Console" />
+            <NavItem to="/simulator" label="Simulator" />
             <NavItem to="/analyze" label="Analyze" />
             <NavItem to="/portfolio" label="Portfolio" />
             <NavItem to="/docs" label="Docs" />
@@ -203,6 +205,7 @@ export default function App() {
           <Route path="/trade" element={<TradePage />} />
           <Route path="/live" element={<LivePage />} />
           <Route path="/console" element={<ConsolePage />} />
+          <Route path="/simulator" element={<SimulatorPage />} />
           {/* Legacy path — renders the SAME registry-driven page so old links and
               the forward-test router state keep working (a <Navigate> would drop state). */}
           <Route path="/live/new" element={<TradePage />} />

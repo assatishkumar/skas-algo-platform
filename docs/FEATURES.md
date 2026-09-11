@@ -45,7 +45,7 @@ live. The invariant is guarded by golden tests (`tests/test_sst_parity.py`,
 
 ## 3. Strategy catalog
 
-Strategies register in `strategies/registry.py` (35 IDs across 32 files) and onboard there,
+Strategies register in `strategies/registry.py` (36 IDs across 33 files) and onboard there,
 never by editing the engine. `intraday=True` means "decide every tick"; otherwise the run
 decides once per day at a set time. "Backtest" notes whether a strategy runs the FULL shared
 engine, a dedicated Black-Scholes service, or is deploy-only.
@@ -230,6 +230,10 @@ intraday stop or a strike picked off the live chain). Most are now backtested by
 the self-captured 1-min option store through the same class the deploy runs (§4); the rest
 are validated paper-first.
 
+- **`manual_sim` — the Simulator (`/simulator`, 2026-09-11).** A backtest whose decisions are the
+  owner's: name a strategy and its playbook, trade it cycle by cycle in the console on the
+  1-min store, bank each cycle with a note, and read the record as an ordinary run (hidden
+  from the Runs list; Run detail / Analyze / Compare by link). Never deployed.
 - **Manual rail (`strategies/manual_book.py`, not deployable — installed by a HANDOVER, 2026-09-10).**
   When the owner's hand changes a running option book (Live page manual order, console
   Commit, mark-closed-at-broker) and lots remain, the strategy is PAUSED intact and this

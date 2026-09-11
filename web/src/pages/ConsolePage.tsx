@@ -10,11 +10,12 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
   ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleLiveRun, ConsoleTicket, ConsoleTicketRow, ConsolePreset, ConsoleProbe, ConsoleRisk,
   ConsoleState,
+  SimOpenSpec,
 } from "../types";
 import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
 import { buildLivePayoff } from "../lib/payoff";
@@ -1128,6 +1129,17 @@ export default function ConsolePage() {
   // The console over a RUNNING deployment: same DTO, no transport, every click staged and
   // applied through the run's own manual-order path. `isLive` = "not a replay".
   const isLive = !!state && state.session.mode !== "replay";
+  // SIM mode (the Simulator, 2026-09-11): a replay session that belongs to a manual-backtest
+  // strategy. Every action autosaves the tape to the strategy; a flat book after trading
+  // offers the cycle for banking; a banked cycle can be watched back read-only (?cycle=).
+  const simId = params.get("sim") ? Number(params.get("sim")) : null;
+  const simCycleNo = params.get("cycle") ? Number(params.get("cycle")) : null;
+  const simReadOnly = simId != null && simCycleNo != null;
+  const [sim, setSim] = useState<SimOpenSpec | null>(null);
+  const [bankNote, setBankNote] = useState("");
+  const [bankBusy, setBankBusy] = useState(false);
+  const [bankMsg, setBankMsg] = useState<string | null>(null);
+  const simParams = () => (simId != null ? { sim: String(simId), ...(simCycleNo != null ? { cycle: String(simCycleNo) } : {}) } : {});
   const isReal = !!state && state.session.mode === "live";
   const { data: liveRuns } = useQuery({
     queryKey: ["console-live-runs"], queryFn: api.consoleLiveRuns,
@@ -1208,12 +1220,14 @@ export default function ConsolePage() {
   const open = useMutation({
     // `expiry: null` = a NEW day or underlying: let the backend land on that month's chip
     // (owner, 2026-09-10). Otherwise the URL's chip is kept, so a reload does not move it.
-    mutationFn: ({ expiry, ...body }: { underlying: string; day?: string | null; at?: string; expiry?: string | null }) =>
+    mutationFn: ({ expiry, ...body }: { underlying: string; day?: string | null; at?: string; expiry?: string | null;
+      capital?: number; restore?: SimOpenSpec["restore"] }) =>
       api.consoleOpen({ ...body, at: body.at ?? params.get("at") ?? "09:20",
+        restore: body.restore ?? undefined,
         expiry: expiry === null ? undefined : (expiry ?? params.get("expiry") ?? undefined) }),
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
-      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1234,7 +1248,7 @@ export default function ConsolePage() {
         setNotice(`${prettyDay(s.session.date)} is the last captured session in the 1-min store — nothing to replay past it yet. Today's bars are captured after 16:00 IST.`);
       }
       setState(s); setDay(s.session.date); setError(null);
-      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1257,7 +1271,7 @@ export default function ConsolePage() {
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
       if (s.jumped === false) setNotice("No such event in this session's direction.");
-      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1309,7 +1323,7 @@ export default function ConsolePage() {
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setUnderlying(s.session.underlying);
       setError(null); setShowSaves(false);
-      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1426,10 +1440,61 @@ export default function ConsolePage() {
     mutationFn: (expiry: string) => call((id) => api.consoleChain(id, { expiry })),
     onSuccess: (s) => {
       setState(s);
-      setParams({ u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) }, { replace: true });
     },
   });
+
+  // SIM: open where the strategy stands (its open cycle, or its next day), or a banked
+  // cycle read-only. The strategy's spec decides day, clock, expiry, capital and the tape.
+  const openSim = async () => {
+    if (simId == null) return;
+    try {
+      const spec = simCycleNo != null ? await api.simCycle(simId, simCycleNo) : await api.simOpen(simId);
+      setSim(spec);
+      setUnderlying(spec.underlying);
+      open.mutate({ underlying: spec.underlying, day: spec.day, at: spec.at, expiry: spec.expiry,
+        capital: spec.capital, restore: spec.restore ?? undefined });
+    } catch (e) { setError((e as Error).message); }
+  };
+  // autosave the open cycle's tape after every change (debounced); never on a read-only replay
+  const journalKey = state ? `${state.session.date}|${state.session.clock}|${state.journal.length}|${state.alerts.length}|${state.bookmarks.length}` : "";
+  useEffect(() => {
+    if (simId == null || simReadOnly || !state || state.session.mode !== "replay") return;
+    const t = window.setTimeout(() => {
+      api.simAutosave(simId, { day: state.session.date, clock: state.session.clock,
+        expiry: state.chain.expiry, capital: state.session.capital,
+        journal: state.journal, alerts: state.alerts, bookmarks: state.bookmarks }).catch(() => {});
+    }, 700);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [journalKey, simId, simReadOnly]);
+  const simTraded = !!state && state.journal.some((f) => f.action === "BUY" || f.action === "SHORT");
+  const simFlat = !!state && (state.risk?.legs_open ?? 0) === 0;
+  // the margin the cycle NEEDED: the peak while legs were open (at bank the book is flat and
+  // reads ₹0). Reset when a cycle is banked / a new session opens.
+  const cycleMargin = useRef<{ value: number; source: string | null }>({ value: 0, source: null });
+  useEffect(() => {
+    if (simId == null || !state || (state.risk?.legs_open ?? 0) === 0) return;
+    if ((state.risk?.margin ?? 0) > cycleMargin.current.value)
+      cycleMargin.current = { value: state.risk!.margin, source: state.risk!.margin_source };
+  }, [simId, state]);
+  useEffect(() => { cycleMargin.current = { value: 0, source: null }; }, [state?.session.id]);
+  const bankCycle = async () => {
+    if (simId == null || !state) return;
+    setBankBusy(true); setBankMsg(null);
+    try {
+      const out = await api.simBank(simId, { note: bankNote,
+        margin: cycleMargin.current.value || null, margin_source: cycleMargin.current.source,
+        payload: { day: state.session.date, clock: state.session.clock, expiry: state.chain.expiry,
+          capital: state.session.capital, journal: state.journal, alerts: state.alerts, bookmarks: state.bookmarks } });
+      setBankNote("");
+      setBankMsg(`Cycle ${out.banked.n} banked · net ${inr0(out.banked.net)} · equity ${inr0(out.equity)}${out.next_day ? ` · next cycle opens ${out.next_day}` : " · no later captured day"}`);
+      // the next cycle: a fresh session at the strategy's next day with the compounded capital
+      await openSim();
+    } catch (e) { setBankMsg((e as Error).message); }
+    finally { setBankBusy(false); }
+  };
 
   // Open a session once the store's day list is known — the newest captured day.
   useEffect(() => {
@@ -1437,6 +1502,7 @@ export default function ConsolePage() {
     opened.current = true;
     const liveId = params.get("live");
     if (liveId) { openLive.mutate(Number(liveId)); return; }
+    if (simId != null) { openSim(); return; }
     open.mutate({ underlying, day: params.get("day") ?? days.last });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days]);
@@ -2036,6 +2102,14 @@ export default function ConsolePage() {
               )}
             </span>
           )}
+          {simId != null && (
+            <span className="ml-2 px-1.5 py-[1px] rounded-[4px] text-[10px] font-bold"
+              title={simReadOnly ? "a banked cycle, replayed read-only" : "the Simulator: every fill autosaves to this strategy; a flat book after trading offers the cycle for banking"}
+              style={{ background: simReadOnly ? "var(--oc-chip)" : "var(--oc-accent)", color: simReadOnly ? "var(--oc-muted)" : "#fff" }}>
+              SIM · {sim?.name ?? `#${simId}`} · {simReadOnly ? `cycle ${simCycleNo} · read-only` : `cycle ${sim?.cycle_no ?? "?"}`}
+              <Link to="/simulator" className="ml-1.5 underline font-normal" style={{ color: "inherit" }}>scoreboard</Link>
+            </span>
+          )}
           <Chip disabled={!state || isLive} title="bookmark this minute (B)"
             active={!!state && state.bookmarks.includes(`${state.session.date}T${state.session.clock}`)}
             onClick={() => bookmark.mutate()}>◇ mark</Chip>
@@ -2270,6 +2344,32 @@ export default function ConsolePage() {
         <StripItem label="Capital">{num(state?.session.capital ?? null, 0)}</StripItem>
       </div>
 
+      {simId != null && !simReadOnly && state && (simTraded && simFlat || bankMsg) && (
+        /* the Simulator's bank sheet: prompts the moment the book is flat after trading */
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-[12px]"
+          style={{ background: "var(--oc-caution-dim)", borderBottom: "1px solid var(--oc-hair)" }}>
+          {simTraded && simFlat ? (
+            <>
+              <b>Cycle {sim?.cycle_no ?? "?"} complete</b>
+              <span style={{ color: "var(--oc-muted)" }}>
+                net {inr0((state.risk?.realised_total ?? 0) - (state.risk?.charges ?? 0))}
+                {" · "}charges {inr0(state.risk?.charges ?? 0)}
+                {cycleMargin.current.value ? ` · margin ${inr0(cycleMargin.current.value)} (${cycleMargin.current.source})` : ""}
+              </span>
+              <input value={bankNote} onChange={(e) => setBankNote(e.target.value)} placeholder="note — what you did and why"
+                className="flex-1 min-w-[220px] h-[24px] rounded-[5px] px-2 text-[11.5px]"
+                style={{ background: "var(--oc-panel)", border: "1px solid var(--oc-line)", color: "var(--oc-ink)" }}
+                onKeyDown={(e) => { if (e.key === "Enter") bankCycle(); }} />
+              <button type="button" disabled={bankBusy} onClick={bankCycle}
+                className="px-3 h-[24px] rounded-[5px] text-[11.5px] font-semibold disabled:opacity-40"
+                style={{ background: "var(--oc-accent)", color: "#fff" }}>{bankBusy ? "Banking…" : "Bank cycle"}</button>
+              <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>banking writes this cycle to the strategy and opens the next day</span>
+            </>
+          ) : (
+            <span style={{ color: "var(--oc-muted)" }}>{bankMsg}</span>
+          )}
+        </div>
+      )}
       {error && (
         <div className="px-3 py-2 text-[12px]"
           style={{ background: "var(--oc-neg-fill)", color: "var(--oc-neg)" }}>{error}</div>

@@ -128,6 +128,7 @@ _DEPLOYS_ELSEWHERE = {
     "custom_options": "Trade → Build a position (a manual multi-leg position)",
     "donchian_strangle_monthly": "Trade → Screener (the basket comes from a scan)",
     "donchian_strangle_bt": "backtest-only sibling of donchian_strangle_monthly — no live path",
+    "manual_sim": "the Simulator (/simulator) — a manual backtest traded in the console; never deployed",
 }
 
 

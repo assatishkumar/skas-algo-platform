@@ -2182,3 +2182,33 @@ export interface ConsoleDays {
   underlying: string; underlyings: string[];
   days: string[]; first: string | null; last: string | null;
 }
+
+
+// ---- Simulator: a manual backtest, stored as an ordinary (hidden) run --------------------
+export interface SimStrategy {
+  id: number; run_id: number; name: string; underlying: string | null;
+  capital: number; equity: number; cycles: number; net: number; win_rate: number | null;
+  last_exit: string | null; open: boolean; next_day: string | null; created_at: string | null;
+}
+export interface SimCycleLeg {
+  symbol: string; underlying: string; strike: number; right: "CE" | "PE"; side: "long" | "short";
+  expiry: string; entry_date: string; entry_premium: number; exit_date: string; exit_price: number;
+  exit_action: string; exit_reason: string; units: number; lots: number; holding_days: number; pnl: number;
+}
+export interface SimCycle {
+  n: number; entered: string | null; exited: string | null; entry_day: string; exit_day: string;
+  realized: number; charges: number; net: number; entry_spot: number | null; exit_spot: number | null;
+  premium: number; expiry: string | null; symbols: string[]; legs: SimCycleLeg[];
+  margin: number | null; margin_source: string | null; rom_pct: number | null;
+  note: string; tags: string[]; capital_before: number; capital_after: number; banked_at: string;
+}
+export interface SimDetail extends SimStrategy {
+  playbook: string; capital_mode: string; cycle_rows: SimCycle[];
+  open_cycle: { day: string | null; clock: string | null; expiry: string | null; fills: number; entered: string | null } | null;
+  metrics: Metrics; equity_curve: { date: string; equity: number }[];
+}
+export interface SimOpenSpec {
+  id: number; name: string; underlying: string; day: string | null; at: string; expiry: string | null;
+  capital: number; cycle_no?: number; n?: number;
+  restore: { journal: ConsoleState["journal"]; alerts: ConsoleState["alerts"]; bookmarks: string[] } | null;
+}

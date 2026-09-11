@@ -30,7 +30,8 @@ _FEATURES = _ROOT / "docs" / "FEATURES.md"
 #   custom_options / custom_equity — the Trade builders' user-authored one-off positions;
 #   broker_smoke_test              — the real-order probe on the Brokers page;
 #   donchian_strangle_bt           — the backtest sibling, documented inside its live card.
-_NOT_A_CARD = {"custom_options", "custom_equity", "broker_smoke_test", "donchian_strangle_bt"}
+_NOT_A_CARD = {"custom_options", "custom_equity", "broker_smoke_test", "donchian_strangle_bt",
+               "manual_sim"}
 
 
 def _card_ids() -> set[str]:

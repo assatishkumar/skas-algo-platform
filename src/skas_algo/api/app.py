@@ -23,6 +23,7 @@ from .routes import (
     live,
     portfolio,
     research,
+    simulator,
     trade,
 )
 
@@ -114,6 +115,7 @@ def create_app() -> FastAPI:
     protected = [Depends(require_auth)]
     app.include_router(alerts.router, prefix="/api/v1", dependencies=protected)
     app.include_router(backtest.router, prefix="/api/v1", dependencies=protected)
+    app.include_router(simulator.router, prefix="/api/v1", dependencies=protected)
     app.include_router(brokers.router, prefix="/api/v1", dependencies=protected)
     app.include_router(console.router, prefix="/api/v1", dependencies=protected)
     app.include_router(data.router, prefix="/api/v1", dependencies=protected)

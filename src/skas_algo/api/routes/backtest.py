@@ -300,6 +300,8 @@ def list_runs(status: str | None = None, db: Session = Depends(get_db)) -> list[
         st = "archived" if run.archived else "active"
         if status and st != status:
             continue
+        if algo.strategy_id == "manual_sim":
+            continue       # the Simulator's runs live on /simulator (owner, 2026-09-11)
         out.append(
             RunSummary(
                 run_id=run.id,

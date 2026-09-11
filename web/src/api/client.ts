@@ -73,6 +73,7 @@ import type {
   ConsolePreset,
   ConsoleSaved,
   ConsoleLiveRun,
+  SimStrategy, SimDetail, SimOpenSpec, SimCycle,
 } from "../types";
 
 import { clearToken, getToken } from "../lib/auth";
@@ -210,6 +211,23 @@ export const api = {
   consoleScale: (id: string, factor: number) =>
     request<ConsoleState>(`/console/sessions/${id}/scale`,
       { method: "POST", body: JSON.stringify({ factor }) }),
+  // ---- Simulator (manual backtests traded in the console, cycle by cycle)
+  simList: () => request<{ strategies: SimStrategy[] }>("/simulator"),
+  simCreate: (body: { name: string; underlying: string; capital: number; playbook?: string | null; start_day?: string | null }) =>
+    request<SimDetail>("/simulator", { method: "POST", body: JSON.stringify(body) }),
+  simGet: (id: number) => request<SimDetail>(`/simulator/${id}`),
+  simUpdate: (id: number, body: { name?: string; playbook?: string }) =>
+    request<SimDetail>(`/simulator/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  simDelete: (id: number) => request<{ deleted: number }>(`/simulator/${id}`, { method: "DELETE" }),
+  simOpen: (id: number) => request<SimOpenSpec>(`/simulator/${id}/open`),
+  simCycle: (id: number, n: number) => request<SimOpenSpec>(`/simulator/${id}/cycles/${n}`),
+  simAutosave: (id: number, payload: Record<string, unknown>) =>
+    request<{ fills: number; flat: boolean; traded: boolean }>(`/simulator/${id}/autosave`,
+      { method: "POST", body: JSON.stringify({ payload }) }),
+  simBank: (id: number, body: { note?: string; tags?: string[]; margin?: number | null; margin_source?: string | null; payload?: Record<string, unknown> }) =>
+    request<SimDetail & { banked: SimCycle }>(`/simulator/${id}/bank`, { method: "POST", body: JSON.stringify(body) }),
+  simNextDay: (id: number, day: string) =>
+    request<SimDetail>(`/simulator/${id}/next-day`, { method: "POST", body: JSON.stringify({ day }) }),
   consoleMarginAnchor: (id: string, margin_per_lot_set: number) =>
     request<ConsoleState>(`/console/sessions/${id}/margin`,
       { method: "POST", body: JSON.stringify({ margin_per_lot_set }) }),

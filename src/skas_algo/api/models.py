@@ -132,6 +132,41 @@ class ConsoleScale(BaseModel):
     factor: float                     # every leg's lots × factor, one action
 
 
+class SimCreate(BaseModel):
+    """A Simulator strategy: a manual backtest traded in the console, cycle by cycle."""
+
+    name: str
+    underlying: str = "NIFTY"
+    capital: float = 500_000
+    playbook: str | None = None       # the rule being tested, in the owner's words
+    start_day: str | None = None      # ISO captured day; None = the newest
+
+
+class SimUpdate(BaseModel):
+    name: str | None = None
+    playbook: str | None = None
+
+
+class SimSave(BaseModel):
+    """The console's save_payload() for the OPEN cycle (autosave after every action)."""
+
+    payload: dict
+
+
+class SimBank(BaseModel):
+    """Bank the open cycle. ``payload`` (optional) is a last autosave in the same call."""
+
+    note: str | None = None
+    tags: list[str] | None = None
+    margin: float | None = None       # the margin at entry, for RoM (Kite / anchor / model)
+    margin_source: str | None = None
+    payload: dict | None = None
+
+
+class SimNextDay(BaseModel):
+    day: str                          # ISO captured day the next cycle opens on
+
+
 class ConsoleCommit(BaseModel):
     """Commit the staged basket. ``limits`` = {"<role>:<symbol>": price} for the rows the
     owner switched to LMT on the ticket (role = open | close); absent rows go at market."""

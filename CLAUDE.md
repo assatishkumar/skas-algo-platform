@@ -1285,6 +1285,29 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   live cursor minute by minute (376 rebuilds ≈ 6 s, and it would move the book).
 - Full plan + phases: `docs/PLAN-options-console.md`.
 
+## 8e. The Simulator (`/simulator`) — manual backtesting, cycle by cycle (2026-09-11)
+A Simulator strategy is *a backtest whose decisions are the owner's*: `services/simulator.py`
+stores it as an `Algo` (`strategy_id = manual_sim`, playbook in `notes`) with ONE `AlgoRun`
+whose `trade_log` grows as cycles are banked and whose `metrics` is the STANDARD report
+rebuilt after every bank (`_to_report` + the COMPLETE `_options_report`, never partial) —
+so Run detail, Analyze and Compare render it unchanged. `AlgoRun.state["sim"]` is the
+LEDGER: every banked cycle's journal slice (the console's own tape; a cycle is fully
+reconstructible from it — `reconstruct()` re-derives legs/P&L with its own FIFO walk, so
+nothing depends on a live session), the open cycle's journal (autosaved from the console
+after every action), the equity and `next_day`. Owner decisions: a cycle runs from the
+first fill on a flat book to the book going FLAT (a close by hand or a settlement — NOT the
+console's expiry-based `cycle_done`); capital COMPOUNDS; the run is HIDDEN from
+`GET /runs` (`list_runs` skips `manual_sim`); the Bank sheet prompts automatically.
+`manual_sim` (`strategies/manual_sim.py`) exists only to BE the registered id — never
+decides, never deploys; it is in `_NOT_A_CARD` and `_DEPLOYS_ELSEWHERE`. The console's
+SIM mode: `?sim=<id>` opens where the strategy stands (`open_spec`: the open cycle's
+day/clock/tape, else `next_day` at 09:30 with the equity as capital), autosaves the tape
+(`POST /simulator/{id}/autosave`, debounced), shows the bank bar when the book is flat
+after trading, and after `bank` reopens the next day; `?sim=&cycle=n` replays a banked
+cycle read-only (no autosave). RoM uses the margin recorded AT BANK (the console's Kite /
+anchor / model figure), so a later margin regime never rewrites history. Nothing
+unrealised enters the stats. Coverage: `tests/test_simulator.py`.
+
 ## 8a. The /portfolio tracker is NOT part of the trading system
 **The VPS is the authoritative portfolio.** It holds the owner's real book (56 holdings)
 and is the only box with both broker sessions and an always-on maintenance loop for the

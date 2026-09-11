@@ -8,9 +8,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from .asymmetric_premium_intra import AsymmetricPremiumIntraStrategy
 from .broker_smoke_test import BrokerSmokeTestStrategy
 from .call_put_ratio_expiry import CallPutRatioExpiryStrategy
-from .put_condor import PutCondorStrategy
 from .call_ratio_monthly import (
     BatmanRatioMonthlyStrategy,
     CallRatioMonthlyStrategy,
@@ -19,30 +19,31 @@ from .call_ratio_monthly import (
 from .custom_equity import CustomEquityStrategy
 from .custom_options import CustomOptionsStrategy
 from .delta_neutral_monthly import DeltaNeutralMonthlyStrategy
-from .double_diagonal_calendar import DoubleDiagonalCalendarStrategy
-from .fair_value_calendar import FairValueCalendarStrategy
-from .monthly_butterfly import MonthlyButterflyStrategy
-from .volcano_calendar import VolcanoCalendarStrategy
 from .donchian_strangle_bt import DonchianStrangleBtStrategy
-from .iron_fly_monthly import IronFlyMonthlyStrategy
 from .donchian_strangle_monthly import DonchianStrangleMonthlyStrategy
+from .double_diagonal_calendar import DoubleDiagonalCalendarStrategy
 from .ema21_momentum import Ema21MomentumStrategy
+from .fair_value_calendar import FairValueCalendarStrategy
 from .gap_reversal import GapReversalStrategy
 from .happy_twins import HappyTwinsStrategy
 from .hni_weekly import HniWeeklyStrategy
-from .asymmetric_premium_intra import AsymmetricPremiumIntraStrategy
 from .intraday_straddle import IntradayStraddleStrategy
 from .intraday_strangle_combo import IntradayStrangleComboStrategy
-from .straddle_btst import StraddleBtstStrategy
+from .iron_fly_monthly import IronFlyMonthlyStrategy
+from .manual_sim import ManualSimStrategy
 from .momentum_theta_intra import MomentumThetaGainerIntra
+from .monthly_butterfly import MonthlyButterflyStrategy
 from .nifty_shop import NiftyShopStrategy
+from .put_condor import PutCondorStrategy
 from .short_premium import ShortPremiumStrategy
 from .sst_fifo import SSTFifoStrategy
 from .sst_lifo import SSTLifoStrategy
-from .value_investing import ValueInvestingStrategy
 from .sst_weekly import SSTWeeklyFifoStrategy, SSTWeeklyStrategy
 from .staggered_covered_call import StaggeredCoveredCallStrategy
+from .straddle_btst import StraddleBtstStrategy
 from .supertrend_momentum import SuperTrendMomentumStrategy
+from .value_investing import ValueInvestingStrategy
+from .volcano_calendar import VolcanoCalendarStrategy
 from .weekly_intraday_straddle import WeeklyIntradayStraddle
 
 # strategy_id -> factory(universe, **params) -> strategy instance
@@ -79,6 +80,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     StraddleBtstStrategy.strategy_id: StraddleBtstStrategy,
     WeeklyIntradayStraddle.strategy_id: WeeklyIntradayStraddle,
     CustomOptionsStrategy.strategy_id: CustomOptionsStrategy,
+    ManualSimStrategy.strategy_id: ManualSimStrategy,
     CustomEquityStrategy.strategy_id: CustomEquityStrategy,
     DonchianStrangleMonthlyStrategy.strategy_id: DonchianStrangleMonthlyStrategy,
     DonchianStrangleBtStrategy.strategy_id: DonchianStrangleBtStrategy,
