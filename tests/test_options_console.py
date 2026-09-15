@@ -1452,10 +1452,40 @@ def test_what_if_prices_candidate_adjustments_and_ranks_by_max_loss():
     # the fixture's de-carried parity spot sits a few points UNDER 24,000 at 10:00, which
     # would make the PE the tested short and its roll-out strike (23900) one the tape
     # never printed; pin spot above the strike so the CE is tested and 24100 CE prices
-    s.market.index_spot = lambda u: 24_100.0
+    s.market.index_spot = lambda u: 24_150.0
     w = s.what_if()
     ids = [c["id"] for c in w["candidates"]]
     assert ids[0] == "hold" and w["tested"] in {leg.id for leg in s.legs}
+    # the UNTESTED side (the PE, spot is above the straddle): roll it IN one step to the
+    # 24100 PE the tape prices; two steps in (24200) would be THROUGH spot → no row; the
+    # premium match picks the 24100 PE too (the only OTM PE that prices)
+    assert w["untested"] == next(leg.id for leg in s.legs if leg.right == "PE")
+    assert w["buffer_side"] == "CE"
+    byid = {c["id"]: c for c in w["candidates"]}
+    assert byid["roll_in_1"]["ok"] and byid["roll_in_1"]["changes"][0].startswith("ROLL 24000 → 24100 PE")
+    assert byid["roll_in_1"]["cash"] > 0                     # rolling in collects credit
+    assert "roll_in_2" not in byid
+    # at 10:00 the fixture's PE (138.5) is the CHEAP side against the CE (163.5), so the
+    # premium match rolls it in to the 24100 PE; a richer untested side gets no such row
+    assert byid["match_premium"]["ok"] and "24000 → 24100 PE" in byid["match_premium"]["label"]
+    rich = _open(at="09:16")                  # CE 150.3 vs PE 151.7: the PE is the rich side
+    rich.stage(kind="add", strike=24000, right="CE", side="S", lots=1)
+    rich.stage(kind="add", strike=24000, right="PE", side="S", lots=1)
+    rich.market.index_spot = lambda u: 24_150.0
+    assert "match_premium" not in {c["id"] for c in rich.what_if()["candidates"]}
+    del rich.market.index_spot
+    # the tested-side buffer: the breakeven ABOVE spot, % from spot, on every priced row
+    assert byid["hold"]["buffer_pct"] is not None and byid["hold"]["buffer_pct"] > 0
+    assert byid["roll_in_1"]["buffer_pct"] is not None
+    assert byid["wing_naked"]["buffer_pct"] is None           # a refused row carries none
+    # a one-sided book has no untested side and no roll-in rows
+    one = _open(at="10:00")
+    one.stage(kind="add", strike=24000, right="CE", side="S", lots=1)
+    one.market.index_spot = lambda u: 24_150.0
+    w1 = one.what_if()
+    assert w1["untested"] is None and not any(c["id"].startswith("roll_in") for c in w1["candidates"])
+    assert "match_premium" not in {c["id"] for c in w1["candidates"]}
+    del one.market.index_spot
     assert {"close_tested", "close_half", "roll_out_1", "roll_out_2", "wing_naked",
             "flatten"} <= set(ids)
     by = {c["id"]: c for c in w["candidates"]}
@@ -1478,7 +1508,7 @@ def test_what_if_prices_candidate_adjustments_and_ranks_by_max_loss():
     import skas_algo.services.options_console.whatif as _w
     s.market.index_spot = lambda u: 23_900.0
     assert _w.candidates(s)["tested"] == pe_id
-    s.market.index_spot = lambda u: 24_100.0
+    s.market.index_spot = lambda u: 24_150.0
     # a wing is pinned to the SHORT's expiry, not the ladder's chip (the fixture tape holds
     # one expiry, so the pin is asserted on the op and refused on a wrong one)
     assert all(op["expiry"] == EXP for op in wing["ops"])

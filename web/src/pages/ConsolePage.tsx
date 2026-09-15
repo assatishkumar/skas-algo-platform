@@ -343,7 +343,7 @@ function WhatIfPanel({ data, loading, current, onApply, busy }: {
     <Panel>
       <div className="flex items-baseline justify-between mb-1">
         <div className="text-[10px] font-semibold uppercase tracking-[.06em]" style={{ color: "var(--oc-faint)" }}>What if · at {data?.at?.slice(11) ?? "—"}</div>
-        <div className="text-[10px]" style={{ color: "var(--oc-muted)" }}>ranked by max loss · model margin</div>
+        <div className="text-[10px]" style={{ color: "var(--oc-muted)" }}>ranked by max loss · model margin{data?.buffer_side ? ` · buffer = ${data.buffer_side} side` : ""}</div>
       </div>
       {loading && !data ? <div className="text-[11px]" style={{ color: "var(--oc-muted)" }}>pricing…</div> : null}
       {data && !data.candidates.length && <div className="text-[11px]" style={{ color: "var(--oc-muted)" }}>{data.note}</div>}
@@ -364,6 +364,9 @@ function WhatIfPanel({ data, loading, current, onApply, busy }: {
                 max L <b style={{ color: c.max_loss == null ? "var(--oc-neg)" : "inherit" }}>{fmtL(c.max_loss)}</b>
                 {current && c.id !== "hold" && c.max_loss != null && current.max_loss != null ? ` (${c.max_loss - current.max_loss >= 0 ? "+" : ""}${inr0(c.max_loss - current.max_loss)})` : ""}
                 {" · "}max P {c.max_profit == null ? "unlimited" : inr0(c.max_profit)}
+                {data?.buffer_side ? ` · buffer ${c.buffer_pct == null ? "none" : `${c.buffer_pct.toFixed(1)}%`}${
+                  c.id !== "hold" && c.buffer_pct != null && data.candidates[0]?.buffer_pct != null && c.buffer_pct !== data.candidates[0].buffer_pct
+                    ? ` (was ${data.candidates[0].buffer_pct.toFixed(1)}%)` : ""}` : ""}
                 {c.pop != null ? ` · POP ${Math.round(100 * c.pop)}%` : ""}
                 {c.be_dist_pct != null ? ` · BE ${c.be_dist_pct >= 0 ? "+" : ""}${c.be_dist_pct.toFixed(1)}%` : ""}
                 <br />

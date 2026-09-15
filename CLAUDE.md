@@ -1374,6 +1374,12 @@ nearest) 1-2 grid steps out, a wing on every naked short, flatten, do nothing �
 COPY of the book priced at the cursor (`_price`; an unprinted strike refuses the row with
 the reason) and measured with the rail's own calculators (payoff max P/L + breakevens +
 POP, net greeks, the MODEL margin on every row so rows compare, cash moved, charges).
+Also, since the owner's first use the same day: **roll the UNTESTED short IN** 1-2 grid
+steps (skipped when the target is at or through spot) and **match the tested side's
+premium** (the delta family's own rule: the untested short moves to the OTM strike whose
+price is nearest the tested short's), and every row carries `buffer_pct` — the breakeven
+on the TESTED side of spot as a % from spot (`buffer_side` names it) — the number that
+says whether an adjustment bought room on the side under pressure.
 Ranked by max loss, finite before unlimited; "apply" is `apply_ops` = one undo group with
 a context stamped. The TESTED short is the one spot has moved INTO (CE: spot − K, PE:
 K − spot, the max), never "nearest to spot" — that tied a straddle and named the CE

@@ -2089,11 +2089,14 @@ export interface ConsoleWhatIfCandidate {
   changes: string[]; cash: number | null; charges: number | null; realizes?: number;
   max_profit: number | null; max_loss: number | null; breakevens: number[];
   be_dist_pct: number | null; pop: number | null;
+  // the breakeven on the TESTED side of spot, % from spot (null: none on that side)
+  buffer_pct?: number | null;
   greeks: { delta: number | null; gamma: number | null; theta: number | null; vega: number | null } | null;
   margin: number | null; margin_source: string; legs_after: string[];
 }
 export interface ConsoleWhatIf {
   at: string; spot: number | null; step?: number; tested?: string | null;
+  untested?: string | null; buffer_side?: "CE" | "PE" | null;
   candidates: ConsoleWhatIfCandidate[]; note: string;
 }
 

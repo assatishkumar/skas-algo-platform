@@ -60,7 +60,53 @@ def candidates(session: ConsoleSession, *, wing_steps: int = 2) -> dict:
         """A strike n grid steps FURTHER from spot than this leg's."""
         return leg.strike + n * step if leg.right == "CE" else leg.strike - n * step
 
+    # the UNTESTED short: the nearest short on the other right — the side the playbook
+    # rolls IN to collect credit and push the tested-side breakeven away (owner,
+    # 2026-09-15: "shouldn't we start moving the sell-side CE closer to spot?")
+    untested = None
+    if tested is not None:
+        others = [s for s in shorts if s.right != tested.right]
+        untested = min(others, key=lambda s: abs(s.strike - spot)) if others else None
+
+    def toward(leg: ConsoleLeg, n: int) -> float:
+        """A strike n grid steps CLOSER to spot than this leg's."""
+        return leg.strike - n * step if leg.right == "CE" else leg.strike + n * step
+
+    def still_otm(leg: ConsoleLeg, k: float) -> bool:
+        return k > spot if leg.right == "CE" else k < spot
+
     specs: list[tuple[str, str, list[dict]]] = [("hold", "Do nothing", [])]
+    if untested is not None:
+        for n in (1, 2):
+            k = toward(untested, n)
+            if not still_otm(untested, k):
+                continue                      # through spot: no longer an untested side
+            specs.append((f"roll_in_{n}", f"Roll the untested short {n} step"
+                          f"{'s' if n > 1 else ''} in · {int(untested.strike)} → {int(k)} "
+                          f"{untested.right}",
+                          [{"kind": "roll", "leg_id": untested.id, "strike": k}]))
+        # the delta family's own rule: the cheap side rolls to the strike whose price
+        # matches the rich side's
+        want = session._price(tested.right, tested.strike, tested.expiry)
+        have = session._price(untested.right, untested.strike, untested.expiry)
+        best = None
+        # only when the untested side is the CHEAP one: the rule rolls the cheap side in
+        # to the rich side's premium; rolling a richer side out is not a defence
+        if want and have is not None and have < want:
+            for n in range(1, 11):
+                k = toward(untested, n)
+                if not still_otm(untested, k):
+                    break
+                px = session._price(untested.right, k, untested.expiry)
+                if px is None:
+                    continue
+                if best is None or abs(px - want) < abs(best[1] - want):
+                    best = (k, px)
+        if best is not None and best[0] != untested.strike:
+            specs.append(("match_premium", f"Match the tested side's premium · "
+                          f"{int(untested.strike)} → {int(best[0])} {untested.right} "
+                          f"(₹{best[1]:g} ≈ ₹{want:g})",
+                          [{"kind": "roll", "leg_id": untested.id, "strike": best[0]}]))
     if tested is not None:
         specs.append(("close_tested",
                       f"Close the tested short · {int(tested.strike)} {tested.right}",
@@ -82,22 +128,39 @@ def candidates(session: ConsoleSession, *, wing_steps: int = 2) -> dict:
         specs.append(("flatten", f"Close all {len(legs)} legs", [{"kind": "flatten"}]))
 
     sigma = session.pop_sigma()
+    buffer_side = tested.right if tested is not None else None
     out = []
     for cid, label, ops in specs:
-        out.append(_evaluate(session, cid, label, ops, legs, spot, sigma))
+        out.append(_evaluate(session, cid, label, ops, legs, spot, sigma, buffer_side))
     # rank: doing nothing first (the reference), then by max loss — finite before
     # unlimited, the smaller loss first; refused rows last
     ref, rest = out[0], out[1:]
     rest.sort(key=lambda c: (not c["ok"], c["max_loss"] is None,
                              -(c["max_loss"] or 0.0)))
     return {"at": at, "spot": round(spot, 2), "step": step,
-            "tested": tested.id if tested else None, "candidates": [ref, *rest],
-            "note": "ranked by max loss at expiry (finite before unlimited); margin is the "
-                    "model on every row so the rows compare; the choice is yours"}
+            "tested": tested.id if tested else None,
+            "untested": untested.id if untested else None,
+            "buffer_side": buffer_side, "candidates": [ref, *rest],
+            "note": "ranked by max loss at expiry (finite before unlimited); buffer = the "
+                    "breakeven on the tested side, % from spot; margin is the model on every "
+                    "row so the rows compare; the choice is yours"}
+
+
+def _buffer(breakevens: list[float], spot: float, side: str | None) -> float | None:
+    """The breakeven on the TESTED side of spot — below it for a tested put, above for a
+    tested call — as a signed % of spot. None when that side has no breakeven."""
+    if not side or not breakevens:
+        return None
+    on_side = [b for b in breakevens if (b < spot if side == "PE" else b > spot)]
+    if not on_side:
+        return None
+    k = max(on_side) if side == "PE" else min(on_side)
+    return round(100.0 * (k - spot) / spot, 2)
 
 
 def _evaluate(session: ConsoleSession, cid: str, label: str, ops: list[dict],
-              legs: list[ConsoleLeg], spot: float, sigma: float | None) -> dict:
+              legs: list[ConsoleLeg], spot: float, sigma: float | None,
+              buffer_side: str | None = None) -> dict:
     """Apply ``ops`` to a COPY of the book, price every new leg at the cursor, and
     measure the result. Nothing on the session changes."""
     book: list[ConsoleLeg] = [replace(leg) for leg in legs]
@@ -188,7 +251,8 @@ def _evaluate(session: ConsoleSession, cid: str, label: str, ops: list[dict],
         return {"id": cid, "label": label, "ops": ops, "ok": False, "reason": str(exc),
                 "changes": changes, "cash": None, "charges": None, "max_profit": None,
                 "max_loss": None, "breakevens": [], "be_dist_pct": None, "pop": None,
-                "greeks": None, "margin": None, "margin_source": "model", "legs_after": []}
+                "buffer_pct": None, "greeks": None, "margin": None, "margin_source": "model",
+                "legs_after": []}
     legs_out = [session._leg_out(leg) for leg in book]
     risk = session._risk_out()
     offset = float(risk.get("realised") or 0.0) + realized - charges
@@ -207,6 +271,7 @@ def _evaluate(session: ConsoleSession, cid: str, label: str, ops: list[dict],
             "breakevens": pay["breakevens"] if pay else [],
             "be_dist_pct": pay["be_dist_pct"] if pay else None,
             "pop": pay["pop"] if pay else None,
+            "buffer_pct": _buffer(pay["breakevens"], spot, buffer_side) if pay else None,
             "greeks": greeks, "margin": round(margin, 0), "margin_source": "model",
             "legs_after": [f"{'S' if x['side'] == 'S' else 'B'} {int(x['strike'])} {x['right']} "
                            f"×{x['lots']}" for x in legs_out]}
