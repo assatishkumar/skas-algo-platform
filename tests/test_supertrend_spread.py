@@ -211,3 +211,39 @@ def test_seed_aggregates_15min_candles_into_the_hourly_buckets():
     last = st.bars[-1]
     assert last[1] == 120 and last[2] == 134 and last[3] == 110 and last[4] == 129   # stub merged
     assert st._seeded and st.seed_intraday_bars(lambda *a: []) is None and len(st.bars) == 6
+
+
+def test_larger_timeframes_split_the_session_the_exchange_way():
+    # 120m: three bars, the last (13:15) evaluated at 15:15 with the stub merged
+    st, ctx, _ = _mk(timeframe=120)
+    _run_days(st, ctx, date(2026, 7, 6), [24000.0])
+    assert [b[0][11:16] for b in st.bars] == ["09:15", "11:15"]
+    assert st.pending["start"][11:16] == "13:15" and st.evaluated_start[11:16] == "13:15"
+    assert st.bars_closed == 3
+    # 240m: two bars (09:15–13:15, 13:15–close), the second evaluated at 15:15
+    st, ctx, _ = _mk(timeframe=240)
+    _run_days(st, ctx, date(2026, 7, 6), [24000.0])
+    assert [b[0][11:16] for b in st.bars] == ["09:15"] and st.evaluated_start[11:16] == "13:15"
+    assert st.bars_closed == 2
+    # 1d: one bar, evaluated at 15:15, closed the next morning without a second evaluation
+    st, ctx, _ = _mk(timeframe=375)
+    _run_days(st, ctx, date(2026, 7, 6), [24000.0])
+    assert st.bars == [] and st.evaluated_start[11:16] == "09:15" and st.bars_closed == 1
+    _tick(st, ctx, date(2026, 7, 7), 9, 15, 24000.0)
+    assert len(st.bars) == 1 and st.bars_closed == 1
+
+
+def test_a_take_profit_with_rollover_reenters_next_month_at_once():
+    st, ctx, chain = _mk(confirm_bars=0, take_profit_pct=75, tp_rollover=True)
+    _run_days(st, ctx, date(2026, 7, 6), _warm() + _drop())
+    assert st.legs and st.entry_expiry == date(2026, 8, 25)   # entered after the 15th → Aug
+    sell = next(leg for leg in st.legs if leg["dir"] < 0)
+    buy = next(leg for leg in st.legs if leg["dir"] > 0)
+    ctx.market.marks = {sell["symbol"]: buy["entry"] + st.entry_credit * 0.2,
+                        buy["symbol"]: buy["entry"]}                     # 80% banked
+    d = date(2026, 7, 27)
+    _tick(st, ctx, d, 9, 15, 23280.0)
+    sigs = _tick(st, ctx, d, 10, 15, 23280.0)
+    assert [s.reason for s in sigs] == ["target", "target", "st_bear", "st_bear"]
+    assert st.legs and st.entry_expiry == date(2026, 9, 29)   # the NEXT month, same side
+    assert st.direction == "bear" and st.armed

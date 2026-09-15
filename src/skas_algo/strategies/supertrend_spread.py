@@ -5,11 +5,13 @@ an intraday signal.
 The one-line intuition: **the SuperTrend line is already the invalidation level, so the
 short strike goes behind it** — sell the premium on the side the trend just left.
 
-- SuperTrend(ATR ``atr_period``, ``multiplier``) on 60-min NIFTY bars anchored to 09:15,
-  built by the strategy itself from the index spot it is fed every slice (the
-  momentum_theta pattern): 09:15 · 10:15 · 11:15 · 12:15 · 13:15 · 14:15, six bars a day.
-  The 14:15 bar is EVALUATED at 15:15 (its 60-minute close) and the 15:15–15:30 stub is
-  then MERGED into it for the indicator's history — no seventh bar, no second decision.
+- SuperTrend(ATR ``atr_period``, ``multiplier``) on ``timeframe``-minute NIFTY bars
+  anchored to 09:15, built by the strategy itself from the index spot it is fed every
+  slice (the momentum_theta pattern). 60m: 09:15 · 10:15 · 11:15 · 12:15 · 13:15 · 14:15,
+  six bars a day — the 14:15 bar is EVALUATED at 15:15 (its 60-minute close) and the
+  15:15–15:30 stub is then MERGED into it for the indicator's history, no seventh bar, no
+  second decision. 120m: three bars; 240m: two (09:15–13:15, 13:15–close, evaluated at
+  15:15); ≥375m: one daily bar evaluated at 15:15.
 - A flip = the direction on the just-closed bar ≠ the prior bar's; ``confirm_bars`` (1)
   further closed bars in the new direction make it actionable (0 = trade the flip bar).
 - Bullish → BULL PUT SPREAD, short strike = the highest ``strike_step`` multiple AT OR
@@ -22,7 +24,9 @@ short strike goes behind it** — sell the premium on the side the trend just le
 - Exits: the opposite confirmed flip closes AND reverses in the same decision — unless it
   comes within ``min_hold_bars`` closed bars of entry, in which case the book goes FLAT
   and waits for the next fresh signal (the whipsaw brake). Optional ``take_profit_pct``
-  (whole percent of the entry credit, 0 = off) checked at every bar close. Never into
+  (whole percent of the entry credit, 0 = off) checked at every bar close; with
+  ``tp_rollover`` a banked target re-enters at once, same direction, on the NEXT month's
+  expiry (owner 2026-09-15: "once we take 75% profit, roll over"). Never into
   expiry week: exit ``roll_days_before`` calendar days before expiry and, if the direction
   still holds, re-enter next month in the same decision.
 - No premium stop: the reverse signal IS the stop, and the long leg caps the tail.
@@ -80,6 +84,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         credit_ideal_hi: float = 130.0,
         max_strike_steps: int = 2,       # toward spot when the line strike does not fit
         take_profit_pct: float = 0.0,    # whole % of the entry credit; 0 = off
+        tp_rollover: bool = False,       # after a take-profit, re-enter at once on NEXT month
         expiry_switch_day: int = 15,
         roll_days_before: int = 5,
         lot_overrides: dict | None = None,
@@ -101,6 +106,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         self.credit_ideal_hi = float(credit_ideal_hi)
         self.max_strike_steps = max(0, int(max_strike_steps))
         self.take_profit_pct = float(take_profit_pct)
+        self.tp_rollover = bool(tp_rollover)
         self.expiry_switch_day = int(expiry_switch_day)
         self.roll_days_before = int(roll_days_before)
         self.initial_capital = initial_capital
@@ -119,16 +125,30 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         self.entry_credit: float = 0.0
         self.entry_expiry: date | None = None
         self.entry_bar: int | None = None      # bars_closed at entry (min_hold_bars)
+        self.min_expiry: date | None = None    # after a TP rollover: the next entry's expiry
+                                               # must be LATER than the one just banked
         self.last_line: float | None = None
         self._seeded = False
 
     # ---------------------------------------------------------------- warm-up
+    def _bars_per_day(self) -> int:
+        """Bars a session holds: 60m → 6 (the 15-min stub merged into the 14:15 bar),
+        120m → 3, 240m → 2 (09:15–13:15 and 13:15–close, the exchange's own 4h split),
+        ≥375m → 1 (a daily bar). Rounded, so a bar shorter than half a step is merged and
+        one longer stands on its own."""
+        return max(1, round(SESSION_MINUTES / self.timeframe))
+
+    def _tail_eval_minute(self) -> int:
+        """Minutes after 09:15 at which the session's LAST bar is evaluated: its own
+        boundary, capped at 15:15 (360) so a bar that would run past the close is read at
+        15:15 with the stub merged afterwards."""
+        return min(self._bars_per_day() * self.timeframe, SESSION_MINUTES - 15)
+
     def _keep_bars(self) -> int:
         """SuperTrend's band ratchet is path-dependent, so the window must be deep enough
-        for the carry to converge — ~40 sessions of hourly bars (the momentum_theta rule
-        scaled to 6 bars a day)."""
-        per_day = max(1, SESSION_MINUTES // self.timeframe)
-        return max(40 * per_day, 24 * self.atr_period)
+        for the carry to converge — ~40 sessions of bars (the momentum_theta rule scaled
+        to the bars a day), never fewer than 24 ATR periods."""
+        return max(40 * self._bars_per_day(), 24 * self.atr_period)
 
     def spot_symbols(self) -> list[str]:
         """The live loop feeds this name's index spot every tick."""
@@ -173,20 +193,9 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         session's tail (60m: 14:15 → 15:30)."""
         mins = now.hour * 60 + now.minute - SESSION_OPEN_MIN
         mins = max(0, mins)
-        n_full = max(1, SESSION_MINUTES // self.timeframe)
-        idx = min(mins // self.timeframe, n_full - 1)
+        idx = min(mins // self.timeframe, self._bars_per_day() - 1)
         return now.replace(hour=9, minute=15, second=0, microsecond=0) + timedelta(
             minutes=idx * self.timeframe)
-
-    def _boundary_minute(self, now: datetime) -> bool:
-        """True on the FIRST minute at or after a bar boundary inside the session — the
-        minute a bar is evaluated (10:15 for the 09:15 bar … 15:15 for the 14:15 bar)."""
-        mins = now.hour * 60 + now.minute - SESSION_OPEN_MIN
-        if mins <= 0:
-            return False
-        n_full = max(1, SESSION_MINUTES // self.timeframe)
-        k = mins // self.timeframe
-        return 1 <= k <= n_full and mins % self.timeframe == 0
 
     def _feed(self, now: datetime, spot: float) -> bool:
         """Feed one tick. Returns True when a bar should be EVALUATED on this tick: the
@@ -209,15 +218,18 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
             cur["h"] = max(cur["h"], spot)
             cur["l"] = min(cur["l"], spot)
             cur["c"] = spot
-        # the tail bar's 60-minute close: evaluate it NOW (the stub keeps feeding it)
-        if (not evaluate and self._boundary_minute(now) and self.pending is not None
-                and self.pending["start"] == start and self.evaluated_start != start):
-            n_full = max(1, SESSION_MINUTES // self.timeframe)
-            mins = now.hour * 60 + now.minute - SESSION_OPEN_MIN
-            if mins // self.timeframe >= n_full:          # only the absorbing last bucket
-                evaluate = True
-                self._provisional = True
-                return evaluate
+        # the session's LAST bar is evaluated at its own boundary (or 15:15 when it would
+        # run past the close) while the tail keeps feeding it — the first tick at/after
+        # that minute, once (`evaluated_start`); a live tick a few seconds late still
+        # counts, an exact-minute test would have missed it
+        mins = now.hour * 60 + now.minute - SESSION_OPEN_MIN
+        if (not evaluate and self.pending is not None and self.pending["start"] == start
+                and self.evaluated_start != start
+                and mins // self.timeframe >= self._bars_per_day() - 1
+                and mins >= self._tail_eval_minute()):
+            evaluate = True
+            self._provisional = True
+            return evaluate
         self._provisional = False
         return evaluate
 
@@ -290,6 +302,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
 
         # 1. the opposite confirmed flip: reverse — or, inside min_hold_bars, just go flat
         if signal is not None and signal != self.direction:
+            self.min_expiry = None                    # a fresh signal picks its own month
             if self.legs:
                 held = self.bars_closed - (self.entry_bar or self.bars_closed)
                 if held < self.min_hold_bars:
@@ -310,8 +323,15 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
             if value is not None:
                 profit = self.entry_credit - value
                 if profit >= self.take_profit_pct / 100.0 * self.entry_credit:
+                    banked = self.entry_expiry
                     signals += self._exit_all("target")
-                    self.armed = False
+                    if self.tp_rollover:
+                        # owner 2026-09-15: a banked 75% rolls straight into NEXT month —
+                        # same direction, the expiry after the one just closed
+                        self.armed = True
+                        self.min_expiry = banked
+                    else:
+                        self.armed = False
 
         # 3. rollover: never into expiry week; the still-armed direction re-enters below
         if self.legs and self.entry_expiry is not None and \
@@ -346,11 +366,12 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         y, m = today.year, today.month
         if today.day >= self.expiry_switch_day:
             y, m = (y + 1, 1) if m == 12 else (y, m + 1)
-        for _ in range(3):
+        for _ in range(4):
             month_exps = [e for e in listed if (e.year, e.month) == (y, m) and e >= today]
             if month_exps:
                 exp = max(month_exps)
-                if (exp - today).days > self.roll_days_before:
+                if ((exp - today).days > self.roll_days_before
+                        and (self.min_expiry is None or exp > self.min_expiry)):
                     return exp
             y, m = (y + 1, 1) if m == 12 else (y, m + 1)
         return None
@@ -488,6 +509,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
             "entry_credit": self.entry_credit,
             "entry_expiry": self.entry_expiry.isoformat() if self.entry_expiry else None,
             "entry_bar": self.entry_bar, "last_line": self.last_line,
+            "min_expiry": self.min_expiry.isoformat() if self.min_expiry else None,
         }
 
     def load_state(self, state: dict) -> None:
@@ -506,5 +528,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         self.entry_expiry = date.fromisoformat(ee) if ee else None
         self.entry_bar = state.get("entry_bar")
         self.last_line = state.get("last_line")
+        me = state.get("min_expiry")
+        self.min_expiry = date.fromisoformat(me) if me else None
         if self.bars:
             self._seeded = True

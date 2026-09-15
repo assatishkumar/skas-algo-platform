@@ -779,7 +779,9 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       basisNote: "signal-driven — the opposite confirmed flip closes and reverses; rolled before expiry",
       fields: [
         f("min_hold_bars", "MIN HOLD BARS", "number", 3, { hint: "a reversal inside this → flat, not reverse" }),
-        f("take_profit_pct", "TAKE PROFIT (% OF CREDIT)", "number", 0, { hint: "0 = off · try 50–60" }),
+        f("take_profit_pct", "TAKE PROFIT (% OF CREDIT)", "number", 0, { hint: "0 = off · try 50–75" }),
+        f("tp_rollover", "ROLL INTO NEXT MONTH AFTER A TAKE-PROFIT", "toggle", false,
+          { hint: "re-enter at once, same direction, next month's expiry" }),
         f("roll_days_before", "ROLL (DAYS BEFORE EXPIRY)", "number", 5),
       ],
       emptyNote: "No premium stop: the reverse signal is the stop and the long leg caps the tail.",

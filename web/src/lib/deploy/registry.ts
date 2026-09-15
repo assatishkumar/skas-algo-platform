@@ -554,6 +554,7 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       f("confirm_bars", "Confirm bars", "number", 1),
       f("min_hold_bars", "Min hold bars", "number", 3),
       f("take_profit_pct", "Take profit (% of credit, 0 = off)", "number", 0),
+      f("tp_rollover", "Roll into next month after a take-profit", "toggle", false),
       f("roll_days_before", "Roll days before expiry", "number", 5),
     ],
   },
