@@ -95,6 +95,12 @@ const LABELS: Record<string, string> = {
   timeframe: "Timeframe",
   supertrend_period: "SuperTrend ATR period",
   supertrend_multiplier: "SuperTrend multiplier",
+  atr_period: "SuperTrend ATR period",
+  multiplier: "SuperTrend multiplier",
+  confirm_bars: "Confirm bars",
+  min_hold_bars: "Min hold bars",
+  max_strike_steps: "Max strike steps toward spot",
+  take_profit_pct: "Take profit (% of credit)",
   partial_book_pct: "Book % at target",
   entry_mode: "Entry",
   pullback_pct: "Min pullback %",
@@ -320,6 +326,7 @@ export const OPTIONS_STRATEGIES = [
   "put_ratio_monthly",
   "short_premium",
   "21_ema_momentum",
+  "supertrend_spread",
 ];
 
 export function isOptionsStrategy(strategyId: string): boolean {

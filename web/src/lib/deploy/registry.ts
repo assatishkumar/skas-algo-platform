@@ -541,6 +541,22 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       f("roll_days_before", "Roll days before expiry", "number", 5),
     ],
   },
+  {
+    id: "supertrend_spread",
+    name: "SuperTrend spread (1h)",
+    group: "monthly", cadence: "EVERY CLOSED 1H BAR",
+    blurb: "NOT YET FORWARD-TESTED · hourly SuperTrend flip → credit spread with the short strike behind the line",
+    instrument: "DERIV",
+    underlyings: ["NIFTY"],
+    fields: [
+      f("lots", "Lots", "number", 1),
+      f("multiplier", "SuperTrend multiplier", "number", 3),
+      f("confirm_bars", "Confirm bars", "number", 1),
+      f("min_hold_bars", "Min hold bars", "number", 3),
+      f("take_profit_pct", "Take profit (% of credit, 0 = off)", "number", 0),
+      f("roll_days_before", "Roll days before expiry", "number", 5),
+    ],
+  },
 
   // ──────────────────────────────────────────────────────────── positional equity
   {

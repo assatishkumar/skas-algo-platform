@@ -627,6 +627,24 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   gate — the strategy self-gates (15:20 + once-a-day latch that only engages AFTER bands
   computed, so a data hiccup doesn't burn the day). Margin model reads ≈2× real broker
   for the spread (no long-leg offset — ratio-family caveat).
+- **supertrend_spread** (`strategies/supertrend_spread.py`, NIFTY, owner spec 2026-09-15):
+  the 21_ema_momentum shape on an HOURLY signal — SuperTrend(ATR 10, ×3) on 60-min bars
+  the strategy BUILDS ITSELF from `ctx.market.index_spot` every slice (replay: the
+  de-carried parity spot; live: the index LTP — one feed, §3), anchored 09:15: six bars
+  a day, the 14:15 bar EVALUATED at 15:15 and the 15:15–15:30 stub then MERGED into it
+  (`_feed`'s provisional evaluation + `evaluated_start` so it is never evaluated twice).
+  A flip confirmed by `confirm_bars` further bars sells the spread with the SHORT strike
+  BEHIND the SuperTrend line (bull put ≤ line / bear call ≥ line), stepping ≤
+  `max_strike_steps` toward spot when the ₹80–140 credit window does not fit at the line
+  (`_find_spread(rows, right, spot, line)`), else `_skip` and retry next bar. Opposite
+  confirmed flip → close + reverse; inside `min_hold_bars` → FLAT (whipsaw brake); optional
+  `take_profit_pct` (whole % of credit, 0 = off — `pct` flag rules: default 0 is
+  unit-agnostic, keep it a WHOLE percent); roll 5 days pre-expiry. NO cadence knobs
+  (signal-driven, like ema21 — `test_cadence_selects_on_every_percent_exit_spec`). Do NOT
+  set `needs_supertrend` (that is the EQUITY daily precompute path). Live warm-up:
+  `seed_intraday_bars` aggregates Kite 15-min candles into the 09:15 buckets (Kite's own
+  60-min series has a separate 15:15 stub bar). Replays on the 1-min store in ~2 s a
+  month; deploy card present, NOT forward-tested. Coverage: `tests/test_supertrend_spread.py`.
 - **call_put_ratio_expiry** (expiry-day-only 1:3 premium-ratio, NIFTY Tue / SENSEX Thu):
   buy ATM straddle 09:20-09:27, sell 3 lots/side at the strikes trading nearest ⅓ of each
   ATM premium (LIVE-chain lookup; >30% tolerance miss → skip the day, `traded_day` guard);

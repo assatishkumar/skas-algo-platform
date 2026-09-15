@@ -753,6 +753,49 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
       f("expiry_switch_day", "EXPIRY SWITCH DAY", "number", 15, { hint: "before the 15th → current month" }),
     ],
   },
+  supertrend_spread: {
+    id: "supertrend_spread",
+    // Hourly SuperTrend flip (bars built from the replay's own spot, 09:15-anchored) →
+    // a credit spread with the short strike BEHIND the SuperTrend line (owner spec
+    // 2026-09-15). Signal-driven exits: the opposite confirmed flip is the stop.
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY"], eod: NONE },
+    note: "Every closed 60-min bar: a confirmed SuperTrend flip up sells a bull put spread with the "
+      + "short strike at/below the line; a flip down sells a bear call spread at/above it. Holds to "
+      + "the opposite confirmed flip (reverse), or goes flat if that comes inside the hold window.",
+    sizing: "intradayHarness",
+    entry: {
+      frequency: "daily",
+      frequencyHint: "one decision per closed bar — six a day at 60m",
+      fields: [
+        f("timeframe", "BAR (MINUTES)", "number", 60, { hint: "15 / 30 / 60 / 120 · anchored 09:15" }),
+        f("atr_period", "SUPERTREND ATR PERIOD", "number", 10),
+        f("multiplier", "SUPERTREND MULTIPLIER", "number", 3, { step: "any", hint: "sweep 2.0–4.0" }),
+        f("confirm_bars", "CONFIRM BARS", "number", 1, { hint: "0 = trade the flip bar" }),
+        f("strike_step", "STRIKE STEP", "number", 100, { hint: "NIFTY: 100s only" }),
+      ],
+    },
+    exit: {
+      basisNote: "signal-driven — the opposite confirmed flip closes and reverses; rolled before expiry",
+      fields: [
+        f("min_hold_bars", "MIN HOLD BARS", "number", 3, { hint: "a reversal inside this → flat, not reverse" }),
+        f("take_profit_pct", "TAKE PROFIT (% OF CREDIT)", "number", 0, { hint: "0 = off · try 50–60" }),
+        f("roll_days_before", "ROLL (DAYS BEFORE EXPIRY)", "number", 5),
+      ],
+      emptyNote: "No premium stop: the reverse signal is the stop and the long leg caps the tail.",
+    },
+    extras: [
+      FIFTY,
+      f("width_min", "SPREAD WIDTH MIN (PTS)", "number", 300),
+      f("width_max", "SPREAD WIDTH MAX (PTS)", "number", 500),
+      f("credit_min", "NET CREDIT MIN (₹/SH)", "number", 80, { step: "any" }),
+      f("credit_max", "NET CREDIT MAX (₹/SH)", "number", 140, { step: "any" }),
+      f("credit_ideal_lo", "CREDIT IDEAL LO", "number", 90, { step: "any" }),
+      f("credit_ideal_hi", "CREDIT IDEAL HI", "number", 130, { step: "any" }),
+      f("max_strike_steps", "MAX STRIKE STEPS TOWARD SPOT", "number", 2),
+      f("expiry_switch_day", "EXPIRY SWITCH DAY", "number", 15, { hint: "before the 15th → current month" }),
+    ],
+  },
 
   call_ratio_monthly: {
     id: "call_ratio_monthly",

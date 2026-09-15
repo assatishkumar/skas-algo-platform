@@ -13,6 +13,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   short_premium: "Short Premium (options)",
   momentum_theta_gainer_intra: "Momentum Theta Intra (options)",
   "21_ema_momentum": "21 EMA Momentum (credit spreads)",
+  supertrend_spread: "SuperTrend Spreads 1h (credit spreads)",
   call_put_ratio_expiry: "CP Ratio Expiry (options)",
   intraday_straddle: "Intraday Straddle (options)",
   weekly_intraday_straddle: "Weekly Intraday Straddle (options)",

@@ -42,6 +42,7 @@ from .sst_weekly import SSTWeeklyFifoStrategy, SSTWeeklyStrategy
 from .staggered_covered_call import StaggeredCoveredCallStrategy
 from .straddle_btst import StraddleBtstStrategy
 from .supertrend_momentum import SuperTrendMomentumStrategy
+from .supertrend_spread import SuperTrendSpreadStrategy
 from .value_investing import ValueInvestingStrategy
 from .volcano_calendar import VolcanoCalendarStrategy
 from .weekly_intraday_straddle import WeeklyIntradayStraddle
@@ -71,6 +72,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     VolcanoCalendarStrategy.strategy_id: VolcanoCalendarStrategy,
     IronFlyMonthlyStrategy.strategy_id: IronFlyMonthlyStrategy,
     Ema21MomentumStrategy.strategy_id: Ema21MomentumStrategy,
+    SuperTrendSpreadStrategy.strategy_id: SuperTrendSpreadStrategy,
     GapReversalStrategy.strategy_id: GapReversalStrategy,
     HappyTwinsStrategy.strategy_id: HappyTwinsStrategy,
     MomentumThetaGainerIntra.strategy_id: MomentumThetaGainerIntra,

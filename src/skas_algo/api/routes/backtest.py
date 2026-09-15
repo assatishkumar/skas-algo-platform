@@ -63,7 +63,8 @@ _INTRADAY_REPLAY = ["intraday_straddle", "straddle_btst", "weekly_intraday_strad
                     # strategies replay on 1-min data; only stock-option strategies keep EOD.
                     "call_ratio_monthly", "put_ratio_monthly", "batman_ratio_monthly",
                     "hni_weekly", "21_ema_momentum", "put_condor", "intraday_strangle_combo",
-                    "asymmetric_premium_intra", "fair_value_calendar", "monthly_butterfly"]
+                    "asymmetric_premium_intra", "fair_value_calendar", "monthly_butterfly",
+                    "supertrend_spread"]
 
 
 @router.get("/strategies")

@@ -220,7 +220,7 @@ def test_strategies_basis_lists(api_client):
     assert intraday[0] == "intraday_straddle" and "momentum_theta_gainer_intra" in intraday
     # The positional family joined the store (2026-07-18) — ALL index-options ids replay.
     for sid in ("hni_weekly", "batman_ratio_monthly", "call_ratio_monthly",
-                "put_ratio_monthly", "21_ema_momentum"):
+                "put_ratio_monthly", "21_ema_momentum", "supertrend_spread"):
         assert sid in intraday, sid
     # Stock-option strategies stay off the store (no stock 1-min data exists).
     assert "donchian_strangle_bt" not in intraday

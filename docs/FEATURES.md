@@ -45,7 +45,7 @@ live. The invariant is guarded by golden tests (`tests/test_sst_parity.py`,
 
 ## 3. Strategy catalog
 
-Strategies register in `strategies/registry.py` (36 IDs across 33 files) and onboard there,
+Strategies register in `strategies/registry.py` (37 IDs across 34 files) and onboard there,
 never by editing the engine. `intraday=True` means "decide every tick"; otherwise the run
 decides once per day at a set time. "Backtest" notes whether a strategy runs the FULL shared
 engine, a dedicated Black-Scholes service, or is deploy-only.
@@ -217,6 +217,17 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   strikes, 300–500 wide, ₹80–140 credit (ideal 90–130; miss → skip and retry at 15:20). Hold
   to the opposite signal (close+reverse in one decision); roll 5 days pre-expiry. Self-gates to
   once/day at 15:20 (bands include today's forming bar). NIFTY, fixed lots. FULL backtest.
+- **`supertrend_spread` — hourly SuperTrend flip credit spread (2026-09-15).** SuperTrend
+  (ATR 10, ×3.0) on 60-min NIFTY bars anchored 09:15 (six a day; the 14:15 bar is evaluated
+  at 15:15 and the 15:15–15:30 stub merged into it), built by the strategy from the index
+  spot it is fed. A flip confirmed by `confirm_bars` (1) further bars → BULL PUT spread with
+  the short strike at/below the SuperTrend LINE (bearish → BEAR CALL at/above it), long leg
+  300–500 out, ₹80–140 credit (ideal 90–130); the line strike steps ≤2 strikes toward spot
+  when the window does not fit, else skip and retry each bar. Opposite confirmed flip →
+  close + reverse; inside `min_hold_bars` (3) → flat instead (whipsaw brake); optional
+  `take_profit_pct` of the credit; roll 5 days pre-expiry. The reverse signal is the stop;
+  the long leg caps the tail. NIFTY, fixed lots, replay on the 1-min store; deploy card
+  present but not yet forward-tested.
 - **`custom_options` — user multi-leg position (Trade UI).** Enter the exact user legs for one
   expiry; exit on any of per-leg targets/stops, combined P&L `target_pct`/`stop_pct`, or spot
   bands; survivors settle at expiry. Builds symbols directly (so any listed contract, incl.

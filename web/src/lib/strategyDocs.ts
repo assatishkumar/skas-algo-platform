@@ -107,6 +107,34 @@ export const STRATEGIES: Rule[] = [
     links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=f2S_S9NoJco" }],
   },
   {
+    id: "supertrend_spread",
+    name: "SuperTrend Spread (1h)",
+    kind: "Options",
+    bias: "Directional · positional credit spreads with the hourly trend",
+    summary:
+      "Hourly SuperTrend flip on NIFTY spot (60-min bars anchored 09:15) traded through defined-risk monthly credit spreads. The SuperTrend line is already the invalidation level, so the short strike goes behind it: a confirmed bullish flip sells a bull put spread with the short strike at or below the line; a bearish flip sells a bear call spread at or above it. Checked at every closed bar — no tick-level monitoring. Replays on the 1-minute option store.",
+    structure: [
+      "SuperTrend(ATR 10, ×3.0) on 60-min bars: 09:15 · 10:15 · 11:15 · 12:15 · 13:15 · 14:15; the 14:15 bar is evaluated at 15:15 and the 15:15–15:30 stub merged into it.",
+      "Bullish → BULL PUT SPREAD: short strike = highest 100-pt strike ≤ the SuperTrend line; long put 300–500 pts below.",
+      "Bearish → BEAR CALL SPREAD: short strike = lowest 100-pt strike ≥ the line; long call 300–500 pts above.",
+      "Net credit ₹80–140/share (₹90–130 ideal). If the line strike does not fit, step the short strike one strike toward spot (max 2); still nothing → skip and retry at the next bar.",
+      "Monthly expiry: before the 15th → current month; on/after → next month.",
+    ],
+    entry: [
+      "A flip = SuperTrend direction on the just-closed bar ≠ the prior bar. Only closed bars count.",
+      "Confirmation (confirm_bars, default 1): the flip must survive one further closed bar in the new direction. 0 trades the flip bar itself — more trades, more whipsaw.",
+      "Acts at the close of the confirmation bar, within the next bar's first minute. One position at a time.",
+    ],
+    exit: [
+      "Opposite confirmed flip → close and reverse in the same decision.",
+      "min_hold_bars (default 3): a reversal within N bars of entry closes the position but does NOT reverse — flat, wait for the next fresh signal (the whipsaw brake).",
+      "Optional take profit at a % of the credit (default off; try 50–60).",
+      "Never into expiry week: exit 5 days before expiry; if the direction still holds, re-enter next month at once.",
+    ],
+    risk:
+      "Defined both ways: max loss ≈ (width − credit) × lot size, no premium stop — the reverse signal is the stop. Expect 3–5× the trade count of the daily EMA version and a lower win rate; judge it on expectancy per trade net of four-leg reversal costs. Sweep the multiplier 2.0–4.0 (trade count moves by an order of magnitude) and read post-Nov-2024 separately; a high skip rate means widen the credit window before touching the signal.",
+  },
+  {
     id: "call_put_ratio_expiry",
     name: "Call-Put Ratio Expiry",
     kind: "Options",
@@ -795,6 +823,13 @@ export const META: Record<string, Meta> = {
     facts: [["Bias", "With the daily trend"], ["Instrument", "NIFTY monthly"], ["Structure", "Credit spread · 300–500 pts"],
             ["Credit", "₹80–140 (ideal 90–130)"], ["Check", "Daily · 15:20 IST"], ["Roll", "5 days pre-expiry"]],
     deployNote: "Fully engine-backtestable on the real cached chain — backtest first, then forward-test the winner.",
+    deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
+  supertrend_spread: {
+    group: "Directional tilt", biasKind: "bull",
+    facts: [["Bias", "With the 1h trend"], ["Instrument", "NIFTY monthly"], ["Structure", "Credit spread · 300–500 pts"],
+            ["Credit", "₹80–140 (ideal 90–130)"], ["Check", "Every closed 1h bar"], ["Roll", "5 days pre-expiry"]],
+    deployNote: "Replays on the 1-min store — backtest and sweep the multiplier first. The deploy card exists but the strategy has NOT been forward-tested yet.",
     deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
   },
   call_put_ratio_expiry: {
