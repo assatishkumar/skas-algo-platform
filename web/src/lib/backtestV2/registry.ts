@@ -783,9 +783,11 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
         f("tp_rollover", "ROLL INTO NEXT MONTH AFTER A TAKE-PROFIT", "toggle", false,
           { hint: "re-enter, same direction, next month's expiry" }),
         f("tp_wait_bars", "ROLLOVER WAITS (BARS)", "number", 0, { hint: "closed bars before the re-entry · 0 = at once" }),
+        f("stop_loss_pct", "PREMIUM STOP (% OF CREDIT)", "number", 0,
+          { hint: "exit when the spread costs this % of the credit received · 200 = one credit lost · 0 = off" }),
         f("roll_days_before", "ROLL (DAYS BEFORE EXPIRY)", "number", 5),
       ],
-      emptyNote: "No premium stop: the reverse signal is the stop and the long leg caps the tail.",
+      emptyNote: "No premium stop by default: the reverse signal is the stop and the long leg caps the tail.",
     },
     extras: [
       FIFTY,

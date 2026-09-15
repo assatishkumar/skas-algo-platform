@@ -641,8 +641,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   `take_profit_pct` (whole % of credit, 0 = off — `pct` flag rules: default 0 is
   unit-agnostic, keep it a WHOLE percent) and `tp_rollover` (a banked target re-enters at
   once — or after `tp_wait_bars` further closed bars — same side, on the NEXT month:
-  `min_expiry` = the expiry just closed, both cleared by the next fresh signal); roll 5
-  days pre-expiry. `timeframe` splits the session the
+  `min_expiry` = the expiry just closed, both cleared by the next fresh signal); optional
+  `stop_loss_pct` (whole % of the credit: exit when the spread's VALUE ≥ that multiple of
+  what it paid, then flat until a fresh flip — read at the bar close only, a gap through
+  it is seen there); roll 5 days pre-expiry. `timeframe` splits the session the
   exchange's way — `_bars_per_day` = round(375/tf): 60m six bars, 120m three, 240m two
   (09:15–13:15 + 13:15–close), ≥375 one — and the LAST bar is evaluated at its own
   boundary capped at 15:15 (`_tail_eval_minute`), the tail merged afterwards. NO cadence knobs

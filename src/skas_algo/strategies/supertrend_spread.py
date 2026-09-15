@@ -26,10 +26,14 @@ short strike goes behind it** — sell the premium on the side the trend just le
   and waits for the next fresh signal (the whipsaw brake). Optional ``take_profit_pct``
   (whole percent of the entry credit, 0 = off) checked at every bar close; with
   ``tp_rollover`` a banked target re-enters at once, same direction, on the NEXT month's
-  expiry (owner 2026-09-15: "once we take 75% profit, roll over"). Never into
+  expiry (owner 2026-09-15: "once we take 75% profit, roll over"). Optional
+  ``stop_loss_pct`` (whole % of the credit: exit when the spread's value reaches that
+  multiple of what it paid — 200 = a loss of one credit — then flat until a fresh flip),
+  also read at the bar close. Never into
   expiry week: exit ``roll_days_before`` calendar days before expiry and, if the direction
   still holds, re-enter next month in the same decision.
-- No premium stop: the reverse signal IS the stop, and the long leg caps the tail.
+- By default no premium stop: the reverse signal IS the stop, and the long leg caps the
+  tail.
 
 Mode notes: the candles come from ``ctx.market.index_spot`` — the replay's de-carried
 parity spot and the live view's index LTP — so the backtest and a deployment build the
@@ -86,6 +90,8 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         take_profit_pct: float = 0.0,    # whole % of the entry credit; 0 = off
         tp_rollover: bool = False,       # after a take-profit, re-enter on NEXT month …
         tp_wait_bars: int = 0,           # … after this many further closed bars (0 = at once)
+        stop_loss_pct: float = 0.0,      # exit when the spread's VALUE ≥ this % of the credit
+                                         # received (200 = a loss of one credit); 0 = off
         expiry_switch_day: int = 15,
         roll_days_before: int = 5,
         lot_overrides: dict | None = None,
@@ -109,6 +115,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         self.take_profit_pct = float(take_profit_pct)
         self.tp_rollover = bool(tp_rollover)
         self.tp_wait_bars = max(0, int(tp_wait_bars))
+        self.stop_loss_pct = float(stop_loss_pct)
         self.expiry_switch_day = int(expiry_switch_day)
         self.roll_days_before = int(roll_days_before)
         self.initial_capital = initial_capital
@@ -320,11 +327,18 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         elif signal is not None and not self.legs:
             self.armed = True                 # a re-affirming flip while flat re-arms
 
-        # 2. take profit (whole % of the entry credit) — direction holds, but no re-entry
-        #    until the next fresh signal
-        if self.legs and self.take_profit_pct > 0 and self.entry_credit > 0:
+        # 2. premium stop / take profit (whole % of the entry credit), read at the bar
+        #    close — a gap through the stop is seen only there, never intra-bar
+        if self.legs and (self.take_profit_pct > 0 or self.stop_loss_pct > 0) \
+                and self.entry_credit > 0:
             value = self._spread_value(ctx)
-            if value is not None:
+            if value is not None and self.stop_loss_pct > 0 \
+                    and value >= self.stop_loss_pct / 100.0 * self.entry_credit:
+                # the spread now costs stop_loss_pct% of what it paid: out, and flat until
+                # the next fresh flip (the trend went the wrong way — do not re-enter it)
+                signals += self._exit_all("stop")
+                self.armed = False
+            elif value is not None and self.take_profit_pct > 0:
                 profit = self.entry_credit - value
                 if profit >= self.take_profit_pct / 100.0 * self.entry_credit:
                     banked = self.entry_expiry

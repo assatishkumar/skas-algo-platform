@@ -267,3 +267,20 @@ def test_a_rollover_can_wait_out_bars_before_reentering():
     sigs = _tick(st, ctx, d, 12, 15, 23280.0)            # bar 3: two bars later → re-enter
     assert [s.reason for s in sigs] == ["st_bear", "st_bear"]
     assert st.entry_expiry == date(2026, 9, 29) and st.wait_until is None
+
+
+def test_a_premium_stop_exits_at_the_bar_close_and_waits_for_a_fresh_signal():
+    st, ctx, chain = _mk(confirm_bars=0, stop_loss_pct=200)
+    _run_days(st, ctx, date(2026, 7, 6), _warm() + _drop())
+    assert st.legs and st.entry_credit > 0
+    sell = next(leg for leg in st.legs if leg["dir"] < 0)
+    buy = next(leg for leg in st.legs if leg["dir"] > 0)
+    # the spread now costs 2.5× the credit received → past the 200% stop
+    ctx.market.marks = {sell["symbol"]: buy["entry"] + st.entry_credit * 2.5,
+                        buy["symbol"]: buy["entry"]}
+    d = date(2026, 7, 27)
+    _tick(st, ctx, d, 9, 15, 23280.0)
+    sigs = _tick(st, ctx, d, 10, 15, 23280.0)
+    assert [s.reason for s in sigs] == ["stop", "stop"] and not st.legs
+    assert st.direction == "bear" and st.armed is False       # flat until a fresh flip
+    assert not _tick(st, ctx, d, 11, 15, 23280.0)             # no re-entry on the next bar
