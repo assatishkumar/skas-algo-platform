@@ -657,7 +657,7 @@ class ConsoleSession(AlertBook):
         leg that cannot price refuses the whole candidate."""
         items = [self._stage_item(**{k: v for k, v in op.items()
                                      if k in ("kind", "right", "strike", "side", "lots",
-                                              "leg_id", "enabled")}) for op in ops]
+                                              "leg_id", "enabled", "expiry")}) for op in ops]
         if not items:
             raise ValueError("nothing to apply")
         if not self.requires_confirm:
@@ -1257,11 +1257,14 @@ class ConsoleSession(AlertBook):
 
     def _stage_item(self, *, kind: str, right: str | None = None, strike: float | None = None,
                     side: str | None = None, lots: int = 1, leg_id: str | None = None,
-                    enabled: bool | None = None) -> dict:
+                    enabled: bool | None = None, expiry: str | None = None) -> dict:
         if kind == "add":
             if not (right and side and strike is not None):
                 raise ValueError("an added leg needs a right, a side and a strike")
-            px = self._price(right.upper(), strike)
+            # `expiry` lets a what-if wing land on the SHORT's expiry; a click on the
+            # ladder passes none and trades the selected chip as before
+            exp = expiry or self.expiry
+            px = self._price(right.upper(), strike, exp)
             if px is None:
                 raise ValueError(
                     f"{int(strike)} {right.upper()} has not traded at {self.clock:%H:%M} — "
@@ -1269,7 +1272,7 @@ class ConsoleSession(AlertBook):
             lot = self._lot_size()
             return {"kind": "add", "right": right.upper(), "strike": float(strike),
                     "side": side.upper(), "lots": max(1, int(lots)),
-                    "price": px, "lot_size": lot,
+                    "price": px, "lot_size": lot, "expiry": exp,
                     "label": f"{side.upper()} {int(strike)} {right.upper()} ×{lots}"}
         elif kind == "exit":
             leg = self._leg(leg_id)
@@ -1336,7 +1339,8 @@ class ConsoleSession(AlertBook):
     def _apply(self, st: dict, minute: str) -> None:
         kind = st["kind"]
         if kind == "add":
-            self._open(st["right"], st["strike"], st["side"], st["lots"], st["price"], minute)
+            self._open(st["right"], st["strike"], st["side"], st["lots"], st["price"], minute,
+                       expiry=st.get("expiry"))
         elif kind == "exit":
             self._close(self._leg(st["leg_id"]), st["lots"], st["price"], minute)
         elif kind == "toggle":

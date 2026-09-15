@@ -48,8 +48,12 @@ def candidates(session: ConsoleSession, *, wing_steps: int = 2) -> dict:
     step = session._grid(rows) if rows else 100.0
     shorts = [leg for leg in legs if leg.side == "S"]
     longs = [leg for leg in legs if leg.side == "B"]
-    # the TESTED short: the one spot is nearest to (or through)
-    tested = min(shorts, key=lambda s: abs(s.strike - spot)) if shorts else None
+    # the TESTED short: the one spot has moved INTO — a short CE is tested as spot rises
+    # through it, a short PE as spot falls through it. "Nearest to spot" tied a straddle's
+    # two strikes and named the CE while the PE was ₹300 in the money (owner, 2026-09-15).
+    def tested_by(leg: ConsoleLeg) -> float:
+        return (spot - leg.strike) if leg.right == "CE" else (leg.strike - spot)
+    tested = max(shorts, key=tested_by) if shorts else None
     naked = _naked(shorts, longs)
 
     def away(leg: ConsoleLeg, n: int) -> float:
@@ -73,7 +77,7 @@ def candidates(session: ConsoleSession, *, wing_steps: int = 2) -> dict:
         specs.append(("wing_naked", "Buy a wing on every naked short · "
                       + ", ".join(f"{int(away(s, wing_steps))} {s.right}" for s in naked),
                       [{"kind": "add", "right": s.right, "strike": away(s, wing_steps),
-                        "side": "B", "lots": s.lots} for s in naked]))
+                        "side": "B", "lots": s.lots, "expiry": s.expiry} for s in naked]))
     if len(legs) > 1 or tested is None:
         specs.append(("flatten", f"Close all {len(legs)} legs", [{"kind": "flatten"}]))
 
@@ -143,9 +147,13 @@ def _evaluate(session: ConsoleSession, cid: str, label: str, ops: list[dict],
                 leg.symbol = f"{session.underlying}|{leg.expiry}|{int(leg.strike)}|{leg.right}"
                 leg.entry = px_new
             elif k == "add":
-                px = session._price(op["right"], float(op["strike"]), None)
+                # a wing belongs on the SHORT's expiry, never the ladder's chip — with the
+                # chip on the next expiry the wing landed a week later and the "fly" was a
+                # diagonal (owner, 2026-09-15)
+                expiry = op.get("expiry") or session.expiry or ""
+                px = session._price(op["right"], float(op["strike"]), expiry)
                 if px is None:
-                    raise ValueError(f"{int(op['strike'])} {op['right']} has no price")
+                    raise ValueError(f"{int(op['strike'])} {op['right']} {expiry} has no price")
                 lot = session._lot_size() or 1
                 n = int(op.get("lots", 1))
                 units = n * lot
@@ -157,10 +165,10 @@ def _evaluate(session: ConsoleSession, cid: str, label: str, ops: list[dict],
                                f"{int(op['strike'])} {op['right']} @ {px:g}")
                 from .session import ConsoleLeg as _Leg
                 book.append(_Leg(id=f"W{len(book)}",
-                                 symbol=f"{session.underlying}|{session.expiry}|"
+                                 symbol=f"{session.underlying}|{expiry}|"
                                         f"{int(op['strike'])}|{op['right']}",
                                  right=op["right"], strike=float(op["strike"]),
-                                 expiry=session.expiry or "", side=side, lots=n, lot_size=lot,
+                                 expiry=expiry, side=side, lots=n, lot_size=lot,
                                  entry=px, entered_at=session._minute_key()))
             elif k == "flatten":
                 for leg in list(book):

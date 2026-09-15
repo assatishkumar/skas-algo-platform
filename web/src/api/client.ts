@@ -230,6 +230,7 @@ export const api = {
   simAnnotate: (id: number, n: number, group: number, why: string) =>
     request<SimDetail>(`/simulator/${id}/cycles/${n}/actions/${group}`, { method: "PATCH", body: JSON.stringify({ why }) }),
   simDossierUrl: (id: number) => `${BASE}/simulator/${id}/dossier`,
+  simDiscardOpen: (id: number) => request<SimDetail>(`/simulator/${id}/open`, { method: "DELETE" }),
   simNextDay: (id: number, day: string) =>
     request<SimDetail>(`/simulator/${id}/next-day`, { method: "POST", body: JSON.stringify({ day }) }),
   consoleMarginAnchor: (id: string, margin_per_lot_set: number) =>

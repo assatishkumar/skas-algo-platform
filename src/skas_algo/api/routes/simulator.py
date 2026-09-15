@@ -122,6 +122,17 @@ def bank(sim_id: int, body: SimBank, db: Session = Depends(get_db)) -> dict:
     return out
 
 
+@router.delete("/{sim_id}/open")
+def discard_open(sim_id: int, db: Session = Depends(get_db)) -> dict:
+    """Discard the open (unbanked) cycle; banked cycles and the strategy stay."""
+    try:
+        out = simulator.discard_open(db, sim_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    db.commit()
+    return out
+
+
 @router.post("/{sim_id}/next-day")
 def next_day(sim_id: int, body: SimNextDay, db: Session = Depends(get_db)) -> dict:
     try:

@@ -1316,7 +1316,9 @@ SIM mode: `?sim=<id>` opens where the strategy stands (`open_spec`: the open cyc
 day/clock/tape, else `next_day` at 09:30 with the equity as capital), autosaves the tape
 (`POST /simulator/{id}/autosave`, debounced), shows the bank bar when the book is flat
 after trading, and after `bank` reopens the next day; `?sim=&cycle=n` replays a banked
-cycle read-only (no autosave). RoM uses the margin recorded AT BANK (the console's Kite /
+cycle read-only (no autosave). The open cycle is KEPT across visits by design (it is what
+"Continue cycle N" resumes); `DELETE /simulator/{id}/open` (the Open-cycle tile's
+"discard") throws it away without touching the strategy or the banked cycles. RoM uses the margin recorded AT BANK (the console's Kite /
 anchor / model figure), so a later margin regime never rewrites history. Nothing
 unrealised enters the stats. Coverage: `tests/test_simulator.py`.
 **The record (owner ask 2026-09-15): the Simulator logs enough for a later review to
@@ -1356,7 +1358,11 @@ COPY of the book priced at the cursor (`_price`; an unprinted strike refuses the
 the reason) and measured with the rail's own calculators (payoff max P/L + breakevens +
 POP, net greeks, the MODEL margin on every row so rows compare, cash moved, charges).
 Ranked by max loss, finite before unlimited; "apply" is `apply_ops` = one undo group with
-a context stamped. (2) **Counterfactuals** (`simulator.counterfactuals`, stored on the
+a context stamped. The TESTED short is the one spot has moved INTO (CE: spot − K, PE:
+K − spot, the max), never "nearest to spot" — that tied a straddle and named the CE
+while the PE was ₹300 in the money; a wing carries the SHORT's `expiry` through
+`_stage_item(expiry=)` so it never lands on the ladder's chip (a diagonal, not a fly).
+The row's "pays/receives" is the premium the adjustment moves, costs are its charges. (2) **Counterfactuals** (`simulator.counterfactuals`, stored on the
 cycle at bank, printed in the dossier and the cycle record): the cycle's tape replayed
 under rules applied post hoc — a stop at −2/3/5% of the recorded margin, a target at
 25/50% of the credit, a trail (give back half the peak once past 2% of margin), the ENTRY

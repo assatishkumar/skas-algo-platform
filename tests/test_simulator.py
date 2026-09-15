@@ -320,3 +320,26 @@ def test_patterns_need_five_cycles_and_state_their_sample():
     assert any("By IV rank at entry" in ln for ln in p["lines"])
     assert any("Exits kept 54% of each cycle's best MTM" in ln for ln in p["lines"])
     assert any("Winners were held" in ln for ln in p["lines"])
+
+
+def test_the_open_cycle_can_be_discarded_without_touching_the_strategy(days):
+    with session_scope() as db:
+        s = simulator.create(db, name="D", underlying="NIFTY", capital=500_000,
+                             start_day=DAY.isoformat())
+        sid = s["id"]
+        j = _straddle_cycle(DAY)
+        simulator.bank(db, sid, payload={"day": DAY.isoformat(), "clock": "11:30",
+                                         "expiry": EXP, "capital": 500_000, "journal": j})
+        simulator.autosave(db, sid, {"day": "2026-07-15", "clock": "10:05", "expiry": EXP,
+                                     "capital": 500_090, "journal": _straddle_cycle(
+                                         date(2026, 7, 15))[:2]})
+        assert simulator.get(db, sid)["open_cycle"]["fills"] == 2
+        out = simulator.discard_open(db, sid)
+        assert out["discarded"] is True and out["open_cycle"] is None
+        assert out["cycles"] == 1 and out["equity"] == 500_090          # the bank stands
+        assert simulator.open_spec(db, sid)["restore"] is None            # a fresh start
+        assert simulator.discard_open(db, sid)["discarded"] is False
+        db.commit()
+    client = TestClient(create_app())
+    assert client.delete(f"/api/v1/simulator/{sid}/open").status_code == 200
+    assert client.delete("/api/v1/simulator/999999/open").status_code == 404

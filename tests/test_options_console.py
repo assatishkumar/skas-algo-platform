@@ -1447,6 +1447,10 @@ def test_what_if_prices_candidate_adjustments_and_ranks_by_max_loss():
     s = _open(at="10:00")
     s.stage(kind="add", strike=24000, right="CE", side="S", lots=2)
     s.stage(kind="add", strike=24000, right="PE", side="S", lots=2)
+    # the fixture's de-carried parity spot sits a few points UNDER 24,000 at 10:00, which
+    # would make the PE the tested short and its roll-out strike (23900) one the tape
+    # never printed; pin spot above the strike so the CE is tested and 24100 CE prices
+    s.market.index_spot = lambda u: 24_100.0
     w = s.what_if()
     ids = [c["id"] for c in w["candidates"]]
     assert ids[0] == "hold" and w["tested"] in {leg.id for leg in s.legs}
@@ -1462,7 +1466,25 @@ def test_what_if_prices_candidate_adjustments_and_ranks_by_max_loss():
     assert flat["cash"] < 0 and flat["charges"] > 0        # a short is bought back: cash out
     # a wing on both naked shorts: the 24500 CE has not printed at 10:00 → refused, said why
     wing = by["wing_naked"]
-    assert not wing["ok"] and "24200 CE has no price" in wing["reason"]
+    assert not wing["ok"] and "24200 CE" in wing["reason"] and "has no price" in wing["reason"]
+    # the TESTED short is the one spot has moved INTO — the CE when spot is above the
+    # straddle's strike, the PE when it is below (the fixture's de-carried parity spot
+    # sits a few points either side of 24,000 at 10:00, so derive it)
+    ce_id = next(leg.id for leg in s.legs if leg.right == "CE")
+    pe_id = next(leg.id for leg in s.legs if leg.right == "PE")
+    assert w["tested"] == ce_id
+    import skas_algo.services.options_console.whatif as _w
+    s.market.index_spot = lambda u: 23_900.0
+    assert _w.candidates(s)["tested"] == pe_id
+    s.market.index_spot = lambda u: 24_100.0
+    # a wing is pinned to the SHORT's expiry, not the ladder's chip (the fixture tape holds
+    # one expiry, so the pin is asserted on the op and refused on a wrong one)
+    assert all(op["expiry"] == EXP for op in wing["ops"])
+    with pytest.raises(ValueError, match="has not traded"):
+        s.apply_ops([{"kind": "add", "right": "CE", "strike": 24100, "side": "B", "lots": 1,
+                      "expiry": "2026-08-25"}])
+    item = s._stage_item(kind="add", right="CE", strike=24100, side="B", lots=1, expiry=EXP)
+    assert item["expiry"] == EXP
     # rolling the tested short one step out keeps two legs and moves the breakeven
     roll = by["roll_out_1"]
     assert roll["ok"] and len(roll["legs_after"]) == 2 and roll["changes"][0].startswith("ROLL")
@@ -1484,6 +1506,7 @@ def test_what_if_prices_candidate_adjustments_and_ranks_by_max_loss():
     rows = [r for r in s.journal if r["action"] != "NOOP"]
     assert rows[-1]["context"]["kind"] == roll["label"] and rows[-1]["group"] == rows[-2]["group"]
     assert s.undo_last() and {int(leg.strike) for leg in s.legs} == {24000}
+    del s.market.index_spot
     assert s.what_if()["candidates"] and _open(at="09:16").what_if()["candidates"] == []
 
 

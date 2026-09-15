@@ -244,6 +244,19 @@ def autosave(db: Session, algo_id: int, payload: dict) -> dict:
     return {"fills": len(journal), "flat": is_flat(journal), "traded": has_traded(journal)}
 
 
+def discard_open(db: Session, algo_id: int) -> dict:
+    """Throw the OPEN cycle away (nothing banked, nothing counted): the next console open
+    starts afresh on `next_day`. The strategy and its banked cycles are untouched — the
+    only other delete was the whole strategy (owner, 2026-09-15)."""
+    _algo, run = _run_of(db, algo_id)
+    sim = _sim(run)
+    had = bool(sim.get("open") and sim["open"].get("journal"))
+    sim["open"] = None
+    _put_sim(run, sim)
+    db.flush()
+    return {**get(db, algo_id), "discarded": had}
+
+
 def set_next_day(db: Session, algo_id: int, day: str) -> dict:
     _algo, run = _run_of(db, algo_id)
     if day not in captured_days():

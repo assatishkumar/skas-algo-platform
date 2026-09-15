@@ -369,7 +369,7 @@ function WhatIfPanel({ data, loading, current, onApply, busy }: {
                 <br />
                 {c.greeks?.delta != null ? `Δ ${c.greeks.delta.toFixed(0)} · Θ ${inr0(c.greeks.theta ?? 0)}/d` : "Δ — · Θ —"}
                 {" · "}margin {inr0(c.margin ?? 0)}
-                {c.id !== "hold" ? ` · cash ${c.cash != null && c.cash >= 0 ? "+" : ""}${inr0(c.cash ?? 0)} · costs ${inr0(c.charges ?? 0)}` : ""}
+                {c.id !== "hold" ? ` · ${c.cash != null && c.cash < 0 ? `pays ${inr0(-c.cash)}` : `receives ${inr0(c.cash ?? 0)}`} · costs ${inr0(c.charges ?? 0)}` : ""}
               </div>
             ) : (
               <div style={{ color: "var(--oc-muted)" }}>refused: {c.reason}</div>

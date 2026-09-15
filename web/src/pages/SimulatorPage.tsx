@@ -155,6 +155,7 @@ export default function SimulatorPage() {
   const [form, setForm] = useState({ name: "", underlying: "NIFTY", capital: "500000", playbook: "", start_day: "" });
   const [playbook, setPlaybook] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [openCycle, setOpenCycle] = useState<number | null>(null);
   const refresh = () => { qc.invalidateQueries({ queryKey: ["sim"] }); };
   const create = useMutation({
@@ -164,6 +165,7 @@ export default function SimulatorPage() {
   });
   const save = useMutation({ mutationFn: (body: { name?: string; playbook?: string }) => api.simUpdate(selected!, body), onSuccess: () => { setPlaybook(null); refresh(); } });
   const del = useMutation({ mutationFn: () => api.simDelete(selected!), onSuccess: () => { setConfirmDelete(false); setParams({}); refresh(); } });
+  const discardOpen = useMutation({ mutationFn: () => api.simDiscardOpen(selected!), onSuccess: (d) => { setConfirmDiscard(false); qc.setQueryData(["sim", selected], d); refresh(); } });
   const d = detail.data ?? null;
   const st = useMemo(() => (d ? stats(d) : null), [d]);
   const curve = useMemo(() => (d ? [{ date: "start", equity: d.capital }, ...d.equity_curve] : []), [d]);
@@ -270,7 +272,20 @@ export default function SimulatorPage() {
               <Kpi label="Charges" value={inr(st.charges)} />
               <Kpi label="Avg RoM" value={pct(st.avgRom)} sub="net ÷ margin at entry" />
               <Kpi label="CAGR" value={d.metrics["CAGR %"] != null ? pct(d.metrics["CAGR %"] as number) : "—"} sub="only past 3 months of record" />
-              <Kpi label="Open cycle" value={d.open_cycle ? `${d.open_cycle.fills} fills` : "none"} sub={d.open_cycle?.entered ? `entered ${when(d.open_cycle.entered)}` : d.open_cycle ? `at ${d.open_cycle.day} ${d.open_cycle.clock}` : undefined} />
+              <div className="rounded-lg px-3 py-2" style={{ background: "var(--panel)" }}>
+                <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-[var(--faint)]">Open cycle</div>
+                <div className="text-[15px] font-semibold tabular-nums">{d.open_cycle ? `${d.open_cycle.fills} fills` : "none"}</div>
+                <div className="text-[10.5px] text-[var(--muted)]">
+                  {d.open_cycle?.entered ? `entered ${when(d.open_cycle.entered)}` : d.open_cycle ? `at ${d.open_cycle.day} ${d.open_cycle.clock}` : "the next console open starts a fresh one"}
+                  {d.open_cycle && (confirmDiscard ? (
+                    <span> · discard it, nothing banked?
+                      <button type="button" onClick={() => discardOpen.mutate()} className="ml-1 text-rose-600 underline">yes</button>
+                      <button type="button" onClick={() => setConfirmDiscard(false)} className="ml-1 underline">no</button></span>
+                  ) : (
+                    <button type="button" onClick={() => setConfirmDiscard(true)} className="ml-2 underline" title="throw the open cycle away — banked cycles and the strategy stay">discard</button>
+                  ))}
+                </div>
+              </div>
               <Kpi label="Record" value={d.run_id ? `run #${d.run_id}` : "—"} sub="hidden from the Runs list" />
             </div>
 
@@ -326,8 +341,9 @@ export default function SimulatorPage() {
                         <Fragment key={c.n}>
                         <tr className="border-t border-[var(--hair)] align-top">
                           <td className="py-1.5">
-                            <button className="underline decoration-dotted" title="the cycle's record: path, actions, decision context, why"
-                              onClick={() => setOpenCycle(openCycle === c.n ? null : c.n)}>{openCycle === c.n ? "▾" : "▸"} {c.n}</button>
+                            <button className="inline-flex items-baseline gap-1 whitespace-nowrap" title="the cycle's record: path, actions, decision context, why"
+                              onClick={() => setOpenCycle(openCycle === c.n ? null : c.n)}>
+                              <span className="text-[10px] text-[var(--faint)]">{openCycle === c.n ? "▾" : "▸"}</span><span className="underline decoration-dotted">{c.n}</span></button>
                           </td>
                           <td>{when(c.entered)}</td>
                           <td>{when(c.exited)}</td>
