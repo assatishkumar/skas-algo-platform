@@ -565,15 +565,17 @@ def test_adding_to_a_position_grows_it_instead_of_stacking_rows():
     assert min(first, px_later) < leg.entry < max(first, px_later)
 
 
-def test_the_two_sides_of_one_strike_stay_separate():
-    """Merging is per contract AND side — a long and a short of the same option are not one
-    position, they are a spread that happens to share a strike."""
+def test_the_two_sides_of_one_strike_net_to_one_position():
+    """REVERSED 2026-09-15 (owner): a long and a short of the same option are NOT a spread
+    that shares a strike — the broker's book nets them, so B on a strike you are short is
+    a cover of that many lots. The same-minute case rewrites the entry rather than booking
+    a ₹0 round trip."""
     store.write_day(DAY, _day())
     s = _open(at="10:00")
     s.stage(kind="add", right="CE", strike=24000, side="S", lots=2)
     s.stage(kind="add", right="CE", strike=24000, side="B", lots=1)
-    assert len(s.legs) == 2
-    assert {(x.side, x.lots) for x in s.legs} == {("S", 2), ("B", 1)}
+    assert len(s.legs) == 1
+    assert {(x.side, x.lots) for x in s.legs} == {("S", 1)}
 
 
 def test_the_rebuilt_book_merges_exactly_as_the_live_one_did():
@@ -1579,3 +1581,51 @@ def test_an_evicted_session_comes_back_and_a_cursor_move_is_throttled(monkeypatc
     back.stage(kind="add", strike=24000, right="PE", side="S", lots=1); back.state()
     back.state()                                          # nothing changed: no call
     assert writes == [False, False, True]
+
+
+# --------------------------------------- an opposite click NETS the leg (2026-09-15)
+
+def test_an_opposite_side_click_nets_the_contract_instead_of_opening_a_second_leg():
+    """A broker's book has one position per contract. S ×2 then B ×1 on the same strike is
+    a cover of one lot; B ×2 more closes the short and opens a long for the remainder.
+    Before: both rows stood while the ladder badge read the net (owner, 2026-09-15)."""
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", strike=24000, right="CE", side="S", lots=2)
+    s.step(5)
+    s.stage(kind="add", strike=24000, right="CE", side="B", lots=1)
+    assert [(leg.side, leg.lots) for leg in s.legs] == [("S", 1)]
+    rows = [r for r in s.journal if r["action"] != "NOOP"]
+    assert [r["action"] for r in rows] == ["SHORT", "COVER"]      # a cover, not a BUY
+    assert s.realized != 0.0 and s.closed and s.closed[-1]["action"] == "COVER"
+    # more than held: the short closes and the remainder opens a LONG, one action
+    s.stage(kind="add", strike=24000, right="CE", side="B", lots=3)
+    assert [(leg.side, leg.lots) for leg in s.legs] == [("B", 2)]
+    rows = [r for r in s.journal if r["action"] != "NOOP"]
+    assert [r["action"] for r in rows] == ["SHORT", "COVER", "COVER", "BUY"]
+    assert rows[-1]["group"] == rows[-2]["group"]
+    # undo takes the whole action back; a rebuild from the journal agrees with the live book
+    assert s.undo_last() and [(leg.side, leg.lots) for leg in s.legs] == [("S", 1)]
+    s.stage(kind="add", strike=24000, right="CE", side="B", lots=3)
+    t = _open(at="10:05")
+    t.restore(s.journal, [], [])
+    assert ([(leg.side, leg.lots, leg.entry) for leg in t.legs]
+            == [(leg.side, leg.lots, leg.entry) for leg in s.legs])
+    assert t.realized == s.realized
+
+
+def test_a_replayed_close_lands_on_the_leg_of_its_own_side():
+    """A journal holding a SHORT and a BUY on one contract (an old tape from before
+    netting): a SELL row must close the LONG, never the short that happened to be first."""
+    store.write_day(DAY, _day())
+    k = DAY.isoformat()
+    j = [{"at": f"{k}T10:00", "symbol": f"NIFTY|{EXP}|24000|CE", "action": "SHORT", "group": 1,
+          "units": 130.0, "price": 150.0, "charges": 10.0, "spot": 24000.0},
+         {"at": f"{k}T10:00", "symbol": f"NIFTY|{EXP}|24000|CE", "action": "BUY", "group": 2,
+          "units": 65.0, "price": 150.0, "charges": 10.0, "spot": 24000.0},
+         {"at": f"{k}T10:05", "symbol": f"NIFTY|{EXP}|24000|CE", "action": "SELL", "group": 3,
+          "units": 65.0, "price": 152.0, "charges": 10.0, "spot": 24000.0}]
+    s = _open(at="10:05")
+    s.restore(j, [], [])
+    assert [(leg.side, leg.lots) for leg in s.legs] == [("S", 2)]
+    assert s.realized == pytest.approx((152.0 - 150.0) * 65)

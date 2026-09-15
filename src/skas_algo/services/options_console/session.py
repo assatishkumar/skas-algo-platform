@@ -459,8 +459,11 @@ class ConsoleSession(AlertBook):
                        max(1, int(fill["units"] // lot)), fill["price"], fill["at"],
                        expiry=expiry)
         else:
+            # a SELL closes a LONG leg, a COVER a SHORT one — matching on the symbol alone
+            # closed the wrong side when both were held (SETTLE takes whichever)
+            want = {"SELL": "B", "COVER": "S"}.get(fill["action"])
             for leg in self.legs:
-                if leg.symbol == fill["symbol"]:
+                if leg.symbol == fill["symbol"] and (want is None or leg.side == want):
                     self._close(leg, int(fill["units"] // lot), fill["price"], fill["at"],
                                 action=fill["action"] if fill["action"] == "SETTLE" else None)
                     break
@@ -1340,8 +1343,22 @@ class ConsoleSession(AlertBook):
     def _apply(self, st: dict, minute: str) -> None:
         kind = st["kind"]
         if kind == "add":
-            self._open(st["right"], st["strike"], st["side"], st["lots"], st["price"], minute,
-                       expiry=st.get("expiry"))
+            # NET against an opposite-side leg on the same contract first — a broker's
+            # book has one position per contract, and B on a strike you are short is a
+            # cover, not a second leg. Clicking S ×4 then B ×4 on 25,200 PE used to leave
+            # both rows standing while the ladder badge read flat (owner, 2026-09-15).
+            # Replay (`_reapply`) goes straight to `_open`: its journal is already explicit.
+            exp = st.get("expiry") or str(self.expiry)
+            sym = f"{self.underlying}|{exp}|{int(st['strike'])}|{st['right']}"
+            lots = int(st["lots"])
+            opp = next((x for x in self.legs if x.symbol == sym and x.side != st["side"]), None)
+            if opp is not None:
+                n = min(lots, opp.lots)
+                self._close(opp, n, st["price"], minute)
+                lots -= n
+            if lots > 0:
+                self._open(st["right"], st["strike"], st["side"], lots, st["price"], minute,
+                           expiry=exp)
         elif kind == "exit":
             self._close(self._leg(st["leg_id"]), st["lots"], st["price"], minute)
         elif kind == "toggle":

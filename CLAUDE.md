@@ -1154,6 +1154,13 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   and a better one than a confirm, because it also covers the leg you decide against a
   minute later: fills carry a `group`, so an undo takes back the WHOLE action — a roll's
   two fills, a basket's four legs — and rebuilds the book at the same minute.
+  **A click on the OPPOSITE side of a contract you hold NETS it (owner, 2026-09-15):**
+  `_apply("add")` closes up to that many lots of the opposite-side leg at the ladder's
+  price (a COVER / SELL row, P&L booked) and opens only the remainder — a broker's book
+  has one position per contract, and S ×4 then B ×4 on 25,200 PE used to leave both
+  rows standing while the ladder badge read flat. `_reapply` goes straight to `_open`
+  (its journal is already explicit) and matches a SELL to the LONG leg and a COVER to
+  the SHORT, never the first leg on the symbol.
 - **Margin is labelled by source, always — and the model is SPAN-SHAPED since
   2026-09-09** (`options_console/margin.py::span_like`): the book's worst loss over a ±6%
   price scan × ±25% vol scan (hedges OFFSET, every leg BS-repriced at its own expiry) plus
