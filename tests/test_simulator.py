@@ -233,3 +233,90 @@ def test_annotate_and_the_dossier(days):
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
     assert "why: entered flat" in r.text
     assert client.get("/api/v1/simulator/999999/dossier").status_code == 404
+
+
+# ----------------------------------------------- counterfactuals + patterns (2026-09-15)
+
+def _rolled_cycle(d: date):
+    """Short straddle at 10:00, the CE rolled up to 24100 at 10:30, everything covered at
+    11:30. On the fixture tape the CE drifts UP 1.5 every 5 min and the PE down."""
+    k = d.isoformat()
+    return [_row(f"{k}T10:00", CE, "SHORT", 65, 150.0, group=1),
+            _row(f"{k}T10:00", PE, "SHORT", 65, 152.0, group=1),
+            _row(f"{k}T10:30", CE, "COVER", 65, 159.0, group=2),
+            _row(f"{k}T10:30", f"NIFTY|{EXP}|24100|CE", "SHORT", 65, 114.0, group=2),
+            _row(f"{k}T11:30", PE, "COVER", 65, 125.0, group=3),
+            _row(f"{k}T11:30", f"NIFTY|{EXP}|24100|CE", "COVER", 65, 132.0, group=3)]
+
+
+def test_counterfactuals_replay_rules_over_the_tape(days):
+    j = _rolled_cycle(DAY)
+    rec = simulator.reconstruct(j, "NIFTY")
+    cf = simulator.counterfactuals(j, "NIFTY", margin=150_000, credit=rec["premium"])
+    by = {x["id"]: x for x in cf}
+    assert by["actual"]["net"] == rec["net"] and by["actual"]["vs_actual"] == 0.0
+    # the exit rules: a −2% stop is −₹3,000; the straddle's MTM never sinks that far on this
+    # tape, so the stop reads "never triggered"; a 25% target on the ₹19,630 credit is
+    # ₹4,907 — reached only by the exit itself
+    assert {"stop_2", "stop_3", "stop_5", "target_25", "target_50", "trail_half"} <= set(by)
+    assert all(x["ok"] for x in cf)
+    for x in cf:
+        if x["id"] != "actual" and x["note"] and "never triggered" in x["note"]:
+            assert x["net"] == rec["net"]
+    # the roll removed: the 24000 CE stays short and is closed at its MARK at 11:30 (the
+    # tape prints 150 + 1.5 × 27 = 190.5 there, the PE 111.5). "Entry only" marks BOTH legs
+    # off the tape (gross ≈ 0, so ≈ −charges); "without the roll" keeps the journal's own
+    # PE cover at 125 and marks only the CE — a worse figure, because the fixture's cover
+    # price is above the tape's mark. Both walk to the actual exit minute.
+    assert "entry_only" in by and "without_2" in by
+    assert by["entry_only"]["exit_at"] == f"{DAY}T11:30" == by["without_2"]["exit_at"]
+    assert -120 < by["entry_only"]["net"] < rec["net"]
+    assert by["without_2"]["net"] < by["entry_only"]["net"]
+    assert by["entry_only"]["vs_actual"] == round(by["entry_only"]["net"] - rec["net"], 2)
+    # banked: stored on the cycle, printed in the dossier
+    with session_scope() as db:
+        s = simulator.create(db, name="Roll", underlying="NIFTY", capital=500_000,
+                             start_day=DAY.isoformat())
+        out = simulator.bank(db, s["id"], margin=150_000, margin_source="zerodha",
+                             payload={"day": DAY.isoformat(), "clock": "11:30", "expiry": EXP,
+                                      "capital": 500_000, "journal": j})
+        c = out["cycle_rows"][0]
+        assert [x["id"] for x in c["counterfactuals"]][:2] == ["actual", "stop_2"]
+        assert [a["label"] for a in c["actions"]] == ["entry", "roll", "exit"]
+        md = simulator.dossier_markdown(db, s["id"])
+        assert "### Counterfactuals" in md and "Hold the entry book, no adjustments" in md
+        assert "## Patterns across cycles" in md and "needs 5 banked cycles (1 so far)" in md
+        assert out["patterns"]["ok"] is False
+        db.commit()
+
+
+def test_patterns_need_five_cycles_and_state_their_sample():
+    def cyc(n, net, rank, vix, dte, mfe_pct, roll_after=None):
+        ctx = {"after": {"iv_rank": {"rank": rank}, "vix": vix, "dte": dte, "mtm": 0.0}}
+        acts = [{"group": 1, "at": f"2026-07-{n:02d}T10:00", "label": "entry", "context": ctx,
+                 "rows": []}]
+        if roll_after is not None:
+            acts.append({"group": 2, "at": f"2026-07-{n:02d}T11:00", "label": "roll",
+                         "context": {"after": {"mtm": roll_after}}, "rows": []})
+        acts.append({"group": 3, "at": f"2026-07-{n:02d}T14:00", "label": "exit", "rows": []})
+        return {"n": n, "net": net, "entered": f"2026-07-{n:02d}T10:00",
+                "exited": f"2026-07-{n:02d}T14:00", "expiry": "2026-07-21",
+                "entry_day": f"2026-07-{n:02d}", "margin": 100_000, "actions": acts,
+                "path": {"exit_vs_mfe_pct": mfe_pct, "mae": {"mtm": -1000.0}}}
+    few = [cyc(i, 100.0, 20, 11.0, 7, 80.0) for i in range(1, 5)]
+    assert simulator.patterns(few)["ok"] is False and "needs 5" in simulator.patterns(few)["note"]
+    many = [cyc(1, 500.0, 20, 11.0, 7, 90.0), cyc(2, 300.0, 25, 11.5, 8, 70.0),
+            cyc(3, -800.0, 80, 17.0, 30, 20.0, roll_after=-1500.0),
+            cyc(4, -200.0, 75, 16.5, 28, 30.0, roll_after=-600.0),
+            cyc(5, 100.0, 50, 13.0, 15, 60.0)]
+    p = simulator.patterns(many)
+    assert p["ok"] and p["n"] == 5
+    t = {r["bucket"]: r for r in p["tables"]["IV rank at entry"]}
+    assert t["low (<30)"]["n"] == 2 and t["low (<30)"]["win_rate"] == 100.0
+    assert t["high (≥70)"]["n"] == 2 and t["high (≥70)"]["avg"] == -500.0
+    adj = p["tables"]["adjustments"][0]
+    # after the two rolls the cycles moved −800−(−1500)=+700 and −200−(−600)=+400 → avg +550
+    assert adj == {"adjustment": "roll", "n": 2, "avg_after": 550.0, "improved": 2}
+    assert any("By IV rank at entry" in ln for ln in p["lines"])
+    assert any("Exits kept 54% of each cycle's best MTM" in ln for ln in p["lines"])
+    assert any("Winners were held" in ln for ln in p["lines"])

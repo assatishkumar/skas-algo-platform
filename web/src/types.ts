@@ -2082,6 +2082,21 @@ export interface ConsoleState {
 
 /** A preset resolved against the chain at the cursor. `legs` are ConsoleLeg-shaped so the
  *  card's metrics come from the same calculator as the rail. */
+/** What-if: candidate adjustments at the cursor, priced and measured side by side
+ *  (`options_console/whatif.py`). Deterministic; ranked by max loss; never a recommendation. */
+export interface ConsoleWhatIfCandidate {
+  id: string; label: string; ops: Record<string, unknown>[]; ok: boolean; reason: string | null;
+  changes: string[]; cash: number | null; charges: number | null; realizes?: number;
+  max_profit: number | null; max_loss: number | null; breakevens: number[];
+  be_dist_pct: number | null; pop: number | null;
+  greeks: { delta: number | null; gamma: number | null; theta: number | null; vega: number | null } | null;
+  margin: number | null; margin_source: string; legs_after: string[];
+}
+export interface ConsoleWhatIf {
+  at: string; spot: number | null; step?: number; tested?: string | null;
+  candidates: ConsoleWhatIfCandidate[]; note: string;
+}
+
 export interface ConsolePreset {
   id: string; name: string; rule: string; defined: boolean; tags: string[];
   ok: boolean; reason: string | null;
@@ -2225,6 +2240,7 @@ export interface SimCycle {
   // the owner's why, the alerts that were armed, and what Undo took back
   path?: SimCyclePath | null;
   actions?: SimAction[];
+  counterfactuals?: SimCounterfactual[];
   alerts?: ConsoleAlert[];
   discarded?: ConsoleState["discarded"];
 }
@@ -2234,12 +2250,20 @@ export interface SimCyclePath {
   peak: { mtm: number | null; at: string | null };
   exit_mtm: number; exit_vs_mfe_pct: number | null;
 }
+export interface SimCounterfactual {
+  id: string; label: string; net: number | null; exit_at: string | null;
+  vs_actual: number | null; note: string | null; ok: boolean;
+}
+export interface SimPatterns {
+  ok: boolean; n: number; note: string | null; lines: string[];
+  tables: Record<string, Record<string, string | number | null>[]>;
+}
 export interface SimAction {
   group: number | null; at: string; label: string; why: string | null;
   context: ConsoleFill["context"]; rows: ConsoleFill[];
 }
 export interface SimDetail extends SimStrategy {
-  playbook: string; capital_mode: string; cycle_rows: SimCycle[];
+  playbook: string; capital_mode: string; cycle_rows: SimCycle[]; patterns?: SimPatterns;
   open_cycle: { day: string | null; clock: string | null; expiry: string | null; fills: number; entered: string | null } | null;
   metrics: Metrics; equity_curve: { date: string; equity: number }[];
 }

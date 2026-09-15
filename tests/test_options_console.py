@@ -1436,3 +1436,50 @@ def test_undo_keeps_what_it_took_back():
     u = _open(at="10:05")
     u.restore(s.journal, [], [])
     assert u.discarded == []
+
+
+# ------------------------------------------------ what-if: the coach (owner, 2026-09-15)
+
+def test_what_if_prices_candidate_adjustments_and_ranks_by_max_loss():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", strike=24000, right="CE", side="S", lots=2)
+    s.stage(kind="add", strike=24000, right="PE", side="S", lots=2)
+    w = s.what_if()
+    ids = [c["id"] for c in w["candidates"]]
+    assert ids[0] == "hold" and w["tested"] in {leg.id for leg in s.legs}
+    assert {"close_tested", "close_half", "roll_out_1", "roll_out_2", "wing_naked",
+            "flatten"} <= set(ids)
+    by = {c["id"]: c for c in w["candidates"]}
+    hold = by["hold"]
+    assert hold["ok"] and hold["max_loss"] is None and hold["cash"] == 0.0   # open tails
+    assert hold["margin"] and hold["margin_source"] == "model"
+    # closing everything: no book, no tails, the loss is bounded at what the closes bank
+    flat = by["flatten"]
+    assert flat["ok"] and flat["legs_after"] == [] and flat["max_loss"] == flat["max_profit"]
+    assert flat["cash"] < 0 and flat["charges"] > 0        # a short is bought back: cash out
+    # a wing on both naked shorts: the 24500 CE has not printed at 10:00 → refused, said why
+    wing = by["wing_naked"]
+    assert not wing["ok"] and "24200 CE has no price" in wing["reason"]
+    # rolling the tested short one step out keeps two legs and moves the breakeven
+    roll = by["roll_out_1"]
+    assert roll["ok"] and len(roll["legs_after"]) == 2 and roll["changes"][0].startswith("ROLL")
+    # ranking: finite max losses before the unlimited ones, refused rows last
+    ranked = w["candidates"][1:]
+    finite = [c for c in ranked if c["ok"] and c["max_loss"] is not None]
+    unlimited = [c for c in ranked if c["ok"] and c["max_loss"] is None]
+    refused = [c for c in ranked if not c["ok"]]
+    assert ranked == finite + unlimited + refused
+    assert finite == sorted(finite, key=lambda c: -c["max_loss"])
+    # nothing on the session moved
+    assert len(s.legs) == 2 and all(leg.lots == 2 for leg in s.legs)
+    # applying a candidate is ONE undo group with a context stamped (a minute later, so the
+    # roll is a real close + open rather than a same-minute rewrite of the entry)
+    s.step(5)
+    roll = {c["id"]: c for c in s.what_if()["candidates"]}["roll_out_1"]
+    s.apply_ops(roll["ops"], label=roll["label"])
+    assert {int(leg.strike) for leg in s.legs} == {24000, 24100}
+    rows = [r for r in s.journal if r["action"] != "NOOP"]
+    assert rows[-1]["context"]["kind"] == roll["label"] and rows[-1]["group"] == rows[-2]["group"]
+    assert s.undo_last() and {int(leg.strike) for leg in s.legs} == {24000}
+    assert s.what_if()["candidates"] and _open(at="09:16").what_if()["candidates"] == []

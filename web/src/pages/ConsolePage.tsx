@@ -13,7 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleLiveRun, ConsoleTicket, ConsoleTicketRow, ConsolePreset, ConsoleProbe, ConsoleRisk,
+  ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleLiveRun, ConsoleTicket, ConsoleTicketRow, ConsolePreset, ConsoleWhatIf, ConsoleWhatIfCandidate, ConsoleProbe, ConsoleRisk,
   ConsoleState,
   SimOpenSpec,
 } from "../types";
@@ -332,6 +332,56 @@ function TrackChip({ children, onClick, disabled, title }: {
  *  at THIS cursor, credit, margin (labelled), max P/L and POP from the same calculator as
  *  the rail, a DEFINED / UNDEFINED badge, and the reason when it cannot be built. In
  *  replay, Apply trades all its legs as one action; Undo takes them all back. */
+/** The coach: candidate adjustments to the open book, priced at the cursor and measured
+ *  with the rail's own calculators. It ranks by max loss and says so; it never picks. */
+function WhatIfPanel({ data, loading, current, onApply, busy }: {
+  data: ConsoleWhatIf | undefined; loading: boolean; current: { max_loss: number | null; margin: number | null } | null;
+  onApply: (c: ConsoleWhatIfCandidate) => void; busy: boolean;
+}) {
+  const fmtL = (v: number | null) => (v == null ? "unlimited" : inr0(v));
+  return (
+    <Panel>
+      <div className="flex items-baseline justify-between mb-1">
+        <div className="text-[10px] font-semibold uppercase tracking-[.06em]" style={{ color: "var(--oc-faint)" }}>What if · at {data?.at?.slice(11) ?? "—"}</div>
+        <div className="text-[10px]" style={{ color: "var(--oc-muted)" }}>ranked by max loss · model margin</div>
+      </div>
+      {loading && !data ? <div className="text-[11px]" style={{ color: "var(--oc-muted)" }}>pricing…</div> : null}
+      {data && !data.candidates.length && <div className="text-[11px]" style={{ color: "var(--oc-muted)" }}>{data.note}</div>}
+      <div className="space-y-1">
+        {(data?.candidates ?? []).map((c) => (
+          <div key={c.id} className="rounded-[6px] px-2 py-1.5 text-[11px]"
+            style={{ background: c.id === "hold" ? "transparent" : "var(--oc-panel-2, rgba(127,127,127,.06))", opacity: c.ok ? 1 : 0.6 }}>
+            <div className="flex items-baseline justify-between gap-2">
+              <div className="font-semibold truncate" title={c.changes.join(" · ") || c.label}>{c.label}</div>
+              {c.ok && c.id !== "hold" && (
+                <button className="shrink-0 underline decoration-dotted" disabled={busy}
+                  title={`apply as one action (Undo takes it back): ${c.changes.join(" · ")}`}
+                  onClick={() => onApply(c)}>apply</button>
+              )}
+            </div>
+            {c.ok ? (
+              <div className="tabular-nums" style={{ color: "var(--oc-muted)" }}>
+                max L <b style={{ color: c.max_loss == null ? "var(--oc-neg)" : "inherit" }}>{fmtL(c.max_loss)}</b>
+                {current && c.id !== "hold" && c.max_loss != null && current.max_loss != null ? ` (${c.max_loss - current.max_loss >= 0 ? "+" : ""}${inr0(c.max_loss - current.max_loss)})` : ""}
+                {" · "}max P {c.max_profit == null ? "unlimited" : inr0(c.max_profit)}
+                {c.pop != null ? ` · POP ${Math.round(100 * c.pop)}%` : ""}
+                {c.be_dist_pct != null ? ` · BE ${c.be_dist_pct >= 0 ? "+" : ""}${c.be_dist_pct.toFixed(1)}%` : ""}
+                <br />
+                {c.greeks?.delta != null ? `Δ ${c.greeks.delta.toFixed(0)} · Θ ${inr0(c.greeks.theta ?? 0)}/d` : "Δ — · Θ —"}
+                {" · "}margin {inr0(c.margin ?? 0)}
+                {c.id !== "hold" ? ` · cash ${c.cash != null && c.cash >= 0 ? "+" : ""}${inr0(c.cash ?? 0)} · costs ${inr0(c.charges ?? 0)}` : ""}
+              </div>
+            ) : (
+              <div style={{ color: "var(--oc-muted)" }}>refused: {c.reason}</div>
+            )}
+          </div>
+        ))}
+      </div>
+      {data?.note && data.candidates.length ? <div className="mt-1 text-[10px]" style={{ color: "var(--oc-faint)" }}>{data.note}</div> : null}
+    </Panel>
+  );
+}
+
 function PresetGallery({ presets, state, lots, onApply }: {
   presets: ConsolePreset[]; state: ConsoleState | null; lots: number;
   onApply: (id: string) => void;
@@ -1345,6 +1395,22 @@ export default function ConsolePage() {
     enabled: !!state && (showPresets || !state.legs.length),
   });
 
+  // What-if: the coach panel, priced server-side at the cursor; fetched only while shown
+  // (every candidate is a book repriced + a model margin — cheap, but not free on autoplay)
+  const [showWhatIf, setShowWhatIf] = useState(false);
+  const whatIfOn = showWhatIf && !!state && state.session.mode === "replay" && state.legs.some((l) => l.enabled);
+  const { data: whatIfData, isFetching: whatIfLoading } = useQuery({
+    queryKey: ["console-what-if", state?.session.id, state?.session.date, state?.session.clock,
+      state?.journal.length],
+    queryFn: () => api.consoleWhatIf(state!.session.id),
+    enabled: whatIfOn,
+  });
+  const applyWhatIf = useMutation({
+    mutationFn: (c: ConsoleWhatIfCandidate) => call((id) => api.consoleApplyWhatIf(id, { ops: c.ops, label: c.label })),
+    onSuccess: (s) => { setState(s); setError(null); },
+    onError: (e: Error) => setError(e.message),
+  });
+
   // Autoplay ticks. Stops itself at the session close, on an error, and the moment an
   // alert FIRES — that is the minute the replay exists to look at, so it stays on screen
   // instead of scrolling past at 15 minutes a second. Hidden tab → pause (a replay that
@@ -1810,10 +1876,28 @@ export default function ConsolePage() {
                   onArm={(b) => armAlert.mutate(b)} onClear={(id) => clearAlert.mutate(id)} />
   );
 
+  const whatIfCard = state && state.session.mode === "replay" ? (
+    <>
+      <div className="flex justify-end -mb-1">
+        <Chip active={showWhatIf} onClick={() => setShowWhatIf((v) => !v)}
+          disabled={!state.legs.some((l) => l.enabled)}
+          title="candidate adjustments to the open book, priced at the cursor and compared — ranked by max loss, never a recommendation">
+          what if
+        </Chip>
+      </div>
+      {whatIfOn && (
+        <WhatIfPanel data={whatIfData} loading={whatIfLoading} busy={applyWhatIf.isPending}
+          current={whatIfData?.candidates[0] ? { max_loss: whatIfData.candidates[0].max_loss, margin: whatIfData.candidates[0].margin } : null}
+          onApply={(c) => applyWhatIf.mutate(c)} />
+      )}
+    </>
+  ) : null;
+
   const railColumn = (
     <>
       {mtmPanel}
       {alertsCard}
+      {whatIfCard}
     </>
   );
 

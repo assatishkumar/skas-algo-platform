@@ -35,6 +35,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from skas_algo.data.option_intraday_store import captured_days, load_day
 from skas_algo.db.enums import InstrumentClass, TradingMode
 from skas_algo.db.models import Algo, AlgoRun
+from skas_algo.engine.options.charges import charges_for_txn
 from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.live.holidays import next_trading_day
 from skas_algo.services.intraday_replay import _options_report, _to_report
@@ -153,6 +154,7 @@ def get(db: Session, algo_id: int) -> dict:
             "cycle_rows": [{**{k: v for k, v in c.items() if k != "journal"},
                             "actions": c.get("actions") or action_groups(c.get("journal", []))}
                            for c in sim["cycles"]],
+            "patterns": patterns(sim["cycles"]),
             "open_cycle": (
                 {"day": sim["open"].get("day"), "clock": sim["open"].get("clock"),
                  "expiry": sim["open"].get("expiry"),
@@ -333,31 +335,36 @@ def reconstruct(journal: list[dict], underlying: str) -> dict:
                                  * (1 if leg["side"] == "long" else -1) for leg in legs), 2)}
 
 
-def cycle_path(journal: list[dict], underlying: str) -> dict | None:
-    """The cycle's minute-by-minute MTM re-derived from the 1-min tape: realized-to-date
-    plus every open leg marked at its forward-filled last print. Returns the daily rows
-    (close / high / low per day), the MAE and MFE with their minutes, the peak, and where
-    the exit sat against the best the cycle offered. ~0.3 s per day of the cycle."""
+def _minute_series(journal: list[dict], underlying: str, *,
+                   tapes: dict | None = None, until: str | None = None) -> list[dict]:
+    """The cycle's MTM minute by minute, re-derived from the 1-min tape: realized-to-date
+    plus every open leg marked at its forward-filled last print. One row per minute from
+    the first fill to the last: ``{m, mtm, realized, charges, marks, open}`` where ``open``
+    is the FIFO book (symbol → lots) and ``marks`` the prints used. A close with nothing to
+    close is a no-op (a counterfactual journal has those). ``tapes`` caches a day's frame
+    across calls. ~0.3 s per day of the cycle."""
     rows = sorted((r for r in journal if r.get("action") in _OPENS or r.get("action") in _CLOSES),
                   key=lambda x: x["at"])
     if not rows:
-        return None
-    first, last = rows[0]["at"][:10], rows[-1]["at"][:10]
+        return []
+    stop = max(rows[-1]["at"], until or "")          # a counterfactual walks past its fills
+    first, last = rows[0]["at"][:10], stop[:10]
     days = [d for d in captured_days() if first <= d <= last]
     if not days:
-        return None
-    # the book after each fill: open lots (FIFO) + realized so far, keyed by fill minute
+        return []
     symbols = {r["symbol"] for r in rows}
-    daily: list[dict] = []
-    mae = {"mtm": 0.0, "at": None}
-    mfe = {"mtm": 0.0, "at": None}
-    peak = {"mtm": None, "at": None}
+    out: list[dict] = []
     open_lots: dict[str, list[dict]] = {}
     realized = 0.0
+    charges = 0.0
     fi = 0                                                # fill cursor into rows
+    tapes = tapes if tapes is not None else {}
     for d in days:
-        df = load_day(date.fromisoformat(d), underlying=underlying,
-                      columns=["symbol", "start", "close"])
+        df = tapes.get(d)
+        if df is None:
+            df = load_day(date.fromisoformat(d), underlying=underlying,
+                          columns=["symbol", "start", "close"])
+            tapes[d] = df
         if df.empty:
             continue
         df = df[df["symbol"].isin(symbols)].sort_values("start")
@@ -366,67 +373,203 @@ def cycle_path(journal: list[dict], underlying: str) -> dict | None:
             series[sym] = ([t.strftime("%Y-%m-%dT%H:%M") for t in g["start"]],
                            [float(c) for c in g["close"]])
         minutes = sorted({m for s in series.values() for m in s[0]})
-        day_high, day_low, day_close = None, None, None
         for m in minutes:
-            # apply the fills at or before this minute
-            while fi < len(rows) and rows[fi]["at"] <= m:
+            while fi < len(rows) and rows[fi]["at"] <= m:      # the fills at or before m
                 r = rows[fi]
                 a, sym = r["action"], r["symbol"]
                 u, px = float(r["units"]), float(r["price"])
                 if a in _OPENS:
                     open_lots.setdefault(sym, []).append(
                         {"units": u, "price": px, "dir": _OPENS[a]})
+                    charges += float(r.get("charges") or 0.0)
                 else:
                     left = u
                     q = open_lots.get(sym, [])
+                    took = 0.0
                     while left > 1e-9 and q:
                         lot = q[0]
                         take = min(left, lot["units"])
                         realized += lot["dir"] * (px - lot["price"]) * take
                         lot["units"] -= take
                         left -= take
+                        took += take
                         if lot["units"] <= 1e-9:
                             q.pop(0)
+                    if took > 0:                            # a close of nothing costs nothing
+                        charges += float(r.get("charges") or 0.0) * (took / u if u else 1.0)
                 fi += 1
             mtm = realized
+            marks: dict[str, float] = {}
             complete = True
             for sym, lots in open_lots.items():
                 if not lots:
                     continue
                 g = series.get(sym)
-                if not g:
-                    complete = False
-                    break
-                i = bisect.bisect_right(g[0], m) - 1
+                i = bisect.bisect_right(g[0], m) - 1 if g else -1
                 if i < 0:
                     complete = False
                     break
                 px = g[1][i]
+                marks[sym] = px
                 for lot in lots:
                     mtm += lot["dir"] * (px - lot["price"]) * lot["units"]
-            if not complete:
+            if not complete or m < rows[0]["at"]:
                 continue
-            if m < rows[0]["at"]:
-                continue                                    # before the entry
-            if m > rows[-1]["at"]:
+            if m > stop:
                 break                                       # after the exit
-            day_close = mtm
-            day_high = mtm if day_high is None else max(day_high, mtm)
-            day_low = mtm if day_low is None else min(day_low, mtm)
-            if mtm < mae["mtm"]:
-                mae = {"mtm": round(mtm, 2), "at": m}
-            if mtm > mfe["mtm"]:
-                mfe = {"mtm": round(mtm, 2), "at": m}
-            if peak["mtm"] is None or mtm > peak["mtm"]:
-                peak = {"mtm": round(mtm, 2), "at": m}
-        if day_close is not None:
-            daily.append({"date": d, "close": round(day_close, 2),
-                          "high": round(day_high, 2), "low": round(day_low, 2)})
-    exit_mtm = round(realized, 2)
+            out.append({"m": m, "mtm": round(mtm, 2), "realized": round(realized, 2),
+                        "charges": round(charges, 2), "marks": marks,
+                        "open": {k: [dict(x) for x in v] for k, v in open_lots.items() if v}})
+    return out
+
+
+def cycle_path(journal: list[dict], underlying: str, *, series: list[dict] | None = None,
+               tapes: dict | None = None) -> dict | None:
+    """The cycle's path: daily rows (close / high / low of MTM per day), the MAE and MFE
+    with their minutes, the peak, and where the exit sat against the best the cycle
+    offered."""
+    pts = series if series is not None else _minute_series(journal, underlying, tapes=tapes)
+    if not pts:
+        return None
+    daily: list[dict] = []
+    mae = {"mtm": 0.0, "at": None}
+    mfe = {"mtm": 0.0, "at": None}
+    peak = {"mtm": None, "at": None}
+    cur_day, day_high, day_low, day_close = None, None, None, None
+    for p in pts:
+        d, mtm, m = p["m"][:10], p["mtm"], p["m"]
+        if d != cur_day:
+            if cur_day is not None:
+                daily.append({"date": cur_day, "close": round(day_close, 2),
+                              "high": round(day_high, 2), "low": round(day_low, 2)})
+            cur_day, day_high, day_low = d, mtm, mtm
+        day_close = mtm
+        day_high = max(day_high, mtm)
+        day_low = min(day_low, mtm)
+        if mtm < mae["mtm"]:
+            mae = {"mtm": mtm, "at": m}
+        if mtm > mfe["mtm"]:
+            mfe = {"mtm": mtm, "at": m}
+        if peak["mtm"] is None or mtm > peak["mtm"]:
+            peak = {"mtm": mtm, "at": m}
+    if cur_day is not None:
+        daily.append({"date": cur_day, "close": round(day_close, 2),
+                      "high": round(day_high, 2), "low": round(day_low, 2)})
+    exit_mtm = pts[-1]["realized"]
     return {"daily": daily, "mae": mae, "mfe": mfe, "peak": peak, "exit_mtm": exit_mtm,
             "exit_vs_mfe_pct": (round(100.0 * exit_mtm / mfe["mtm"], 1)
                                 if mfe["mtm"] > 0 else None),
-            "minutes": sum(len(x) for x in [daily])}
+            "minutes": len(pts)}
+
+
+def _close_cost(open_lots: dict[str, list[dict]], marks: dict[str, float]) -> float:
+    """What closing the whole book at these marks would cost in charges."""
+    c = 0.0
+    for sym, lots in open_lots.items():
+        px = marks.get(sym)
+        if px is None:
+            continue
+        for lot in lots:
+            c += charges_for_txn({"action": "SELL" if lot["dir"] > 0 else "COVER",
+                                  "amount": lot["units"] * px})["total"]
+    return c
+
+
+def counterfactuals(journal: list[dict], underlying: str, *, margin: float | None,
+                    credit: float | None, path: dict | None = None,
+                    tapes: dict | None = None) -> list[dict]:
+    """What the cycle would have netted under rules applied POST HOC over its own tape —
+    the loss_study construction, per cycle: a fixed stop off the margin, a target off the
+    credit, a trail off the running peak, the ENTRY book held with no adjustment, and each
+    adjustment removed one at a time (what remained open is closed at its mark at the
+    actual exit minute). Exit-only overlays are exact over the marked path; a removed
+    adjustment re-marks the legs it would have left in place off the same tape, so it is
+    honest to the prints, not to the fills they would have needed. Never a prediction:
+    every row says what it measured, and the actual cycle is the reference."""
+    tapes = tapes if tapes is not None else {}
+    pts = _minute_series(journal, underlying, tapes=tapes)
+    if not pts:
+        return []
+    actual = pts[-1]
+    actual_net = round(actual["realized"] - actual["charges"], 2)
+    exit_at = actual["m"]
+    out: list[dict] = [{"id": "actual", "label": "What you did", "net": actual_net,
+                        "exit_at": exit_at, "vs_actual": 0.0, "note": None, "ok": True}]
+
+    def _exit_rule(cid: str, label: str, trigger, note: str) -> None:
+        peak = 0.0
+        for p in pts:
+            peak = max(peak, p["mtm"])
+            if p["open"] and trigger(p, peak):
+                net = round(p["mtm"] - p["charges"] - _close_cost(p["open"], p["marks"]), 2)
+                out.append({"id": cid, "label": label, "net": net, "exit_at": p["m"],
+                            "vs_actual": round(net - actual_net, 2), "note": note, "ok": True})
+                return
+        out.append({"id": cid, "label": label, "net": actual_net, "exit_at": exit_at,
+                    "vs_actual": 0.0, "note": "never triggered — same as what you did",
+                    "ok": True})
+
+    if margin:
+        for x in (2, 3, 5):
+            lvl = -x / 100.0 * float(margin)
+            _exit_rule(f"stop_{x}", f"Stop at −{x}% of margin ({_inr(lvl)})",
+                       lambda p, _pk, lvl=lvl: p["mtm"] <= lvl,
+                       "closed everything at its mark the minute MTM crossed the level")
+    if credit and credit > 0:
+        for y in (25, 50):
+            lvl = y / 100.0 * float(credit)
+            _exit_rule(f"target_{y}", f"Target at {y}% of the credit ({_inr(lvl)})",
+                       lambda p, _pk, lvl=lvl: p["mtm"] >= lvl,
+                       "closed everything at its mark the minute MTM reached the level")
+    if margin:
+        arm = 0.02 * float(margin)
+        _exit_rule("trail_half", f"Trail: give back half the peak once it is past 2% of "
+                   f"margin ({_inr(arm)})",
+                   lambda p, pk: pk >= arm and p["mtm"] <= 0.5 * pk,
+                   "closed everything at its mark once MTM fell to half its running peak")
+
+    # the entry book held with no adjustment, and each adjustment removed one at a time
+    acts = action_groups(journal)
+    if len(acts) >= 3:
+        entry = acts[0]
+        middle = [a for a in acts[1:-1] if a["group"] is not None]
+
+        def _replayed(cid: str, label: str, keep_groups: set | None, drop: int | None,
+                      note: str) -> None:
+            rows = [r for r in journal if r.get("action") != "NOOP"
+                    and (keep_groups is None or r.get("group") in keep_groups)
+                    and (drop is None or r.get("group") != drop)]
+            alt = _minute_series(rows, underlying, tapes=tapes, until=exit_at)
+            # cut at the actual exit minute and close what is still open at its marks
+            alt = [p for p in alt if p["m"] <= exit_at] or alt
+            if not alt:
+                out.append({"id": cid, "label": label, "net": None, "exit_at": None,
+                            "vs_actual": None, "note": "no marks on the tape", "ok": False})
+                return
+            p = alt[-1]
+            forced = 0.0
+            for sym, lots in p["open"].items():
+                px = p["marks"].get(sym)
+                if px is None:
+                    continue
+                for lot in lots:
+                    forced += lot["dir"] * (px - lot["price"]) * lot["units"]
+            net = round(p["realized"] + forced - p["charges"]
+                        - _close_cost(p["open"], p["marks"]), 2)
+            out.append({"id": cid, "label": label, "net": net, "exit_at": p["m"],
+                        "vs_actual": round(net - actual_net, 2), "note": note, "ok": True})
+
+        if middle:
+            _replayed("entry_only", "Hold the entry book, no adjustments",
+                      {entry["group"]}, None,
+                      "the entry legs alone, marked to the actual exit minute and closed there")
+            for a in middle:
+                lab = a["label"].replace("_", " ")
+                _replayed(f"without_{a['group']}", f"Without the {lab} at {a['at'][11:]}",
+                          None, a["group"],
+                          "that action removed, everything else as done; what was left "
+                          "open is closed at its mark at the actual exit minute")
+    return out
 
 
 _LABELS = {"entry", "roll", "hedge", "resize", "partial_exit", "exit", "add", "close"}
@@ -493,6 +636,120 @@ def action_groups(journal: list[dict]) -> list[dict]:
     return out
 
 
+# ------------------------------------------------------------- cross-cycle patterns
+_MIN_CYCLES = 5
+
+
+def _entry_ctx(c: dict) -> dict:
+    acts = c.get("actions") or []
+    ctx = (acts[0].get("context") or {}) if acts else {}
+    return ctx.get("after") or ctx.get("before") or {}
+
+
+def _bucket(v, edges: list[tuple[str, float | None, float | None]]) -> str | None:
+    if v is None:
+        return None
+    for name, lo, hi in edges:
+        if (lo is None or v >= lo) and (hi is None or v < hi):
+            return name
+    return None
+
+
+def _agg(rows: list[dict]) -> dict:
+    n = len(rows)
+    wins = sum(1 for r in rows if r["net"] > 0)
+    return {"n": n, "net": round(sum(r["net"] for r in rows), 2),
+            "avg": round(sum(r["net"] for r in rows) / n, 2) if n else None,
+            "win_rate": round(100.0 * wins / n, 1) if n else None}
+
+
+def patterns(cycles: list[dict]) -> dict:
+    """Observations across banked cycles — by the conditions at entry (IV rank, DTE, VIX),
+    by what followed each kind of adjustment, by how much of the best the exits kept.
+    Plain arithmetic with the sample size on every line; nothing below ``_MIN_CYCLES``
+    cycles, and a line needs 2+ cycles in each bucket it compares. Observations, never
+    advice: they say what happened in THIS record."""
+    done = [c for c in cycles if c.get("net") is not None]
+    if len(done) < _MIN_CYCLES:
+        return {"ok": False, "n": len(done),
+                "note": f"needs {_MIN_CYCLES} banked cycles ({len(done)} so far)", "lines": [],
+                "tables": {}}
+    lines: list[str] = []
+    tables: dict[str, list[dict]] = {}
+
+    def by(name: str, key, edges) -> None:
+        groups: dict[str, list[dict]] = {}
+        for c in done:
+            b = _bucket(key(c), edges)
+            if b:
+                groups.setdefault(b, []).append(c)
+        rows = [{"bucket": b, **_agg(groups[b])} for b, _lo, _hi in edges
+                if b in groups and len(groups[b]) >= 2]        # a bucket of one is noise
+        if len(rows) >= 2:
+            tables[name] = rows
+            best = max(rows, key=lambda r: r["avg"])
+            worst = min(rows, key=lambda r: r["avg"])
+            lines.append(f"By {name}: best {best['bucket']} (avg {_inr(best['avg'])}, "
+                         f"{best['win_rate']}% won, n={best['n']}), worst {worst['bucket']} "
+                         f"(avg {_inr(worst['avg'])}, {worst['win_rate']}% won, n={worst['n']}).")
+
+    by("IV rank at entry", lambda c: (_entry_ctx(c).get("iv_rank") or {}).get("rank"),
+       [("low (<30)", None, 30), ("mid (30–70)", 30, 70), ("high (≥70)", 70, None)])
+    by("VIX at entry", lambda c: _entry_ctx(c).get("vix"),
+       [("<12", None, 12), ("12–16", 12, 16), ("≥16", 16, None)])
+    by("DTE at entry", lambda c: (_entry_ctx(c).get("dte") if _entry_ctx(c).get("dte") is not None
+                                  else ((date.fromisoformat(c["expiry"]) - date.fromisoformat(
+                                      c["entry_day"])).days if c.get("expiry") and c.get(
+                                      "entry_day") else None)),
+       [("<10", None, 10), ("10–25", 10, 25), ("≥25", 25, None)])
+
+    # what followed each kind of adjustment: the cycle's net minus the MTM at the action
+    follow: dict[str, list[float]] = {}
+    for c in done:
+        for a in c.get("actions") or []:
+            if a["label"] in ("roll", "hedge", "resize", "partial_exit", "add"):
+                after = ((a.get("context") or {}).get("after") or {}).get("mtm")
+                if after is not None:
+                    follow.setdefault(a["label"], []).append(c["net"] - float(after))
+    adj_rows = []
+    for lab, xs in sorted(follow.items()):
+        if len(xs) >= 2:
+            avg = sum(xs) / len(xs)
+            better = sum(1 for x in xs if x > 0)
+            adj_rows.append({"adjustment": lab, "n": len(xs), "avg_after": round(avg, 2),
+                             "improved": better})
+            lines.append(f"After a {lab.replace('_', ' ')} (n={len(xs)}) the cycle moved "
+                         f"{_inr(avg)} on average from the MTM at the moment of the action; "
+                         f"{better} of {len(xs)} ended above it.")
+    if adj_rows:
+        tables["adjustments"] = adj_rows
+
+    # exits vs the best the cycle offered
+    kept = [c["path"]["exit_vs_mfe_pct"] for c in done
+            if c.get("path") and c["path"].get("exit_vs_mfe_pct") is not None]
+    if len(kept) >= 2:
+        avg = sum(kept) / len(kept)
+        left = sum(1 for k in kept if k < 50)
+        lines.append(f"Exits kept {avg:.0f}% of each cycle's best MTM on average (n={len(kept)}); "
+                     f"{left} of {len(kept)} banked under half of it.")
+    # stops: how often the actual loss went past the counterfactual stops
+    hit = [c for c in done if c.get("path") and c.get("margin")
+           and c["path"]["mae"]["mtm"] <= -0.03 * float(c["margin"])]
+    if done and any(c.get("margin") for c in done):
+        lines.append(f"{len(hit)} of {len(done)} cycles were at some point more than 3% of "
+                     f"margin under water; {sum(1 for c in hit if c['net'] > 0)} of those "
+                     f"still closed positive.")
+    # holding time, winners vs losers
+    w = [c for c in done if c["net"] > 0 and c.get("entered") and c.get("exited")]
+    losers = [c for c in done if c["net"] <= 0 and c.get("entered") and c.get("exited")]
+    if len(w) >= 2 and len(losers) >= 2:
+        hw = sum(_holding_days(c["entered"], c["exited"]) for c in w) / len(w)
+        hl = sum(_holding_days(c["entered"], c["exited"]) for c in losers) / len(losers)
+        lines.append(f"Winners were held {hw:.1f} days on average (n={len(w)}), losers "
+                     f"{hl:.1f} (n={len(losers)}).")
+    return {"ok": True, "n": len(done), "note": None, "lines": lines, "tables": tables}
+
+
 def _holding_days(entry_minute: str, exit_minute: str) -> float:
     e = datetime.fromisoformat(entry_minute.replace(" ", "T"))
     x = datetime.fromisoformat(exit_minute.replace(" ", "T"))
@@ -522,11 +779,19 @@ def bank(db: Session, algo_id: int, *, note: str | None = None, tags: list[str] 
     rec = reconstruct(journal, u)
     n = len(sim["cycles"]) + 1
     capital_before = float(sim["equity"] or algo.capital)
+    tapes: dict = {}
     try:
-        path = cycle_path(journal, u)
+        path = cycle_path(journal, u, tapes=tapes)
     except Exception:
         logger.exception("SIM %s: cycle path failed", algo_id)
         path = None
+    try:
+        cf = counterfactuals(journal, u, margin=float(margin) if margin else None,
+                             credit=rec["premium"] if rec["premium"] > 0 else None,
+                             path=path, tapes=tapes)
+    except Exception:
+        logger.exception("SIM %s: counterfactuals failed", algo_id)
+        cf = []
     cycle = {"n": n, "entered": rec["entered"], "exited": rec["exited"],
              "entry_day": rec["entered"][:10] if rec["entered"] else o.get("day"),
              "exit_day": rec["exited"][:10] if rec["exited"] else o.get("day"),
@@ -542,7 +807,7 @@ def bank(db: Session, algo_id: int, *, note: str | None = None, tags: list[str] 
              "journal": journal, "banked_at": datetime.now(UTC).isoformat(timespec="seconds"),
              # the analysis material: the path, the actions with their decision contexts,
              # what was armed, and what was taken back (never in the P&L)
-             "path": path, "actions": action_groups(journal),
+             "path": path, "actions": action_groups(journal), "counterfactuals": cf,
              "alerts": o.get("alerts") or [], "discarded": o.get("discarded") or []}
     sim["cycles"].append(cycle)
     sim["equity"] = cycle["capital_after"]
@@ -731,6 +996,18 @@ def dossier_markdown(db: Session, algo_id: int) -> str:
                     f"max P {_lim(pay.get('max_profit'))} / max L {_lim(pay.get('max_loss'))} · "
                     f"BE {pay.get('breakevens')} · nearest BE {pay.get('be_dist_pct')}% · "
                     f"nearest short {x.get('short_strike_dist_pct')}% · POP {pay.get('pop')}")
+        if c.get("counterfactuals"):
+            out += ["", "### Counterfactuals (rules applied after the fact, over this tape)", ""]
+            for x in c["counterfactuals"]:
+                if not x.get("ok"):
+                    out.append(f"- {x['label']}: {x.get('note')}")
+                    continue
+                d = x.get("vs_actual")
+                out.append(f"- {x['label']}: net {_inr(x['net'])}"
+                           + (f" ({'+' if d >= 0 else ''}{_inr(d)} vs actual)"
+                              if d is not None and x["id"] != "actual" else "")
+                           + f" · exit {x.get('exit_at')}"
+                           + (f" — {x['note']}" if x.get("note") else ""))
         if c.get("alerts"):
             out += ["", "- alerts: " + "; ".join(
                 f"{a.get('kind')} {a.get('value')} "
@@ -742,6 +1019,13 @@ def dossier_markdown(db: Session, algo_id: int) -> str:
                 + ", ".join(f"{r['action']} {int(r['units'])} {r['symbol']}"
                             for r in x.get("rows", []))
                 for x in c["discarded"])]
+        out.append("")
+    pat = patterns(sim["cycles"])
+    out += ["## Patterns across cycles", ""]
+    if not pat["ok"]:
+        out += [f"({pat['note']})", ""]
+    else:
+        out += [f"- {ln}" for ln in pat["lines"]] or ["(no bucket has two cycles yet)"]
         out.append("")
     if sim.get("open") and sim["open"].get("journal"):
         o = sim["open"]

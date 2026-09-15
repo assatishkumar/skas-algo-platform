@@ -48,6 +48,7 @@ from skas_algo.services.replay_market import ReplayChain, ReplayMarket
 
 from . import payoff as _payoff
 from . import presets as _presets
+from . import whatif as _whatif
 from .alerts import AlertBook
 from .margin import MarginLeg, span_like
 
@@ -640,6 +641,33 @@ class ConsoleSession(AlertBook):
                        "label": label or " · ".join(i["label"] for i in items)}
         return self.staged
 
+    def what_if(self) -> dict:
+        """Candidate adjustments at the cursor, priced and measured side by side — see
+        `whatif.py`. Read-only."""
+        return _whatif.candidates(self)
+
+    def apply_ops(self, ops: list[dict], *, label: str | None = None) -> dict | None:
+        """A what-if candidate's operations as ONE action (one undo group) — a roll, a wing
+        on each naked short, a flatten. Mixed kinds, every one through `_stage_item`, so a
+        leg that cannot price refuses the whole candidate."""
+        items = [self._stage_item(**{k: v for k, v in op.items()
+                                     if k in ("kind", "right", "strike", "side", "lots",
+                                              "leg_id", "enabled")}) for op in ops]
+        if not items:
+            raise ValueError("nothing to apply")
+        if not self.requires_confirm:
+            before = self._decision_context()
+            self._group += 1
+            minute = self.clock.strftime("%Y-%m-%dT%H:%M")
+            for it in items:
+                self._apply(it, minute)
+            self._replay_book(self.clock, force=True)
+            self._stamp_context(self._group, before, label or "what-if")
+            return None
+        self.staged = {"items": items,
+                       "label": label or " · ".join(i["label"] for i in items)}
+        return self.staged
+
     def scale_book(self, factor: float) -> dict | None:
         """The design's multiplier: every leg's lots × ``factor`` in ONE action (one group,
         so Undo takes the whole rescale back). A rescale of 1 leg is a resize; of a condor
@@ -1103,7 +1131,7 @@ class ConsoleSession(AlertBook):
             iv30 = self.iv30_at_cursor()
             legs = [{"right": x["right"], "strike": x["strike"], "direction": x["direction"],
                      "units": x["units"], "entry": x["entry"]} for x in legs_out]
-            sigma = (iv30["iv"] / 100.0) if iv30 else None
+            sigma = self.pop_sigma()
             t = min((x["t"] for x in legs_out if x.get("t")), default=None)
             pay = _payoff.metrics(legs, float(spot), offset=risk.get("realised", 0.0),
                                   sigma=sigma, t=t) if spot else None
@@ -1130,6 +1158,20 @@ class ConsoleSession(AlertBook):
         except Exception:  # pragma: no cover - a snapshot must never break a fill
             logger.exception("console: decision context failed")
             return {"at": self._minute_key()}
+
+    def pop_sigma(self) -> float | None:
+        """The vol POP is measured with: the ~30-DTE ATM IV at the cursor, else the ATM IV
+        of the selected expiry, else the VIX — the first one the day can supply, as a
+        fraction."""
+        iv30 = self.iv30_at_cursor()
+        if iv30 and iv30.get("iv"):
+            return float(iv30["iv"]) / 100.0
+        atm = self._atm_iv_at_cursor()
+        if atm:
+            return float(atm) / 100.0
+        v = self._vix_at_cursor() or {}
+        vix = v.get("last") or v.get("prev_close")
+        return float(vix) / 100.0 if vix else None
 
     def _stamp_context(self, group: int, before: dict, kind: str) -> None:
         """Stamp {kind, before, after} on the journal rows of ``group``."""

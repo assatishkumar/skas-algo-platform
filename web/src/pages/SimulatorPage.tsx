@@ -98,6 +98,23 @@ function CycleRecord({ simId, c }: { simId: number; c: SimCycle }) {
           </div>
         );
       })}
+      {(c.counterfactuals?.length ?? 0) > 1 && (
+        <div className="border-t border-[var(--hair)] pt-1.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-[var(--faint)]" title="rules applied after the fact over this cycle's own tape — exit-only overlays are exact over the marked path; a removed adjustment re-marks what it would have left open. Observations, not advice.">Counterfactuals · what a rule would have netted</div>
+          <table className="text-[11.5px] tabular-nums mt-1">
+            <tbody>
+              {c.counterfactuals!.map((x) => (
+                <tr key={x.id} title={x.note ?? undefined}>
+                  <td className="pr-3 py-0.5">{x.label}</td>
+                  <td className={`text-right pr-3 ${x.net != null && x.net >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>{x.ok ? inr(x.net) : "—"}</td>
+                  <td className="text-right pr-3 text-[var(--muted)]">{x.id === "actual" ? "reference" : x.vs_actual == null ? (x.note ?? "") : `${x.vs_actual >= 0 ? "+" : ""}${inr(x.vs_actual)} vs actual`}</td>
+                  <td className="text-[var(--muted)]">{x.exit_at ? when(x.exit_at) : ""}{x.note && x.note.startsWith("never") ? " · never triggered" : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       {(c.alerts?.length ?? 0) > 0 && (
         <div className="text-[11px] text-[var(--muted)]">alerts: {c.alerts!.map((a) => `${a.kind} ${a.value}${a.fired_at ? ` (fired ${when(a.fired_at)})` : " (armed)"}`).join(" · ")}</div>
       )}
@@ -274,6 +291,16 @@ export default function SimulatorPage() {
               </Card>
             )}
 
+            <Card>
+              <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-[var(--faint)] mb-1">Patterns across cycles</div>
+              {!d.patterns || !d.patterns.ok ? (
+                <div className="text-sm text-[var(--muted)]">{d.patterns?.note ?? "needs 5 banked cycles"} — observations by the conditions at entry, what followed each kind of adjustment, and how much of each cycle's best the exits kept. Arithmetic over this record only, with the sample size on every line; never advice.</div>
+              ) : d.patterns.lines.length === 0 ? (
+                <div className="text-sm text-[var(--muted)]">no bucket has two cycles yet</div>
+              ) : (
+                <ul className="text-[12.5px] list-disc pl-4 space-y-0.5">{d.patterns.lines.map((ln, i) => <li key={i}>{ln}</li>)}</ul>
+              )}
+            </Card>
             <Card>
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-[var(--faint)]">Cycles</div>

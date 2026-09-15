@@ -26,6 +26,7 @@ from skas_algo.api.models import (
     ConsoleMarginAnchor,
     ConsoleOpen,
     ConsoleOpenLive,
+    ConsoleOps,
     ConsolePreset,
     ConsoleSave,
     ConsoleScale,
@@ -248,6 +249,26 @@ def jump(session_id: str, body: ConsoleJump) -> dict:
     st = session.state()
     st["jumped"] = session.clock != before
     return st
+
+
+@router.get("/sessions/{session_id}/what-if")
+def what_if(session_id: str) -> dict:
+    """Candidate adjustments at the cursor, priced off the chain and measured side by side
+    (max loss, breakevens, POP, greeks, model margin, cash moved). Read-only; ranked by
+    max loss and labelled so — the choice stays the owner's."""
+    session = _replay_only(_get(session_id), "what-if")
+    return session.what_if()
+
+
+@router.post("/sessions/{session_id}/what-if")
+def apply_what_if(session_id: str, body: ConsoleOps) -> dict:
+    """Apply one candidate's operations as ONE undo group."""
+    session = _replay_only(_get(session_id), "what-if")
+    try:
+        session.apply_ops(body.ops, label=body.label)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return session.state()
 
 
 @router.post("/sessions/{session_id}/annotate")

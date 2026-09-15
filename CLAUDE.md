@@ -1335,6 +1335,30 @@ no path. (4) `GET /simulator/{id}/dossier` (`dossier_markdown`; CLI `skas-algo
 sim-dossier <id> [--out f.md]`) is the whole strategy as one Markdown document —
 playbook, stats, every cycle's actions with before/after contexts, path, alerts, undos —
 the file a review session starts from.
+**The coach (owner ask 2026-09-15) is DETERMINISTIC arithmetic, never advice, and every
+row says what it measured.** Three pieces. (1) **What-if** (`options_console/whatif.py`,
+`GET/POST /console/sessions/{id}/what-if`, the rail's "what if" chip in replay): candidate
+adjustments to the open book — close / half-close / roll the TESTED short (the one spot is
+nearest) 1-2 grid steps out, a wing on every naked short, flatten, do nothing — each a
+COPY of the book priced at the cursor (`_price`; an unprinted strike refuses the row with
+the reason) and measured with the rail's own calculators (payoff max P/L + breakevens +
+POP, net greeks, the MODEL margin on every row so rows compare, cash moved, charges).
+Ranked by max loss, finite before unlimited; "apply" is `apply_ops` = one undo group with
+a context stamped. (2) **Counterfactuals** (`simulator.counterfactuals`, stored on the
+cycle at bank, printed in the dossier and the cycle record): the cycle's tape replayed
+under rules applied post hoc — a stop at −2/3/5% of the recorded margin, a target at
+25/50% of the credit, a trail (give back half the peak once past 2% of margin), the ENTRY
+book held with no adjustment, and each adjustment removed one at a time. Built on
+`_minute_series` (the walker `cycle_path` now shares; `until=` lets a counterfactual walk
+past its own last fill to the actual exit minute; a close of nothing is a no-op). Exit-only
+overlays are exact over the marked path; a removed adjustment marks what it would have
+left open at the tape's print at the actual exit minute — honest to the prints, not to
+the fills those legs would have needed. (3) **Patterns** (`simulator.patterns`, in `get()`
+and the dossier; the page's card): with ≥5 banked cycles, outcomes by IV rank / VIX / DTE
+at entry (a bucket needs 2+ cycles), what followed each kind of adjustment (cycle net −
+MTM at the action's `after`), how much of MFE the exits kept, how often a cycle went >3%
+of margin under water, winners' vs losers' holding time. (4) Claude review: hand the
+dossier to a session — no code.
 
 ## 8a. The /portfolio tracker is NOT part of the trading system
 **The VPS is the authoritative portfolio.** It holds the owner's real book (56 holdings)

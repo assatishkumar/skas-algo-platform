@@ -53,7 +53,7 @@ import type {
   Trade,
   ConsoleDays,
   ConsoleProbe,
-  ConsoleState,
+  ConsoleState, ConsoleWhatIf,
   Universe,
   CpRatioExpiryDeploy,
   FairValueCalendarDeploy,
@@ -238,6 +238,9 @@ export const api = {
   consoleJump: (id: string, body: { kind: string; pct?: number }) =>
     request<ConsoleState>(`/console/sessions/${id}/jump`,
       { method: "POST", body: JSON.stringify(body) }),
+  consoleWhatIf: (id: string) => request<ConsoleWhatIf>(`/console/sessions/${id}/what-if`),
+  consoleApplyWhatIf: (id: string, body: { ops: Record<string, unknown>[]; label?: string | null }) =>
+    request<ConsoleState>(`/console/sessions/${id}/what-if`, { method: "POST", body: JSON.stringify(body) }),
   consoleAnnotate: (id: string, group: number, why: string) =>
     request<ConsoleState>(`/console/sessions/${id}/annotate`, { method: "POST", body: JSON.stringify({ group, why }) }),
   consoleBookmark: (id: string) =>

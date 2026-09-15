@@ -172,6 +172,13 @@ class SimWhy(BaseModel):
     why: str
 
 
+class ConsoleOps(BaseModel):
+    """A what-if candidate's operations, applied as one action."""
+
+    ops: list[dict]
+    label: str | None = None
+
+
 class ConsoleAnnotate(BaseModel):
     """The owner's 'why' on one console action (its undo group), stamped on the tape."""
 
