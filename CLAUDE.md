@@ -640,8 +640,9 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   confirmed flip → close + reverse; inside `min_hold_bars` → FLAT (whipsaw brake); optional
   `take_profit_pct` (whole % of credit, 0 = off — `pct` flag rules: default 0 is
   unit-agnostic, keep it a WHOLE percent) and `tp_rollover` (a banked target re-enters at
-  once, same side, on the NEXT month: `min_expiry` = the expiry just closed, cleared by
-  the next fresh signal); roll 5 days pre-expiry. `timeframe` splits the session the
+  once — or after `tp_wait_bars` further closed bars — same side, on the NEXT month:
+  `min_expiry` = the expiry just closed, both cleared by the next fresh signal); roll 5
+  days pre-expiry. `timeframe` splits the session the
   exchange's way — `_bars_per_day` = round(375/tf): 60m six bars, 120m three, 240m two
   (09:15–13:15 + 13:15–close), ≥375 one — and the LAST bar is evaluated at its own
   boundary capped at 15:15 (`_tail_eval_minute`), the tail merged afterwards. NO cadence knobs

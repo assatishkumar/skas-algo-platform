@@ -102,6 +102,7 @@ const LABELS: Record<string, string> = {
   max_strike_steps: "Max strike steps toward spot",
   take_profit_pct: "Take profit (% of credit)",
   tp_rollover: "Roll into next month after a take-profit",
+  tp_wait_bars: "Rollover waits (bars)",
   partial_book_pct: "Book % at target",
   entry_mode: "Entry",
   pullback_pct: "Min pullback %",

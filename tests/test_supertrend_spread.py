@@ -247,3 +247,20 @@ def test_a_take_profit_with_rollover_reenters_next_month_at_once():
     assert [s.reason for s in sigs] == ["target", "target", "st_bear", "st_bear"]
     assert st.legs and st.entry_expiry == date(2026, 9, 29)   # the NEXT month, same side
     assert st.direction == "bear" and st.armed
+
+
+def test_a_rollover_can_wait_out_bars_before_reentering():
+    st, ctx, chain = _mk(confirm_bars=0, take_profit_pct=75, tp_rollover=True, tp_wait_bars=2)
+    _run_days(st, ctx, date(2026, 7, 6), _warm() + _drop())
+    sell = next(leg for leg in st.legs if leg["dir"] < 0)
+    buy = next(leg for leg in st.legs if leg["dir"] > 0)
+    ctx.market.marks = {sell["symbol"]: buy["entry"] + st.entry_credit * 0.2,
+                        buy["symbol"]: buy["entry"]}
+    d = date(2026, 7, 27)
+    _tick(st, ctx, d, 9, 15, 23280.0)
+    sigs = _tick(st, ctx, d, 10, 15, 23280.0)            # bar 1: the target, no re-entry yet
+    assert [s.reason for s in sigs] == ["target", "target"] and not st.legs and st.armed
+    assert not _tick(st, ctx, d, 11, 15, 23280.0)        # bar 2: still waiting
+    sigs = _tick(st, ctx, d, 12, 15, 23280.0)            # bar 3: two bars later → re-enter
+    assert [s.reason for s in sigs] == ["st_bear", "st_bear"]
+    assert st.entry_expiry == date(2026, 9, 29) and st.wait_until is None

@@ -84,7 +84,8 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         credit_ideal_hi: float = 130.0,
         max_strike_steps: int = 2,       # toward spot when the line strike does not fit
         take_profit_pct: float = 0.0,    # whole % of the entry credit; 0 = off
-        tp_rollover: bool = False,       # after a take-profit, re-enter at once on NEXT month
+        tp_rollover: bool = False,       # after a take-profit, re-enter on NEXT month …
+        tp_wait_bars: int = 0,           # … after this many further closed bars (0 = at once)
         expiry_switch_day: int = 15,
         roll_days_before: int = 5,
         lot_overrides: dict | None = None,
@@ -107,6 +108,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         self.max_strike_steps = max(0, int(max_strike_steps))
         self.take_profit_pct = float(take_profit_pct)
         self.tp_rollover = bool(tp_rollover)
+        self.tp_wait_bars = max(0, int(tp_wait_bars))
         self.expiry_switch_day = int(expiry_switch_day)
         self.roll_days_before = int(roll_days_before)
         self.initial_capital = initial_capital
@@ -127,6 +129,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         self.entry_bar: int | None = None      # bars_closed at entry (min_hold_bars)
         self.min_expiry: date | None = None    # after a TP rollover: the next entry's expiry
                                                # must be LATER than the one just banked
+        self.wait_until: int | None = None     # bars_closed the rollover may re-enter from
         self.last_line: float | None = None
         self._seeded = False
 
@@ -303,6 +306,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         # 1. the opposite confirmed flip: reverse — or, inside min_hold_bars, just go flat
         if signal is not None and signal != self.direction:
             self.min_expiry = None                    # a fresh signal picks its own month
+            self.wait_until = None
             if self.legs:
                 held = self.bars_closed - (self.entry_bar or self.bars_closed)
                 if held < self.min_hold_bars:
@@ -326,10 +330,14 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
                     banked = self.entry_expiry
                     signals += self._exit_all("target")
                     if self.tp_rollover:
-                        # owner 2026-09-15: a banked 75% rolls straight into NEXT month —
-                        # same direction, the expiry after the one just closed
+                        # owner 2026-09-15: a banked 75% rolls into NEXT month — same
+                        # direction, the expiry after the one just closed — at once, or
+                        # after `tp_wait_bars` further closed bars (the same-bar re-entry
+                        # lands right after the move that paid; a pause lets it breathe)
                         self.armed = True
                         self.min_expiry = banked
+                        self.wait_until = (self.bars_closed + self.tp_wait_bars
+                                           if self.tp_wait_bars else None)
                     else:
                         self.armed = False
 
@@ -338,8 +346,12 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
                 (self.entry_expiry - today).days <= self.roll_days_before:
             signals += self._exit_all("roll")
 
-        # 4. flat and armed → build the spread behind the line
+        # 4. flat and armed → build the spread behind the line (a rollover may be waiting
+        #    out its bars first)
         if self.direction is not None and self.armed and not self.legs:
+            if self.wait_until is not None and self.bars_closed < self.wait_until:
+                return signals
+            self.wait_until = None
             signals += self._try_enter(ctx, chain, today, line)
         return signals
 
@@ -510,6 +522,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
             "entry_expiry": self.entry_expiry.isoformat() if self.entry_expiry else None,
             "entry_bar": self.entry_bar, "last_line": self.last_line,
             "min_expiry": self.min_expiry.isoformat() if self.min_expiry else None,
+            "wait_until": self.wait_until,
         }
 
     def load_state(self, state: dict) -> None:
@@ -530,5 +543,6 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         self.last_line = state.get("last_line")
         me = state.get("min_expiry")
         self.min_expiry = date.fromisoformat(me) if me else None
+        self.wait_until = state.get("wait_until")
         if self.bars:
             self._seeded = True
