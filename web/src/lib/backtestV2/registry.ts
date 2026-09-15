@@ -766,11 +766,11 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
     sizing: "intradayHarness",
     entry: {
       frequency: "daily",
-      frequencyHint: "one decision per closed bar — six a day at 60m",
+      frequencyHint: "one decision per closed bar — two a day at 240m (13:15, 15:15)",
       fields: [
-        f("timeframe", "BAR (MINUTES)", "number", 60, { hint: "15 / 30 / 60 / 120 · anchored 09:15" }),
+        f("timeframe", "BAR (MINUTES)", "number", 240, { hint: "60 / 120 / 240 / 375 · anchored 09:15 · 240 confirmed" }),
         f("atr_period", "SUPERTREND ATR PERIOD", "number", 10),
-        f("multiplier", "SUPERTREND MULTIPLIER", "number", 3, { step: "any", hint: "sweep 2.0–4.0" }),
+        f("multiplier", "SUPERTREND MULTIPLIER", "number", 4, { step: "any", hint: "4 confirmed on 4h; the curve turns over past it" }),
         f("confirm_bars", "CONFIRM BARS", "number", 1, { hint: "0 = trade the flip bar" }),
         f("strike_step", "STRIKE STEP", "number", 100, { hint: "NIFTY: 100s only" }),
       ],

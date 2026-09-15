@@ -70,9 +70,9 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         initial_capital: float = 500_000,
         underlying: str | None = None,
         lots: int = 1,
-        timeframe: int = 60,             # minutes per bar; anchor stays 09:15
-        atr_period: int = 10,
-        multiplier: float = 3.0,
+        timeframe: int = 240,            # minutes per bar; anchor stays 09:15 — 4h confirmed
+        atr_period: int = 10,            # over Jul 2021→Sep 2026 (see the docs card)
+        multiplier: float = 4.0,
         confirm_bars: int = 1,           # 0 = trade the flip bar itself
         min_hold_bars: int = 3,          # a reversal inside this → flat, not reverse
         strike_step: int = 100,          # 100-point strikes ONLY

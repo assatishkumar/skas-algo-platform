@@ -108,13 +108,13 @@ export const STRATEGIES: Rule[] = [
   },
   {
     id: "supertrend_spread",
-    name: "SuperTrend Spread (1h)",
+    name: "SuperTrend Spread (4h)",
     kind: "Options",
-    bias: "Directional · positional credit spreads with the hourly trend",
+    bias: "Directional · positional credit spreads with the intraday trend",
     summary:
-      "Hourly SuperTrend flip on NIFTY spot (60-min bars anchored 09:15) traded through defined-risk monthly credit spreads. The SuperTrend line is already the invalidation level, so the short strike goes behind it: a confirmed bullish flip sells a bull put spread with the short strike at or below the line; a bearish flip sells a bear call spread at or above it. Checked at every closed bar — no tick-level monitoring. Replays on the 1-minute option store.",
+      "SuperTrend flip on NIFTY spot bars (4h by default, anchored 09:15; 1h/2h/1d selectable) traded through defined-risk monthly credit spreads. The SuperTrend line is already the invalidation level, so the short strike goes behind it: a confirmed bullish flip sells a bull put spread with the short strike at or below the line; a bearish flip sells a bear call spread at or above it. Checked at every closed bar — no tick-level monitoring. Replays on the 1-minute option store; the confirmed setting (below) is the template.",
     structure: [
-      "SuperTrend(ATR 10, ×3.0) on 60-min bars: 09:15 · 10:15 · 11:15 · 12:15 · 13:15 · 14:15; the 14:15 bar is evaluated at 15:15 and the 15:15–15:30 stub merged into it.",
+      "SuperTrend(ATR 10, ×4.0) on 4h bars, two a day: 09:15–13:15 evaluated at 13:15, 13:15–close evaluated at 15:15 with the 15:15–15:30 tail merged in. (60m: six bars, the 14:15 bar evaluated at 15:15; 120m: three; 1d: one at 15:15.)",
       "Bullish → BULL PUT SPREAD: short strike = highest 100-pt strike ≤ the SuperTrend line; long put 300–500 pts below.",
       "Bearish → BEAR CALL SPREAD: short strike = lowest 100-pt strike ≥ the line; long call 300–500 pts above.",
       "Net credit ₹80–140/share (₹90–130 ideal). If the line strike does not fit, step the short strike one strike toward spot (max 2); still nothing → skip and retry at the next bar.",
@@ -132,7 +132,31 @@ export const STRATEGIES: Rule[] = [
       "Never into expiry week: exit 5 days before expiry; if the direction still holds, re-enter next month at once.",
     ],
     risk:
-      "Defined both ways: max loss ≈ (width − credit) × lot size, no premium stop — the reverse signal is the stop. Expect 3–5× the trade count of the daily EMA version and a lower win rate; judge it on expectancy per trade net of four-leg reversal costs. Sweep the multiplier 2.0–4.0 (trade count moves by an order of magnitude) and read post-Nov-2024 separately; a high skip rate means widen the credit window before touching the signal.",
+      "Defined both ways: max loss ≈ (width − credit) × lot size, no premium stop — the reverse signal is the stop. Judge it on expectancy per trade net of four-leg reversal costs, not on win rate. The credit window did not bind in any sweep (skips stayed under half the trade count), so the signal, not the window, is the lever.",
+    findings: {
+      title: "What the replays said (2026-09-15) — 28 runs on the 1-min store, one lot, ₹5L",
+      intro: "Confirm 1, min hold 3, credit ₹80–140, wings 300–500, roll 5 days pre-expiry throughout. Net is after charges. 'Nov24→' = 1 Nov 2024 → 15 Sep 2026 (22 months); 'full' = 29 Jul 2021 → 15 Sep 2026. Rows are ordinary runs — open them in Runs / Analyze / Compare by id.",
+      columns: ["Trades", "Win", "Net", "₹/trade", "Max DD"],
+      rows: [
+        { name: "1h · ×2.0 · Nov24→ (#302)", set: "the spec's starting point", cells: ["170", "38%", "−26,021", "−153", "13.4%"], read: "Too many flips; charges alone are ₹25k." },
+        { name: "1h · ×4.0 · Nov24→ (#306)", set: "widest multiplier on 1h", cells: ["81", "41%", "+17,129", "+211", "6.1%"], read: "Monotonic: fewer flips, better — but a coin that lands slightly heads." },
+        { name: "2h · ×4.0 · Nov24→ (#309)", set: "three bars a day", cells: ["50", "54%", "+29,968", "+599", "4.9%"], read: "Slower bars filter the whipsaws." },
+        { name: "4h · ×4.0 · Nov24→ (#311)", set: "two bars a day", cells: ["35", "60%", "+53,991", "+1,543", "3.1%"], read: "The standout of the timeframe sweep." },
+        { name: "1d · ×4.0 · Nov24→ (#313)", set: "one bar at 15:15", cells: ["23", "57%", "−26,531", "−1,154", "12.5%"], read: "Flips too rarely; sits through regime moves with the short right behind the line." },
+        { name: "4h · ×4.0 · TP75 + same-bar rollover (#312)", set: "bank 75%, re-enter at once next month", cells: ["46", "59%", "+39,457", "+858", "4.0%"], read: "The rollover costs money at every timeframe: it re-enters right after the move that paid, 30+ days out." },
+        { name: "4h · ×4.0 · TP50, wait for a fresh signal · Nov24→ (#322)", set: "bank 50%, no re-entry until a new flip", cells: ["22", "91%", "+62,771", "+2,853", "2.5%"], read: "Best in the recent window…" },
+        { name: "4h · ×4.0 · TP50 · full (#325)", set: "…the same over five years", cells: ["65", "71%", "+59,415", "+914", "4.6%"], read: "…but it gives back the trend years: 2021–24 add ₹3k, 2025–26 ₹55k. Regime-specific — not confirmed." },
+        { name: "4h · ×4.5 · full (#326)", set: "wider band", cells: ["87", "59%", "+70,818", "+814", "5.3%"], read: "The multiplier curve turns over past 4." },
+        { name: "4h · ×5.0 · full (#327)", set: "wider still", cells: ["80", "54%", "+27,997", "+350", "9.0%"], read: "Worse on every column; with TP50 it loses (#329, −21,677)." },
+        { name: "1h · ×4.0 · full (#324)", set: "the hourly spec over five years", cells: ["209", "46%", "+44,558", "+213", "7.1%"], read: "Thin and charge-heavy; settles the timeframe question." },
+        { name: "4h · ×4.0 · no TP · full (#323) ★", set: "THE TEMPLATE", cells: ["97", "59%", "+109,170", "+1,125", "4.9%"], read: "Positive in five of six calendar years (2024 flat: +2k). By year, k: +12 · +31 · +17 · +2 · +36 · +11. The setting that survives every window." },
+      ],
+      notes: [
+        "Sample sizes are modest — 97 trades in five years for the template — so read the ranking as robust and the rupees as approximate.",
+        "One lot on ₹5L is why the five-year CAGR reads under 4%; a spread this size blocks ₹30–60k of margin, so the return on capital actually at risk is several times that. Sizing is a separate decision.",
+        "Not yet forward-tested: replay bars come from the de-carried parity spot, a deployment's from the index LTP with Kite's 15-min candles as warm-up. Paper-deploy for a month and check the 13:15 / 15:15 decisions land where the replay put them before any real lot.",
+      ],
+    },
   },
   {
     id: "call_put_ratio_expiry",
@@ -827,9 +851,9 @@ export const META: Record<string, Meta> = {
   },
   supertrend_spread: {
     group: "Directional tilt", biasKind: "bull",
-    facts: [["Bias", "With the 1h trend"], ["Instrument", "NIFTY monthly"], ["Structure", "Credit spread · 300–500 pts"],
-            ["Credit", "₹80–140 (ideal 90–130)"], ["Check", "Every closed 1h bar"], ["Roll", "5 days pre-expiry"]],
-    deployNote: "Replays on the 1-min store — backtest and sweep the multiplier first. The deploy card exists but the strategy has NOT been forward-tested yet.",
+    facts: [["Bias", "With the 4h trend"], ["Instrument", "NIFTY monthly"], ["Structure", "Credit spread · 300–500 pts"],
+            ["Credit", "₹80–140 (ideal 90–130)"], ["Check", "Every closed 4h bar"], ["Roll", "5 days pre-expiry"]],
+    deployNote: "Confirmed on the 1-min store (4h · ×4 · no take-profit, five years: +₹1.09L on one lot, 59% win, 4.9% max DD — run #323 is the template). NOT forward-tested yet: paper-deploy first.",
     deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
   },
   call_put_ratio_expiry: {

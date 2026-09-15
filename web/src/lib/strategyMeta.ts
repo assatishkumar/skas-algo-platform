@@ -101,7 +101,7 @@ export const STRATEGY_NAMES: Record<string, string> = {
   staggered_covered_call: "Staggered Covered Call",
   custom_options: "Custom Options (builder)",
   "21_ema_momentum": "21-EMA Momentum Spreads",
-  supertrend_spread: "SuperTrend Spreads (1h)",
+  supertrend_spread: "SuperTrend Spreads (4h)",
   delta_neutral_monthly: "Delta-Neutral — Monthly",
   iron_fly_monthly: "Iron Fly — Monthly",
   double_diagonal_calendar: "Double Diagonal Calendar",

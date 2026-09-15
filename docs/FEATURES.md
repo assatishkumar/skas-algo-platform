@@ -226,8 +226,12 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   when the window does not fit, else skip and retry each bar. Opposite confirmed flip →
   close + reverse; inside `min_hold_bars` (3) → flat instead (whipsaw brake); optional
   `take_profit_pct` of the credit; roll 5 days pre-expiry. The reverse signal is the stop;
-  the long leg caps the tail. NIFTY, fixed lots, replay on the 1-min store; deploy card
-  present but not yet forward-tested.
+  the long leg caps the tail. NIFTY, fixed lots, replay on the 1-min store. **Confirmed
+  setting (28 replays, 2026-09-15): 4h bars · ×4 · no take-profit** — five years +₹1.09L on
+  one lot, 97 trades, 59% win, 4.9% max DD, positive in 5 of 6 years (run #323 = the
+  template; the docs card carries the sweep tables). The hourly spec was thin (46% win,
+  charge-heavy), daily bars lost, a 50% take-profit won only post-Nov-2024, and the
+  multiplier curve turns over past 4. Deploy card present but not yet forward-tested.
 - **`custom_options` — user multi-leg position (Trade UI).** Enter the exact user legs for one
   expiry; exit on any of per-leg targets/stops, combined P&L `target_pct`/`stop_pct`, or spot
   bands; survivors settle at expiry. Builds symbols directly (so any listed contract, incl.

@@ -543,14 +543,14 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
   },
   {
     id: "supertrend_spread",
-    name: "SuperTrend spread (1h)",
-    group: "monthly", cadence: "EVERY CLOSED 1H BAR",
-    blurb: "NOT YET FORWARD-TESTED · hourly SuperTrend flip → credit spread with the short strike behind the line",
+    name: "SuperTrend spread (4h)",
+    group: "monthly", cadence: "EVERY CLOSED 4H BAR",
+    blurb: "NOT YET FORWARD-TESTED · 4h SuperTrend flip → credit spread with the short strike behind the line",
     instrument: "DERIV",
     underlyings: ["NIFTY"],
     fields: [
       f("lots", "Lots", "number", 1),
-      f("multiplier", "SuperTrend multiplier", "number", 3),
+      f("multiplier", "SuperTrend multiplier", "number", 4),
       f("confirm_bars", "Confirm bars", "number", 1),
       f("min_hold_bars", "Min hold bars", "number", 3),
       f("take_profit_pct", "Take profit (% of credit, 0 = off)", "number", 0),

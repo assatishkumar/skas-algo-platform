@@ -102,6 +102,9 @@ def _mk(**kw):
     chain = FakeChain(exps, 24000.0)
     market = FakeMarket()
     ctx = FakeCtx(chain, market)
+    # the tests are written against HOURLY bars (six a day); the ctor default moved to
+    # 240 once the 4h setting was confirmed (2026-09-15)
+    kw.setdefault("timeframe", 60)
     st = SuperTrendSpreadStrategy(universe=["NIFTY"], **kw)
     return st, ctx, chain
 
@@ -191,7 +194,7 @@ def test_state_round_trip_keeps_the_bars_and_the_book():
     st, ctx, chain = _mk(confirm_bars=0)
     _run_days(st, ctx, date(2026, 7, 6), _warm() + _drop())
     state = st.export_state()
-    again = SuperTrendSpreadStrategy(universe=["NIFTY"], confirm_bars=0)
+    again = SuperTrendSpreadStrategy(universe=["NIFTY"], confirm_bars=0, timeframe=60)
     again.load_state(state)
     assert again.export_state() == state and again.legs == st.legs
     assert again.bars_closed == st.bars_closed and again.pending == st.pending

@@ -650,7 +650,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   set `needs_supertrend` (that is the EQUITY daily precompute path). Live warm-up:
   `seed_intraday_bars` aggregates Kite 15-min candles into the 09:15 buckets (Kite's own
   60-min series has a separate 15:15 stub bar). Replays on the 1-min store in ~2 s a
-  month; deploy card present, NOT forward-tested. Coverage: `tests/test_supertrend_spread.py`.
+  month. **Ctor defaults ARE the confirmed setting (4h · ×4 · no TP; run #323 is the
+  template; 28-run sweep on the /docs card, 2026-09-15)** — the hourly spec, daily bars,
+  a take-profit and multipliers past 4 all tested worse over five years. Deploy card
+  present, NOT forward-tested. Coverage: `tests/test_supertrend_spread.py`.
 - **call_put_ratio_expiry** (expiry-day-only 1:3 premium-ratio, NIFTY Tue / SENSEX Thu):
   buy ATM straddle 09:20-09:27, sell 3 lots/side at the strikes trading nearest ⅓ of each
   ATM premium (LIVE-chain lookup; >30% tolerance miss → skip the day, `traded_day` guard);
