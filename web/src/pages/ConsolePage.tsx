@@ -1277,7 +1277,7 @@ export default function ConsolePage() {
         expiry: expiry === null ? undefined : (expiry ?? params.get("expiry") ?? undefined) }),
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
-      setParams({ ...simParams(), u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1298,7 +1298,7 @@ export default function ConsolePage() {
         setNotice(`${prettyDay(s.session.date)} is the last captured session in the 1-min store — nothing to replay past it yet. Today's bars are captured after 16:00 IST.`);
       }
       setState(s); setDay(s.session.date); setError(null);
-      setParams({ ...simParams(), u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1321,7 +1321,7 @@ export default function ConsolePage() {
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
       if (s.jumped === false) setNotice("No such event in this session's direction.");
-      setParams({ ...simParams(), u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1373,7 +1373,7 @@ export default function ConsolePage() {
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setUnderlying(s.session.underlying);
       setError(null); setShowSaves(false);
-      setParams({ ...simParams(), u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1506,7 +1506,7 @@ export default function ConsolePage() {
     mutationFn: (expiry: string) => call((id) => api.consoleChain(id, { expiry })),
     onSuccess: (s) => {
       setState(s);
-      setParams({ ...simParams(), u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) }, { replace: true });
     },
   });
@@ -1571,6 +1571,16 @@ export default function ConsolePage() {
     const liveId = params.get("live");
     if (liveId) { openLive.mutate(Number(liveId)); return; }
     if (simId != null) { openSim(); return; }
+    // a session id in the URL: the backend keeps every replay session on disk and rebuilds
+    // it under the same id (a restart, an eviction, a reload — none of them cost the book);
+    // only when it is truly gone do we open afresh from the day/minute in the URL
+    const sid = params.get("sid");
+    if (sid) {
+      api.consoleGet(sid).then((s) => {
+        setState(s); setDay(s.session.date); setUnderlying(s.session.underlying); setError(null);
+      }).catch(() => open.mutate({ underlying, day: params.get("day") ?? days.last }));
+      return;
+    }
     open.mutate({ underlying, day: params.get("day") ?? days.last });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days]);

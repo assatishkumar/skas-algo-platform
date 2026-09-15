@@ -1238,6 +1238,18 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   (`SKAS_CONSOLE_DIR`, tmp in tests); `⤒ load` opens a new session from it. Never
   persist the BOOK: it is re-derived from the tape on load, so a file cannot disagree
   with the store. Registry: 8 sessions, 3h idle.
+  **Since 2026-09-15 a replay session also SURVIVES the process**: the registry writes
+  the same payload through to `<console_dir>/sessions/<id>.json` whenever `state()`
+  sees the book change (`ConsoleSession._notify_change` → `registry.persist`; a
+  cursor-only move at most every 2 s, so autoplay is not a write per step), and
+  `registry.get()` rebuilds a missing id from that file UNDER THE SAME ID (the route's
+  `_wire` hooks re-attached via `registry.hooks`), so a restart, an eviction or the idle
+  sweep costs a reload from the tape, never the book or the URL. The page carries `sid`
+  in the URL and reopens by id on mount, falling back to a fresh open only when the
+  file is gone; the journal-restore path stays as the last resort. An explicit close
+  (`DELETE /console/sessions/{id}`) deletes the file; files older than 7 days are
+  pruned on create. Live consoles rebuild from the run; a STAGED basket is deliberately
+  not persisted (its prices belong to the minute it was staged).
 - **Below 1536px the console reflows (D9, 2026-09-10):** `useNarrow()` (matchMedia) swaps
   the ladder to `COLS_NARROW` (456px), the chain panel to 496px and the rail to 300px, so
   a 1280px window keeps ~460px of payoff instead of pushing the rail off the right edge.

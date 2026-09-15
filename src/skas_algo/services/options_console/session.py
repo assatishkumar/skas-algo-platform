@@ -250,6 +250,11 @@ class ConsoleSession(AlertBook):
         self._iv_series: dict[str, list[tuple[str, float]]] = {}
         # actions taken back by Undo — kept for the Simulator's record, never in the P&L
         self.discarded: list[dict] = []
+        # write-through: the registry persists the tape whenever `state()` sees a change,
+        # so a restart or an eviction costs a reload, not the book (owner, 2026-09-15)
+        self.on_change: Callable[[ConsoleSession, bool], None] | None = None
+        self._rev = 0                       # bumped by edits `state()` cannot count
+        self._change_key: tuple | None = None
         # per-symbol (minutes, closes) for the open day — the tape regrouped once, so a
         # 30-minute P&L path or an alert scan is a few bisects, not thirty rebuilds
         self._sym_series: dict[str, dict[str, tuple[list[str], list[float]]]] = {}
@@ -1188,6 +1193,8 @@ class ConsoleSession(AlertBook):
             if row.get("group") == int(group):
                 row["why"] = why.strip()
                 hit = True
+        if hit:
+            self._rev += 1
         return hit
 
     def save_payload(self) -> dict:
@@ -1195,8 +1202,35 @@ class ConsoleSession(AlertBook):
                 "clock": self.clock.strftime("%H:%M"), "expiry": self.expiry,
                 "capital": self.capital, "margin_per_lot_set": self.margin_per_lot_set,
                 "allow_fifty_strikes": self.allow_fifty_strikes,
+                "strike_window": self.strike_window,
                 "journal": self.journal, "alerts": self._alerts_out(),
                 "bookmarks": self.bookmarks, "discarded": self.discarded}
+
+    def _change_signature(self) -> tuple:
+        return (len(self.journal), len(self.alerts), len(self.bookmarks),
+                len(self.discarded), self.expiry, self.margin_per_lot_set, self._rev,
+                self.clock)
+
+    def prime_change_key(self) -> None:
+        """A session rebuilt from its own file has nothing new to write yet."""
+        self._change_key = self._change_signature()
+
+    def _notify_change(self) -> None:
+        """Tell the registry when something a rebuild needs has changed. Two grades: the
+        BOOK (journal, alerts, bookmarks, undos, anchor, expiry, annotations) and the mere
+        CURSOR — the registry throttles the second so autoplay is not a write per step."""
+        if self.on_change is None:
+            return
+        key = self._change_signature()
+        book = key[:-1]
+        if key == self._change_key:
+            return
+        book_changed = self._change_key is None or self._change_key[:-1] != book
+        self._change_key = key
+        try:
+            self.on_change(self, book_changed)
+        except Exception:  # pragma: no cover - persistence must never break a request
+            logger.exception("console: persist failed")
 
     def undo_last(self) -> bool:
         """Undo the last action — the whole action, so a roll's two fills and a basket's
@@ -1811,7 +1845,7 @@ class ConsoleSession(AlertBook):
             1.0, (close_dt - open_dt).total_seconds())
         cyc = self.cycle_range()
         iv30 = self.iv30_at_cursor()
-        return {
+        out = {
             "session": {
                 "id": self.id, "mode": self.mode, "underlying": self.underlying,
                 "lot_size": snap.get("lot_size") or 0,
@@ -1878,7 +1912,8 @@ class ConsoleSession(AlertBook):
                         "expiry_time": EXPIRY_TIME.strftime("%H:%M")},
             "notes": _notes(),
         }
-
+        self._notify_change()
+        return out
 
 def _notes() -> list[str]:
     """What the screen is not able to tell the truth about, said out loud rather than

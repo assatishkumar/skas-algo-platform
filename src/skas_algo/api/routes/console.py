@@ -43,6 +43,18 @@ from skas_algo.services.options_console.session import UNDERLYINGS, ConsoleSessi
 router = APIRouter(prefix="/console", tags=["console"])
 
 
+def _wire(session) -> None:
+    """The out-of-package hooks a replay session needs (Kite margin, VIX, IV rank) — set
+    on every session the routes open AND on one the registry rebuilds from disk."""
+    session.margin_fn = console_margin.kite_equivalent
+    session.vix_fn = console_market.vix_for_day
+    session.iv_rank_fn = atm_iv_history.iv_rank
+    console_margin.warm(session.underlying)
+
+
+registry.hooks = _wire
+
+
 def _get(session_id: str):
     """A replay session from the registry, or — for a ``live:<run_id>`` id — the console
     over that running deployment. Both answer the same DTO and the same verbs; a verb a
@@ -110,10 +122,7 @@ async def open_session(body: ConsoleOpen) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    session.margin_fn = console_margin.kite_equivalent
-    session.vix_fn = console_market.vix_for_day
-    session.iv_rank_fn = atm_iv_history.iv_rank
-    console_margin.warm(session.underlying)
+    _wire(session)
     if body.restore and (body.restore.journal or body.restore.alerts):
         try:
             await asyncio.to_thread(session.restore, body.restore.journal, body.restore.alerts,
@@ -324,12 +333,9 @@ async def load_session(body: ConsoleLoad) -> dict:
             capital=j.get("capital", 500_000),
             allow_fifty_strikes=j.get("allow_fifty_strikes", False),
             margin_per_lot_set=j.get("margin_per_lot_set", 0.0))
-        session.margin_fn = console_margin.kite_equivalent
-        session.vix_fn = console_market.vix_for_day
-        session.iv_rank_fn = atm_iv_history.iv_rank
-        console_margin.warm(session.underlying)
+        _wire(session)
         await asyncio.to_thread(session.restore, j.get("journal", []), j.get("alerts", []),
-                                j.get("bookmarks", []))
+                                j.get("bookmarks", []), j.get("discarded", []))
     except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return session.state()

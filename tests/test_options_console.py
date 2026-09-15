@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 
+import json
+
 import pandas as pd
 import pytest
 
@@ -1483,3 +1485,74 @@ def test_what_if_prices_candidate_adjustments_and_ranks_by_max_loss():
     assert rows[-1]["context"]["kind"] == roll["label"] and rows[-1]["group"] == rows[-2]["group"]
     assert s.undo_last() and {int(leg.strike) for leg in s.legs} == {24000}
     assert s.what_if()["candidates"] and _open(at="09:16").what_if()["candidates"] == []
+
+
+# ------------------------------------------- sessions survive the process (2026-09-15)
+
+def test_a_session_is_written_through_and_comes_back_under_the_same_id(tmp_path):
+    """A console session is in-process state; it used to die with the process and the
+    page rebuilt it from the journal it held (a different id, a banner). Now the registry
+    writes the tape through on every change and `get()` rebuilds a missing id from disk."""
+    store.write_day(DAY, _day())
+    s = registry.create(underlying="NIFTY", day=DAY, at="10:00", expiry=EXP, strike_window=6,
+                        margin_per_lot_set=123_000.0)
+    s.stage(kind="add", strike=24000, right="CE", side="S", lots=2)
+    s.state()                                             # the route always ends in state()
+    p = registry._path(s.id)
+    assert p.exists()
+    s.step(5)
+    s.stage(kind="add", strike=24000, right="PE", side="S", lots=1)
+    s.undo_last()
+    s.arm_alert("target", 5000)
+    s.state()
+    j = json.loads(p.read_text())
+    assert j["id"] == s.id and j["clock"] == "10:05" and j["strike_window"] == 6
+    assert len([r for r in j["journal"] if r["action"] != "NOOP"]) == 1
+    assert j["discarded"][0]["rows"][0]["symbol"].endswith("24000|PE")
+    assert j["alerts"][0]["kind"] == "target" and j["margin_per_lot_set"] == 123_000.0
+    # "restart": the registry is empty, the file is not
+    sid = s.id
+    registry.clear()
+    wired = []
+    registry.hooks = lambda sess: wired.append(sess.id)
+    try:
+        back = registry.get(sid)
+    finally:
+        registry.hooks = None
+    assert back is not s and back.id == sid and wired == [sid]
+    assert back.clock.strftime("%H:%M") == "10:05" and back.strike_window == 6
+    assert [int(leg.strike) for leg in back.legs] == [24000] and back.legs[0].lots == 2
+    assert back.discarded == s.discarded and back.margin_per_lot_set == 123_000.0
+    assert [a["kind"] for a in back.state()["alerts"]] == ["target"]
+    assert registry.get(sid) is back                      # in memory again
+    # an explicit close deletes the file; an unknown / unsafe id is a plain miss
+    assert registry.drop(sid) and not p.exists()
+    with pytest.raises(KeyError):
+        registry.get(sid)
+    with pytest.raises(KeyError):
+        registry.get("../../etc/passwd")
+    with pytest.raises(KeyError):
+        registry.get("deadbeef0000")
+
+
+def test_an_evicted_session_comes_back_and_a_cursor_move_is_throttled(monkeypatch):
+    store.write_day(DAY, _day())
+    made = [registry.create(underlying="NIFTY", day=DAY, at="10:00", expiry=EXP)
+            for _ in range(registry.MAX_SESSIONS + 1)]
+    made[0].stage(kind="add", strike=24000, right="CE", side="S", lots=1)
+    made[0].state()
+    # push it out of memory
+    for extra in made[1:]:
+        extra.state()
+    assert made[0].id not in {b["id"] for b in registry.briefs()}
+    back = registry.get(made[0].id)
+    assert back is not made[0] and len(back.legs) == 1
+    # only the cursor moving: at most one write per CURSOR_WRITE_S
+    writes = []
+    monkeypatch.setattr(registry, "persist", lambda sess, book_changed=True: writes.append(book_changed))
+    back.on_change = registry.persist
+    back.step(1); back.state()
+    back.step(1); back.state()
+    back.stage(kind="add", strike=24000, right="PE", side="S", lots=1); back.state()
+    back.state()                                          # nothing changed: no call
+    assert writes == [False, False, True]
