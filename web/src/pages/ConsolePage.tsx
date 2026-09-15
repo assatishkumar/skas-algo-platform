@@ -1226,6 +1226,13 @@ export default function ConsolePage() {
   // replay a click already IS the trade, so shown == held.
   const staging = !!state && state.session.mode !== "replay" && !!state.staged;
   const legsShown = staging ? state!.staged!.after_legs : (state?.legs ?? []);
+  // "Payoff on": the expiries the shown book spans, and the one the expiry curve + rail are
+  // measured at (null = the nearest). Only offered when there is more than one.
+  const legExpiries = useMemo(
+    () => [...new Set(legsShown.filter((l) => l.enabled).map((l) => l.expiry))].sort(),
+    [legsShown]);
+  const [payoffOnPick, setPayoffOnPick] = useState<string | null>(null);
+  const payoffOn = payoffOnPick && legExpiries.includes(payoffOnPick) ? payoffOnPick : null;
   const risk = staging && state?.staged?.risk_after ? state.staged.risk_after : state?.risk;
 
   // A session lives in the backend's memory. A restart or an eviction drops it, and until
@@ -1675,18 +1682,18 @@ export default function ConsolePage() {
   const mNow = useMemo(() => {
     const legs = toPayoffLegs(legsShown);
     return spotNow && expNow && legs.length
-      ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
-      }, [legsShown, spotNow, expNow, state?.session.date]);
+      ? computeMetrics(legs, spotNow, expNow, state?.session.date, null, 0, payoffOn) : null;
+      }, [legsShown, spotNow, expNow, state?.session.date, payoffOn]);
       const mBeforeStaged = useMemo(() => {
         const legs = toPayoffLegs(state?.legs ?? []);
         return spotNow && expNow && legs.length
-          ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
-      }, [state?.legs, spotNow, expNow, state?.session.date]);
+          ? computeMetrics(legs, spotNow, expNow, state?.session.date, null, 0, payoffOn) : null;
+      }, [state?.legs, spotNow, expNow, state?.session.date, payoffOn]);
       const mStaged = useMemo(() => {
     const legs = toPayoffLegs(state?.staged?.after_legs ?? []);
     return spotNow && expNow && legs.length
-      ? computeMetrics(legs, spotNow, expNow, state?.session.date) : null;
-  }, [state?.staged, spotNow, expNow, state?.session.date]);
+      ? computeMetrics(legs, spotNow, expNow, state?.session.date, null, 0, payoffOn) : null;
+  }, [state?.staged, spotNow, expNow, state?.session.date, payoffOn]);
   // T+0 at −1% / spot / +1%: the open book's model value across a narrow window, read at
   // its three ends. The same curve the chart draws dashed, so the tiles and the chart agree.
   const scen = useMemo(() => {
@@ -1707,7 +1714,7 @@ export default function ConsolePage() {
     const lo = Math.min(spotNow, ...legs.map((l) => l.strike)) * 0.9;
     const hi = Math.max(spotNow, ...legs.map((l) => l.strike)) * 1.1;
     const d = buildLivePayoff(legs, spotNow, expNow, state?.session.date, null, undefined,
-      { range: [lo, hi], offset: off });
+      { range: [lo, hi], offset: off, on: payoffOn });
     const out: number[] = [];
     const pts = d?.data ?? [];
     for (let i = 1; i < pts.length; i++) {
@@ -1717,7 +1724,7 @@ export default function ConsolePage() {
       }
     }
     return out;
-  }, [legsShown, spotNow, expNow, state?.session.date, risk?.realised]);
+  }, [legsShown, spotNow, expNow, state?.session.date, risk?.realised, payoffOn]);
   // one standard deviation of the underlying to the selected expiry: spot × ATM IV × √t,
   // the ATM IV being the ladder's own (the OTM side's), t the chain's DTE (floored at a day)
   const sigma1 = useMemo(() => {
@@ -1750,6 +1757,15 @@ export default function ConsolePage() {
                           title="prebuilt structures, resolved against the chain at the cursor">
                           {showPresets ? "payoff" : "presets"}</Chip>
                       ) : null}
+                      {!showPresets && legsShown.length && legExpiries.length > 1 ? (
+                        <span className="flex items-center gap-1" title="the date the expiry curve, max P/L, breakevens and POP are measured at — legs expiring on or before it go to intrinsic, later legs keep their time value">
+                          payoff on
+                          {legExpiries.map((e, i) => (
+                            <Chip key={e} active={(payoffOn ?? legExpiries[0]) === e} onClick={() => setPayoffOnPick(i === 0 ? null : e)}>{expiryChip(e)}</Chip>
+                          ))}
+                          ·
+                        </span>
+                      ) : null}
                       {!showPresets && legsShown.length ? "expiry · T+0 dashed · staged dotted" : null}
                     </span>
                   </div>
@@ -1762,7 +1778,7 @@ export default function ConsolePage() {
                     ) : (
                       <PayoffSvg legs={legsShown} staged={staging ? null : (state?.staged?.after_legs ?? null)}
                         spot={state?.market.spot ?? null} expiry={state?.chain.expiry ?? null}
-                        today={state?.session.date ?? ""} alerts={state?.alerts ?? []}
+                        today={state?.session.date ?? ""} alerts={state?.alerts ?? []} payoffOn={payoffOn}
                         realised={risk?.realised ?? 0} sigma={sigma1} underlying={state?.session.underlying} />
                     )}
                   </div>
@@ -1861,7 +1877,8 @@ export default function ConsolePage() {
                       sub={pctOf(mNow ? mNow.maxProfit + (risk?.realised ?? 0) : undefined, risk?.margin) + " of margin"} />
                     <Tile label="Max loss" tone="neg"
                       value={mNow ? (mNow.maxLossUnlimited ? "unlimited" : inr0(mNow.maxLoss + (risk?.realised ?? 0))) : "—"}
-                      sub={pctOf(mNow ? mNow.maxLoss + (risk?.realised ?? 0) : undefined, risk?.margin) + " of margin"} />
+                      sub={pctOf(mNow ? mNow.maxLoss + (risk?.realised ?? 0) : undefined, risk?.margin) + " of margin"
+                        + (legExpiries.length > 1 ? ` · on ${expiryChip(payoffOn ?? legExpiries[0])}` : "")} />
                     <Tile label="Breakeven"
                       value={cycleBE.length
                         ? cycleBE.map((b) => Math.round(b).toLocaleString("en-IN")).join(" / ")

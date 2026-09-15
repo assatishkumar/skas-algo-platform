@@ -1189,6 +1189,16 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   "pressing +1d made my position vanish"; the Positions row now carries the leg's own
   expiry + DTE (amber ⚠ when ≠ the chain's), and the empty state names what SETTLED, at
   what, and when.
+- **"Payoff on" (owner 2026-09-15, the Stockmock control):** a book across expiries is
+  drawn and measured at a CHOSEN expiry — `terminalExpiry(legs, fallback, on)` in
+  `payoff.ts`, the `on` option of `buildLivePayoff` / last arg of `computeMetrics`,
+  `PayoffSvg.payoffOn`. Legs expiring on or before that date go to intrinsic at the
+  terminal spot, later legs keep BS-valued time value at their residual DTE and own IV;
+  the POP horizon follows the chosen date. The chips appear in the Payoff header only when
+  the enabled legs span >1 expiry; the default (no pick) is the nearest, as before, and the
+  Max-loss tile names the date. The server-side `options_console/payoff.py::metrics` now
+  does the same at the NEAREST expiry when legs carry `t` + `iv` (the decision context and
+  the what-if pass them), so a calendar's what-if rows are no longer all-intrinsic.
 - The chain solves IV/Δ SERVER-side (0.16 ms for 44 strikes) so the ladder and the payoff
   share one calculator; the frontend reuses `lib/payoff.ts::computeMetrics` for max P/L,
   breakevens, POP and the staged before→after, so the rail and the chart cannot disagree.

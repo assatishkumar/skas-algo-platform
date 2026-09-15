@@ -42,7 +42,9 @@ export function toPayoffLegs(legs: ConsoleLeg[]): LiveLeg[] {
 }
 
 export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight = 220,
-  alerts = [], realised = 0, sigma = null, underlying = "" }: {
+  alerts = [], realised = 0, sigma = null, underlying = "", payoffOn = null }: {
+  // the terminal date the expiry curve is drawn at; null = the nearest leg expiry
+  payoffOn?: string | null;
   legs: ConsoleLeg[];
   staged: ConsoleLeg[] | null;
   spot: number | null;
@@ -94,8 +96,8 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   const ghost = useMemo(() => (staged ? toPayoffLegs(staged) : null), [staged]);
 
   const metrics = useMemo(
-    () => (spot && expiry && live.length ? computeMetrics(live, spot, expiry, today) : null),
-    [live, spot, expiry, today]);
+    () => (spot && expiry && live.length ? computeMetrics(live, spot, expiry, today, null, 0, payoffOn) : null),
+    [live, spot, expiry, today, payoffOn]);
   // "fit" = the WHOLE structure: spot, every strike AND every breakeven, with room past
   // each so both zero-crossings and the loss beyond them are on screen, and spot never
   // pinned to an edge. A window of spot+strikes alone cut a short straddle off at its
@@ -118,12 +120,12 @@ export default function PayoffSvg({ legs, staged, spot, expiry, today, minHeight
   }, [spot, zoom, custom, live, ghost, metrics]);
   const data = useMemo(
     () => (spot && expiry && live.length && range
-      ? buildLivePayoff(live, spot, expiry, today, null, undefined, { range, offset: realised }) : null),
-    [live, spot, expiry, today, range, realised]);
+      ? buildLivePayoff(live, spot, expiry, today, null, undefined, { range, offset: realised, on: payoffOn }) : null),
+    [live, spot, expiry, today, range, realised, payoffOn]);
   const ghostData = useMemo(
     () => (spot && expiry && ghost?.length && range
-      ? buildLivePayoff(ghost, spot, expiry, today, null, undefined, { range, offset: realised }) : null),
-    [ghost, spot, expiry, today, range, realised]);
+      ? buildLivePayoff(ghost, spot, expiry, today, null, undefined, { range, offset: realised, on: payoffOn }) : null),
+    [ghost, spot, expiry, today, range, realised, payoffOn]);
 
   if (!spot || !expiry || (!data && !ghostData)) {
     return (

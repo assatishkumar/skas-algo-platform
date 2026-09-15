@@ -1135,7 +1135,8 @@ class ConsoleSession(AlertBook):
             v = self._vix_at_cursor() or {}
             iv30 = self.iv30_at_cursor()
             legs = [{"right": x["right"], "strike": x["strike"], "direction": x["direction"],
-                     "units": x["units"], "entry": x["entry"]} for x in legs_out]
+                     "units": x["units"], "entry": x["entry"], "t": x.get("t"),
+                     "iv": (x["iv"] / 100.0) if x.get("iv") else None} for x in legs_out]
             sigma = self.pop_sigma()
             t = min((x["t"] for x in legs_out if x.get("t")), default=None)
             pay = _payoff.metrics(legs, float(spot), offset=risk.get("realised", 0.0),

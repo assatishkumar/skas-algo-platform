@@ -172,7 +172,11 @@ export interface LivePayoffData {
 
 /** The nearest leg expiry — the date the "expiry" payoff is evaluated at. For a calendar the near
  *  legs settle here while the far legs still carry time value (see legTerminalMeta). */
-function terminalExpiry(legs: LiveLeg[], fallback: string): string {
+function terminalExpiry(legs: LiveLeg[], fallback: string, on?: string | null): string {
+  // "Payoff on" (owner, 2026-09-15): a book across expiries can be drawn at ANY of them —
+  // legs expiring on or before that date go to intrinsic at the terminal spot, later legs
+  // keep BS-valued time value. The default stays the nearest leg expiry.
+  if (on) return on;
   let best: string | null = null;
   for (const l of legs) {
     const e = l.expiry ?? fallback;
@@ -223,11 +227,13 @@ export function buildLivePayoff(
     // An explicit x-window (data units) — used to draw a second book on the SAME grid as a
     // first one (the point-in-time "before this event" ghost).
     range?: [number, number];
+    // The terminal date to draw the "expiry" curve at (default: the nearest leg expiry).
+    on?: string | null;
   },
 ): LivePayoffData | null {
   if (!legs.length || !spot) return null;
   const asOf = today ?? new Date().toISOString().slice(0, 10);
-  const term = terminalExpiry(legs, expiryDate);
+  const term = terminalExpiry(legs, expiryDate, opts?.on);
   const meta = legTerminalMeta(legs, spot, asOf, term);
   const offset = opts?.offset ?? 0;
   // Auto range spans spot, EVERY strike, and the breakevens (so the tent kinks + zero-crossings
@@ -330,17 +336,22 @@ export function computeMetrics(
   // realized P&L already banked — shifts the curve so breakevens / max P&L / current P&L
   // are the CYCLE's, not the standing book's (0 = the book alone, every existing caller)
   offset = 0,
+  // the terminal date the metrics are measured at (default: the nearest leg expiry)
+  on: string | null = null,
 ): PositionMetrics | null {
   if (!legs.length || !spot) return null;
   const asOf = today ?? new Date().toISOString().slice(0, 10);
-  // the POP horizon: the nearest leg's exact intraday t when the legs carry one
+  // the POP horizon: the nearest leg's exact intraday t when the legs carry one — or the
+  // chosen terminal date's own distance when the payoff is drawn on a later expiry
   const tLegs = legs.map((l) => l.t).filter((v): v is number => v != null && v > 0);
-  const t = tLegs.length ? Math.min(...tLegs) : Math.max(daysBetween(asOf, expiryDate) / 365, 1 / 365);
+  const t = on
+    ? Math.max(daysBetween(asOf, on) / 365, 1 / 365)
+    : tLegs.length ? Math.min(...tLegs) : Math.max(daysBetween(asOf, expiryDate) / 365, 1 / 365);
 
   // Terminal payoff = value at the NEAREST leg expiry (near legs → intrinsic, a calendar's far
   // legs → BS at their residual DTE). For a single-expiry position this is plain intrinsic, so
   // breakevens / max-P&L / POP are unchanged; for a calendar they reflect the rounded tent.
-  const term = terminalExpiry(legs, expiryDate);
+  const term = terminalExpiry(legs, expiryDate, on);
   const meta = legTerminalMeta(legs, spot, asOf, term);
   const expiryPnl = (S: number) =>
     legs.reduce((p, l, j) => p + l.direction * (legValueAtTerminal(l, S, meta[j]) - l.entry) * l.units, offset);

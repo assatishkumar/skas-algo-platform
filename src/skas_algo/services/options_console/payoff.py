@@ -18,15 +18,28 @@ def _norm_cdf(x: float) -> float:
 
 def metrics(legs: list[dict], spot: float, *, offset: float = 0.0, sigma: float | None = None,
             t: float | None = None, r: float = 0.065) -> dict | None:
-    """``legs``: [{right, strike, direction, units, entry}] (enabled legs only).
+    """``legs``: [{right, strike, direction, units, entry, t?, iv?}] (enabled legs only).
     Returns max_profit / max_loss (None = unlimited), breakevens, the nearest breakeven's
-    distance from spot in %, POP (0..1) when ``sigma`` and ``t`` are given."""
+    distance from spot in %, POP (0..1) when ``sigma`` and ``t`` are given.
+
+    The terminal is the NEAREST leg expiry (the page's construction, `payoff.ts`): a leg
+    with a larger ``t`` than the smallest is a calendar's far leg and is BS-valued at its
+    residual time with its own ``iv`` (fraction); without ``t``/``iv`` every leg is intrinsic."""
     if not legs or not spot or spot <= 0:
         return None
+    ts = [leg["t"] for leg in legs if leg.get("t")]
+    t_near = min(ts) if ts else None
+
+    def value(leg: dict, s: float) -> float:
+        rem = (leg["t"] - t_near) if (t_near is not None and leg.get("t")) else 0.0
+        iv = leg.get("iv")
+        if rem > 1e-9 and iv:
+            return bs.price(s, leg["strike"], rem, r, float(iv), leg["right"])
+        return bs.intrinsic(leg["right"], s, leg["strike"])
 
     def pnl(s: float) -> float:
-        return offset + sum(leg["direction"] * (bs.intrinsic(leg["right"], s, leg["strike"])
-                                                - leg["entry"]) * leg["units"] for leg in legs)
+        return offset + sum(leg["direction"] * (value(leg, s) - leg["entry"]) * leg["units"]
+                            for leg in legs)
 
     lo, hi = spot * 0.7, spot * 1.3
     n = 1200
@@ -65,4 +78,6 @@ def metrics(legs: list[dict], spot: float, *, offset: float = 0.0, sigma: float 
     return {"max_profit": max_profit, "max_loss": max_loss, "breakevens": bes,
             "nearest_be": near,
             "be_dist_pct": round(100.0 * (near - spot) / spot, 2) if near else None,
-            "pop": pop, "basis": "intrinsic at expiry"}
+            "pop": pop,
+            "basis": "at the nearest expiry; far legs BS-valued" if t_near is not None
+            else "intrinsic at expiry"}

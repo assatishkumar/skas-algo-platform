@@ -193,7 +193,8 @@ def _evaluate(session: ConsoleSession, cid: str, label: str, ops: list[dict],
     risk = session._risk_out()
     offset = float(risk.get("realised") or 0.0) + realized - charges
     pay_legs = [{"right": x["right"], "strike": x["strike"], "direction": x["direction"],
-                 "units": x["units"], "entry": x["entry"]} for x in legs_out]
+                 "units": x["units"], "entry": x["entry"], "t": x.get("t"),
+                 "iv": (x["iv"] / 100.0) if x.get("iv") else None} for x in legs_out]
     t = min((x["t"] for x in legs_out if x.get("t")), default=None)
     pay = _payoff.metrics(pay_legs, spot, offset=offset, sigma=sigma, t=t) if book else None
     greeks = session._net_greeks(legs_out) if book else None
