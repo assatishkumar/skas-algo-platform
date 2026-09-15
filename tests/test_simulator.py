@@ -138,3 +138,98 @@ def test_the_routes_and_the_runs_list_hide_it(days):
     assert r.json()["playbook"] == "new rule"
     assert client.delete(f"/api/v1/simulator/{sid}").json() == {"deleted": sid}
     assert client.get(f"/api/v1/simulator/{sid}").status_code == 404
+
+
+# ------------------------------------------------------------- the record (2026-09-15)
+# The Simulator logs enough for a later review to judge every adjustment on what was
+# known at the minute it was made: the decision context stamped by the console, the
+# cycle's path (MAE/MFE off the tape), the owner's why, what Undo took back.
+
+def test_the_cycle_path_reads_mae_and_mfe_off_the_tape(days):
+    j = _straddle_cycle(DAY)        # short straddle 10:00 @150/152, covered 11:30 @140/160
+    path = simulator.cycle_path(j, "NIFTY")
+    assert path and [d["date"] for d in path["daily"]] == [DAY.isoformat()]
+    # the ATM pair drifts: CE +1.5/5min, PE −1.5/5min → the straddle's combined premium
+    # is flat, so MTM stays near zero until the cover books +2/unit
+    assert path["exit_mtm"] == 130.0
+    assert path["mfe"]["mtm"] >= 130.0 and path["mae"]["mtm"] <= 0.0
+    assert path["daily"][0]["high"] >= path["daily"][0]["low"]
+    assert path["exit_vs_mfe_pct"] is not None
+
+
+def test_actions_are_grouped_and_labelled_by_shape():
+    k = DAY.isoformat()
+    j = [_row(f"{k}T10:00", CE, "SHORT", 65, 150.0, group=1),
+         _row(f"{k}T10:00", PE, "SHORT", 65, 152.0, group=1),
+         # roll the CE up: cover it and short the 24100 in one group
+         _row(f"{k}T10:30", CE, "COVER", 65, 160.0, group=2),
+         _row(f"{k}T10:30", f"NIFTY|{EXP}|24100|CE", "SHORT", 65, 110.0, group=2),
+         # buy a wing → hedge
+         _row(f"{k}T10:45", f"NIFTY|{EXP}|24500|CE", "BUY", 65, 18.0, group=3),
+         # cover half the PE → partial exit
+         _row(f"{k}T11:00", PE, "COVER", 30, 150.0, group=4),
+         _row(f"{k}T11:30", PE, "COVER", 35, 150.0, group=5),
+         _row(f"{k}T11:30", f"NIFTY|{EXP}|24100|CE", "COVER", 65, 100.0, group=5),
+         _row(f"{k}T11:30", f"NIFTY|{EXP}|24500|CE", "SELL", 65, 20.0, group=5)]
+    j[0]["context"] = {"kind": "straddle", "before": {"spot": 24000}, "after": {"spot": 24000}}
+    j[2]["why"] = "CE tested, rolled up"
+    acts = simulator.action_groups(j)
+    assert [a["label"] for a in acts] == ["entry", "roll", "hedge", "partial_exit", "exit"]
+    assert acts[0]["context"]["kind"] == "straddle" and acts[0]["group"] == 1
+    assert acts[1]["why"] == "CE tested, rolled up"
+    assert all("context" not in r for a in acts for r in a["rows"])   # rows stay light
+
+
+def test_annotate_and_the_dossier(days):
+    with session_scope() as db:
+        s = simulator.create(db, name="Straddle", underlying="NIFTY", capital=500_000,
+                             playbook="sell the ATM straddle at 10:00", start_day=DAY.isoformat())
+        sid = s["id"]
+        j = _straddle_cycle(DAY)
+        j[0]["context"] = {"kind": "straddle",
+                           "before": {"at": f"{DAY}T10:00", "spot": 24000.0, "dte": 14,
+                                      "vix": 12.5, "mtm": 0.0, "legs_open": 0, "payoff": None},
+                           "after": {"at": f"{DAY}T10:00", "spot": 24000.0, "dte": 14,
+                                     "vix": 12.5, "mtm": -100.0, "legs_open": 2,
+                                     "greeks": {"delta": 0.1, "gamma": -0.01, "theta": 30,
+                                                "vega": -40},
+                                     "payoff": {"max_profit": 19630.0, "max_loss": None,
+                                                "breakevens": [23698.0, 24302.0],
+                                                "be_dist_pct": 1.26, "pop": 0.61}}}
+        out = simulator.bank(db, sid, note="held", margin=150_000, margin_source="zerodha",
+                             payload={"day": DAY.isoformat(), "clock": "11:30", "expiry": EXP,
+                                      "capital": 500_000, "journal": j,
+                                      "alerts": [{"kind": "target", "value": 5000,
+                                                  "fired_at": None}],
+                                      "discarded": [{"group": 9, "undone_at": f"{DAY}T10:20",
+                                                     "rows": [_row(f"{DAY}T10:20", CE, "COVER",
+                                                                   65, 155.0)]}]})
+        c = out["cycle_rows"][0]
+        assert c["path"]["exit_mtm"] == 130.0
+        assert [a["label"] for a in c["actions"]] == ["entry", "exit"]
+        assert c["alerts"][0]["kind"] == "target" and c["discarded"][0]["group"] == 9
+        # the owner's why, after the fact
+        d = simulator.annotate_action(db, sid, 1, 2, "took the +2 once the PE stalled")
+        assert d["cycle_rows"][0]["actions"][1]["why"] == "took the +2 once the PE stalled"
+        with pytest.raises(KeyError):
+            simulator.annotate_action(db, sid, 1, 42, "no such group")
+        with pytest.raises(KeyError):
+            simulator.annotate_action(db, sid, 7, 1, "no such cycle")
+        md = simulator.dossier_markdown(db, sid)
+        db.commit()
+    for needle in ("# Straddle — Simulator dossier", "## Playbook", "sell the ATM straddle",
+                   "## Cycle 1", "MFE ₹", "**Entry** at", "**Exit** at",
+                   "why: took the +2 once the PE stalled", "before: spot 24000.0 · DTE 14",
+                   "max P ₹19,630 / max L unlimited", "POP 0.61",
+                   "alerts: target 5000 (armed)", "taken back (undo): group 9"):
+        assert needle in md, needle
+    # the routes: annotate + dossier
+    client = TestClient(create_app())
+    r = client.patch(f"/api/v1/simulator/{sid}/cycles/1/actions/1", json={"why": "entered flat"})
+    assert r.status_code == 200 and r.json()["cycle_rows"][0]["actions"][0]["why"] == "entered flat"
+    assert client.patch(f"/api/v1/simulator/{sid}/cycles/1/actions/99",
+                        json={"why": "x"}).status_code == 404
+    r = client.get(f"/api/v1/simulator/{sid}/dossier")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+    assert "why: entered flat" in r.text
+    assert client.get("/api/v1/simulator/999999/dossier").status_code == 404

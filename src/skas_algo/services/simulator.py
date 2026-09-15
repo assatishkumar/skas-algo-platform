@@ -24,13 +24,15 @@ ledger never depends on a live session object. Deliberately outside `options_con
 
 from __future__ import annotations
 
+import bisect
 import logging
 from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
-from skas_algo.data.option_intraday_store import captured_days
+from skas_algo.data.option_intraday_store import captured_days, load_day
 from skas_algo.db.enums import InstrumentClass, TradingMode
 from skas_algo.db.models import Algo, AlgoRun
 from skas_algo.engine.options.contract_specs import lot_size_for
@@ -72,6 +74,9 @@ def _put_sim(run: AlgoRun, sim: dict) -> None:
     st = dict(run.state or {})
     st["sim"] = sim
     run.state = st
+    # an in-place edit of a nested row (annotate) leaves old == new by VALUE, so the JSON
+    # column's change detection sees nothing and the flush writes nothing — say so
+    flag_modified(run, "state")
 
 
 # ----------------------------------------------------------------------------- create / list
@@ -143,7 +148,11 @@ def get(db: Session, algo_id: int) -> dict:
     sim = _sim(run)
     return {**summary(db, algo_id), "playbook": algo.notes or "",
             "capital_mode": sim["capital_mode"],
-            "cycle_rows": [{k: v for k, v in c.items() if k != "journal"} for c in sim["cycles"]],
+            # a cycle banked before the record existed (2026-09-15) gets its actions derived
+            # on read (cheap); its path is not back-filled (0.3 s a day, and no contexts)
+            "cycle_rows": [{**{k: v for k, v in c.items() if k != "journal"},
+                            "actions": c.get("actions") or action_groups(c.get("journal", []))}
+                           for c in sim["cycles"]],
             "open_cycle": (
                 {"day": sim["open"].get("day"), "clock": sim["open"].get("clock"),
                  "expiry": sim["open"].get("expiry"),
@@ -190,7 +199,8 @@ def open_spec(db: Session, algo_id: int) -> dict:
                 "at": o.get("clock") or "09:30", "expiry": o.get("expiry"),
                 "capital": float(o.get("capital") or capital),
                 "restore": {"journal": o["journal"], "alerts": o.get("alerts") or [],
-                            "bookmarks": o.get("bookmarks") or []},
+                            "bookmarks": o.get("bookmarks") or [],
+                            "discarded": o.get("discarded") or []},
                 "cycle_no": len(sim["cycles"]) + 1}
     day = sim["next_day"] or algo.params.get("start_day")
     days = captured_days()
@@ -225,6 +235,7 @@ def autosave(db: Session, algo_id: int, payload: dict) -> dict:
                    "expiry": payload.get("expiry"), "capital": payload.get("capital"),
                    "journal": journal, "alerts": payload.get("alerts") or [],
                    "bookmarks": payload.get("bookmarks") or [],
+                   "discarded": payload.get("discarded") or [],
                    "saved_at": datetime.now(UTC).isoformat(timespec="seconds")}
     _put_sim(run, sim)
     db.flush()
@@ -322,6 +333,166 @@ def reconstruct(journal: list[dict], underlying: str) -> dict:
                                  * (1 if leg["side"] == "long" else -1) for leg in legs), 2)}
 
 
+def cycle_path(journal: list[dict], underlying: str) -> dict | None:
+    """The cycle's minute-by-minute MTM re-derived from the 1-min tape: realized-to-date
+    plus every open leg marked at its forward-filled last print. Returns the daily rows
+    (close / high / low per day), the MAE and MFE with their minutes, the peak, and where
+    the exit sat against the best the cycle offered. ~0.3 s per day of the cycle."""
+    rows = sorted((r for r in journal if r.get("action") in _OPENS or r.get("action") in _CLOSES),
+                  key=lambda x: x["at"])
+    if not rows:
+        return None
+    first, last = rows[0]["at"][:10], rows[-1]["at"][:10]
+    days = [d for d in captured_days() if first <= d <= last]
+    if not days:
+        return None
+    # the book after each fill: open lots (FIFO) + realized so far, keyed by fill minute
+    symbols = {r["symbol"] for r in rows}
+    daily: list[dict] = []
+    mae = {"mtm": 0.0, "at": None}
+    mfe = {"mtm": 0.0, "at": None}
+    peak = {"mtm": None, "at": None}
+    open_lots: dict[str, list[dict]] = {}
+    realized = 0.0
+    fi = 0                                                # fill cursor into rows
+    for d in days:
+        df = load_day(date.fromisoformat(d), underlying=underlying,
+                      columns=["symbol", "start", "close"])
+        if df.empty:
+            continue
+        df = df[df["symbol"].isin(symbols)].sort_values("start")
+        series: dict[str, tuple[list[str], list[float]]] = {}
+        for sym, g in df.groupby("symbol"):
+            series[sym] = ([t.strftime("%Y-%m-%dT%H:%M") for t in g["start"]],
+                           [float(c) for c in g["close"]])
+        minutes = sorted({m for s in series.values() for m in s[0]})
+        day_high, day_low, day_close = None, None, None
+        for m in minutes:
+            # apply the fills at or before this minute
+            while fi < len(rows) and rows[fi]["at"] <= m:
+                r = rows[fi]
+                a, sym = r["action"], r["symbol"]
+                u, px = float(r["units"]), float(r["price"])
+                if a in _OPENS:
+                    open_lots.setdefault(sym, []).append(
+                        {"units": u, "price": px, "dir": _OPENS[a]})
+                else:
+                    left = u
+                    q = open_lots.get(sym, [])
+                    while left > 1e-9 and q:
+                        lot = q[0]
+                        take = min(left, lot["units"])
+                        realized += lot["dir"] * (px - lot["price"]) * take
+                        lot["units"] -= take
+                        left -= take
+                        if lot["units"] <= 1e-9:
+                            q.pop(0)
+                fi += 1
+            mtm = realized
+            complete = True
+            for sym, lots in open_lots.items():
+                if not lots:
+                    continue
+                g = series.get(sym)
+                if not g:
+                    complete = False
+                    break
+                i = bisect.bisect_right(g[0], m) - 1
+                if i < 0:
+                    complete = False
+                    break
+                px = g[1][i]
+                for lot in lots:
+                    mtm += lot["dir"] * (px - lot["price"]) * lot["units"]
+            if not complete:
+                continue
+            if m < rows[0]["at"]:
+                continue                                    # before the entry
+            if m > rows[-1]["at"]:
+                break                                       # after the exit
+            day_close = mtm
+            day_high = mtm if day_high is None else max(day_high, mtm)
+            day_low = mtm if day_low is None else min(day_low, mtm)
+            if mtm < mae["mtm"]:
+                mae = {"mtm": round(mtm, 2), "at": m}
+            if mtm > mfe["mtm"]:
+                mfe = {"mtm": round(mtm, 2), "at": m}
+            if peak["mtm"] is None or mtm > peak["mtm"]:
+                peak = {"mtm": round(mtm, 2), "at": m}
+        if day_close is not None:
+            daily.append({"date": d, "close": round(day_close, 2),
+                          "high": round(day_high, 2), "low": round(day_low, 2)})
+    exit_mtm = round(realized, 2)
+    return {"daily": daily, "mae": mae, "mfe": mfe, "peak": peak, "exit_mtm": exit_mtm,
+            "exit_vs_mfe_pct": (round(100.0 * exit_mtm / mfe["mtm"], 1)
+                                if mfe["mtm"] > 0 else None),
+            "minutes": sum(len(x) for x in [daily])}
+
+
+_LABELS = {"entry", "roll", "hedge", "resize", "partial_exit", "exit", "add", "close"}
+
+
+def action_groups(journal: list[dict]) -> list[dict]:
+    """The cycle's ACTIONS: journal rows grouped by the console's undo group, each with an
+    automatic label from its shape — entry (first opens on a flat book), roll (a close and
+    an open of the same right), hedge (a long added beside shorts), resize (more/less of a
+    held contract), partial_exit / exit (closes only; exit when the book is flat after),
+    add (other opens) — plus the decision context and the owner's `why` when stamped."""
+    rows = sorted((r for r in journal if r.get("action") != "NOOP"),
+                  key=lambda x: (x["at"], x.get("group") or 0))
+    groups: dict[int | None, list[dict]] = {}
+    order: list[int | None] = []
+    for r in rows:
+        g = r.get("group")
+        key = g if g is not None else f"settle:{r['at']}"
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(r)
+    held: dict[str, float] = {}
+    out = []
+    for key in order:
+        rs = groups[key]
+        opens = [r for r in rs if r["action"] in _OPENS]
+        closes = [r for r in rs if r["action"] in _CLOSES]
+        was_flat = all(abs(v) < 1e-9 for v in held.values())
+        for r in rs:
+            a, s, u = r["action"], r["symbol"], float(r.get("units") or 0)
+            if a in _OPENS:
+                held[s] = held.get(s, 0.0) + _OPENS[a] * u
+            elif a == "SETTLE":
+                held[s] = 0.0
+            else:
+                cur = held.get(s, 0.0)
+                held[s] = cur - (u if cur > 0 else -u)
+                if abs(held[s]) < 1e-9:
+                    held[s] = 0.0
+        now_flat = all(abs(v) < 1e-9 for v in held.values())
+        if isinstance(key, str):
+            label = "settle"
+        elif was_flat and opens and not closes:
+            label = "entry"
+        elif opens and closes and {r["symbol"].split("|")[3] for r in opens} & {
+                r["symbol"].split("|")[3] for r in closes}:
+            label = "roll"
+        elif closes and not opens:
+            label = "exit" if now_flat else "partial_exit"
+        elif opens and not closes and all(r["action"] == "BUY" for r in opens) and any(
+                v < 0 for v in held.values()):
+            label = "hedge"
+        elif opens and closes:
+            label = "resize"
+        else:
+            label = "add"
+        ctx = next((r.get("context") for r in rs if r.get("context")), None)
+        why = next((r.get("why") for r in rs if r.get("why")), None)
+        out.append({"group": key if not isinstance(key, str) else None, "at": rs[0]["at"],
+                    "label": label, "why": why, "context": ctx,
+                    "rows": [{k: v for k, v in r.items() if k not in ("context", "replaces")}
+                             for r in rs]})
+    return out
+
+
 def _holding_days(entry_minute: str, exit_minute: str) -> float:
     e = datetime.fromisoformat(entry_minute.replace(" ", "T"))
     x = datetime.fromisoformat(exit_minute.replace(" ", "T"))
@@ -351,6 +522,11 @@ def bank(db: Session, algo_id: int, *, note: str | None = None, tags: list[str] 
     rec = reconstruct(journal, u)
     n = len(sim["cycles"]) + 1
     capital_before = float(sim["equity"] or algo.capital)
+    try:
+        path = cycle_path(journal, u)
+    except Exception:
+        logger.exception("SIM %s: cycle path failed", algo_id)
+        path = None
     cycle = {"n": n, "entered": rec["entered"], "exited": rec["exited"],
              "entry_day": rec["entered"][:10] if rec["entered"] else o.get("day"),
              "exit_day": rec["exited"][:10] if rec["exited"] else o.get("day"),
@@ -363,7 +539,11 @@ def bank(db: Session, algo_id: int, *, note: str | None = None, tags: list[str] 
              "note": (note or "").strip(), "tags": [t for t in (tags or []) if t],
              "capital_before": capital_before,
              "capital_after": round(capital_before + rec["net"], 2),
-             "journal": journal, "banked_at": datetime.now(UTC).isoformat(timespec="seconds")}
+             "journal": journal, "banked_at": datetime.now(UTC).isoformat(timespec="seconds"),
+             # the analysis material: the path, the actions with their decision contexts,
+             # what was armed, and what was taken back (never in the P&L)
+             "path": path, "actions": action_groups(journal),
+             "alerts": o.get("alerts") or [], "discarded": o.get("discarded") or []}
     sim["cycles"].append(cycle)
     sim["equity"] = cycle["capital_after"]
     sim["open"] = None
@@ -379,6 +559,28 @@ def bank(db: Session, algo_id: int, *, note: str | None = None, tags: list[str] 
     logger.info("SIM %s banked cycle %s: net %s over %s..%s", algo_id, n, rec["net"],
                 rec["entered"], rec["exited"])
     return {**get(db, algo_id), "banked": {k: v for k, v in cycle.items() if k != "journal"}}
+
+
+def annotate_action(db: Session, algo_id: int, n: int, group: int, why: str) -> dict:
+    """The owner's 'why' on one action of a banked cycle, stamped on its journal rows and
+    on the action row — post hoc, so trading stays frictionless."""
+    _algo, run = _run_of(db, algo_id)
+    sim = _sim(run)
+    c = next((x for x in sim["cycles"] if int(x["n"]) == int(n)), None)
+    if c is None:
+        raise KeyError(f"cycle {n} not banked on Simulator #{algo_id}")
+    hit = False
+    for r in c.get("journal", []):
+        if r.get("group") == int(group):
+            r["why"] = why.strip()
+            hit = True
+    if not hit:
+        raise KeyError(f"cycle {n} has no action group {group}")
+    c["actions"] = action_groups(c["journal"])
+    _put_sim(run, sim)
+    run.metrics = build_report(sim, float(_algo.capital), run.trade_log or [])
+    db.flush()
+    return get(db, algo_id)
 
 
 def _trade_rows(journal: list[dict], rec: dict, n: int) -> list[dict]:
@@ -453,3 +655,100 @@ def build_report(sim: dict, capital: float, trades: list[dict]) -> dict:
     days = len({c["entry_day"] for c in cycles} | {c["exit_day"] for c in cycles})
     return _to_report(curve, trades, capital, charges_bd["total"], days, cycles=rows,
                       options=options)
+
+
+# ----------------------------------------------------------------------------- the dossier
+def _inr(v) -> str:
+    try:
+        return f"₹{float(v):,.0f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _lim(v) -> str:
+    return "unlimited" if v is None else _inr(v)
+
+
+def dossier_markdown(db: Session, algo_id: int) -> str:
+    """One document a review can start from: the playbook, the stats, and every cycle with
+    its actions (label, minute, fills, the decision context before/after, the owner's why),
+    its path (daily rows, MAE/MFE, exit vs best), what was armed and what was taken back."""
+    algo, run = _run_of(db, algo_id)
+    sim = _sim(run)
+    d = get(db, algo_id)
+    m = d["metrics"]
+    out = [f"# {algo.name} — Simulator dossier", "",
+           f"underlying {d['underlying']} · capital {_inr(d['capital'])} → equity "
+           f"{_inr(d['equity'])} ({sim['capital_mode']}) · run #{run.id} · "
+           f"generated {datetime.now(UTC).isoformat(timespec='minutes')}", "",
+           "## Playbook", "", (algo.notes or "(none)"), "",
+           "## Stats (banked cycles only)", "",
+           f"- net {_inr(m.get('Net Realized P&L'))} · cycles {m.get('Total Trades')} · "
+           f"win rate {m.get('Win Rate %')}% · max drawdown {m.get('Max Drawdown %')}% · "
+           f"charges {_inr(m.get('Total Charges'))}"
+           + (f" · CAGR {m['CAGR %']}%" if m.get("CAGR %") is not None else ""), ""]
+    for c in sim["cycles"]:
+        out += [f"## Cycle {c['n']} · {c['entered']} → {c['exited']} · net {_inr(c['net'])}"
+                f" (gross {_inr(c['realized'])}, charges {_inr(c['charges'])})", "",
+                f"- spot {c.get('entry_spot')} → {c.get('exit_spot')} · expiry {c.get('expiry')}"
+                f" · margin {_inr(c.get('margin'))} ({c.get('margin_source') or '—'})"
+                f" · RoM {c.get('rom_pct') if c.get('rom_pct') is not None else '—'}%"
+                f" · capital {_inr(c['capital_before'])} → {_inr(c['capital_after'])}",
+                f"- note: {c.get('note') or '—'}"
+                + (f" · tags: {', '.join(c['tags'])}" if c.get("tags") else "")]
+        path = c.get("path")
+        if path:
+            out += [f"- path: MFE {_inr(path['mfe']['mtm'])} at {path['mfe']['at']} · "
+                    f"MAE {_inr(path['mae']['mtm'])} at {path['mae']['at']} · exit "
+                    f"{_inr(path['exit_mtm'])}"
+                    + (f" = {path['exit_vs_mfe_pct']}% of the best"
+                       if path.get("exit_vs_mfe_pct") is not None else "")]
+            if path.get("daily"):
+                out += ["", "| day | close | high | low |", "|---|---|---|---|"]
+                out += [f"| {r['date']} | {_inr(r['close'])} | {_inr(r['high'])} | "
+                        f"{_inr(r['low'])} |" for r in path["daily"]]
+        out += ["", "### Actions", ""]
+        for a in c.get("actions") or action_groups(c.get("journal", [])):
+            fills = "; ".join(f"{r['action']} {int(r['units'])} {r['symbol']} @ {r['price']}"
+                              for r in a["rows"])
+            out.append(f"- **{a['label'].replace('_', ' ').capitalize()}** at {a['at']}: {fills}")
+            if a.get("why"):
+                out.append(f"  - why: {a['why']}")
+            ctx = a.get("context") or {}
+            for tag in ("before", "after"):
+                x = ctx.get(tag) or {}
+                if not x:
+                    continue
+                pay = x.get("payoff") or {}
+                g = x.get("greeks") or {}
+                rk = x.get("iv_rank") or {}
+                out.append(
+                    f"  - {tag}: spot {x.get('spot')} · DTE {x.get('dte')} · VIX {x.get('vix')} · "
+                    f"ATM IV {x.get('atm_iv')} · IV30 {x.get('iv30')}"
+                    + (f" (rank {rk.get('rank')}%, IVR {rk.get('ivr')})" if rk else "")
+                    + f" · MTM {_inr(x.get('mtm'))} · margin {_inr(x.get('margin'))} · "
+                    f"Δ {g.get('delta')} Γ {g.get('gamma')} Θ {g.get('theta')} V {g.get('vega')} · "
+                    f"max P {_lim(pay.get('max_profit'))} / max L {_lim(pay.get('max_loss'))} · "
+                    f"BE {pay.get('breakevens')} · nearest BE {pay.get('be_dist_pct')}% · "
+                    f"nearest short {x.get('short_strike_dist_pct')}% · POP {pay.get('pop')}")
+        if c.get("alerts"):
+            out += ["", "- alerts: " + "; ".join(
+                f"{a.get('kind')} {a.get('value')} "
+                f"({'fired ' + str(a.get('fired_at')) if a.get('fired_at') else 'armed'})"
+                for a in c["alerts"])]
+        if c.get("discarded"):
+            out += ["- taken back (undo): " + "; ".join(
+                f"group {x.get('group')} at {x.get('undone_at')}: "
+                + ", ".join(f"{r['action']} {int(r['units'])} {r['symbol']}"
+                            for r in x.get("rows", []))
+                for x in c["discarded"])]
+        out.append("")
+    if sim.get("open") and sim["open"].get("journal"):
+        o = sim["open"]
+        out += [f"## Open cycle (not banked) · {o.get('day')} {o.get('clock')}", ""]
+        for a in action_groups(o["journal"]):
+            fills = "; ".join(f"{r['action']} {int(r['units'])} {r['symbol']} @ {r['price']}"
+                              for r in a["rows"])
+            out.append(f"- **{a['label'].replace('_', ' ').capitalize()}** at {a['at']}: {fills}")
+        out.append("")
+    return "\n".join(out)

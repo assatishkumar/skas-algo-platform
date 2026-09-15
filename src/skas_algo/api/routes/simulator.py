@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
-from skas_algo.api.models import SimBank, SimCreate, SimNextDay, SimSave, SimUpdate
+from skas_algo.api.models import SimBank, SimCreate, SimNextDay, SimSave, SimUpdate, SimWhy
 from skas_algo.services import simulator
 
 router = APIRouter(prefix="/simulator", tags=["simulator"])
@@ -74,6 +75,28 @@ def cycle_journal(sim_id: int, n: int, db: Session = Depends(get_db)) -> dict:
         return simulator.cycle_journal(db, sim_id, n)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{sim_id}/dossier", response_class=PlainTextResponse)
+def dossier(sim_id: int, db: Session = Depends(get_db)) -> str:
+    """The strategy as one Markdown document — playbook, stats, every cycle's actions with
+    their decision contexts, paths, notes — the file a review session starts from."""
+    try:
+        return simulator.dossier_markdown(db, sim_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/{sim_id}/cycles/{n}/actions/{group}")
+def annotate_action(sim_id: int, n: int, group: int, body: SimWhy,
+                    db: Session = Depends(get_db)) -> dict:
+    """The owner's 'why' on one action of a banked cycle (post hoc)."""
+    try:
+        out = simulator.annotate_action(db, sim_id, n, group, body.why)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    db.commit()
+    return out
 
 
 @router.post("/{sim_id}/autosave")

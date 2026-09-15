@@ -1247,14 +1247,17 @@ def test_the_kite_equivalent_prices_a_mapped_basket_and_caches_it(monkeypatch):
     monkeypatch.setattr(cm, "_account", lambda: ("Satish Kite", _Adapter()))
     legs = [{"right": "CE", "strike": 24000, "expiry": "2026-04-28", "side": "S", "lots": 1},
             {"right": "CE", "strike": 24200, "expiry": "2026-04-28", "side": "B", "lots": 1}]
-    got = cm.kite_equivalent("NIFTY", legs, spot=24000.0, day=_d(2026, 4, 14))
+    # `today` pinned: the mapping picks the listed expiry nearest 14 DTE FROM TODAY, and the
+    # bare date.today() made this test drift a week after it was written (2026-09-15)
+    today = _d(2026, 9, 10)
+    got = cm.kite_equivalent("NIFTY", legs, spot=24000.0, day=_d(2026, 4, 14), today=today)
     assert got and got["total"] == 90828.0 and got["account"] == "Satish Kite" and got["shifted"]
     assert [x["strike"] for x in got["legs"]] == [25000.0, 25200.0]
     assert [x["expiry"] for x in got["legs"]] == ["2026-09-22", "2026-09-22"]
     first = seen[0][0]
     assert first["symbol"].startswith("NIFTY|2026-09-22|25000") and first["direction"] == -1
     assert seen[0][0]["units"] % 1 == 0 and seen[0][0]["units"] > 0
-    cm.kite_equivalent("NIFTY", legs, spot=24000.0, day=_d(2026, 4, 14))
+    cm.kite_equivalent("NIFTY", legs, spot=24000.0, day=_d(2026, 4, 14), today=today)
     assert len(seen) == 1                                    # cached by mapped shape
     # a long-only book asks nothing; no session → None (the caller falls back)
     assert cm.kite_equivalent("NIFTY", [legs[1]], spot=24000.0, day=_d(2026, 4, 14)) is None
@@ -1380,3 +1383,56 @@ def test_a_leg_carries_the_intraday_t_its_iv_was_solved_with():
     assert 0 < leg["t"] < 1 / 365 and abs(leg["t"] * 365 * 24 - hours_left) < 0.05
     s.step(60)
     assert s.state()["legs"][0]["t"] < leg["t"]                 # t shrinks with the cursor
+
+
+# ------------------------------------------ the decision record (Simulator, 2026-09-15)
+
+def test_every_action_is_stamped_with_what_the_screen_showed():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", strike=24000, right="CE", side="S", lots=1)
+    s.stage(kind="add", strike=24000, right="PE", side="S", lots=1)
+    rows = [r for r in s.journal if r["action"] != "NOOP"]
+    assert len(rows) == 2 and all(r.get("context") for r in rows)
+    ctx = rows[1]["context"]
+    assert ctx["kind"] == "add"
+    b, a = ctx["before"], ctx["after"]
+    assert b["legs_open"] == 1 and a["legs_open"] == 2         # what was held either side
+    assert a["at"] == f"{DAY}T10:00" and a["spot"] and a["expiry"] == EXP
+    assert a["dte"] == (date.fromisoformat(EXP) - DAY).days
+    assert a["greeks"] and set(a["greeks"]) >= {"delta", "gamma", "theta", "vega"}
+    assert a["margin"] is not None and a["margin_source"]
+    pay = a["payoff"]
+    assert pay and pay["max_loss"] is None                     # a short straddle: open tails
+    assert pay["max_profit"] and len(pay["breakevens"]) == 2 and pay["be_dist_pct"] is not None
+    assert a["short_strike_dist_pct"] is not None
+    # the owner's why lands on the group; an unknown group is refused
+    assert s.annotate(rows[1]["group"], "second leg") and rows[1]["why"] == "second leg"
+    assert not s.annotate(99, "nothing")
+    # the stamps travel through save → restore untouched
+    payload = s.save_payload()
+    t = _open(at="10:00")
+    t.restore(payload["journal"], payload["alerts"], payload["bookmarks"], payload["discarded"])
+    kept = [r for r in t.journal if r["action"] != "NOOP"]
+    assert kept[1]["context"]["after"]["legs_open"] == 2 and kept[1]["why"] == "second leg"
+
+
+def test_undo_keeps_what_it_took_back():
+    store.write_day(DAY, _day())
+    s = _open(at="10:00")
+    s.stage(kind="add", strike=24000, right="CE", side="S", lots=1)
+    s.step(5)
+    s.stage(kind="add", strike=24000, right="PE", side="S", lots=1)
+    assert s.undo_last() and len(s.legs) == 1
+    assert len(s.discarded) == 1
+    gone = s.discarded[0]
+    assert gone["undone_at"] == f"{DAY}T10:05" and gone["rows"][0]["symbol"].endswith("24000|PE")
+    assert "replaces" not in gone["rows"][0]
+    assert s.state()["discarded"] == s.discarded and s.save_payload()["discarded"] == s.discarded
+    # restore carries it; a payload without it restores clean
+    t = _open(at="10:05")
+    t.restore(s.journal, [], [], s.discarded)
+    assert t.discarded == s.discarded
+    u = _open(at="10:05")
+    u.restore(s.journal, [], [])
+    assert u.discarded == []

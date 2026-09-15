@@ -1202,7 +1202,7 @@ export default function ConsolePage() {
       const fresh = await api.consoleOpen({
         underlying: cur.session.underlying, day: cur.session.date, at: cur.session.clock,
         expiry: cur.chain.expiry ?? undefined, capital: cur.session.capital,
-        restore: { journal: cur.journal ?? [], alerts: cur.alerts ?? [] },
+        restore: { journal: cur.journal ?? [], alerts: cur.alerts ?? [], bookmarks: cur.bookmarks ?? [], discarded: cur.discarded ?? [] },
       });
       stateRef.current = fresh;
       setState(fresh);
@@ -1458,13 +1458,14 @@ export default function ConsolePage() {
     } catch (e) { setError((e as Error).message); }
   };
   // autosave the open cycle's tape after every change (debounced); never on a read-only replay
-  const journalKey = state ? `${state.session.date}|${state.session.clock}|${state.journal.length}|${state.alerts.length}|${state.bookmarks.length}` : "";
+  const journalKey = state ? `${state.session.date}|${state.session.clock}|${state.journal.length}|${state.alerts.length}|${state.bookmarks.length}|${state.discarded?.length ?? 0}` : "";
   useEffect(() => {
     if (simId == null || simReadOnly || !state || state.session.mode !== "replay") return;
     const t = window.setTimeout(() => {
       api.simAutosave(simId, { day: state.session.date, clock: state.session.clock,
         expiry: state.chain.expiry, capital: state.session.capital,
-        journal: state.journal, alerts: state.alerts, bookmarks: state.bookmarks }).catch(() => {});
+        journal: state.journal, alerts: state.alerts, bookmarks: state.bookmarks,
+        discarded: state.discarded ?? [] }).catch(() => {});
     }, 700);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1487,7 +1488,8 @@ export default function ConsolePage() {
       const out = await api.simBank(simId, { note: bankNote,
         margin: cycleMargin.current.value || null, margin_source: cycleMargin.current.source,
         payload: { day: state.session.date, clock: state.session.clock, expiry: state.chain.expiry,
-          capital: state.session.capital, journal: state.journal, alerts: state.alerts, bookmarks: state.bookmarks } });
+          capital: state.session.capital, journal: state.journal, alerts: state.alerts, bookmarks: state.bookmarks,
+          discarded: state.discarded ?? [] } });
       setBankNote("");
       setBankMsg(`Cycle ${out.banked.n} banked · net ${inr0(out.banked.net)} · equity ${inr0(out.equity)}${out.next_day ? ` · next cycle opens ${out.next_day}` : " · no later captured day"}`);
       // the next cycle: a fresh session at the strategy's next day with the compounded capital

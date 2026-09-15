@@ -135,6 +135,21 @@ def _build_iv_history(args) -> None:
         print(u, build(u, progress=prog))
 
 
+def _sim_dossier(args) -> None:
+    """`skas-algo sim-dossier <id> [--out file.md]` — the Simulator strategy's dossier."""
+    from skas_algo.db.base import session_scope
+    from skas_algo.services.simulator import dossier_markdown
+
+    with session_scope() as db:
+        text = dossier_markdown(db, int(args.sim_id))
+    if args.out:
+        with open(args.out, "w") as fh:
+            fh.write(text)
+        print(f"wrote {args.out} ({len(text)} chars)")
+    else:
+        print(text)
+
+
 def main() -> None:
     """CLI entry point (``skas-algo``): run the API server, or export the Obsidian vault."""
     import argparse
@@ -162,6 +177,9 @@ def main() -> None:
         "build-iv-history", help="Append the daily ATM IV history from the 1-min option store"
     )
     ih.add_argument("--underlying", default=None, help="one underlying (default: all three)")
+    sd = sub.add_parser("sim-dossier", help="Write a Simulator strategy's dossier (Markdown)")
+    sd.add_argument("sim_id", help="the Simulator strategy id (/simulator?id=…)")
+    sd.add_argument("--out", default=None, help="file to write (default: stdout)")
     rb = sub.add_parser(
         "restore-option-bars", help="Pull missed 1-min option-bar days from a remote (VPS) store"
     )
@@ -202,6 +220,9 @@ def main() -> None:
         return
     if args.cmd == "build-iv-history":
         _build_iv_history(args)
+        return
+    if args.cmd == "sim-dossier":
+        _sim_dossier(args)
         return
     if args.cmd == "restore-option-bars":
         _restore_option_bars(args)

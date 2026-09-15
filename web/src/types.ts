@@ -1988,6 +1988,25 @@ export interface ConsoleChainRow {
   pe: ConsoleChainLeg;
 }
 
+/** What the screen showed at the minute an action landed (stamped server-side on every
+ *  undo group) — the Simulator judges a decision on what was known, not on what followed. */
+export interface ConsoleDecision {
+  at: string; spot: number | null; expiry: string | null; dte: number | null;
+  vix: number | null; atm_iv: number | null; iv30: number | null;
+  iv_rank: { rank: number; ivr: number } | null;
+  greeks: { delta: number; gamma: number; theta: number; vega: number } | null;
+  mtm: number | null; unrealised: number | null; realised: number | null;
+  margin: number | null; margin_source: string | null; legs_open: number;
+  net_credit: number | null; short_strike_dist_pct: number | null;
+  payoff: { max_profit: number | null; max_loss: number | null; breakevens: number[];
+    nearest_be: number | null; be_dist_pct: number | null; pop: number | null; basis: string } | null;
+}
+export interface ConsoleFill {
+  at: string; symbol: string; action: string; group: number | null;
+  units: number; price: number; charges: number; spot?: number | null;
+  context?: { kind: string; before: ConsoleDecision; after: ConsoleDecision } | null;
+  why?: string | null;
+}
 export interface ConsoleState {
   session: {
     id: string; mode: string; underlying: string; lot_size: number;
@@ -2036,10 +2055,11 @@ export interface ConsoleState {
   fills: { at: string; symbol: string; action: string; units: number; price: number; charges: number }[];
   // The whole tape of the owner's actions (not just the slice ≤ cursor). The page hands
   // it back when the backend has lost the session, so the book survives a restart.
-  journal: { at: string; symbol: string; action: string; group: number | null;
-    units: number; price: number; charges: number }[];
+  journal: ConsoleFill[];
   alerts: ConsoleAlert[];
   bookmarks: string[];                       // full minutes "2026-04-01T11:40"
+  // actions taken back by Undo — the Simulator's record of hesitation, never in the P&L
+  discarded: { group: number; undone_at: string; rows: ConsoleFill[] }[];
   // The cycle: first fill's day → the last expiry among the legs held, in captured
   // sessions. null until something has traded. `done` = every leg has expired.
   cycle: {
@@ -2201,6 +2221,22 @@ export interface SimCycle {
   premium: number; expiry: string | null; symbols: string[]; legs: SimCycleLeg[];
   margin: number | null; margin_source: string | null; rom_pct: number | null;
   note: string; tags: string[]; capital_before: number; capital_after: number; banked_at: string;
+  // the record (2026-09-15): the cycle's path, every action with its decision context and
+  // the owner's why, the alerts that were armed, and what Undo took back
+  path?: SimCyclePath | null;
+  actions?: SimAction[];
+  alerts?: ConsoleAlert[];
+  discarded?: ConsoleState["discarded"];
+}
+export interface SimCyclePath {
+  daily: { date: string; close: number; high: number; low: number }[];
+  mae: { mtm: number; at: string | null }; mfe: { mtm: number; at: string | null };
+  peak: { mtm: number | null; at: string | null };
+  exit_mtm: number; exit_vs_mfe_pct: number | null;
+}
+export interface SimAction {
+  group: number | null; at: string; label: string; why: string | null;
+  context: ConsoleFill["context"]; rows: ConsoleFill[];
 }
 export interface SimDetail extends SimStrategy {
   playbook: string; capital_mode: string; cycle_rows: SimCycle[];
@@ -2210,5 +2246,6 @@ export interface SimDetail extends SimStrategy {
 export interface SimOpenSpec {
   id: number; name: string; underlying: string; day: string | null; at: string; expiry: string | null;
   capital: number; cycle_no?: number; n?: number;
-  restore: { journal: ConsoleState["journal"]; alerts: ConsoleState["alerts"]; bookmarks: string[] } | null;
+  restore: { journal: ConsoleState["journal"]; alerts: ConsoleState["alerts"]; bookmarks: string[];
+    discarded?: ConsoleState["discarded"] } | null;
 }

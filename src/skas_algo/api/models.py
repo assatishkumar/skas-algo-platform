@@ -111,6 +111,7 @@ class ConsoleRestore(BaseModel):
     journal: list[dict] = []
     alerts: list[dict] = []
     bookmarks: list[str] = []
+    discarded: list[dict] = []          # actions taken back by Undo (the Simulator's record)
 
 
 class ConsoleBasket(BaseModel):
@@ -165,6 +166,17 @@ class SimBank(BaseModel):
 
 class SimNextDay(BaseModel):
     day: str                          # ISO captured day the next cycle opens on
+
+
+class SimWhy(BaseModel):
+    why: str
+
+
+class ConsoleAnnotate(BaseModel):
+    """The owner's 'why' on one console action (its undo group), stamped on the tape."""
+
+    group: int
+    why: str
 
 
 class ConsoleCommit(BaseModel):

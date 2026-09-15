@@ -4,14 +4,14 @@
  *  ordinary run (hidden from the Runs list) so Run detail, Analyze and Compare work on it by
  *  link; this page is the ledger and the scoreboard: create a strategy with its playbook,
  *  open the console on it, and read the banked cycles. Nothing unrealised enters the stats. */
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "../api/client";
 import { Card, ErrorBox, Spinner } from "../components/ui";
 import { formatInr } from "../lib/format";
-import type { SimCycle, SimDetail } from "../types";
+import type { ConsoleDecision, SimAction, SimCycle, SimDetail } from "../types";
 
 const inr = (v: number | null | undefined) => (v == null ? "—" : formatInr(v));
 const pct = (v: number | null | undefined, dp = 1) => (v == null ? "—" : `${v.toFixed(dp)}%`);
@@ -23,6 +23,88 @@ function Kpi({ label, value, tone, sub }: { label: string; value: string; tone?:
       <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-[var(--faint)]">{label}</div>
       <div className={`text-[15px] font-semibold tabular-nums ${tone === "pos" ? "text-emerald-600 dark:text-emerald-400" : tone === "neg" ? "text-rose-600 dark:text-rose-400" : ""}`}>{value}</div>
       {sub && <div className="text-[10.5px] text-[var(--muted)]">{sub}</div>}
+    </div>
+  );
+}
+
+const LABEL: Record<string, string> = {
+  entry: "Entry", roll: "Roll", hedge: "Hedge", resize: "Resize", partial_exit: "Partial exit",
+  exit: "Exit", add: "Add", settle: "Settled",
+};
+const num = (v: number | null | undefined, dp = 1) => (v == null ? "—" : v.toFixed(dp));
+
+/** One decision context, compact: the numbers that were on the screen at that minute. */
+function Ctx({ tag, x }: { tag: string; x: ConsoleDecision | undefined }) {
+  if (!x) return null;
+  const p = x.payoff; const g = x.greeks;
+  return (
+    <div className="text-[11px] text-[var(--muted)] tabular-nums">
+      <span className="uppercase tracking-[.06em] text-[10px] text-[var(--faint)] mr-1">{tag}</span>
+      spot {x.spot?.toLocaleString("en-IN") ?? "—"} · DTE {x.dte ?? "—"} · VIX {num(x.vix, 2)} · ATM IV {num(x.atm_iv)} · IV30 {num(x.iv30)}
+      {x.iv_rank ? ` (rank ${num(x.iv_rank.rank, 0)}%)` : ""} · MTM {inr(x.mtm)} · margin {inr(x.margin)}
+      {g ? ` · Δ ${num(g.delta)} Γ ${num(g.gamma, 3)} Θ ${num(g.theta, 0)} V ${num(g.vega, 0)}` : ""}
+      {p ? ` · max P ${p.max_profit == null ? "∞" : inr(p.max_profit)} / max L ${p.max_loss == null ? "∞" : inr(p.max_loss)} · BE ${p.breakevens.map((b) => b.toLocaleString("en-IN", { maximumFractionDigits: 0 })).join(" / ") || "—"}${p.be_dist_pct != null ? ` (${pct(p.be_dist_pct, 1)} away)` : ""}${p.pop != null ? ` · POP ${pct(100 * p.pop, 0)}` : ""}` : ""}
+      {x.short_strike_dist_pct != null ? ` · nearest short ${pct(x.short_strike_dist_pct, 2)}` : ""}
+    </div>
+  );
+}
+
+/** The cycle's record: its path (MAE/MFE, daily closes), every action with its decision
+ *  context and a `why` the owner can write after the fact, the alerts armed, what Undo
+ *  took back. This is what a review reads — the dossier prints the same. */
+function CycleRecord({ simId, c }: { simId: number; c: SimCycle }) {
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState<Record<number, string>>({});
+  const annotate = useMutation({
+    mutationFn: ({ group, why }: { group: number; why: string }) => api.simAnnotate(simId, c.n, group, why),
+    onSuccess: (d) => { qc.setQueryData(["sim", simId], d); },
+  });
+  const path = c.path;
+  return (
+    <div className="px-2 py-2 text-[12px] space-y-2" style={{ background: "var(--panel)" }}>
+      {path && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 tabular-nums">
+          <span>MFE <b className="text-emerald-600 dark:text-emerald-400">{inr(path.mfe.mtm)}</b> {path.mfe.at ? `at ${when(path.mfe.at)}` : ""}</span>
+          <span>MAE <b className="text-rose-600 dark:text-rose-400">{inr(path.mae.mtm)}</b> {path.mae.at ? `at ${when(path.mae.at)}` : ""}</span>
+          <span>exit {inr(path.exit_mtm)}{path.exit_vs_mfe_pct != null ? ` · ${pct(path.exit_vs_mfe_pct, 0)} of the best` : ""}</span>
+          {path.daily.length > 1 && (
+            <span className="text-[var(--muted)]">daily: {path.daily.map((d) => `${d.date.slice(5)} ${inr(d.close)}`).join(" · ")}</span>
+          )}
+        </div>
+      )}
+      {(c.actions ?? []).map((a: SimAction, i) => {
+        const g = a.group ?? -1 - i;
+        return (
+          <div key={`${a.at}-${i}`} className="border-t border-[var(--hair)] pt-1.5">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className="font-semibold">{LABEL[a.label] ?? a.label}</span>
+              <span className="text-[var(--muted)] tabular-nums">{when(a.at)}</span>
+              <span className="tabular-nums">{a.rows.map((r) => `${r.action} ${r.units} ${r.symbol.split("|").slice(2).join(" ")} @ ${r.price}`).join(" · ")}</span>
+            </div>
+            <Ctx tag="before" x={a.context?.before} />
+            <Ctx tag="after" x={a.context?.after} />
+            {a.group != null && (
+              <div className="flex gap-2 mt-1">
+                <input className="flex-1 min-w-0 rounded border border-[var(--hair)] bg-transparent px-2 py-0.5 text-[12px]"
+                  placeholder="why — what you saw and what you meant to do"
+                  value={draft[g] ?? a.why ?? ""} onChange={(e) => setDraft({ ...draft, [g]: e.target.value })}
+                  onKeyDown={(e) => { if (e.key === "Enter" && (draft[g] ?? "") !== (a.why ?? "")) annotate.mutate({ group: a.group as number, why: draft[g] ?? "" }); }} />
+                {(draft[g] ?? a.why ?? "") !== (a.why ?? "") && (
+                  <button className="text-[11px] underline" disabled={annotate.isPending}
+                    onClick={() => annotate.mutate({ group: a.group as number, why: draft[g] ?? "" })}>save why</button>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {(c.alerts?.length ?? 0) > 0 && (
+        <div className="text-[11px] text-[var(--muted)]">alerts: {c.alerts!.map((a) => `${a.kind} ${a.value}${a.fired_at ? ` (fired ${when(a.fired_at)})` : " (armed)"}`).join(" · ")}</div>
+      )}
+      {(c.discarded?.length ?? 0) > 0 && (
+        <div className="text-[11px] text-[var(--muted)]">taken back: {c.discarded!.map((x) => `${x.rows.map((r) => `${r.action} ${r.units} ${r.symbol.split("|").slice(2).join(" ")}`).join(", ")} (undone ${when(x.undone_at)})`).join(" · ")}</div>
+      )}
+      {annotate.isError && <div className="text-[11px] text-rose-600">{(annotate.error as Error).message}</div>}
     </div>
   );
 }
@@ -56,6 +138,7 @@ export default function SimulatorPage() {
   const [form, setForm] = useState({ name: "", underlying: "NIFTY", capital: "500000", playbook: "", start_day: "" });
   const [playbook, setPlaybook] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [openCycle, setOpenCycle] = useState<number | null>(null);
   const refresh = () => { qc.invalidateQueries({ queryKey: ["sim"] }); };
   const create = useMutation({
     mutationFn: () => api.simCreate({ name: form.name, underlying: form.underlying, capital: Number(form.capital) || 500000,
@@ -195,6 +278,7 @@ export default function SimulatorPage() {
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-[var(--faint)]">Cycles</div>
                 <div className="flex gap-3 text-xs">
+                  <a href={api.simDossierUrl(d.id)} target="_blank" rel="noreferrer" className="underline" title="the whole strategy as one Markdown document — playbook, stats, every cycle's actions with their decision context, paths and notes">Dossier</a>
                   <Link to={`/runs/${d.run_id}`} className="underline">Open as run</Link>
                   <Link to={`/analyze?run=${d.run_id}`} className="underline">Analyze</Link>
                   <Link to={`/compare?ids=${d.run_id}`} className="underline">Compare</Link>
@@ -212,8 +296,12 @@ export default function SimulatorPage() {
                     </thead>
                     <tbody>
                       {[...d.cycle_rows].reverse().map((c: SimCycle) => (
-                        <tr key={c.n} className="border-t border-[var(--hair)] align-top">
-                          <td className="py-1.5">{c.n}</td>
+                        <Fragment key={c.n}>
+                        <tr className="border-t border-[var(--hair)] align-top">
+                          <td className="py-1.5">
+                            <button className="underline decoration-dotted" title="the cycle's record: path, actions, decision context, why"
+                              onClick={() => setOpenCycle(openCycle === c.n ? null : c.n)}>{openCycle === c.n ? "▾" : "▸"} {c.n}</button>
+                          </td>
                           <td>{when(c.entered)}</td>
                           <td>{when(c.exited)}</td>
                           <td className="text-right">{c.entered && c.exited ? `${((Date.parse(c.exited) - Date.parse(c.entered)) / 86400000).toFixed(1)}d` : "—"}</td>
@@ -226,6 +314,10 @@ export default function SimulatorPage() {
                           <td className="pl-3 whitespace-normal max-w-[320px] text-[var(--muted)]">{c.note || "—"}{c.tags?.length ? ` · ${c.tags.join(", ")}` : ""}</td>
                           <td className="text-right"><Link to={`/console?sim=${d.id}&cycle=${c.n}`} className="underline" title="watch this cycle back in the console, read-only">⟲</Link></td>
                         </tr>
+                        {openCycle === c.n && (
+                          <tr><td colSpan={12} className="whitespace-normal"><CycleRecord simId={d.id} c={c} /></td></tr>
+                        )}
+                        </Fragment>
                       ))}
                     </tbody>
                   </table>

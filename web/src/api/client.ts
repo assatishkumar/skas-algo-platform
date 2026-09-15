@@ -175,7 +175,8 @@ export const api = {
   consoleOpen: (body: {
     underlying: string; day?: string | null; at?: string | null; expiry?: string | null;
     capital?: number; strike_window?: number; allow_fifty_strikes?: boolean;
-    restore?: { journal: ConsoleState["journal"]; alerts: ConsoleState["alerts"] };
+    restore?: { journal: ConsoleState["journal"]; alerts: ConsoleState["alerts"]; bookmarks?: string[];
+      discarded?: ConsoleState["discarded"] };
   }) => request<ConsoleState>("/console/sessions", { method: "POST", body: JSON.stringify(body) }),
   consoleGet: (id: string) => request<ConsoleState>(`/console/sessions/${id}`),
   consoleLiveRuns: () => request<{ runs: ConsoleLiveRun[]; recovering?: boolean }>("/console/live-runs"),
@@ -226,6 +227,9 @@ export const api = {
       { method: "POST", body: JSON.stringify({ payload }) }),
   simBank: (id: number, body: { note?: string; tags?: string[]; margin?: number | null; margin_source?: string | null; payload?: Record<string, unknown> }) =>
     request<SimDetail & { banked: SimCycle }>(`/simulator/${id}/bank`, { method: "POST", body: JSON.stringify(body) }),
+  simAnnotate: (id: number, n: number, group: number, why: string) =>
+    request<SimDetail>(`/simulator/${id}/cycles/${n}/actions/${group}`, { method: "PATCH", body: JSON.stringify({ why }) }),
+  simDossierUrl: (id: number) => `${BASE}/simulator/${id}/dossier`,
   simNextDay: (id: number, day: string) =>
     request<SimDetail>(`/simulator/${id}/next-day`, { method: "POST", body: JSON.stringify({ day }) }),
   consoleMarginAnchor: (id: string, margin_per_lot_set: number) =>
@@ -234,6 +238,8 @@ export const api = {
   consoleJump: (id: string, body: { kind: string; pct?: number }) =>
     request<ConsoleState>(`/console/sessions/${id}/jump`,
       { method: "POST", body: JSON.stringify(body) }),
+  consoleAnnotate: (id: string, group: number, why: string) =>
+    request<ConsoleState>(`/console/sessions/${id}/annotate`, { method: "POST", body: JSON.stringify({ group, why }) }),
   consoleBookmark: (id: string) =>
     request<ConsoleState>(`/console/sessions/${id}/bookmark`, { method: "POST" }),
   consoleUnbookmark: (id: string, minute: string) =>

@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException
 
 from skas_algo.api.models import (
     ConsoleAlert,
+    ConsoleAnnotate,
     ConsoleBasket,
     ConsoleCommit,
     ConsoleJump,
@@ -115,7 +116,7 @@ async def open_session(body: ConsoleOpen) -> dict:
     if body.restore and (body.restore.journal or body.restore.alerts):
         try:
             await asyncio.to_thread(session.restore, body.restore.journal, body.restore.alerts,
-                                    body.restore.bookmarks)
+                                    body.restore.bookmarks, body.restore.discarded)
         except (KeyError, ValueError, TypeError) as exc:
             registry.drop(session.id)
             raise HTTPException(status_code=422, detail=f"restore failed: {exc}") from exc
@@ -247,6 +248,15 @@ def jump(session_id: str, body: ConsoleJump) -> dict:
     st = session.state()
     st["jumped"] = session.clock != before
     return st
+
+
+@router.post("/sessions/{session_id}/annotate")
+def annotate(session_id: str, body: ConsoleAnnotate) -> dict:
+    """Stamp the owner's 'why' on one action (undo group) of a replay session's tape."""
+    session = _replay_only(_get(session_id), "annotate")
+    if not session.annotate(body.group, body.why):
+        raise HTTPException(status_code=404, detail=f"no action group {body.group}")
+    return session.state()
 
 
 @router.post("/sessions/{session_id}/bookmark")

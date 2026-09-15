@@ -117,7 +117,8 @@ def map_legs(legs: list[dict], *, underlying: str, spot_replay: float, spot_toda
     return out
 
 
-def kite_equivalent(underlying: str, legs: list[dict], *, spot: float, day: date) -> dict | None:
+def kite_equivalent(underlying: str, legs: list[dict], *, spot: float, day: date,
+                    today: date | None = None) -> dict | None:
     """Kite's net basket margin for today's equivalent of ``legs`` at ``spot`` on ``day``.
     Returns ``{"total", "account", "spot_today", "legs", "shifted"}`` or None."""
     shorts = [leg for leg in legs if leg["side"] == "S" and leg["lots"] > 0]
@@ -139,7 +140,7 @@ def kite_equivalent(underlying: str, legs: list[dict], *, spot: float, day: date
     if chain is None:
         return None
     spot_today, expiries = chain
-    today = date.today()
+    today = today or date.today()
     mapped = map_legs(legs, underlying=underlying, spot_replay=spot, spot_today=spot_today,
                       day=day, today=today, expiries_today=expiries)
     if not mapped:

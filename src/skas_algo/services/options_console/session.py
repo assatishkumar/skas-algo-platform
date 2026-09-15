@@ -46,6 +46,7 @@ from skas_algo.engine.options.charges import charges_for_txn
 from skas_algo.live.holidays import next_trading_day
 from skas_algo.services.replay_market import ReplayChain, ReplayMarket
 
+from . import payoff as _payoff
 from . import presets as _presets
 from .alerts import AlertBook
 from .margin import MarginLeg, span_like
@@ -246,6 +247,8 @@ class ConsoleSession(AlertBook):
         self._margin_detail: dict | None = None
         self._spot_series: dict[str, list[tuple[str, float]]] = {}
         self._iv_series: dict[str, list[tuple[str, float]]] = {}
+        # actions taken back by Undo — kept for the Simulator's record, never in the P&L
+        self.discarded: list[dict] = []
         # per-symbol (minutes, closes) for the open day — the tape regrouped once, so a
         # 30-minute P&L path or an alert scan is a few bisects, not thirty rebuilds
         self._sym_series: dict[str, dict[str, tuple[list[str], list[float]]]] = {}
@@ -602,9 +605,11 @@ class ConsoleSession(AlertBook):
         item = self._stage_item(kind=kind, right=right, strike=strike, side=side, lots=lots,
                                 leg_id=leg_id, enabled=enabled)
         if not self.requires_confirm:
+            before = self._decision_context()
             self._group += 1
             self._apply(item, self.clock.strftime("%Y-%m-%dT%H:%M"))
             self._replay_book(self.clock, force=True)   # the journal is the book, always
+            self._stamp_context(self._group, before, kind)
             return None
         items = [] if (replace or not self.staged) else list(self.staged["items"])
         items.append(item)
@@ -623,11 +628,13 @@ class ConsoleSession(AlertBook):
         if not items:
             raise ValueError("an empty basket")
         if not self.requires_confirm:
+            before = self._decision_context()
             self._group += 1
             minute = self.clock.strftime("%Y-%m-%dT%H:%M")
             for it in items:
                 self._apply(it, minute)
             self._replay_book(self.clock, force=True)
+            self._stamp_context(self._group, before, label or "basket")
             return None
         self.staged = {"items": items,
                        "label": label or " · ".join(i["label"] for i in items)}
@@ -652,11 +659,13 @@ class ConsoleSession(AlertBook):
         if not items:
             return None
         if not self.requires_confirm:
+            before = self._decision_context()
             self._group += 1
             minute = self.clock.strftime("%Y-%m-%dT%H:%M")
             for it in items:
                 self._apply(it, minute)
             self._replay_book(self.clock, force=True)
+            self._stamp_context(self._group, before, f"scale x{factor:g}")
             return None
         self.staged = {"items": items, "label": f"Scale ×{factor:g}"}
         return self.staged
@@ -1080,13 +1089,72 @@ class ConsoleSession(AlertBook):
                 # the expiry lies past the last captured session: the replay cannot reach it
                 "beyond_data": end > last_captured, "data_until": last_captured}
 
+    # ------------------------------------------------------- decision snapshots
+    def _decision_context(self) -> dict:
+        """What the screen showed at THIS minute: spot, DTE, VIX, the vol gauges, the
+        book's greeks, MTM and margin, and the expiry payoff's shape. Stamped on every
+        action so a later review can judge the decision on what was known, not on what
+        followed (the Simulator's record, 2026-09-15)."""
+        try:
+            legs_out = [self._leg_out(leg) for leg in self.legs if leg.enabled]
+            spot = self.market.index_spot(self.underlying)
+            risk = self._risk_out()
+            v = self._vix_at_cursor() or {}
+            iv30 = self.iv30_at_cursor()
+            legs = [{"right": x["right"], "strike": x["strike"], "direction": x["direction"],
+                     "units": x["units"], "entry": x["entry"]} for x in legs_out]
+            sigma = (iv30["iv"] / 100.0) if iv30 else None
+            t = min((x["t"] for x in legs_out if x.get("t")), default=None)
+            pay = _payoff.metrics(legs, float(spot), offset=risk.get("realised", 0.0),
+                                  sigma=sigma, t=t) if spot else None
+            near_short = None
+            if spot:
+                shorts = [x["strike"] for x in legs_out if x["side"] == "S"]
+                if shorts:
+                    k = min(shorts, key=lambda k: abs(k - spot))
+                    near_short = round(100.0 * (k - spot) / spot, 2)
+            return {
+                "at": self._minute_key(), "spot": round(float(spot), 2) if spot else None,
+                "expiry": self.expiry,
+                "dte": ((date.fromisoformat(self.expiry) - self.day).days if self.expiry else None),
+                "vix": v.get("last") or v.get("prev_close"), "atm_iv": self._atm_iv_at_cursor(),
+                "iv30": iv30["iv"] if iv30 else None,
+                "iv_rank": self._iv_rank(iv30),
+                "greeks": self._net_greeks(legs_out),
+                "mtm": risk.get("mtm"), "unrealised": risk.get("unrealised"),
+                "realised": risk.get("realised"), "margin": risk.get("margin"),
+                "margin_source": risk.get("margin_source"), "legs_open": len(legs_out),
+                "net_credit": risk.get("net_credit"), "payoff": pay,
+                "short_strike_dist_pct": near_short,
+            }
+        except Exception:  # pragma: no cover - a snapshot must never break a fill
+            logger.exception("console: decision context failed")
+            return {"at": self._minute_key()}
+
+    def _stamp_context(self, group: int, before: dict, kind: str) -> None:
+        """Stamp {kind, before, after} on the journal rows of ``group``."""
+        after = self._decision_context()
+        ctx = {"kind": kind, "before": before, "after": after}
+        for row in self.journal:
+            if row.get("group") == group:
+                row["context"] = ctx
+
+    def annotate(self, group: int, why: str) -> bool:
+        """The owner's 'why' on one action (its undo group)."""
+        hit = False
+        for row in self.journal:
+            if row.get("group") == int(group):
+                row["why"] = why.strip()
+                hit = True
+        return hit
+
     def save_payload(self) -> dict:
         return {"underlying": self.underlying, "day": self.day.isoformat(),
                 "clock": self.clock.strftime("%H:%M"), "expiry": self.expiry,
                 "capital": self.capital, "margin_per_lot_set": self.margin_per_lot_set,
                 "allow_fifty_strikes": self.allow_fifty_strikes,
                 "journal": self.journal, "alerts": self._alerts_out(),
-                "bookmarks": self.bookmarks}
+                "bookmarks": self.bookmarks, "discarded": self.discarded}
 
     def undo_last(self) -> bool:
         """Undo the last action — the whole action, so a roll's two fills and a basket's
@@ -1098,12 +1166,16 @@ class ConsoleSession(AlertBook):
             return False
         last = max(groups)
         kept: list[dict] = []
+        gone: list[dict] = []
         for f in self.journal:
             if f.get("group") != last:
                 kept.append(f)
             else:
+                gone.append({k: v for k, v in f.items() if k != "replaces"})
                 kept.extend(f.get("replaces") or [])   # an edit gives back what it replaced
         self.journal = kept
+        # the Simulator's record of hesitation: what was taken back, and when
+        self.discarded.append({"group": last, "undone_at": self._minute_key(), "rows": gone})
         self._replay_book(self.clock, force=True)
         return True
 
@@ -1176,10 +1248,12 @@ class ConsoleSession(AlertBook):
             raise ValueError("nothing staged")
         items = self.staged["items"]
         minute = self.clock.strftime("%Y-%m-%dT%H:%M")
+        before = self._decision_context()
         self._group += 1
         for st in items:
             self._apply(st, minute)
         self._replay_book(self.clock, force=True)
+        self._stamp_context(self._group, before, self.staged.get("label") or "commit")
         self.staged = None
         return {"committed": len(items), "at": minute}
 
@@ -1334,7 +1408,8 @@ class ConsoleSession(AlertBook):
         return c["total"]
 
     def restore(self, journal: list[dict], alerts: list[dict] | None = None,
-                bookmarks: list[str] | None = None) -> None:
+                bookmarks: list[str] | None = None,
+                discarded: list[dict] | None = None) -> None:
         """Rebuild a LOST session from the journal the page kept.
 
         The registry is in-process: a backend restart or an eviction drops the object, and
@@ -1347,11 +1422,15 @@ class ConsoleSession(AlertBook):
         for f in journal:
             if f.get("action") in ("SETTLE", "NOOP"):
                 continue
-            rows.append({"at": str(f["at"]), "symbol": str(f["symbol"]),
-                         "action": str(f["action"]), "group": f.get("group"),
-                         "units": float(f["units"]), "price": float(f["price"]),
-                         "charges": float(f.get("charges") or 0.0),
-                         "spot": f.get("spot")})
+            row = {"at": str(f["at"]), "symbol": str(f["symbol"]),
+                   "action": str(f["action"]), "group": f.get("group"),
+                   "units": float(f["units"]), "price": float(f["price"]),
+                   "charges": float(f.get("charges") or 0.0),
+                   "spot": f.get("spot")}
+            for extra in ("context", "why"):             # the Simulator's decision record
+                if f.get(extra) is not None:
+                    row[extra] = f[extra]
+            rows.append(row)
         rows.sort(key=lambda f: f["at"])
         self.journal = rows
         self._group = max([int(f["group"]) for f in rows if f.get("group")] or [0])
@@ -1362,6 +1441,7 @@ class ConsoleSession(AlertBook):
             except (KeyError, ValueError, TypeError):
                 continue
         self.bookmarks = sorted({str(b) for b in (bookmarks or [])})
+        self.discarded = list(discarded or [])
         self._settle_expired()
         self._replay_book(self.clock, force=True)
 
@@ -1739,6 +1819,7 @@ class ConsoleSession(AlertBook):
             "journal": self.journal,          # the whole tape of actions — what a restore needs
             "alerts": self._alerts_out(),
             "bookmarks": self.bookmarks,
+            "discarded": self.discarded,     # what Undo took back (the Simulator's record)
             "cycle": self.cycle_info(),
             # the replay track: markers on the OPEN day for the scrubber
             "track": {

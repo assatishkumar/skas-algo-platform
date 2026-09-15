@@ -1307,6 +1307,34 @@ after trading, and after `bank` reopens the next day; `?sim=&cycle=n` replays a 
 cycle read-only (no autosave). RoM uses the margin recorded AT BANK (the console's Kite /
 anchor / model figure), so a later margin regime never rewrites history. Nothing
 unrealised enters the stats. Coverage: `tests/test_simulator.py`.
+**The record (owner ask 2026-09-15): the Simulator logs enough for a later review to
+judge every adjustment on what was KNOWN at the minute, not on what followed.** Four
+parts. (1) The console stamps a `context` on every action group's journal rows
+(`ConsoleSession._decision_context` → `_stamp_context`, on stage / basket / scale /
+commit): `{kind, before, after}` with spot, DTE, VIX, ATM IV, IV30 + rank, the book's
+greeks, MTM / unrealised / realised, margin + source, legs open, the nearest short
+strike's distance, and the expiry payoff's shape from the NEW server-side
+`options_console/payoff.py::metrics` (max P/L with unlimited tails, breakevens, nearest
+BE distance, POP — the same construction as `payoff.ts::computeMetrics`, `basis` says
+intrinsic-at-expiry). A snapshot that fails logs and stamps only the minute — it must
+never break a fill. (2) `undo_last` keeps what it took back in `session.discarded`
+(`{group, undone_at, rows}`; `state()`, `save_payload`, `restore` and the page's
+autosave / bank / 404-restore all carry it) — the record of hesitation, never in the
+P&L. (3) `simulator.bank` computes `cycle_path(journal, u)` — per-minute MTM over the
+tape from first fill to exit (realised + open lots at their forward-filled prints),
+giving daily close/high/low, MAE, MFE with their minutes, and `exit_vs_mfe_pct` — and
+stores `actions` (`action_groups`: rows grouped by undo group, labelled by SHAPE —
+entry / roll / hedge / resize / partial_exit / exit / add / settle — with the context
+and the owner's `why`), the cycle's `alerts` and `discarded`. A `why` is stamped
+post hoc (`POST /console/sessions/{id}/annotate {group, why}` on an open session;
+`PATCH /simulator/{id}/cycles/{n}/actions/{group}` on a banked one — the page's
+expandable cycle row) so trading stays frictionless. `_put_sim` calls `flag_modified`:
+an in-place edit of a nested row leaves old == new by value and the JSON column would
+otherwise flush nothing. A cycle banked before this derives `actions` on read and has
+no path. (4) `GET /simulator/{id}/dossier` (`dossier_markdown`; CLI `skas-algo
+sim-dossier <id> [--out f.md]`) is the whole strategy as one Markdown document —
+playbook, stats, every cycle's actions with before/after contexts, path, alerts, undos —
+the file a review session starts from.
 
 ## 8a. The /portfolio tracker is NOT part of the trading system
 **The VPS is the authoritative portfolio.** It holds the owner's real book (56 holdings)
