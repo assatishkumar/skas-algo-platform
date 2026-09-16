@@ -41,7 +41,7 @@ function ParametersCard({
             <div key={k} className={`rounded-md bg-slate-800/40 px-3 py-2 ${disabled ? "opacity-50" : ""}`}>
               <div className="text-slate-400 text-xs">{paramLabel(k)}</div>
               <div>
-                {formatParamValue(k, merged[k])}
+                {formatParamValue(k, merged[k], String(merged.currency ?? "INR"))}
                 {disabled && <span className="text-slate-500"> · n/a (book 0%)</span>}
               </div>
             </div>

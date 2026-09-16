@@ -1,4 +1,4 @@
-import { formatInr } from "./format";
+import { formatMoney } from "./format";
 
 // Human labels + a sensible display order for backtest input parameters.
 const LABELS: Record<string, string> = {
@@ -18,6 +18,8 @@ const LABELS: Record<string, string> = {
   roll_days_before: "Roll days before expiry",
   expiry_switch_day: "Expiry switch day",
   capital: "Capital",
+  market: "Market",
+  currency: "Currency",
   universe: "Universe",
   symbols: "Symbols",
   start_date: "Start date",
@@ -340,11 +342,11 @@ export function paramLabel(key: string): string {
 }
 
 /** Format a parameter value for display (percent fractions, money, enums, symbol counts). */
-export function formatParamValue(key: string, value: unknown): string {
+export function formatParamValue(key: string, value: unknown, currency = "INR"): string {
   if (value == null || value === "") return "—";
   if (Array.isArray(value)) return `${value.length} symbol${value.length === 1 ? "" : "s"}`;
   if ((key === "capital" || key === "margin_per_lotset") && typeof value === "number")
-    return formatInr(value);
+    return formatMoney(value, currency);
   if (PCT_KEYS.has(key) && typeof value === "number") {
     const p = value * 100;
     return `${Number.isInteger(p) ? p : p.toFixed(1)}%`;

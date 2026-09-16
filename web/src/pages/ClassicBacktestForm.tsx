@@ -164,8 +164,12 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   useEffect(() => {
     if (market === prevMarket.current) return;
     prevMarket.current = market;
-    if (market === "US") { setTaxRate(0); setStFunding("ledger"); setStIdleReturn(4); }
-    else { setTaxRate(20); setStIdleReturn(6); }
+    if (market === "US") {
+      setTaxRate(0); setStFunding("ledger"); setStIdleReturn(4);
+      // the US store starts 2016-09 and a SuperTrend run pads nothing before its start:
+      // begin well inside the data unless the dates were set by hand
+      if (!datesTouched.current && startDate < "2018-01-01") setStartDate("2018-01-01");
+    } else { setTaxRate(20); setStIdleReturn(6); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [market]);
   const [capital, setCapital] = useState(2500000);
@@ -1207,7 +1211,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                 </div>
               )}
               <div className="grid md:grid-cols-4 gap-4">
-                <Field label="Capital (₹)">
+                <Field label={market === "US" ? "Capital ($)" : "Capital (₹)"}>
                   <NumberInput className={inputClass} value={capital} onChange={setCapital} />
                 </Field>
                 {Object.entries(iparams)
@@ -1410,7 +1414,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                 credit/debit sign. EOD engine: the 9:45 AM entry and intraday ±1% exits fill at
                 daily closes. Weekly Tuesday expiries are cached from Sep 2025.
               </div>
-              <Field label="Capital (₹)">
+              <Field label={market === "US" ? "Capital ($)" : "Capital (₹)"}>
                 <NumberInput className={inputClass} value={capital} onChange={setCapital} />
               </Field>
               <Field label="Lot-sets (× 1-3-2)">
@@ -1634,7 +1638,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
             </div>
           ) : isEma21 ? (
             <div key="ema21-params" className="grid md:grid-cols-3 gap-4">
-              <Field label="Capital (₹)">
+              <Field label={market === "US" ? "Capital ($)" : "Capital (₹)"}>
                 <NumberInput className={inputClass} value={capital} onChange={setCapital} />
               </Field>
               <Field label="Lots">
@@ -1671,7 +1675,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
             </div>
           ) : isOptions ? (
             <div key="options-params" className="grid md:grid-cols-3 gap-4">
-              <Field label="Capital (₹)">
+              <Field label={market === "US" ? "Capital ($)" : "Capital (₹)"}>
                 <NumberInput className={inputClass} value={capital} onChange={setCapital} />
               </Field>
               <Field label="Structure">
@@ -1706,7 +1710,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
             </div>
           ) : (
           <div key="equity-params" className="grid md:grid-cols-3 gap-4">
-            <Field label="Capital (₹)">
+            <Field label={market === "US" ? "Capital ($)" : "Capital (₹)"}>
               <NumberInput className={inputClass} value={capital} onChange={setCapital} />
             </Field>
             {isValueInvesting ? (
