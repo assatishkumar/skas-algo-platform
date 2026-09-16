@@ -135,6 +135,40 @@ def _build_iv_history(args) -> None:
         print(u, build(u, progress=prog))
 
 
+def _us_daily_refresh(args) -> None:
+    """`skas-algo us-daily-refresh [sp500 nasdaq100 | AAPL MSFT …]` — fetch or top up the
+    US daily-bar store from Yahoo (one call per symbol, ~0.25 s apart; ten years on a
+    first fetch, the tail afterwards). A universe name expands to its current list
+    (refreshed from Wikipedia first). No broker, no order path."""
+    import time
+
+    from skas_algo.data import universes, us_daily, us_universe
+
+    names, symbols = [], []
+    for a in args.targets or ["sp500", "nasdaq100"]:
+        (names if a.lower() in universes.US_UNIVERSES else symbols).append(a)
+    for n in names:
+        res = us_universe.refresh(n.lower(), baseline=list(universes.UNIVERSES[n.lower()][1]))
+        status = "ok" if res.get("ok") else f"FAILED {res.get('error')}"
+        print(f"universe {n}: {status} · {res.get('count')} names · "
+              f"+{len(res.get('added', []))} −{len(res.get('dropped', []))}")
+        for s in universes.current(n.lower()):
+            if s not in symbols:
+                symbols.append(s)
+    t0 = time.time()
+    print(f"refreshing {len(symbols)} symbols into {us_daily.store_dir()} …")
+
+    def prog(done, total, sym, res):
+        if not res.get("ok"):
+            print(f"  {sym}: FAILED {res.get('error')}")
+        elif done % 25 == 0 or done == total:
+            print(f"  {done}/{total} · {sym} {res.get('rows')} rows → {res.get('last')}")
+    out = us_daily.refresh(symbols, progress=prog)
+    ok = sum(1 for r in out.values() if r.get("ok"))
+    print(f"done: {ok} ok, {len(out) - ok} failed, {round(time.time() - t0)} s; "
+          f"store: {us_daily.coverage()}")
+
+
 def _sim_dossier(args) -> None:
     """`skas-algo sim-dossier <id> [--out file.md]` — the Simulator strategy's dossier."""
     from skas_algo.db.base import session_scope
@@ -177,6 +211,10 @@ def main() -> None:
         "build-iv-history", help="Append the daily ATM IV history from the 1-min option store"
     )
     ih.add_argument("--underlying", default=None, help="one underlying (default: all three)")
+    ud = sub.add_parser("us-daily-refresh",
+                        help="Fetch / top up US daily bars from Yahoo (universes or symbols)")
+    ud.add_argument("targets", nargs="*",
+                    help="sp500 / nasdaq100 and/or symbols; default: both universes")
     sd = sub.add_parser("sim-dossier", help="Write a Simulator strategy's dossier (Markdown)")
     sd.add_argument("sim_id", help="the Simulator strategy id (/simulator?id=…)")
     sd.add_argument("--out", default=None, help="file to write (default: stdout)")
@@ -223,6 +261,9 @@ def main() -> None:
         return
     if args.cmd == "sim-dossier":
         _sim_dossier(args)
+        return
+    if args.cmd == "us-daily-refresh":
+        _us_daily_refresh(args)
         return
     if args.cmd == "restore-option-bars":
         _restore_option_bars(args)

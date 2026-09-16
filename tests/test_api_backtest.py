@@ -47,7 +47,10 @@ def test_universes_listed_with_counts(api_client: TestClient):
     assert resp.status_code == 200
     by_name = {u["name"]: u for u in resp.json()}
     assert set(by_name) == {"nifty25", "nifty50", "nifty100", "nifty200", "nifty500",
-                            "nifty500mom50"}
+                            "nifty500mom50", "sp500", "nasdaq100"}
+    # the US universes count against the US store (empty here), never the Kite cache
+    assert by_name["sp500"]["market"] == "US" and by_name["sp500"]["count"] == 0
+    assert by_name["nifty50"]["market"] == "IN"
     # Only RELIANCE/TCS/INFY are "available", so counts reflect the intersection.
     assert by_name["nifty50"]["count"] == 3
     assert by_name["nifty50"]["label"] == "Nifty 50"
@@ -349,3 +352,49 @@ def test_strategy_template_lifecycle(api_client: TestClient):
 
     assert api_client.delete("/api/v1/strategies/sst_lifo/template").json()["cleared"] is True
     assert api_client.get("/api/v1/strategies/templates").json()["templates"] == {}
+
+
+def test_a_us_universe_backtest_reads_the_us_store_and_is_tagged_usd(api_client, tmp_path, monkeypatch):
+    """The second market: sp500 resolves against the US daily store, the run prices off it,
+    and the persisted params say market US / currency USD. The Indian path is untouched."""
+    from datetime import date, datetime, timedelta
+
+    from skas_algo.data import us_daily
+
+    monkeypatch.setenv("SKAS_US_DAILY_DIR", str(tmp_path / "us"))
+    # two S&P names with a year of bars each, straight into the store
+    start = date(2020, 1, 6)
+    for sym in ("AAPL", "MSFT"):
+        rows = []
+        d, i = start, 0
+        while i < 260:
+            if d.weekday() < 5:
+                rows.append({"date": d.isoformat(), "open": 100 + i, "high": 101 + i,
+                             "low": 99 + i, "close": 100.5 + i, "volume": 1.0, "adjclose": 100.5 + i})
+                i += 1
+            d += timedelta(days=1)
+        import pandas as pd
+        us_daily.store_dir().mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_csv(us_daily._path(sym), index=False)
+    assert api_client.get("/api/v1/universes").json()
+    by = {u["name"]: u for u in api_client.get("/api/v1/universes").json()}
+    assert by["sp500"]["count"] == 2
+    body = {"strategy_id": "sst_lifo", "universe": "sp500", "start_date": "2020-03-01",
+            "end_date": "2020-12-31", "capital": 100_000, "tax_rate": 0.0, "lookback": 5,
+            "params": {}, "persist": True}
+    resp = api_client.post("/api/v1/backtest", json=body)
+    assert resp.status_code == 200, resp.text
+    run = resp.json()
+    assert run["run_id"] and run["report"]["metrics"]
+    detail = api_client.get(f"/api/v1/runs/{run['run_id']}").json()
+    assert detail["params"]["market"] == "US" and detail["params"]["currency"] == "USD"
+    assert sorted(detail["params"]["symbols"]) == ["AAPL", "MSFT"]
+    # a custom US list needs the store to hold every name
+    body2 = {**body, "universe": None, "symbols": ["AAPL", "TSLA"], "market": "US"}
+    r2 = api_client.post("/api/v1/backtest", json=body2)
+    assert r2.status_code == 422 and "TSLA" in r2.text
+    # the Indian run still resolves against the fake Indian availability and is tagged INR
+    r3 = api_client.post("/api/v1/backtest", json={**body, "universe": "nifty50"})
+    assert r3.status_code == 200
+    d3 = api_client.get(f"/api/v1/runs/{r3.json()['run_id']}").json()
+    assert d3["params"]["market"] == "IN" and d3["params"]["currency"] == "INR"

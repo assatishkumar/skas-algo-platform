@@ -1584,6 +1584,16 @@ export interface OptionBarsDay {
   bytes: number;
 }
 
+/** The US daily-bar store (data/us_daily.py) — the Data page's card. */
+export interface UsDailyStore {
+  symbols: number; first: string | null; last: string | null; oldest_last: string | null;
+  stale: string[]; stale_count: number; dir: string;
+  job: { running: boolean; done: number; total: number; symbol: string | null; errors: number;
+    started_at: string | null; finished_at: string | null;
+    result: { ok?: number; failed?: string[]; error?: string } | null };
+  universes: Record<string, number>;
+}
+
 export interface OptionBarsStore {
   days_total: number;
   rows_total: number;
@@ -1752,6 +1762,7 @@ export interface LiveWsMessage {
 export interface Universe {
   name: string;
   label: string;
+  market?: "IN" | "US";   // which store the count was taken against (2026-09-16)
   count: number;      // names this box has cached (what a deploy would trade)
   total?: number;     // names in the list itself
   source?: "official" | "snapshot";
@@ -1762,6 +1773,7 @@ export interface BacktestRequest {
   strategy_id: string;
   symbols: string[];
   universe?: string | null;
+  market?: "IN" | "US";      // a named universe decides; the toggle only matters for custom symbols
   instrument_class?: string; // "STOCK" (default) | "DERIV"
   underlying?: string | null; // DERIV: NIFTY / BANKNIFTY
   start_date: string;

@@ -30,6 +30,7 @@ os.environ["SKAS_BACKUP_REMOTE_CMD"] = ""
 # The official-constituent store is per box (~/.skas_data/universes); tests must neither
 # read the owner's captures nor write into them.
 os.environ["SKAS_UNIVERSE_DIR"] = tempfile.mkdtemp(prefix="skas-universes-")
+os.environ["SKAS_US_DAILY_DIR"] = tempfile.mkdtemp(prefix="skas-us_daily-")  # the US daily store (2026-09-16) — never the real one
 
 # A throwaway Fernet key so credential-encryption tests work in isolation.
 from cryptography.fernet import Fernet  # noqa: E402

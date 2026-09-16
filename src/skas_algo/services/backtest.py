@@ -292,6 +292,10 @@ def persist_backtest(session: Session, req: BacktestRequest, report: dict, trade
             "lookback": req.lookback,
             "tax_rate": req.tax_rate,
             "withdrawal_rate": req.withdrawal_rate,
+            # the market the run priced in and its currency — labels for the pages, and the
+            # only record of which store fed it (2026-09-16)
+            "market": req.market or "IN",
+            "currency": "USD" if (req.market or "IN") == "US" else "INR",
             # Effective strategy config (defaults included), then explicit overrides.
             **_effective_strategy_params(factory, req.params),
             **req.params,

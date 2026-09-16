@@ -38,6 +38,9 @@ class BacktestRequest(BaseModel):
     # data + chain + expiry-settlement engine instead of the equity loader.
     instrument_class: str = "STOCK"
     underlying: str | None = None  # DERIV: NIFTY / BANKNIFTY (else taken from params/symbols)
+    # "IN" (the Kite cache, ₹) or "US" (the US daily store, $). A named universe decides it
+    # (`universes.market_of`); the field only matters for a custom symbol list. 2026-09-16.
+    market: str | None = None
     start_date: date
     end_date: date
     capital: float = 2_500_000
@@ -243,6 +246,7 @@ class ConsoleAlert(BaseModel):
 
 
 class UniverseOut(BaseModel):
+    market: str = "IN"          # "IN" | "US" — which store the count was taken against
     name: str
     label: str
     count: int  # symbols available in the cache

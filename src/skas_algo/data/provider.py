@@ -47,6 +47,30 @@ def get_price_loader() -> PriceLoader:
     return loader
 
 
+def get_us_price_loader() -> PriceLoader:
+    """The US daily store's loader (data/us_daily.py) — the same contract, a different
+    box of files. The Indian loader above is untouched: the parity suites read it."""
+    from skas_algo.data import us_daily
+
+    def loader(symbol: str, start: date, end: date):
+        return us_daily.load(symbol, start, end)
+    return loader
+
+
+def get_us_available_symbols() -> set[str]:
+    from skas_algo.data import us_daily
+
+    return us_daily.cached_symbols()
+
+
+def price_loader_for(market: str) -> PriceLoader:
+    return get_us_price_loader() if market == "US" else get_price_loader()
+
+
+def available_symbols_for(market: str) -> set[str]:
+    return get_us_available_symbols() if market == "US" else get_available_symbols()
+
+
 def get_available_symbols() -> set[str]:
     """Set of stock symbols present in the skas-data cache (FastAPI dependency)."""
     return set(_skas_data().list_cached_symbols(asset_type="stock"))

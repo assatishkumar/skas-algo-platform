@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import { api, brokers } from "../api/client";
 import { FuturesDataSection, OptionsDataSection } from "../components/DerivData";
+import { UsDailySection } from "../components/UsDailyData";
 import { Card, ErrorBox, Spinner } from "../components/ui";
 import type { DataSymbol } from "../types";
 
@@ -362,6 +363,7 @@ const TABS = [
   { key: "stocks", label: "Stocks" },
   { key: "options", label: "Options" },
   { key: "futures", label: "Futures" },
+  { key: "us", label: "US stocks" },
 ];
 
 export default function DataPage() {
@@ -389,6 +391,8 @@ export default function DataPage() {
         <OptionsDataSection />
       ) : tab === "futures" ? (
         <FuturesDataSection />
+      ) : tab === "us" ? (
+        <UsDailySection />
       ) : (
         <StocksDataSection />
       )}

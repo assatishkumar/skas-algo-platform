@@ -21,7 +21,7 @@ import type {
   Deployment,
   LiveSummary,
   DerivCoverage,
-  OptionBarsStore,
+  OptionBarsStore, UsDailyStore,
   EquityTradeDeploy,
   DonchianAnalyzeRequest,
   DonchianDeploy,
@@ -369,6 +369,9 @@ export const api = {
   },
 
   // --- options & futures data (no broker session needed) ---
+  usDailyStore: () => request<UsDailyStore>("/data/us-daily"),
+  usDailyRefresh: (targets?: string[]) =>
+    request<{ started: boolean; symbols: number }>("/data/us-daily/refresh", { method: "POST", body: JSON.stringify(targets ?? null) }),
   optionsUnderlyings: () => request<UnderlyingList>("/data/options/underlyings"),
   optionBarsStore: (days = 30) =>
     request<OptionBarsStore>(`/data/options/intraday-store?days=${days}`),

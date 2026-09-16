@@ -228,6 +228,29 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 - Known security debt: Kite secrets were committed in sibling repos (see `docs/PLAN.md` Phase 0) — not
   this repo's scope, but don't propagate the pattern.
 
+## 5b. The SECOND market: US daily bars for equity backtests (2026-09-16)
+`data/us_daily.py` is a csv.gz-per-symbol store under `~/.skas_data/us_daily/`
+(`SKAS_US_DAILY_DIR`) fed from Yahoo's chart endpoint (the one `global_quotes.py` uses;
+one call per symbol, 0.25 s apart, ten years on a first fetch, the tail afterwards;
+split-adjusted OHLC, `adjclose` kept beside it, never used). `data/us_universe.py` fetches
+the S&P 500 and Nasdaq-100 lists from Wikipedia (`html.parser` — the venv has no lxml)
+into the SAME dated store `nse_universe` uses; `universes.US_UNIVERSES` / `market_of()`
+name them. Fill with `skas-algo us-daily-refresh` or the Data → US stocks card.
+**The engine is market-neutral and was NOT touched**: the equity path charges nothing, the
+calendar is the union of the data's dates, the multiplier is 1. The whole US path is a
+loader + an availability set + a universe list, chosen at the ROUTE by
+`BacktestRequest.market` (a named universe decides via `market_of`; the field matters
+only for custom symbols): `provider.price_loader_for("US")` / `available_symbols_for`
+— `get_price_loader` / `get_available_symbols` for India are untouched and the parity
+suites read them. A US run persists `params.market/currency` and the pages print $
+(`format.ts::formatMoney`; `ReportView`'s CurrencyCtx). Two run settings that CHANGE
+NUMBERS: `tax_rate` (the 0.20 default is an Indian STCG proxy — the form sets 0 for US)
+and `funding` (`park`/`on_demand` settle on the 2026 NSE holiday table — India-only on
+the form). Warm-up: `services/backtest.py` pads nothing before `start_date` for
+SuperTrend strategies, so start a US run ≥ 400 days after the store's first bar.
+Survivorship: TODAY'S constituents; a point-in-time table (the `mom50_membership`
+template) is the phase-2 fix. No deploy path — there is no US broker.
+
 ## 6. Indian-market assumptions are implicit everywhere
 - IST timezone, NSE hours, Nifty 50 universe, F&O lot sizes + monthly/weekly expiries, STCG-tax &
   withdrawal modeling, ₹/INR, Zerodha/Kite.

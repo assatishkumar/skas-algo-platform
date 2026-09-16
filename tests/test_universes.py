@@ -19,7 +19,7 @@ def test_lists_present_and_sized():
         assert len(symbols) == len(set(symbols)), f"{name} has duplicates"
     assert len(universes.NIFTY500_MOMENTUM_50) == 50  # official NSE snapshot, 2026-08-18
     assert set(universes.UNIVERSES) == {"nifty25", "nifty50", "nifty100", "nifty200",
-                                        "nifty500", "nifty500mom50"}
+                                        "nifty500", "nifty500mom50", "sp500", "nasdaq100"}
     # the top-25-by-weight basket is a strict subset of the Nifty 50, and the index
     # family nests (a broken nesting means one snapshot was regenerated and another not)
     assert set(universes.NIFTY_25) <= set(universes.NIFTY_50)

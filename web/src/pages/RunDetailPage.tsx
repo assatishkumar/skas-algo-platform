@@ -236,8 +236,10 @@ export default function RunDetailPage() {
           trades={data.trades}
           onDownloadCsv={() => api.downloadTradesCsv(runId)}
           runId={runId}
+          currency={String((data.params as Record<string, unknown>)?.currency ?? "INR")}
           defaultBenchmark={
-            (data.params as Record<string, unknown>)?.universe === "nifty500" ? "NIFTY 500" : undefined
+            (data.params as Record<string, unknown>)?.market === "US" ? "SPY"
+              : (data.params as Record<string, unknown>)?.universe === "nifty500" ? "NIFTY 500" : undefined
           }
         />
       ) : (

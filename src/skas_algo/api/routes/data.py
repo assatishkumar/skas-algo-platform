@@ -263,6 +263,35 @@ def _coverage_payload(cov: dict) -> dict:
     }
 
 
+@router.get("/us-daily")
+def us_daily_store() -> dict:
+    """The US daily-bar store (data/us_daily.py): coverage + the refresh job's state — the
+    Data page's "US daily bars" card. Local files only, no broker."""
+    from skas_algo.data import universes, us_daily
+
+    return {**us_daily.coverage(), "job": us_daily.job_snapshot(),
+            "universes": {n: len(universes.current(n)) for n in sorted(universes.US_UNIVERSES)}}
+
+
+@router.post("/us-daily/refresh")
+def us_daily_refresh(targets: list[str] | None = None) -> dict:
+    """Start a background refresh (Yahoo, one call per symbol) of the named universes
+    and/or symbols — default both US universes. 409 while one runs; poll GET /data/us-daily."""
+    from fastapi import HTTPException
+
+    from skas_algo.data import universes, us_daily, us_universe
+
+    names, symbols = [], []
+    for a in targets or ["sp500", "nasdaq100"]:
+        (names if a.lower() in universes.US_UNIVERSES else symbols).append(a.upper())
+    for n in names:
+        us_universe.refresh(n.lower(), baseline=list(universes.UNIVERSES[n.lower()][1]))
+        symbols += [s for s in universes.current(n.lower()) if s not in symbols]
+    if not us_daily.start_refresh_job(symbols):
+        raise HTTPException(status_code=409, detail="a US daily refresh is already running")
+    return {"started": True, "symbols": len(symbols)}
+
+
 @router.get("/options/intraday-store")
 def options_intraday_store(days: int = 30) -> dict:
     """The self-captured 1-min option-bar store (the GFD replacement): totals, per-day

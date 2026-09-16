@@ -141,6 +141,12 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
   const [universe, setUniverse] = useState("nifty50"); // "" = Custom
+  // The second market (2026-09-16): a US universe prices off the US daily store in $; the
+  // Custom symbols box needs the toggle because a bare ticker says nothing about its market.
+  const [customMarket, setCustomMarket] = useState<"IN" | "US">("IN");
+  const market: "IN" | "US" = universe === ""
+    ? customMarket
+    : (universes.find((u) => u.name === universe)?.market ?? "IN");
   // Momentum-50 only: trade the union of every name EVER in the index, with the strategy's
   // daily scan following the rebalance table — the survivorship-bias fix for backtests.
   const [pitUniverse, setPitUniverse] = useState(true);
@@ -153,6 +159,15 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
   // read from the coverage effect's closure is still false mid-pass — so it overwrote the
   // clone's dates every time (2026-08-18). A ref mutates synchronously across the pass.
   const datesTouched = useRef(false);
+  // a US run: no Indian STCG proxy, no ETF-funded modes (they settle on NSE holidays)
+  const prevMarket = useRef<"IN" | "US">("IN");
+  useEffect(() => {
+    if (market === prevMarket.current) return;
+    prevMarket.current = market;
+    if (market === "US") { setTaxRate(0); setStFunding("ledger"); setStIdleReturn(4); }
+    else { setTaxRate(20); setStIdleReturn(6); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market]);
   const [capital, setCapital] = useState(2500000);
   // INTRADAY basis: generic per-strategy params + the option store's coverage for date hints.
   const [iparams, setIparams] = useState<Record<string, number | string | boolean>>(
@@ -828,6 +843,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
       strategy_id: strategyId,
       name: name.trim() || undefined,
       notes: notes.trim() || undefined,
+      market,
       universe: isCustom ? null : universe,
       symbols: isCustom ? symbols.split(",").map((s) => s.trim()).filter(Boolean) : [],
       start_date: startDate,
@@ -1115,14 +1131,25 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
               <>
                 <Field label="Universe">
                   <select className={inputClass} value={universe} onChange={(e) => setUniverse(e.target.value)}>
-                    {universes.map((u) => (
-                      <option key={u.name} value={u.name}>
-                        {u.label} ({u.count} available)
-                      </option>
-                    ))}
+                    <optgroup label="India · Kite cache">
+                      {universes.filter((u) => (u.market ?? "IN") === "IN").map((u) => (
+                        <option key={u.name} value={u.name}>{u.label} ({u.count} available)</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="US · daily store (Data → US stocks)">
+                      {universes.filter((u) => u.market === "US").map((u) => (
+                        <option key={u.name} value={u.name}>{u.label} ({u.count} available)</option>
+                      ))}
+                    </optgroup>
                     <option value="">Custom</option>
                   </select>
                 </Field>
+                {market === "US" && (
+                  <div className="text-xs text-amber-400/90 -mt-1">
+                    US run: priced in $ off the US daily store; tax is set to 0 (the 20% default is an
+                    Indian STCG proxy); ETF-funded modes are India-only. Today's constituents — survivorship-biased.
+                  </div>
+                )}
                 {universe === "nifty500mom50" && (
                   <label className="flex items-center gap-2 text-xs text-slate-400 -mt-1">
                     <input type="checkbox" checked={pitUniverse}
@@ -1133,9 +1160,17 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                   </label>
                 )}
                 {universe === "" ? (
-                  <Field label="Symbols (comma-separated)">
-                    <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
-                  </Field>
+                  <>
+                    <Field label="Market">
+                      <select className={inputClass} value={customMarket} onChange={(e) => setCustomMarket(e.target.value as "IN" | "US")}>
+                        <option value="IN">India (NSE symbols, Kite cache)</option>
+                        <option value="US">US (tickers, the US daily store)</option>
+                      </select>
+                    </Field>
+                    <Field label="Symbols (comma-separated)">
+                      <input className={inputClass} value={symbols} onChange={(e) => setSymbols(e.target.value)} />
+                    </Field>
+                  </>
                 ) : (
                   <Field label="Symbols">
                     <div className={`${inputClass} text-[var(--muted)]`}>
@@ -1797,7 +1832,7 @@ export default function ClassicBacktestForm({ embedded = false, strategyId, onSt
                     <Field label="Entry funding">
                       <select className={inputClass} value={stFunding} onChange={(e) => setStFunding(e.target.value)}>
                         <option value="ledger">Own ledger (classic)</option>
-                        <option value="park">From an ETF — T+1, with a cash float</option>
+                        {market === "IN" && <option value="park">From an ETF — T+1, with a cash float</option>}
                         <option value="on_demand">On demand (queue and retry)</option>
                       </select>
                     </Field>

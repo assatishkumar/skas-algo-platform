@@ -558,6 +558,14 @@ BS delta/IV helpers) · engine services: `black_scholes.py` (IV/delta), `contrac
 
 ## 4. Backtesting
 
+- **Two equity markets (2026-09-16).** An EOD equity backtest prices off the Kite cache
+  (India, ₹) or the US daily store ($): a named universe decides (`sp500`, `nasdaq100` →
+  US), a custom symbol list carries a Market toggle. The engine is market-neutral (the
+  calendar is the data's dates, the equity path charges nothing); the route swaps the
+  price loader and the availability set, the run is tagged `params.market/currency`, and
+  the report prints in that currency. A US run defaults tax to 0 (the 20% is an Indian
+  STCG proxy) and hides the ETF-funded modes (they settle on NSE holidays). Today's
+  constituents only — survivorship-biased until a point-in-time table exists.
 - **One backtest page, two data bases.** The New-backtest form starts with a basis selector:
   **EOD (daily cache)** runs the engine below; **Intraday (1-min store)** replays the
   self-captured option store minute-by-minute through the ACTUAL strategy classes
@@ -769,6 +777,13 @@ disarmed account paper-fills.
   selection-time, not per-tick). Broker basket margins refresh ~1/min per run.
 - **Intraday bars store** (`data/intraday_bars.py`, `~/.skas_data/intraday/`): Kite-fetched
   15-min bars in csv.gz, used to warm up and backtest the intraday strategies.
+- **US daily bars — the second market (2026-09-16)** (`data/us_daily.py`,
+  `~/.skas_data/us_daily/`): one csv.gz per symbol fed from Yahoo's chart endpoint (one
+  call per symbol, ten years on a first fetch, the tail afterwards; split-adjusted OHLC,
+  `adjclose` beside it). `data/us_universe.py` fetches the S&P 500 and Nasdaq-100 lists from
+  Wikipedia into the same dated universe store. Filled by `skas-algo us-daily-refresh` or
+  the Data → US stocks card (background job, coverage + staleness). Backtest-only: no US
+  broker, no deploy path.
 - **Option intraday-bar store — the self-built GFD replacement**
   (`data/option_intraday_store.py`, `~/.skas_data/option_intraday/1min/`): the platform builds
   its OWN 1-minute option dataset. Every trading day after close (~15:45), a background task

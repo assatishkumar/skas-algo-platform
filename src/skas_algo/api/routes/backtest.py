@@ -7,6 +7,7 @@ import io
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,14 +22,17 @@ from skas_algo.api.models import (
     iso_utc,
 )
 from skas_algo.data import universes
-from skas_algo.data.provider import get_available_symbols, get_price_loader
+from skas_algo.data.provider import (
+    available_symbols_for,
+    get_available_symbols,
+    get_price_loader,
+    price_loader_for,
+)
 from skas_algo.db.enums import InstrumentClass, TradingMode
 from skas_algo.db.models import Algo, AlgoRun, Order, StrategyTemplate
 from skas_algo.engine.market import PriceLoader
 from skas_algo.services.backtest import persist_backtest, run_backtest
-from pydantic import BaseModel
-
-from skas_algo.services.benchmark import BENCHMARK_INDICES, benchmark_series
+from skas_algo.services.benchmark import BENCHMARK_INDICES, US_BENCHMARKS, benchmark_series
 from skas_algo.services.runs import delete_algo_cascade
 from skas_algo.strategies.registry import available
 
@@ -102,11 +106,20 @@ def list_universes(
     avail: set[str] = Depends(get_available_symbols),
 ) -> list[UniverseOut]:
     out = []
+    us_avail = None
     for name in universes.UNIVERSES:
         meta = universes.as_of(name)
+        # a US universe counts against the US daily store (data/us_daily.py), never the
+        # Kite cache — "(0 available)" until `skas-algo us-daily-refresh` has run
+        if universes.market_of(name) == "US":
+            if us_avail is None:
+                us_avail = available_symbols_for("US")
+            names_avail = us_avail
+        else:
+            names_avail = avail
         out.append(UniverseOut(
-            name=name, label=universes.label(name),
-            count=len(universes.resolve(name, avail)),
+            name=name, label=universes.label(name), market=universes.market_of(name),
+            count=len(universes.resolve(name, names_avail)),
             total=len(universes.current(name)),
             source=meta["source"], as_of=meta["date"],
         ))
@@ -118,11 +131,11 @@ def refresh_universes() -> dict:
     """Pull the official NSE constituent lists now (the maintenance loop does this every
     weekday; this is the hand-trigger). Read-only, public files, no broker. Reports what
     moved per index; a failed fetch is reported, never raised."""
-    from skas_algo.data import nse_universe
+    from skas_algo.data import nse_universe, us_universe
 
-    baselines = {n: list(universes.UNIVERSES[n][1]) for n in nse_universe.INDEX_FILES
-                 if n in universes.UNIVERSES}
-    return nse_universe.refresh_all(baselines=baselines)
+    baselines = {n: list(universes.UNIVERSES[n][1]) for n in universes.UNIVERSES}
+    return {**nse_universe.refresh_all(baselines=baselines),
+            **us_universe.refresh_all(baselines=baselines)}
 
 
 @router.get("/universes/{name}/symbols")
@@ -136,6 +149,8 @@ def universe_symbols(
     flow needs this: intersecting with the cache made an EMPTY cache (a fresh VPS box)
     404 on the very button that would populate it (chicken-and-egg, 2026-07-30), and on
     a warm box it silently skipped constituents not yet cached."""
+    if universes.market_of(name) == "US":
+        avail = available_symbols_for("US")
     try:
         syms = universes.resolve(name, avail if cached_only else None)
     except KeyError as exc:
@@ -146,14 +161,32 @@ def universe_symbols(
     return {"name": name, "symbols": syms}
 
 
+def _resolve_market(req: BacktestRequest) -> str:
+    """The market a request prices in: a named universe decides, else the field, else IN.
+    Written back onto the request so the persisted params carry it."""
+    market = universes.market_of(req.universe) if req.universe else (req.market or "IN")
+    market = "US" if str(market).upper() == "US" else "IN"
+    req.market = market
+    return market
+
+
 def _resolve_universe(req: BacktestRequest, avail: set[str]) -> None:
-    """Expand a named equity universe to its cached symbols, validating the request in place."""
+    """Expand a named equity universe to its cached symbols, validating the request in place.
+    ``avail`` is the INDIAN cache's symbol set; a US request swaps in the US store's."""
     # Options (DERIV) runs trade a dynamic option chain for an underlying, so they
     # need neither explicit symbols nor a named equity universe.
     if req.instrument_class.upper() == "DERIV":
         if not (req.underlying or req.params.get("underlying")):
             raise HTTPException(status_code=422, detail="underlying required for a DERIV backtest")
         return
+    if _resolve_market(req) == "US":
+        avail = available_symbols_for("US")
+        if not req.universe and req.symbols:
+            missing = [s for s in req.symbols if s.upper() not in avail]
+            if missing:
+                raise HTTPException(status_code=422, detail=(
+                    f"no US daily bars for {', '.join(missing[:8])} — run "
+                    "`skas-algo us-daily-refresh <symbols>` or the Data page's US refresh"))
     if req.universe:
         try:
             req.symbols = universes.resolve(req.universe, avail)
@@ -185,6 +218,8 @@ def post_backtest(
     avail: set[str] = Depends(get_available_symbols),
 ) -> BacktestResponse:
     _resolve_universe(req, avail)
+    if req.market == "US":
+        loader = price_loader_for("US")
     try:
         result = run_backtest(db, loader, req)
     except KeyError as exc:  # unknown strategy_id
@@ -884,6 +919,8 @@ def post_benchmark_series(
 ) -> dict:
     if body.index not in BENCHMARK_INDICES:
         raise HTTPException(status_code=400, detail=f"unknown index {body.index!r}")
+    if body.index in US_BENCHMARKS:
+        loader = price_loader_for("US")
     try:
         points = benchmark_series(loader, body.index, body.dates, body.capital)
     except ValueError as exc:
@@ -905,6 +942,8 @@ def get_run_benchmark(
     algo = db.get(Algo, run.algo_id)
     curve = (_run_report(run, algo) or {}).get("equity_curve", [])  # live for a running equity run
     dates = [p["date"] for p in curve]
+    if index in US_BENCHMARKS:
+        loader = price_loader_for("US")
     try:
         points = benchmark_series(loader, index, dates, algo.capital if algo else 0.0)
     except ValueError as exc:

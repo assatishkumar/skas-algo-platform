@@ -236,6 +236,64 @@ NIFTY500_MOMENTUM_50: list[str] = [
     "SYRMA", "THERMAX", "TORNTPHARM", "IDEA", "WELCORP",
 ]
 
+# ---- US (2026-09-16, Wikipedia; TODAY'S constituents — survivorship-biased until the
+# point-in-time table exists; see data/us_universe.py) ----
+SP500: list[str] = [
+    "MMM", "AOS", "ABT", "ABBV", "ACN", "ADBE", "AMD", "AES", "AFL", "A", "APD", "ABNB", "AKAM",
+    "ALB", "ARE", "ALGN", "ALLE", "LNT", "ALL", "GOOGL", "GOOG", "MO", "AMZN", "AMCR", "AEE",
+    "AEP", "AXP", "AIG", "AMT", "AWK", "AMP", "AME", "AMGN", "APH", "ADI", "AON", "APA", "APO",
+    "AAPL", "AMAT", "APP", "APTV", "ACGL", "ADM", "ARES", "ANET", "AJG", "AIZ", "T", "ATO",
+    "ADSK", "ADP", "AZO", "AVY", "AXON", "BKR", "BALL", "BAC", "BAX", "BDX", "BRK.B", "BBY",
+    "TECH", "BIIB", "BLK", "BX", "XYZ", "BNY", "BA", "BKNG", "BSX", "BMY", "AVGO", "BR", "BRO",
+    "BF.B", "BLDR", "BG", "BXP", "CHRW", "CDNS", "CPT", "COF", "CAH", "CCL", "CARR", "CVNA",
+    "CASY", "CAT", "CBOE", "CBRE", "CDW", "COR", "CNC", "CNP", "CF", "CRL", "SCHW", "CHTR",
+    "CVX", "CMG", "CB", "CHD", "CIEN", "CI", "CINF", "CTAS", "CSCO", "C", "CFG", "CLX", "CME",
+    "CMS", "KO", "CTSH", "COHR", "COIN", "CL", "CMCSA", "FIX", "COP", "ED", "STZ", "CEG", "COO",
+    "CPRT", "GLW", "CPAY", "CTVA", "CSGP", "COST", "CRH", "CRWD", "CCI", "CSX", "CMI", "CVS",
+    "DHR", "DRI", "DDOG", "DVA", "DECK", "DE", "DELL", "DAL", "DVN", "DXCM", "FANG", "DLR",
+    "DG", "DLTR", "D", "DPZ", "DASH", "DOV", "DOW", "DHI", "DTE", "DUK", "DD", "ETN", "EBAY",
+    "ECHO", "ECL", "EIX", "EW", "ELV", "EME", "EMR", "ETR", "EOG", "EQT", "EFX", "EQIX", "ERIE",
+    "ESS", "EL", "EG", "EVRG", "ES", "EXC", "EXE", "EXPE", "EXPD", "EXR", "XOM", "FFIV", "FDS",
+    "FICO", "FAST", "FRT", "FDX", "FDXF", "FERG", "FIS", "FITB", "FSLR", "FE", "FISV", "FLEX",
+    "F", "FTNT", "FTV", "FOXA", "FOX", "BEN", "FCX", "GRMN", "IT", "GE", "GEHC", "GEV", "GEN",
+    "GNRC", "GD", "GIS", "GM", "GPC", "GILD", "GPN", "GL", "GDDY", "GS", "HAL", "HIG", "HAS",
+    "HCA", "DOC", "HSIC", "HSY", "HPE", "HLT", "HD", "HONA", "HON", "HRL", "HST", "HWM", "HPQ",
+    "HUBB", "HUM", "HBAN", "HII", "IBM", "IEX", "IDXX", "ITW", "INCY", "IR", "PODD", "INTC",
+    "IBKR", "ICE", "IFF", "IP", "INTU", "ISRG", "IVZ", "INVH", "IQV", "IRM", "JBHT", "JBL",
+    "JKHY", "J", "JNJ", "JCI", "JPM", "KVUE", "KDP", "KEY", "KEYS", "KMB", "KIM", "KMI", "KKR",
+    "KLAC", "KHC", "KR", "LHX", "LH", "LRCX", "LVS", "LDOS", "LEN", "LII", "LLY", "LIN", "LYV",
+    "LMT", "L", "LOW", "LULU", "LITE", "LYB", "MTB", "MPC", "MAR", "MRSH", "MLM", "MRVL", "MAS",
+    "MA", "MKC", "MCD", "MCK", "MDT", "MRK", "META", "MET", "MTD", "MGM", "MCHP", "MU", "MSFT",
+    "MAA", "MRNA", "TAP", "MDLZ", "MPWR", "MNST", "MCO", "MS", "MOS", "MSI", "MSCI", "NDAQ",
+    "NTAP", "NFLX", "NEM", "NWSA", "NWS", "NEE", "NKE", "NI", "NDSN", "NSC", "NTRS", "NOC",
+    "NCLH", "NRG", "NUE", "NVDA", "NVR", "NXPI", "ORLY", "OXY", "ODFL", "OMC", "ON", "OKE",
+    "ORCL", "OTIS", "PCAR", "PKG", "PLTR", "PANW", "PSKY", "PH", "PAYX", "PYPL", "PNR", "PEP",
+    "PFE", "PCG", "PM", "PSX", "PNW", "PNC", "PPG", "PPL", "PFG", "PG", "PGR", "PLD", "PRU",
+    "PEG", "PTC", "PSA", "PHM", "PWR", "QCOM", "DGX", "Q", "RL", "RJF", "RDDT", "RTX", "O",
+    "REG", "REGN", "RF", "RSG", "RMD", "RVTY", "HOOD", "ROK", "ROL", "ROP", "ROST", "RCL",
+    "SPGI", "CRM", "SNDK", "SBAC", "SLB", "STX", "SRE", "NOW", "SHW", "SPG", "SWKS", "SJM",
+    "SW", "SNA", "SOLV", "SO", "LUV", "SWK", "SBUX", "STT", "STLD", "STE", "SYK", "SMCI", "SYF",
+    "SNPS", "SYY", "TMUS", "TROW", "TTWO", "TPR", "TRGP", "TGT", "TEL", "TDY", "TER", "TSLA",
+    "TXN", "TPL", "TXT", "TMO", "TJX", "TKO", "TTD", "TSCO", "TT", "TDG", "TRV", "TRMB", "TFC",
+    "TYL", "TSN", "USB", "UBER", "UDR", "ULTA", "UNP", "UAL", "UPS", "URI", "UNH", "UHS", "VLO",
+    "VEEV", "VTR", "VLTO", "VRSN", "VRSK", "VZ", "VRTX", "VRT", "VTRS", "VICI", "V", "VST",
+    "VMRK", "VMC", "WRB", "GWW", "WAB", "WMT", "DIS", "WBD", "WM", "WAT", "WEC", "WFC", "WELL",
+    "WST", "WDC", "WY", "WSM", "WMB", "WTW", "WDAY", "WYNN", "XEL", "XYL", "YUM", "ZBRA", "ZBH",
+    "ZTS",
+]
+
+NASDAQ_100: list[str] = [
+    "ADBE", "AMD", "ABNB", "ALNY", "GOOGL", "GOOG", "AMZN", "AEP", "AMGN", "ADI", "AAPL",
+    "AMAT", "APP", "ARM", "ASML", "ALAB", "ADSK", "ADP", "AXON", "BKR", "BKNG", "AVGO", "CDNS",
+    "CTAS", "CSCO", "CCEP", "CMCSA", "CEG", "CPRT", "CRWV", "COST", "CRWD", "CSX", "DDOG",
+    "DXCM", "FANG", "DASH", "EXC", "FAST", "FER", "FTNT", "GEHC", "GILD", "HONA", "HON", "IDXX",
+    "INTC", "INTU", "ISRG", "KDP", "KLAC", "KHC", "LRCX", "LIN", "LITE", "MAR", "MRVL", "MELI",
+    "META", "MCHP", "MU", "MSFT", "MSTR", "MDLZ", "MPWR", "MNST", "NBIS", "NFLX", "NVDA",
+    "NXPI", "ORLY", "ODFL", "PCAR", "PLTR", "PANW", "PAYX", "PYPL", "PDD", "PEP", "QCOM",
+    "REGN", "RKLB", "ROP", "ROST", "SNDK", "STX", "SHOP", "SPCX", "SBUX", "SNPS", "TMUS",
+    "TTWO", "TER", "TSLA", "TXN", "TRI", "VRTX", "WMT", "WBD", "WDC", "WDAY", "XEL",
+]
+
 # name -> (display label, symbol list)
 UNIVERSES: dict[str, tuple[str, list[str]]] = {
     "nifty25": ("Nifty 25 (top by weight)", NIFTY_25),
@@ -244,7 +302,17 @@ UNIVERSES: dict[str, tuple[str, list[str]]] = {
     "nifty200": ("Nifty 200", NIFTY_200),
     "nifty500": ("Nifty 500", NIFTY_500),
     "nifty500mom50": ("Nifty500 Momentum 50 (snapshot)", NIFTY500_MOMENTUM_50),
+    "sp500": ("S&P 500", SP500),
+    "nasdaq100": ("Nasdaq-100", NASDAQ_100),
 }
+# The second market (2026-09-16): these resolve against the US daily store, not the
+# Kite cache, and a run over them is priced in USD (`market_of`).
+US_UNIVERSES: frozenset[str] = frozenset({"sp500", "nasdaq100"})
+
+
+def market_of(name: str | None) -> str:
+    """``"US"`` for a US universe, else ``"IN"``."""
+    return "US" if name in US_UNIVERSES else "IN"
 
 
 def label(name: str) -> str:
@@ -256,28 +324,35 @@ def current(name: str) -> list[str]:
     else the static snapshot above. Raises KeyError for an unknown name."""
     static = UNIVERSES[name][1]
     try:
-        from skas_algo.data import nse_universe
-
-        got = nse_universe.latest(name) if name in nse_universe.INDEX_FILES else None
+        got = _stored(name)
     except Exception:  # pragma: no cover - a bad store file must never break resolve
         got = None
     return list(got[1]) if got else list(static)
 
 
+def _stored(name: str):
+    """The newest list a fetcher stored for ``name`` — NSE or US, same dated store."""
+    from skas_algo.data import nse_universe, us_universe
+
+    if name in nse_universe.INDEX_FILES or name in us_universe.PAGES:
+        return nse_universe.latest(name)
+    return None
+
+
 def as_of(name: str) -> dict:
     """Where the current list came from — ``{"source": "official"|"snapshot", "date"}``."""
     try:
-        from skas_algo.data import nse_universe
-
-        got = nse_universe.latest(name) if name in nse_universe.INDEX_FILES else None
+        got = _stored(name)
     except Exception:  # pragma: no cover
         got = None
     if got:
         return {"source": "official", "date": got[0].isoformat()}
-    return {"source": "snapshot", "date": SNAPSHOT_DATE}
+    return {"source": "snapshot", "date": US_SNAPSHOT_DATE if name in US_UNIVERSES
+            else SNAPSHOT_DATE}
 
 
 SNAPSHOT_DATE = "2026-09-08"
+US_SNAPSHOT_DATE = "2026-09-16"
 
 
 def resolve(name: str, available: set[str] | None = None) -> list[str]:
