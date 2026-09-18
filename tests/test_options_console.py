@@ -216,7 +216,11 @@ def test_the_console_cannot_reach_the_order_path():
 
     import skas_algo.services.options_console as pkg
 
-    banned = ("skas_algo.live", "skas_algo.brokers")
+    # …nor the fork bridge or the peer client (services/console_fork, services/peer): the
+    # Simulator imports the console, and the peer is the only thing in the tree that talks
+    # to another box — both stay OUTSIDE the package, injected by the route layer.
+    banned = ("skas_algo.live", "skas_algo.brokers", "skas_algo.services.console_fork",
+              "skas_algo.services.peer")
     # The ONE exception: the NSE calendar. `live.holidays` is dates and a holiday list —
     # no adapter, no manager, no order — and the cycle bar needs trading sessions.
     allowed = ("from skas_algo.live.holidays import",)

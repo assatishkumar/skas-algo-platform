@@ -248,8 +248,9 @@ function weekdayOf(stamp: string | null | undefined): number | null {
  * scroll. Intraday books reach hundreds of rows within months. */
 const PAGE_SIZE = 10;
 
-export function CycleSummary({ cycles, points, runId }: {
+export function CycleSummary({ cycles, points, runId, forkable }: {
   cycles: ReconCycle[]; points: StockSeriesPoint[]; runId?: number;
+  forkable?: boolean;   // a deployment: each row can be forked into the console
 }) {
   const [sortKey, setSortKey] = useState<SumKey>("entered");
   const [dir, setDir] = useState<1 | -1>(-1);
@@ -390,6 +391,11 @@ export function CycleSummary({ cycles, points, runId }: {
                       {r.c.entry_date} ↗
                     </Link>
                   ) : r.c.entry_date}
+                  {runId != null && forkable && (
+                    <Link to={`/console?fork=local:${runId}:${cycles.indexOf(r.c)}`}
+                      className="ml-1.5 text-brand hover:underline"
+                      title="fork this cycle into the console: the run's actual fills on its entry day, then trade the rest differently">⑂</Link>
+                  )}
                   {weekdayOf(r.c.entry_date) != null && (
                     <span className="ml-1.5 text-[11px] text-slate-500">
                       {WEEKDAYS[weekdayOf(r.c.entry_date) as number]}

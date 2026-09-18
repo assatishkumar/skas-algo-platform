@@ -115,6 +115,19 @@ class ConsoleRestore(BaseModel):
     alerts: list[dict] = []
     bookmarks: list[str] = []
     discarded: list[dict] = []          # actions taken back by Undo (the Simulator's record)
+    fork: dict | None = None            # a forked deployment cycle's record (console_fork)
+
+
+class ConsoleForkOpen(BaseModel):
+    """Open the console AS a deployment's cycle: the run's actual fills restored on the
+    cycle's entry day, ready to be watched, forked and traded differently."""
+
+    source: Literal["local", "peer"] = "local"
+    run_id: int
+    index: int                          # the cycle's index in GET /runs/{id}/cycles
+    strike_window: int = 20
+    allow_fifty_strikes: bool = False
+    capital: float | None = None        # default: the run's capital
 
 
 class ConsoleBasket(BaseModel):

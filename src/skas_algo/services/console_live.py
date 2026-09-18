@@ -1374,6 +1374,7 @@ class LiveConsole(AlertBook):
             },
             "fills": fills,
             "journal": [],
+            "fork": None,
             "alerts": self._rail_alerts() + self._alerts_out(),
             "bookmarks": [],
             "cycle": ({"entry_at": entry_at, "entry_spot": entry_spot} if legs else None),

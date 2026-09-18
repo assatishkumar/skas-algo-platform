@@ -21,6 +21,7 @@ from skas_algo.api.models import (
     ConsoleAnnotate,
     ConsoleBasket,
     ConsoleCommit,
+    ConsoleForkOpen,
     ConsoleJump,
     ConsoleLoad,
     ConsoleMarginAnchor,
@@ -35,7 +36,14 @@ from skas_algo.api.models import (
     ConsoleUnstage,
 )
 from skas_algo.data.option_intraday_store import captured_days
-from skas_algo.services import atm_iv_history, console_live, console_margin, console_market
+from skas_algo.services import (
+    atm_iv_history,
+    console_fork,
+    console_live,
+    console_margin,
+    console_market,
+    peer,
+)
 from skas_algo.services.options_console import registry
 from skas_algo.services.options_console import store as console_store
 from skas_algo.services.options_console.session import UNDERLYINGS, ConsoleSession
@@ -126,10 +134,139 @@ async def open_session(body: ConsoleOpen) -> dict:
     if body.restore and (body.restore.journal or body.restore.alerts):
         try:
             await asyncio.to_thread(session.restore, body.restore.journal, body.restore.alerts,
-                                    body.restore.bookmarks, body.restore.discarded)
+                                    body.restore.bookmarks, body.restore.discarded,
+                                    body.restore.fork)
         except (KeyError, ValueError, TypeError) as exc:
             registry.drop(session.id)
             raise HTTPException(status_code=422, detail=f"restore failed: {exc}") from exc
+    return session.state()
+
+
+def _local_fork_inputs(run_id: int, index: int) -> tuple[dict, list[dict], float | None, str]:
+    """A local deployment's cycle (by the SAME index the cycle-detail page uses — see
+    `routes.backtest.run_cycles`), its trades, capital and label."""
+    from skas_algo.api.routes.backtest import _resolve_run_trades, cycle_briefs, run_cycles
+    from skas_algo.db.base import session_scope
+    from skas_algo.db.models import Algo, AlgoRun
+
+    with session_scope() as db:
+        run = db.get(AlgoRun, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        algo = db.get(Algo, run.algo_id)
+        trades = _resolve_run_trades(run, db)
+        briefs = cycle_briefs(run_cycles(run, algo, trades))
+        if not (0 <= index < len(briefs)):
+            raise HTTPException(status_code=404, detail="cycle index out of range")
+        name = algo.name if algo else f"run #{run_id}"
+        capital = float(algo.capital) if algo and algo.capital else None
+        return briefs[index], trades, capital, name
+
+
+def _peer_fork_inputs(run_id: int, index: int) -> tuple[dict, list[dict], float | None, str]:
+    try:
+        cyc = peer.run_cycles(run_id)
+        trades = peer.trades(run_id)
+    except peer.PeerError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    briefs = cyc.get("cycles") or []
+    if not (0 <= index < len(briefs)):
+        raise HTTPException(status_code=404, detail="cycle index out of range on the peer")
+    return briefs[index], trades, cyc.get("capital"), str(cyc.get("name") or f"run #{run_id}")
+
+
+@router.post("/sessions/fork")
+async def open_fork(body: ConsoleForkOpen) -> dict:
+    """Open the console AS a deployment's cycle (services/console_fork): the run's actual
+    fills restored on the cycle's entry day at the entry minute, `state.fork` carrying the
+    actual outcome for the comparison strip. Read-only on the run — its trades are read,
+    never touched; a LIVE run's cycle forks exactly like a paper one."""
+    inputs = _local_fork_inputs if body.source == "local" else _peer_fork_inputs
+    brief, trades, capital, name = await asyncio.to_thread(inputs, body.run_id, body.index)
+    label = f"#{body.run_id} {name}" + (" · VPS" if body.source == "peer" else "")
+    try:
+        spec = await asyncio.to_thread(
+            console_fork.fork_spec, cycle=console_fork.normalise_cycle(brief), trades=trades,
+            capital=body.capital or capital or 500_000, source=body.source,
+            run_id=body.run_id, label=label, run_name=name)
+        session = await asyncio.to_thread(
+            registry.create, underlying=spec["underlying"],
+            day=date.fromisoformat(spec["day"]), at=spec["at"], expiry=spec["expiry"],
+            capital=spec["capital"], strike_window=body.strike_window,
+            allow_fifty_strikes=body.allow_fifty_strikes)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _wire(session)
+    try:
+        await asyncio.to_thread(session.restore, spec["restore"]["journal"], [], [], [],
+                                spec["fork"])
+    except (KeyError, ValueError, TypeError) as exc:
+        registry.drop(session.id)
+        raise HTTPException(status_code=422, detail=f"fork failed: {exc}") from exc
+    return session.state()
+
+
+@router.get("/fork-sources")
+async def fork_sources() -> dict:
+    """What can be forked: the local paper/live runs with their cycles, and the peer's
+    (the VPS over Tailscale) when one is configured. A peer failure fills `error`."""
+    from skas_algo.api.routes.backtest import _resolve_run_trades, cycle_briefs, run_cycles
+    from skas_algo.db.base import session_scope
+    from skas_algo.db.enums import TradingMode
+    from skas_algo.db.models import Algo, AlgoRun
+    from sqlalchemy import select
+
+    def _local() -> list[dict]:
+        out = []
+        with session_scope() as db:
+            rows = db.execute(
+                select(AlgoRun, Algo).join(Algo, AlgoRun.algo_id == Algo.id)
+                .where(AlgoRun.mode != TradingMode.BACKTEST).order_by(AlgoRun.id.desc())
+            ).all()
+            for run, algo in rows:
+                if run.archived:
+                    continue
+                trades = _resolve_run_trades(run, db)
+                cycles = cycle_briefs(run_cycles(run, algo, trades)) if trades else []
+                if not cycles:
+                    continue
+                out.append({"run_id": run.id, "name": algo.name, "mode": run.mode.value,
+                            "strategy_id": algo.strategy_id,
+                            "underlying": (run.params_snapshot or {}).get("underlying"),
+                            "stopped": run.stopped_at is not None, "cycles": cycles})
+        return out
+
+    def _peer() -> dict:
+        if not peer.configured():
+            return {"configured": False, "url": None, "ok": False, "error": None, "runs": []}
+        try:
+            runs = []
+            for d in peer.deployments()[:20]:
+                rid = int(d.get("run_id"))
+                cyc = peer.run_cycles(rid)
+                if not cyc.get("cycles"):
+                    continue
+                runs.append({"run_id": rid, "name": cyc.get("name") or d.get("name"),
+                             "mode": d.get("mode"), "strategy_id": d.get("strategy_id"),
+                             "underlying": cyc.get("underlying") or d.get("underlying"),
+                             "stopped": d.get("status") != "active",
+                             "cycles": cyc["cycles"]})
+            return {"configured": True, "url": peer.base_url(), "ok": True, "error": None,
+                    "runs": runs}
+        except peer.PeerError as exc:
+            return {"configured": True, "url": peer.base_url(), "ok": False,
+                    "error": str(exc), "runs": []}
+
+    local, remote = await asyncio.gather(asyncio.to_thread(_local), asyncio.to_thread(_peer))
+    return {"local": local, "peer": remote}
+
+
+@router.post("/sessions/{session_id}/fork")
+def fork_here(session_id: str) -> dict:
+    """FORK HERE: drop the tape after the cursor (on a forked cycle, the run's actual later
+    fills) so the rest can be traded differently. Replay only."""
+    session = _replay_only(_get(session_id), "fork")
+    session.truncate_after_cursor()
     return session.state()
 
 
@@ -335,7 +472,7 @@ async def load_session(body: ConsoleLoad) -> dict:
             margin_per_lot_set=j.get("margin_per_lot_set", 0.0))
         _wire(session)
         await asyncio.to_thread(session.restore, j.get("journal", []), j.get("alerts", []),
-                                j.get("bookmarks", []), j.get("discarded", []))
+                                j.get("bookmarks", []), j.get("discarded", []), j.get("fork"))
     except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return session.state()

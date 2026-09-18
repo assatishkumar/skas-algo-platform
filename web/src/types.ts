@@ -2075,8 +2075,12 @@ export interface ConsoleState {
   journal: ConsoleFill[];
   alerts: ConsoleAlert[];
   bookmarks: string[];                       // full minutes "2026-04-01T11:40"
-  // actions taken back by Undo — the Simulator's record of hesitation, never in the P&L
-  discarded: { group: number; undone_at: string; rows: ConsoleFill[] }[];
+  // actions taken back by Undo — the Simulator's record of hesitation, never in the P&L;
+  // a `reason: "fork"` entry is the actual fills "fork here" dropped on a forked cycle
+  discarded: { group: number | null; undone_at: string; rows: ConsoleFill[]; reason?: string }[];
+  // a FORKED deployment cycle (services/console_fork): the actual outcome + per-minute MTM
+  // the comparison strip reads; null on a plain replay and on a live console
+  fork?: ConsoleFork | null;
   // The cycle: first fill's day → the last expiry among the legs held, in captured
   // sessions. null until something has traded. `done` = every leg has expired.
   cycle: {
@@ -2290,9 +2294,38 @@ export interface SimDetail extends SimStrategy {
   open_cycle: { day: string | null; clock: string | null; expiry: string | null; fills: number; entered: string | null } | null;
   metrics: Metrics; equity_curve: { date: string; equity: number }[];
 }
+/** A deployment cycle forked into the console: what really happened, for the strip. */
+export interface ConsoleFork {
+  source: "local" | "peer"; run_id: number; index: number | null; label: string; run_name: string;
+  underlying: string; entered_at: string; exited_at: string | null; exit_reason: string | null; live: boolean;
+  actual: { net: number | null; fills: number; entered_at: string; exited_at: string | null;
+    exit_reason: string | null; live: boolean };
+  actual_series: [string, number][];          // [minute, the actual book's MTM] over the store
+  entry_day_uncaptured: boolean; opened_day: string;
+  clamped: { symbol: string; from: string; to: string }[];   // fills outside 09:15–15:40, moved
+  uncaptured: string[];                       // contracts the store never captured (unpriced)
+  forked_at: string | null;                   // the minute "fork here" was pressed
+}
+export interface ForkCycleBrief {
+  index: number; entered_at: string | null; exited_at: string | null; exit_reason: string | null;
+  net: number | null; live: boolean; underlying: string | null; expiry: string | null;
+  n_legs: number; symbols: string[];
+}
+export interface ForkSourceRun {
+  run_id: number; name: string; mode: string; strategy_id?: string | null; underlying?: string | null;
+  stopped: boolean; cycles: ForkCycleBrief[];
+}
+export interface ForkSources {
+  local: ForkSourceRun[];
+  peer: { configured: boolean; url: string | null; ok: boolean; error: string | null; runs: ForkSourceRun[] };
+}
+export interface RunCycles {
+  run_id: number; name: string; strategy_id: string | null; mode: string; capital: number | null;
+  underlying: string | null; is_deployment: boolean; cycles: ForkCycleBrief[];
+}
 export interface SimOpenSpec {
   id: number; name: string; underlying: string; day: string | null; at: string; expiry: string | null;
   capital: number; cycle_no?: number; n?: number;
   restore: { journal: ConsoleState["journal"]; alerts: ConsoleState["alerts"]; bookmarks: string[];
-    discarded?: ConsoleState["discarded"] } | null;
+    discarded?: ConsoleState["discarded"]; fork?: ConsoleFork | null } | null;
 }

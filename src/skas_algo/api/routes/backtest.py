@@ -813,22 +813,71 @@ def _cycle_detail_model(
     return to_native(model)
 
 
+def run_cycles(run: AlgoRun, algo: Algo | None, trades: list[dict]) -> list[dict]:
+    """THE cycle list a run's ``index`` addresses — the stored report's cycles (backtests +
+    STOPPED deployments, oldest-first, `engine/options/report.py`) else a reconstruction
+    from the trades (a RUNNING deployment, newest-first, the Live page's order, the OPEN
+    cycle at index 0). Two orders, one rule: every caller that hands out or resolves an
+    index goes through here, so the cycle-detail page, the cycle list and the console fork
+    (services/console_fork) can never disagree about which cycle "index 3" is."""
+    from skas_algo.services.cycle_detail import reconstruct_cycles
+
+    report = _run_report(run, algo) or {}
+    return (report.get("options") or {}).get("cycles") or reconstruct_cycles(trades)
+
+
+def cycle_briefs(cycles: list[dict]) -> list[dict]:
+    """One row per cycle, in `run_cycles` order, with everything a fork needs and nothing a
+    page has to derive: the window, the symbols, the net, whether it is still open."""
+    out = []
+    for i, c in enumerate(cycles):
+        legs = c.get("legs_detail") or []
+        out.append({
+            "index": i,
+            "entered_at": c.get("entry_date"),
+            "exited_at": c.get("exit_date"),
+            "exit_reason": c.get("exit_reason"),
+            "net": c.get("net_pnl"),
+            "live": bool(c.get("live")),
+            "underlying": c.get("underlying"),
+            "expiry": c.get("expiry"),
+            "n_legs": len(legs),
+            "symbols": sorted({str(lg.get("symbol")) for lg in legs if lg.get("symbol")}),
+        })
+    return out
+
+
+@router.get("/runs/{run_id}/cycles")
+def get_run_cycles(run_id: int, db: Session = Depends(get_db)) -> dict:
+    """A run's cycles as briefs, indexed exactly as `/cycles/{index}/detail` indexes them
+    (see `run_cycles`). The console's "fork a cycle" picker reads this locally, and the
+    PEER fetch reads it on the VPS — so the peer's own ordering is what gets indexed."""
+    run = db.get(AlgoRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    algo = db.get(Algo, run.algo_id)
+    trades = _resolve_run_trades(run, db)
+    return {
+        "run_id": run_id, "name": (algo.name if algo else f"run #{run_id}"),
+        "strategy_id": (algo.strategy_id if algo else None), "mode": run.mode.value,
+        "capital": float(algo.capital) if algo and algo.capital else None,
+        "underlying": (run.params_snapshot or {}).get("underlying"),
+        "is_deployment": run.mode in (TradingMode.PAPER, TradingMode.LIVE),
+        "cycles": cycle_briefs(run_cycles(run, algo, trades)),
+    }
+
+
 @router.get("/runs/{run_id}/cycles/{index}/detail")
 def get_cycle_detail(run_id: int, index: int, db: Session = Depends(get_db)) -> dict:
     """The position-lifecycle model for ONE options cycle (entry → rolls/hedges → exit) with
     reconstructed per-event net delta — powers the Cycle Detail page. Cache-only, read-only."""
-    from skas_algo.services.cycle_detail import reconstruct_cycles
-
     run = db.get(AlgoRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     algo = db.get(Algo, run.algo_id)
     trades = _resolve_run_trades(run, db)
     report = _run_report(run, algo) or {}
-    # Backtests + stopped runs have the options cycles in the stored report; a RUNNING live
-    # options deployment has none yet → reconstruct from its live trades (same newest-first
-    # order the live page displays, so the index the UI links matches).
-    cycles = (report.get("options") or {}).get("cycles") or reconstruct_cycles(trades)
+    cycles = run_cycles(run, algo, trades)      # the one list every index refers to
     model = _cycle_detail_model(
         cycles, trades, index,
         run_id=run_id, strategy_id=(algo.strategy_id if algo else ""),

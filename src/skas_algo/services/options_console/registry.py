@@ -98,7 +98,7 @@ def _rehydrate(session_id: str) -> ConsoleSession:
     if hooks is not None:
         hooks(session)
     session.restore(j.get("journal", []), j.get("alerts", []), j.get("bookmarks", []),
-                    j.get("discarded", []))
+                    j.get("discarded", []), fork=j.get("fork"))
     session.prime_change_key()
     _attach(session)
     logger.info("console session %s rehydrated from disk (%d fills)", session_id,

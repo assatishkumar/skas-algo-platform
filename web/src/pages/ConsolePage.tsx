@@ -17,6 +17,8 @@ import type {
   ConsoleState,
   SimOpenSpec,
   ConsoleFill,
+  ConsoleFork,
+  ForkSources,
 } from "../types";
 import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
 import { buildLivePayoff } from "../lib/payoff";
@@ -340,7 +342,7 @@ function TrackChip({ children, onClick, disabled, title }: {
  *  labelled by shape, the owner's note saved through the session's annotate verb and
  *  carried into the bank. Replay/SIM only — a deployment's tape is the run's. */
 function ActionsThisCycle({ journal, discarded, onAnnotate, busy, readOnly }: {
-  journal: ConsoleFill[]; discarded: { group: number; undone_at: string; rows: ConsoleFill[] }[];
+  journal: ConsoleFill[]; discarded: { group: number | null; undone_at: string; rows: ConsoleFill[]; reason?: string }[];
   onAnnotate: (group: number, why: string) => void; busy: boolean; readOnly: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -415,11 +417,132 @@ function ActionsThisCycle({ journal, discarded, onAnnotate, busy, readOnly }: {
               )}
             </div>
           ))}
-          {discarded.length > 0 && (
+          {discarded.some((x) => x.reason === "fork") && (
             <div style={{ color: "var(--oc-faint)" }}>
-              taken back: {discarded.map((x) => `${x.rows.map((r) => `${r.action} ${r.units} ${r.symbol.split("|").slice(2).join(" ")}`).join(", ")} (undone ${x.undone_at.slice(11, 16)})`).join(" · ")}
+              {discarded.filter((x) => x.reason === "fork").map((x, i) => (
+                <span key={i}>forked here at {x.undone_at.replace("T", " ")} · {x.rows.length} actual fill{x.rows.length === 1 ? "" : "s"} dropped{i < discarded.filter((y) => y.reason === "fork").length - 1 ? " · " : ""}</span>
+              ))}
             </div>
           )}
+          {discarded.some((x) => x.reason !== "fork") && (
+            <div style={{ color: "var(--oc-faint)" }}>
+              taken back: {discarded.filter((x) => x.reason !== "fork").map((x) => `${x.rows.map((r) => `${r.action} ${r.units} ${r.symbol.split("|").slice(2).join(" ")}`).join(", ")} (undone ${x.undone_at.slice(11, 16)})`).join(" · ")}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const dShort = (m: string | null | undefined) => {
+  if (!m) return "—";
+  const d = new Date(m.slice(0, 10) + "T00:00:00");
+  return `${d.getDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()]}`;
+};
+
+/** The comparison a fork exists for: what the ACTUAL book was worth at this minute (the
+ *  run's real fills marked on the store) beside what THIS tape is worth, and — once the
+ *  fork's book is flat — the actual cycle's net beside the fork's. Arithmetic, no advice. */
+function ForkStrip({ fork, cursorKey, risk, traded }: {
+  fork: ConsoleFork; cursorKey: string; risk: ConsoleRisk | null | undefined; traded: boolean;
+}) {
+  const series = fork.actual_series;
+  let actual: [string, number] | null = null;
+  if (series.length && cursorKey >= series[0][0]) {
+    let lo = 0, hi = series.length - 1;          // last minute ≤ cursor
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (series[mid][0] <= cursorKey) lo = mid; else hi = mid - 1; }
+    actual = series[lo];
+  }
+  const mine = risk?.mtm ?? null;
+  const flat = (risk?.legs_open ?? 0) === 0 && traded;
+  const beyond = fork.exited_at != null && cursorKey > fork.exited_at;
+  const tone = (v: number | null) => (v == null ? "var(--oc-muted)" : v >= 0 ? "var(--oc-pos)" : "var(--oc-neg)");
+  const Item = ({ label, value, color, title }: { label: string; value: string; color?: string; title?: string }) => (
+    <span className="inline-flex items-baseline gap-1.5" title={title}>
+      <span className="text-[10px] uppercase tracking-[.06em]" style={{ color: "var(--oc-faint)" }}>{label}</span>
+      <b className="tabular-nums text-[12.5px]" style={{ color: color ?? "var(--oc-ink)" }}>{value}</b>
+    </span>
+  );
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5 text-[12px]"
+      style={{ background: "var(--oc-accent-dim, var(--oc-panel))", borderBottom: "1px solid var(--oc-hair)" }}>
+      <Item label={beyond ? "actual · after its exit" : fork.live && !fork.exited_at ? "actual (still open)" : "actual at cursor"}
+        value={actual ? inr0(actual[1]) : series.length ? "no tape at cursor" : "no priceable leg"}
+        color={tone(actual ? actual[1] : null)}
+        title={actual ? `the run's real book marked on the store at ${actual[0].replace("T", " ")}` : "the actual book's MTM is read off the 1-min store; before its first fill or past its exit there is nothing to read"} />
+      <Item label={fork.forked_at ? "this fork" : "this tape"} value={mine != null ? inr0(mine) : "—"} color={tone(mine)}
+        title="the cycle MTM of the tape on screen: banked + open" />
+      {actual && mine != null && (
+        <Item label="Δ" value={`${mine - actual[1] >= 0 ? "+" : ""}${inr0(mine - actual[1])}`} color={tone(mine - actual[1])}
+          title="this tape minus the actual, at the cursor" />
+      )}
+      {flat && (
+        <Item label="fork net vs actual" color={tone(fork.actual.net != null ? (risk?.realised ?? 0) - fork.actual.net : null)}
+          value={fork.actual.net != null
+            ? `${inr0(risk?.realised ?? 0)} vs ${inr0(fork.actual.net)} (${(risk?.realised ?? 0) - fork.actual.net >= 0 ? "+" : ""}${inr0((risk?.realised ?? 0) - fork.actual.net)})`
+            : `${inr0(risk?.realised ?? 0)} vs actual still open`}
+          title="the fork's book is flat: what it banked beside what the run actually banked (gross, the KPI's basis)" />
+      )}
+      <span className="ml-auto text-[10.5px]" style={{ color: "var(--oc-faint)" }}
+        title="the actuals are the run's real fills (bid/ask at the broker); the fork's own fills are the store's last trade with no spread">
+        {fork.forked_at ? `forked at ${fork.forked_at.replace("T", " ")} · ` : "watching the actual tape · "}
+        {fork.entry_day_uncaptured ? `entry day uncaptured, opened ${fork.opened_day} · ` : ""}
+        {fork.uncaptured.length ? `${fork.uncaptured.length} leg${fork.uncaptured.length === 1 ? "" : "s"} not in the store · ` : ""}
+        {fork.clamped.length ? `${fork.clamped.length} fill${fork.clamped.length === 1 ? "" : "s"} moved into session hours · ` : ""}
+        fork fills at the store's last trade, no spread
+      </span>
+    </div>
+  );
+}
+
+/** "Fork a cycle…": every local paper/live run with cycles, then the peer's (the VPS over
+ *  Tailscale) when one is configured — a row per cycle, newest where the run lists it. */
+function ForkPicker({ onClose }: { onClose: () => void }) {
+  const { data, isLoading, error } = useQuery({ queryKey: ["fork-sources"], queryFn: api.consoleForkSources });
+  const Run = ({ r, source }: { r: ForkSources["local"][number]; source: "local" | "peer" }) => (
+    <div className="mb-2">
+      <div className="text-[11.5px] font-semibold" style={{ color: "var(--oc-ink)" }}>
+        {r.mode} · #{r.run_id} {r.name}{r.underlying ? ` · ${r.underlying}` : ""}{r.stopped ? " · stopped" : ""}
+      </div>
+      <div className="flex flex-wrap gap-1 mt-0.5">
+        {r.cycles.map((c) => (
+          <Link key={c.index} to={`/console?fork=${source}:${r.run_id}:${c.index}`} onClick={onClose}
+            className="px-1.5 py-[2px] rounded-[4px] text-[11px] tabular-nums"
+            style={{ border: "1px solid var(--oc-line)", color: c.live ? "var(--oc-accent)" : "var(--oc-ink)" }}
+            title={`${c.n_legs} legs · ${c.symbols.join(", ")}`}>
+            {dShort(c.entered_at)} → {c.exited_at ? dShort(c.exited_at) : "open"}
+            {c.net != null ? <span style={{ color: c.net >= 0 ? "var(--oc-pos)" : "var(--oc-neg)" }}> {inr0(c.net)}</span> : ""}
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+  return (
+    <div className="absolute left-3 top-10 z-30 w-[560px] max-h-[70vh] overflow-auto rounded-[8px] p-3 text-[12px] shadow-lg"
+      style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)", color: "var(--oc-ink)" }}>
+      <div className="flex items-center justify-between mb-2">
+        <b>Fork a cycle into the console</b>
+        <button type="button" onClick={onClose} className="text-[11px] underline">close</button>
+      </div>
+      <div className="text-[10.5px] mb-2" style={{ color: "var(--oc-faint)" }}>
+        opens on the cycle's entry day with the run's actual fills; step forward to watch, "fork here" to trade the rest differently
+      </div>
+      {isLoading && <div style={{ color: "var(--oc-muted)" }}>reading runs…</div>}
+      {error && <div style={{ color: "var(--oc-neg)" }}>{(error as Error).message}</div>}
+      {data && !data.local.length && <div style={{ color: "var(--oc-muted)" }}>no local deployment has a cycle yet</div>}
+      {data?.local.map((r) => <Run key={r.run_id} r={r} source="local" />)}
+      {data?.peer.configured && (
+        <div className="mt-3 pt-2" style={{ borderTop: "1px solid var(--oc-line)" }}>
+          <div className="text-[10.5px] uppercase tracking-[.06em] mb-1" style={{ color: "var(--oc-faint)" }}>peer · {data.peer.url}</div>
+          {data.peer.error && <div style={{ color: "var(--oc-neg)" }}>{data.peer.error}</div>}
+          {data.peer.ok && !data.peer.runs.length && <div style={{ color: "var(--oc-muted)" }}>no peer run has a cycle yet</div>}
+          {data.peer.runs.map((r) => <Run key={r.run_id} r={r} source="peer" />)}
+        </div>
+      )}
+      {data && !data.peer.configured && (
+        <div className="mt-2 text-[10.5px]" style={{ color: "var(--oc-faint)" }}>
+          no peer configured — set SKAS_PEER_API_URL (+ SKAS_PEER_API_TOKEN from `skas-algo mint-token` on the VPS) to list its runs here
         </div>
       )}
     </div>
@@ -1301,6 +1424,16 @@ export default function ConsolePage() {
   const [bankBusy, setBankBusy] = useState(false);
   const [bankMsg, setBankMsg] = useState<string | null>(null);
   const simParams = () => (simId != null ? { sim: String(simId), ...(simCycleNo != null ? { cycle: String(simCycleNo) } : {}) } : {});
+  // FORK mode (2026-09-18): `?fork=<local|peer>:<run_id>:<index>` opens the console AS a
+  // deployment's cycle — the run's actual fills as the tape, `state.fork` carrying the
+  // actual outcome. Kept in the URL like the SIM params so transport never drops it.
+  const forkRaw = params.get("fork");
+  const forkRef = useMemo(() => {
+    const m = /^(local|peer):(\d+):(\d+)$/.exec(forkRaw ?? "");
+    return m ? { source: m[1] as "local" | "peer", run_id: Number(m[2]), index: Number(m[3]) } : null;
+  }, [forkRaw]);
+  const forkParams = (): Record<string, string> => (forkRaw ? { fork: forkRaw } : {});
+  const [showFork, setShowFork] = useState(false);
   const isReal = !!state && state.session.mode === "live";
   const { data: liveRuns } = useQuery({
     queryKey: ["console-live-runs"], queryFn: api.consoleLiveRuns,
@@ -1370,7 +1503,8 @@ export default function ConsolePage() {
       const fresh = await api.consoleOpen({
         underlying: cur.session.underlying, day: cur.session.date, at: cur.session.clock,
         expiry: cur.chain.expiry ?? undefined, capital: cur.session.capital,
-        restore: { journal: cur.journal ?? [], alerts: cur.alerts ?? [], bookmarks: cur.bookmarks ?? [], discarded: cur.discarded ?? [] },
+        restore: { journal: cur.journal ?? [], alerts: cur.alerts ?? [], bookmarks: cur.bookmarks ?? [], discarded: cur.discarded ?? [],
+          fork: cur.fork ?? null },
       });
       stateRef.current = fresh;
       setState(fresh);
@@ -1395,7 +1529,7 @@ export default function ConsolePage() {
         expiry: expiry === null ? undefined : (expiry ?? params.get("expiry") ?? undefined) }),
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
-      setParams({ ...simParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), ...forkParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1416,7 +1550,7 @@ export default function ConsolePage() {
         setNotice(`${prettyDay(s.session.date)} is the last captured session in the 1-min store — nothing to replay past it yet. Today's bars are captured after 16:00 IST.`);
       }
       setState(s); setDay(s.session.date); setError(null);
-      setParams({ ...simParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), ...forkParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1439,7 +1573,7 @@ export default function ConsolePage() {
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setError(null);
       if (s.jumped === false) setNotice("No such event in this session's direction.");
-      setParams({ ...simParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), ...forkParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1496,7 +1630,7 @@ export default function ConsolePage() {
     onSuccess: (s) => {
       setState(s); setDay(s.session.date); setUnderlying(s.session.underlying);
       setError(null); setShowSaves(false);
-      setParams({ ...simParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), ...forkParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) },
         { replace: true });
     },
@@ -1629,7 +1763,7 @@ export default function ConsolePage() {
     mutationFn: (expiry: string) => call((id) => api.consoleChain(id, { expiry })),
     onSuccess: (s) => {
       setState(s);
-      setParams({ ...simParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
+      setParams({ ...simParams(), ...forkParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
         ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) }, { replace: true });
     },
   });
@@ -1646,6 +1780,24 @@ export default function ConsolePage() {
         capital: spec.capital, restore: spec.restore ?? undefined });
     } catch (e) { setError((e as Error).message); }
   };
+  // FORK: open AS the deployment's cycle (the run's actual fills restored on its entry day)
+  const openFork = async () => {
+    if (!forkRef) return;
+    try {
+      const s = await api.consoleFork({ source: forkRef.source, run_id: forkRef.run_id, index: forkRef.index });
+      setState(s); setDay(s.session.date); setUnderlying(s.session.underlying); setError(null);
+      setParams({ ...simParams(), ...forkParams(), sid: s.session.id, u: s.session.underlying, day: s.session.date, at: s.session.clock,
+        ...(s.chain.expiry ? { expiry: s.chain.expiry } : {}) }, { replace: true });
+    } catch (e) { setError((e as Error).message); }
+  };
+  const forkHere = useMutation({
+    mutationFn: () => call((id) => api.consoleForkHere(id)),
+    onSuccess: (s) => { setState(s); setError(null); },
+    onError: (e: Error) => setError(e.message),
+  });
+  const cursorKey = state ? `${state.session.date}T${state.session.clock}` : "";
+  // actual fills still ahead of the cursor on a forked cycle — what "fork here" would drop
+  const forkAhead = state?.fork ? state.journal.filter((f) => f.action !== "NOOP" && f.at > cursorKey).length : 0;
   // autosave the open cycle's tape after every change (debounced); never on a read-only replay
   const journalKey = state ? `${state.session.date}|${state.session.clock}|${state.journal.length}|${state.alerts.length}|${state.bookmarks.length}|${state.discarded?.length ?? 0}` : "";
   useEffect(() => {
@@ -1694,6 +1846,9 @@ export default function ConsolePage() {
     const liveId = params.get("live");
     if (liveId) { openLive.mutate(Number(liveId)); return; }
     if (simId != null) { openSim(); return; }
+    // a fork with no session id yet: open AS the cycle; with a sid the rehydrate path below
+    // brings `state.fork` back from disk
+    if (forkRef && !params.get("sid")) { openFork(); return; }
     // a session id in the URL: the backend keeps every replay session on disk and rebuilds
     // it under the same id (a restart, an eviction, a reload — none of them cost the book);
     // only when it is truly gone do we open afresh from the day/minute in the URL
@@ -2278,7 +2433,8 @@ export default function ConsolePage() {
         </span>
         <input type="date" value={day} min={days?.first ?? undefined} max={days?.last ?? undefined}
           onChange={(e) => { setDay(e.target.value); open.mutate({ underlying, day: e.target.value, at: "09:30", expiry: null }); }}
-          className={`h-[22px] rounded-[5px] px-1.5 text-[11px] ${isLive ? "!hidden" : ""}`}
+          /* a forked cycle moves by the jog chips only: the picker opens a NEW plain session */
+          className={`h-[22px] rounded-[5px] px-1.5 text-[11px] ${isLive || state?.fork ? "!hidden" : ""}`}
           style={{ background: "var(--oc-chip)", color: "var(--oc-ink)", border: "none" }} />
         <div className="w-px h-5" style={{ background: "var(--oc-line)" }} />
 
@@ -2344,9 +2500,25 @@ export default function ConsolePage() {
               <Link to="/simulator" className="ml-1.5 underline font-normal" style={{ color: "inherit" }}>scoreboard</Link>
             </span>
           )}
+          {state?.fork && (
+            <span className="ml-2 px-1.5 py-[1px] rounded-[4px] text-[10px] font-bold"
+              title={`a deployment's cycle forked into the console: the tape is the run's ACTUAL fills (${state.fork.actual.fills}); step forward to watch what happened, "fork here" to trade the rest differently. Actual net is the run's realised for the cycle, gross.`}
+              style={{ background: state.fork.forked_at ? "var(--oc-caution)" : "var(--oc-accent)", color: "#fff" }}>
+              FORK · {state.fork.label} · {dShort(state.fork.entered_at)} → {state.fork.exited_at ? dShort(state.fork.exited_at) : "open"}
+              {" · "}actual {state.fork.actual.net != null ? inr0(state.fork.actual.net) : "open"}
+            </span>
+          )}
+          {state?.fork && forkAhead > 0 && !isLive && (
+            <Chip title="drop the run's actual fills after this minute so the rest can be traded differently (kept on the record as 'forked here')"
+              onClick={() => forkHere.mutate()} disabled={forkHere.isPending}>
+              ✂ {forkAhead} actual fill{forkAhead === 1 ? "" : "s"} ahead · fork here
+            </Chip>
+          )}
           <Chip disabled={!state || isLive} title="bookmark this minute (B)"
             active={!!state && state.bookmarks.includes(`${state.session.date}T${state.session.clock}`)}
             onClick={() => bookmark.mutate()}>◇ mark</Chip>
+          <Chip active={showFork} title="fork a paper/live deployment's cycle into the console" onClick={() => setShowFork((v) => !v)}>⑂ fork…</Chip>
+          {showFork && <ForkPicker onClose={() => setShowFork(false)} />}
           <Chip disabled={!state || isLive} active={showSaveBox} title="save this session (day, cursor, book, alerts)"
             onClick={() => { setShowSaveBox((v) => !v); setShowSaves(false);
               setSaveName(`${underlying} ${state?.session.date ?? ""} ${state?.session.clock ?? ""}`); }}>
@@ -2578,6 +2750,9 @@ export default function ConsolePage() {
         <StripItem label="Capital">{num(state?.session.capital ?? null, 0)}</StripItem>
       </div>
 
+      {state?.fork && !isLive && (
+        <ForkStrip fork={state.fork} cursorKey={cursorKey} risk={state.risk} traded={simTraded} />
+      )}
       {simId != null && !simReadOnly && state && (simTraded && simFlat || bankMsg) && (
         /* the Simulator's bank sheet: prompts the moment the book is flat after trading */
         <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-[12px]"

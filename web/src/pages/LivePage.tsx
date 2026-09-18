@@ -1559,6 +1559,11 @@ function DeploymentTile({
                   {" "}{dep.underlying_spot >= dep.cycle.entry_spot ? "▲" : "▼"} {Math.abs(dep.underlying_spot / dep.cycle.entry_spot - 1).toLocaleString("en-IN", { style: "percent", minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
               )}
+              {/* the OPEN cycle is index 0 of a RUNNING run's newest-first cycle list */}
+              {dep.status === "active" && (
+                <Link to={`/console?fork=local:${dep.run_id}:0`} className="ml-1.5 text-[var(--accent-deep)] hover:underline"
+                  title="replay this cycle in the console from its entry with the run's actual fills; fork at any minute and trade the rest differently">⑂ replay</Link>
+              )}
             </span>
           )}
         </div>

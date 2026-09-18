@@ -1,5 +1,8 @@
 import type {
   AnalyticsBundle,
+  ConsoleFork,
+  ForkSources,
+  RunCycles,
   BacktestRequest,
   BacktestResponse,
   ReplayJobSnapshot,
@@ -176,8 +179,15 @@ export const api = {
     underlying: string; day?: string | null; at?: string | null; expiry?: string | null;
     capital?: number; strike_window?: number; allow_fifty_strikes?: boolean;
     restore?: { journal: ConsoleState["journal"]; alerts: ConsoleState["alerts"]; bookmarks?: string[];
-      discarded?: ConsoleState["discarded"] };
+      discarded?: ConsoleState["discarded"]; fork?: ConsoleFork | null };
   }) => request<ConsoleState>("/console/sessions", { method: "POST", body: JSON.stringify(body) }),
+  // fork a deployment's cycle into the console (services/console_fork): the run's actual
+  // fills as the tape, the actual outcome on `state.fork`; read-only on the run
+  consoleFork: (body: { source: "local" | "peer"; run_id: number; index: number; capital?: number | null }) =>
+    request<ConsoleState>("/console/sessions/fork", { method: "POST", body: JSON.stringify(body) }),
+  consoleForkHere: (id: string) => request<ConsoleState>(`/console/sessions/${id}/fork`, { method: "POST" }),
+  consoleForkSources: () => request<ForkSources>("/console/fork-sources"),
+  runCycles: (runId: number) => request<RunCycles>(`/runs/${runId}/cycles`),
   consoleGet: (id: string) => request<ConsoleState>(`/console/sessions/${id}`),
   consoleLiveRuns: () => request<{ runs: ConsoleLiveRun[]; recovering?: boolean }>("/console/live-runs"),
   consoleOpenLive: (body: { run_id: number; expiry?: string | null }) =>

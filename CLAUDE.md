@@ -1384,6 +1384,23 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
 - The replay track's "next 1% move" reads a per-day spot series built in ONE pass over
   the tape with a scratch `ReplayMarket` (14 ms, cached per day) — never by stepping the
   live cursor minute by minute (376 rebuilds ≈ 6 s, and it would move the book).
+- **Fork a deployment's cycle (owner ask 2026-09-18) — `services/console_fork.py`,
+  OUTSIDE the package (it imports `simulator`, which imports the console).** The run's
+  ACTUAL fills for one cycle become a console journal (`cycle_to_journal`: AVG_BUY→BUY,
+  SETTLE dropped and re-derived, a fill outside 09:15–15:40 clamped + listed, one undo
+  group per fill minute) restored on the entry day at the entry minute — `restore` fills
+  at each row's own price, so the actuals are exact; `state.fork` carries the actual
+  outcome + `actual_series` (`simulator._minute_series` over the store) for the strip.
+  `ConsoleSession.truncate_after_cursor()` is "fork here": rows after the cursor go into
+  `discarded` as ONE `reason="fork"` entry, `_group` is untouched so `undo_last` never
+  reaches an actual. **Index parity by construction:** `routes.backtest.run_cycles` is
+  the ONE list a cycle index addresses (a STOPPED run's stored report is oldest-first, a
+  running run's reconstruction newest-first) — `GET /runs/{id}/cycles`, the detail page
+  and `POST /console/sessions/fork` all read it; never re-select a cycle elsewhere. The
+  PEER client (`services/peer.py`) is GET-only with a path whitelist, pinned by
+  `tests/test_peer.py` (no other HTTP verb in its source); `SKAS_PEER_API_URL/_TOKEN`,
+  the token from `skas-algo mint-token` on the peer. The console package imports neither
+  module (pin in `tests/test_options_console.py`). Coverage: `tests/test_console_fork.py`.
 - Full plan + phases: `docs/PLAN-options-console.md`.
 
 ## 8e. The Simulator (`/simulator`) — manual backtesting, cycle by cycle (2026-09-11)

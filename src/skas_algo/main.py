@@ -198,6 +198,9 @@ def main() -> None:
     )
     ev.add_argument("--scaffold", action="store_true", help="write the vault dashboards/templates")
     sub.add_parser("hash-password", help="Hash an operator password for SKAS_AUTH_PASSWORD_HASH")
+    mt = sub.add_parser("mint-token", help="Mint a long-lived operator JWT (for a peer box's "
+                                           "SKAS_PEER_API_TOKEN); needs SKAS_AUTH_JWT_SECRET")
+    mt.add_argument("--days", type=int, default=365, help="lifetime in days (default 365)")
     ig = sub.add_parser(
         "import-gfd", help="Import GlobalDataFeeds 1-min CSVs into the option-bar store"
     )
@@ -243,6 +246,11 @@ def main() -> None:
 
     if args.cmd == "hash-password":
         _hash_password()
+        return
+    if args.cmd == "mint-token":
+        from skas_algo.security.auth import create_token
+
+        print(create_token(ttl_hours=int(args.days) * 24))
         return
 
     settings = get_settings()

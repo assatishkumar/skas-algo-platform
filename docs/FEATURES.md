@@ -1013,6 +1013,24 @@ Coverage: `tests/test_portfolio.py`, `test_portfolio_sync.py`, `test_portfolio_i
   cycle range; "payoff on" draws a multi-expiry book at a chosen expiry; the what-if panel
   prices candidate adjustments side by side. `services/options_console/` imports no order
   path. Invariants: CLAUDE.md §8d; plan `docs/PLAN-options-console.md`.
+- **Fork a deployment's cycle into the console (2026-09-18).** Any paper/live run's
+  cycle — closed or the OPEN one — opens in the console replay on its entry day at the
+  entry minute with the run's ACTUAL fills as the tape (`services/console_fork.py`:
+  the cycle's trade rows → a console journal, AVG_BUY→BUY, SETTLE re-derived, fills
+  outside 09:15–15:40 clamped and listed). Step forward to watch what happened; press
+  "fork here" (`ConsoleSession.truncate_after_cursor`, kept on the record as a `fork`
+  entry) to drop the actual later fills and trade the rest differently; the strip reads
+  the actual book's MTM at the cursor (the Simulator's minute walker over the store)
+  beside the fork's, and, once the fork is flat, the actual net beside the fork's. Entry
+  points: the cycle detail page, the Live page's cycle table (⑂), the open-cycle
+  "replay" on a running tile, and the console's "⑂ fork…" picker (`GET
+  /console/fork-sources`). The cycle index is the SAME list the cycle-detail page
+  indexes (`routes.backtest.run_cycles`; `GET /runs/{id}/cycles` lists it). VPS cycles
+  reach the Mac's console through a READ-ONLY peer client (`services/peer.py`,
+  GET-only and pinned; `SKAS_PEER_API_URL` + a token from `skas-algo mint-token`).
+  The fork is an ordinary replay session (persisted, ⤓ save). Honesty: the actuals are
+  real fills, the fork's own fills are the store's last trade with no spread; a contract
+  the store never captured stays unpriced and is listed.
 - **Simulator (`/simulator`, 2026-09-11).** Manual backtesting cycle by cycle in the
   console, stored as an ordinary run: banked cycles, compounding equity, the standard
   report, and per cycle the decision context of every action, the path (MAE/MFE), the
@@ -1191,6 +1209,9 @@ the shared deployment path: **M** `POST /options/deploy` (custom_options), `/opt
 | `SKAS_AUTH_PASSWORD_HASH` | — | bcrypt hash of the operator password (`skas-algo hash-password`). |
 | `SKAS_AUTH_JWT_SECRET` | — | HS256 signing key for login tokens. Auth is on only when both this + the hash are set. |
 | `SKAS_AUTH_TOKEN_TTL_HOURS` | `24` | Login token lifetime. |
+| `SKAS_PEER_API_URL` | unset | A peer backend (the VPS over Tailscale) whose deployment cycles the console can fork — read-only, GET-only (`services/peer.py`). |
+| `SKAS_PEER_API_TOKEN` | unset | The peer's operator JWT, minted on the peer with `skas-algo mint-token --days 365`. |
+| `SKAS_PEER_API_TIMEOUT_S` | `8` | Peer request timeout. |
 | `SKAS_DEBUG` | `true` | Dev auto-reload; the supervisor sets `false` (single process). |
 | `SKAS_LIVE_TRADING_ENABLED` | `false` | Master switch for real orders (one of the 4 keys). |
 | `SKAS_LIVE_MAX_ORDER_NOTIONAL` | `500000` | Per-order notional cap (rail). |

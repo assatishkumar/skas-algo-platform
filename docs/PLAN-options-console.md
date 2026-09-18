@@ -452,3 +452,33 @@ toggle. **Closed 2026-09-18:** the `why` box on the OPEN cycle in the console (a
 "actions this cycle" list under Positions in replay/SIM, each group with its box, saved through
 the session's annotate verb and carried into the bank) and the console guide artifact.
 Nothing on the original plan remains open; what is left is deferred by owner decision.
+
+---
+
+# Part 4 — Forking a deployment's cycle (2026-09-18, shipped)
+
+**Ask:** "take any PAPER or LIVE position — even a past cycle — go back in time, make
+different adjustments, and see if the end result changes." **Owner decisions:** VPS cycles
+reach the Mac's console by a peer fetch over Tailscale; closed AND open cycles; a fork is an
+ordinary console session (persisted, ⤓ save), not a Simulator bank.
+
+- `services/console_fork.py`: `normalise_cycle` (one shape for a stored-report cycle, a
+  reconstruction, a brief), `cycle_to_journal` (the run's rows → the console's, with what
+  was clamped/dropped noted), `fork_spec` (day = first captured day ≥ entry, the tape, the
+  `fork` record: actual net/exit, `actual_series` from `simulator._minute_series`,
+  uncaptured contracts, clamped fills).
+- Session: `fork` on the session, in `save_payload`/`restore`/`state`; `truncate_after_cursor`.
+- Routes: `POST /console/sessions/fork {source, run_id, index}`, `POST /console/sessions/{id}/fork`,
+  `GET /console/fork-sources`, `GET /runs/{id}/cycles` (+ `run_cycles`/`cycle_briefs` in
+  `routes/backtest.py` — the index-parity rule).
+- Peer: `services/peer.py` (GET-only, whitelist, `httpx.MockTransport` hook), settings
+  `SKAS_PEER_API_URL/_TOKEN/_TIMEOUT_S`, CLI `skas-algo mint-token --days N`.
+- Page: `?fork=<local|peer>:<run>:<index>`, the FORK chip, "N actual fills ahead · fork
+  here", the comparison strip (actual at cursor / this fork / Δ / fork net vs actual), the
+  "⑂ fork…" picker; links on the cycle detail page, the Live cycle table and the open-cycle
+  tile. The date picker is hidden in fork mode (it opens a plain session).
+- Verified 2026-09-18 on run 111's 31 Aug → 4 Sep cycle: replayed to its end the tape
+  reads ₹2,958 both sides; forked at 3 Sep 10:16 and flattened, "₹8,093 vs ₹2,958 (+₹5,135)".
+- Deferred: `fork-review` (the Simulator's counterfactual rules over the fork's tape);
+  banking forks into a Simulator strategy; the peer needs the VPS backend updated for
+  `GET /runs/{id}/cycles` before its runs list.

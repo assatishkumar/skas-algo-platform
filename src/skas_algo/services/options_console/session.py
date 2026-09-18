@@ -250,6 +250,9 @@ class ConsoleSession(AlertBook):
         self._iv_series: dict[str, list[tuple[str, float]]] = {}
         # actions taken back by Undo — kept for the Simulator's record, never in the P&L
         self.discarded: list[dict] = []
+        # a FORKED deployment cycle (services/console_fork): the actual cycle's summary +
+        # per-minute MTM the comparison strip reads. A plain dict, stored untouched.
+        self.fork: dict | None = None
         # write-through: the registry persists the tape whenever `state()` sees a change,
         # so a restart or an eviction costs a reload, not the book (owner, 2026-09-15)
         self.on_change: Callable[[ConsoleSession, bool], None] | None = None
@@ -1208,12 +1211,13 @@ class ConsoleSession(AlertBook):
                 "allow_fifty_strikes": self.allow_fifty_strikes,
                 "strike_window": self.strike_window,
                 "journal": self.journal, "alerts": self._alerts_out(),
-                "bookmarks": self.bookmarks, "discarded": self.discarded}
+                "bookmarks": self.bookmarks, "discarded": self.discarded,
+                "fork": self.fork}
 
     def _change_signature(self) -> tuple:
         return (len(self.journal), len(self.alerts), len(self.bookmarks),
                 len(self.discarded), self.expiry, self.margin_per_lot_set, self._rev,
-                self.clock)
+                bool(self.fork and self.fork.get("forked_at")), self.clock)
 
     def prime_change_key(self) -> None:
         """A session rebuilt from its own file has nothing new to write yet."""
@@ -1235,6 +1239,25 @@ class ConsoleSession(AlertBook):
             self.on_change(self, book_changed)
         except Exception:  # pragma: no cover - persistence must never break a request
             logger.exception("console: persist failed")
+
+    def truncate_after_cursor(self, *, reason: str = "fork") -> int:
+        """FORK HERE: drop every journal row after the cursor — on a forked deployment cycle
+        those are the run's ACTUAL later fills, which stepping forward would otherwise
+        bring back — so the owner can trade the rest differently. What went is kept in
+        `discarded` as ONE entry (reason "fork"), never in the P&L. `_group` is left where
+        it is: the owner's later fills get higher groups, so `undo_last` takes back the
+        owner's action and never an actual. Returns how many rows were dropped."""
+        key = self._minute_key()
+        gone = [f for f in self.journal if f["at"] > key]
+        if not gone:
+            return 0
+        self.journal = [f for f in self.journal if f["at"] <= key]
+        self.discarded.append({"group": None, "undone_at": key, "rows": gone, "reason": reason})
+        if self.fork is not None:
+            self.fork["forked_at"] = key
+        self._rev += 1
+        self._replay_book(self.clock, force=True)
+        return len(gone)
 
     def undo_last(self) -> bool:
         """Undo the last action — the whole action, so a roll's two fills and a basket's
@@ -1507,7 +1530,8 @@ class ConsoleSession(AlertBook):
 
     def restore(self, journal: list[dict], alerts: list[dict] | None = None,
                 bookmarks: list[str] | None = None,
-                discarded: list[dict] | None = None) -> None:
+                discarded: list[dict] | None = None,
+                fork: dict | None = None) -> None:
         """Rebuild a LOST session from the journal the page kept.
 
         The registry is in-process: a backend restart or an eviction drops the object, and
@@ -1540,6 +1564,8 @@ class ConsoleSession(AlertBook):
                 continue
         self.bookmarks = sorted({str(b) for b in (bookmarks or [])})
         self.discarded = list(discarded or [])
+        if fork is not None:
+            self.fork = dict(fork)
         self._settle_expired()
         self._replay_book(self.clock, force=True)
 
@@ -1918,6 +1944,7 @@ class ConsoleSession(AlertBook):
             "alerts": self._alerts_out(),
             "bookmarks": self.bookmarks,
             "discarded": self.discarded,     # what Undo took back (the Simulator's record)
+            "fork": self.fork,               # a forked deployment cycle: actual vs this tape
             "cycle": self.cycle_info(),
             # the replay track: markers on the OPEN day for the scrubber
             "track": {

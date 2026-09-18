@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     auth_jwt_secret: str | None = None  # SKAS_AUTH_JWT_SECRET (HS256 signing key)
     auth_token_ttl_hours: int = 24  # SKAS_AUTH_TOKEN_TTL_HOURS (login token lifetime)
 
+    # --- Peer backend (READ-ONLY): the VPS, so its cycles can be forked into the Mac's
+    # console (services/peer.py is GET-only and pinned). Token: on the peer,
+    # `skas-algo mint-token --days 365`; unset when the peer has auth disabled.
+    peer_api_url: str | None = None  # SKAS_PEER_API_URL, e.g. https://algo-ubuntu.<tailnet>.ts.net
+    peer_api_token: str | None = None  # SKAS_PEER_API_TOKEN (the peer's operator JWT)
+    peer_api_timeout_s: float = 8.0  # SKAS_PEER_API_TIMEOUT_S
+
     # --- Alerts (Telegram) ---
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
