@@ -47,6 +47,132 @@ function rebase(points: (number | null)[]): (number | null)[] {
   return points.map((v) => (v === null ? null : (v / first - 1) * 100));
 }
 
+/** The "By holding" picker (owner ask 2026-09-18): 56 flat chips were a wall. Holdings are
+ *  GROUPED BY ASSET CLASS (the payload's own label + colour), each group headed by a chip that
+ *  toggles all its members, a search box that narrows every group (Enter = show exactly the
+ *  matches), and quick picks that map straight onto the chart's line cap. `hidden` stays the
+ *  single source of truth, so the chart, legend and end labels need nothing new. */
+function HoldingPicker({ rows, series, hidden, setHidden, classes, maxLines }: {
+  rows: Holding[];
+  series: Series[];
+  hidden: Record<string, boolean>;
+  setHidden: (h: Record<string, boolean>) => void;
+  classes: PortfolioPayload["asset_classes"];
+  maxLines: number;
+}) {
+  const [q, setQ] = useState("");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const PER_GROUP = 8;   // chips shown per group before "+N more"
+  const byKey = useMemo(() => new Map(series.map((s) => [s.key, s])), [series]);
+  const groups = useMemo(() => {
+    const m = new Map<string, { label: string; color: string; total: number; members: { h: Holding; s: Series }[] }>();
+    for (const h of rows) {
+      const s = byKey.get(`h${h.id}`);
+      if (!s) continue;
+      const k = String(h.asset_class);
+      const meta = classes[h.asset_class];
+      let g = m.get(k);
+      if (!g) { g = { label: meta?.label ?? h.class_label ?? k, color: meta?.color ?? "var(--faint)", total: 0, members: [] }; m.set(k, g); }
+      g.total += h.value;
+      g.members.push({ h, s });
+    }
+    for (const g of m.values()) g.members.sort((a, b) => b.h.value - a.h.value);
+    return [...m.entries()].sort((a, b) => b[1].total - a[1].total);
+  }, [rows, byKey, classes]);
+  const needle = q.trim().toLowerCase();
+  const matches = (h: Holding) => !needle || h.name.toLowerCase().includes(needle);
+  const onCount = series.filter((s) => !hidden[s.key]).length;
+  // quick picks: exactly N series shown, everything else hidden
+  const only = (keys: string[]) => setHidden(Object.fromEntries(series.map((s) => [s.key, !keys.includes(s.key)])));
+  const change = (s: Series) => {
+    const p = s.points.filter((v): v is number => v !== null && v > 0);
+    return p.length >= 2 ? p[p.length - 1] / p[0] - 1 : null;
+  };
+  const ranked = (dir: 1 | -1) => series
+    .map((s) => ({ s, c: change(s) })).filter((x): x is { s: Series; c: number } => x.c !== null)
+    .sort((a, b) => dir * (b.c - a.c)).slice(0, maxLines).map((x) => x.s.key);
+  const btn = "rounded-full border-[1.5px] border-[var(--border)] px-2.5 py-1 text-[11.5px] font-bold text-[var(--muted)] hover:text-[var(--strong)]";
+  return (
+    <div className="mb-3">
+      <div className="flex flex-wrap items-center gap-[7px] mb-2">
+        <button onClick={() => setHidden({})} className={btn} title="Show every holding">All</button>
+        <button onClick={() => setHidden(Object.fromEntries(series.map((s) => [s.key, true])))} className={btn}
+          title="Hide every holding, then pick the ones to compare">None</button>
+        <span className="mx-1 h-4 w-px bg-[var(--border)]" />
+        <button onClick={() => only(series.slice(0, maxLines).map((s) => s.key))} className={btn}
+          title={`the ${maxLines} largest by value`}>Top {maxLines} by value</button>
+        <button onClick={() => only(ranked(1))} className={btn} title="the best movers over the window shown">Top {maxLines} gainers</button>
+        <button onClick={() => only(ranked(-1))} className={btn} title="the worst movers over the window shown">Top {maxLines} losers</button>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") { setQ(""); return; }
+            if (e.key === "Enter" && needle) only(rows.filter(matches).map((h) => `h${h.id}`));
+          }}
+          placeholder="filter holdings… (Enter = show only these)"
+          className="ml-auto h-[30px] min-w-[220px] rounded-full border-[1.5px] border-[var(--border)] bg-[var(--card)] px-3 text-[12px] text-[var(--strong)]"
+        />
+        <span className="text-[11.5px] font-semibold text-[var(--faint)]">{onCount} of {series.length} selected</span>
+      </div>
+      {groups.map(([k, g]) => {
+        const vis = g.members.filter((m) => matches(m.h));
+        if (!vis.length) return null;
+        const on = vis.filter((m) => !hidden[m.s.key]).length;
+        const state = on === 0 ? "off" : on === vis.length ? "on" : "mixed";
+        const open = !!expanded[k] || !!needle;
+        const shown = open ? vis : vis.slice(0, PER_GROUP);
+        return (
+          <div key={k} className="flex flex-wrap items-center gap-[7px] mb-1.5">
+            <button
+              onClick={() => {
+                const next = { ...hidden };
+                for (const m of vis) next[m.s.key] = state === "on";   // all on → all off, else all on
+                setHidden(next);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-full border-[1.5px] px-3 py-1.5 text-[12px] font-bold"
+              style={{
+                background: state === "off" ? "var(--card)" : "var(--tint)",
+                borderColor: state === "off" ? "var(--border)" : g.color,
+                color: state === "off" ? "var(--faint)" : "var(--strong)",
+              }}
+              title={`${g.label} · ${vis.length} holding${vis.length === 1 ? "" : "s"} · ${money(g.total)} — click to ${state === "on" ? "hide" : "show"} all`}
+            >
+              <span className="inline-block h-2 w-2 rounded-full" style={{ background: g.color, opacity: state === "off" ? 0.4 : 1 }} />
+              {g.label} · {vis.length}{state === "mixed" ? ` · ${on} on` : ""}
+            </button>
+            {shown.map(({ h, s }) => {
+              const isOn = !hidden[s.key];
+              return (
+                <button
+                  key={s.key}
+                  onClick={() => setHidden({ ...hidden, [s.key]: isOn })}
+                  className="inline-flex items-center gap-1.5 rounded-full border-[1.5px] px-3 py-1.5 text-[12px] font-bold"
+                  style={{
+                    background: isOn ? "var(--tint)" : "var(--card)",
+                    borderColor: isOn ? "var(--tint-border)" : "var(--border)",
+                    color: isOn ? "var(--strong)" : "var(--faint)",
+                  }}
+                  title={`${h.name} · ${money(h.value)}`}
+                >
+                  <span className="inline-block h-2 w-2 rounded-full" style={{ background: isOn ? s.color : "var(--faint)" }} />
+                  {s.label}
+                </button>
+              );
+            })}
+            {vis.length > shown.length && (
+              <button onClick={() => setExpanded({ ...expanded, [k]: true })} className={btn}>+{vis.length - shown.length} more</button>
+            )}
+            {open && !needle && vis.length > PER_GROUP && (
+              <button onClick={() => setExpanded({ ...expanded, [k]: false })} className={btn}>fewer</button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function GrowthView({
   rows, payload, buckets,
 }: { rows: Holding[]; payload: PortfolioPayload; buckets: Bucket[] }) {
@@ -329,7 +455,16 @@ export default function GrowthView({
           )}
         </div>
 
-        {scope !== "total" && (
+        {scope === "holding" && (
+          <HoldingPicker rows={rows} series={series} hidden={hidden} setHidden={setHidden}
+            classes={payload.asset_classes} maxLines={MAX_LINES} />
+        )}
+        {scope === "holding" && overflow && (
+          <div className="mb-3 text-[11.5px] font-bold text-[var(--warn-text)]">
+            {MAX_LINES} lines drawn · {series.filter((s) => !hidden[s.key]).length - MAX_LINES} more selected — use a quick pick or a group to compare fewer
+          </div>
+        )}
+        {scope !== "total" && scope !== "holding" && (
           <div className="mb-3 flex flex-wrap items-center gap-[7px]">
             <button
               onClick={() => setHidden({})}
