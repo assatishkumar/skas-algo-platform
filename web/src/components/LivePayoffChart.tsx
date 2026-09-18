@@ -216,6 +216,11 @@ export default function LivePayoffChart({
                 {skipped > 0 ? ` (${skipped} other-underlying leg${skipped > 1 ? "s" : ""} not shown)` : ""}
               </span>
             )}{" "}
+            {pnlOffset !== 0 && (
+              <span className="font-semibold" style={{ color: "var(--warn-text)" }}>
+                {" "}· cycle basis: {pnlOffset > 0 ? "+" : ""}{formatInr(pnlOffset)} banked from closed legs is on every point
+              </span>
+            )}{" "}
             <span className="text-slate-500">— green/red = P&L if held to expiry; dashed = current value;{" "}</span>
             <span className="font-bold" style={{ color: "var(--strong)" }}>▍spot</span>
             <span className="text-slate-500"> · strikes on the rail: </span>

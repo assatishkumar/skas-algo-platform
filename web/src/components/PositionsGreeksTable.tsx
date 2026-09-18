@@ -91,6 +91,11 @@ export default function PositionsGreeksTable({ run }: { run: LiveRunSnapshot }) 
     return acc;
   }, [legs]);
 
+  // legs closed THIS cycle stay on the table, muted (owner, 2026-09-18): their P&L is what
+  // the cycle has banked, and a table of the open legs alone hid a −₹42,857 exit
+  const closed = run.cycle?.open ? (run.cycle_closed ?? []) : [];
+  const banked = closed.reduce((a, c) => a + c.pnl, 0);
+
   if (!legs.length) return null;
 
   const deltaCash = spot != null ? net.posDelta * spot : null; // net POSITION Δ × spot (always position)
@@ -130,7 +135,7 @@ export default function PositionsGreeksTable({ run }: { run: LiveRunSnapshot }) 
         <div>
           <div className="font-['Space_Grotesk'] font-bold text-[15px] text-[var(--strong)]">Positions</div>
           <div className="text-[11.5px] text-[var(--muted)]">
-            {legs.length} legs{lotSets != null ? ` · ${lotSets} lots each` : ""}{lotSize != null ? ` · lot ${lotSize}` : ""} · greeks from live quotes, ~1/min
+            {legs.length} legs{lotSets != null ? ` · ${lotSets} lots each` : ""}{lotSize != null ? ` · lot ${lotSize}` : ""}{closed.length ? ` · ${closed.length} closed this cycle` : ""} · greeks from live quotes, ~1/min
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -215,6 +220,41 @@ export default function PositionsGreeksTable({ run }: { run: LiveRunSnapshot }) 
             </div>
           ))}
 
+          {/* legs closed this cycle: muted, struck, exit price and the P&L they banked */}
+          {closed.map((c, i) => (
+            <div
+              key={`c${i}`}
+              className="grid items-center gap-x-2 px-4 py-2 border-b border-[var(--divider)] opacity-60"
+              style={{ gridTemplateColumns: COLS }}
+              title={`${c.action === "SETTLE" ? "settled" : "exited"} ${c.at.replace("T", " ")}`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="inline-flex justify-center min-w-[44px] rounded-[6px] px-1.5 py-0.5 text-[10px] font-bold tracking-wide bg-[var(--seg)] text-[var(--muted)]">
+                  {c.side === "S" ? "SELL" : "BUY"}
+                </span>
+                <div className="min-w-0">
+                  <div className="font-['Space_Grotesk'] font-bold text-[14px] text-[var(--muted)] line-through whitespace-nowrap">
+                    {c.strike} {c.right}
+                  </div>
+                  <div className="text-[11px] text-[var(--muted)] truncate">
+                    {fmtExpiry(c.expiry)} · {c.action === "SETTLE" ? "settled" : "exited"} {c.at.slice(11)}
+                  </div>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="font-['Space_Grotesk'] font-semibold tabular-nums text-[13px] text-[var(--muted)]">{c.units}</div>
+                <div className="text-[10.5px] text-[var(--faint)] tabular-nums">{c.lots} × {Math.round(c.units / c.lots)}</div>
+              </div>
+              <div className="text-right tabular-nums whitespace-nowrap text-[12.5px] text-[var(--muted)]" title="entry → exit">
+                {formatInr(c.entry, 2)} <span className="text-[var(--faint)]">→</span> {formatInr(c.exit, 2)}
+              </div>
+              <div /><div /><div /><div /><div />
+              <div className={`text-right tabular-nums whitespace-nowrap font-['Space_Grotesk'] font-semibold text-[13px] ${sign(c.pnl)}`} title="realized on this exit">
+                {formatInr(c.pnl)}
+              </div>
+            </div>
+          ))}
+
           {/* net row */}
           <div
             className="grid items-center gap-x-2 px-4 py-2 bg-[var(--stat)] border-b border-[var(--divider)]"
@@ -232,6 +272,12 @@ export default function PositionsGreeksTable({ run }: { run: LiveRunSnapshot }) 
               {formatInr(net.unreal)}
             </div>
           </div>
+          {closed.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-[12px] text-[var(--muted)] border-b border-[var(--divider)]">
+              <span>Cycle so far · banked <b className={sign(banked)}>{formatInr(banked)}</b> from {closed.length} closed leg{closed.length > 1 ? "s" : ""} · open <b className={sign(net.unreal)}>{formatInr(net.unreal)}</b></span>
+              <span className={`font-['Space_Grotesk'] font-bold text-[13px] ${sign(banked + net.unreal)}`} title="realized this cycle + unrealized on the open legs">cycle {formatInr(banked + net.unreal)}</span>
+            </div>
+          )}
         </div>
       </div>
 

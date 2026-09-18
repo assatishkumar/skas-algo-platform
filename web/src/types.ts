@@ -641,6 +641,11 @@ export interface LiveRunSnapshot {
   margin_dhan_sum?: number | null; // Dhan's per-leg sum, kept as a footnote beside the Kite figure
   net_credit?: number | null; // options: net premium (+credit / −debit)
   realized_pnl?: number | null; // booked P&L so far (incl. a backtest seed's trades)
+  // The CURRENT cycle read off the transaction log (services/live_cycles) and the legs it
+  // has already closed — the positions table shows them muted and the payoff stands on
+  // the cycle's basis (banked + open), not the open legs alone (owner, 2026-09-18).
+  cycle?: DeploymentCycle | null;
+  cycle_closed?: ConsoleClosedLeg[];
   profit_target_amt?: number | null; // ₹ profit target the strategy will act on
   stop_loss_amt?: number | null; // ₹ stop-loss the strategy will act on
   // what those rupees are a % OF when the strategy freezes its own anchor — a frozen broker

@@ -21,7 +21,7 @@ from skas_algo.engine.options.instrument import make as make_option
 from skas_algo.engine.options.instrument import parse
 from skas_algo.live.manager import manager
 from skas_algo.services import atm_iv_history, console_margin, console_market
-from skas_algo.services.live_cycles import cycle_info
+from skas_algo.services.live_cycles import closed_legs, cycle_info
 from skas_algo.services.options_console import presets as _presets
 from skas_algo.services.options_console.alerts import AlertBook
 from skas_algo.services.options_console.margin import MarginLeg, span_like
@@ -464,38 +464,28 @@ class LiveConsole(AlertBook):
 
     def closed_legs(self, since: str | None) -> list[dict]:
         """Legs the run closed in the CURRENT cycle (rows at or after ``since``), one entry per
-        closing fill, for the table's closed rows."""
-        out = []
-        for t in self.session.transactions:
-            act = str(t.get("action") or "").upper()
-            if act not in ("SELL", "COVER", "SETTLE"):
+        closing fill, for the table's closed rows — `live_cycles.closed_legs`, the reader the
+        Live page's table shares."""
+        return closed_legs(list(self.session.transactions), since)
+
+    def _staged_close_pnl(self, legs: list[dict]) -> float:
+        """What the staged CLOSES would bank at the run's current marks — the same price the
+        ticket prints. The staged preview used to leave this out: exiting one lot of a long
+        bought at 1,071 and marked 357 showed the after-book's payoff ₹21k higher than the
+        cycle would stand the moment Commit filled it (owner, 2026-09-18, run 31)."""
+        if not self.staged:
+            return 0.0
+        by_sym = {leg["symbol"]: leg for leg in legs}
+        closes, _ = self._orders(self.staged["items"])
+        total = 0.0
+        for c in closes:
+            leg = by_sym.get(c["symbol"])
+            if leg is None:
                 continue
-            when = str(t.get("date") or "")[:16].replace(" ", "T")
-            if since and when < since:
-                continue
-            sym = str(t.get("ticker") or "")
-            inst = parse(sym)
-            if inst is None:
-                continue
-            units = int(t.get("units") or 0)
-            lot = int(inst.lot_size or 1)
-            out.append(
-                {
-                    "symbol": sym,
-                    "right": inst.right,
-                    "strike": float(inst.strike),
-                    "expiry": inst.expiry.isoformat(),
-                    "side": "S" if act == "COVER" else "B",
-                    "lots": max(1, units // lot),
-                    "units": units,
-                    "entry": round(float(t.get("entry_premium") or 0.0), 2),
-                    "exit": round(float(t.get("price") or 0.0), 2),
-                    "pnl": round(float(t.get("profit") or 0.0), 2),
-                    "at": when,
-                    "action": act,
-                }
-            )
-        return out
+            units = int(c.get("units") or leg["units"])
+            px = leg.get("ltp") or leg["entry"]
+            total += float(leg["direction"]) * (float(px) - float(leg["entry"])) * units
+        return total
 
     def held_by_strike(self) -> dict:
         return {
@@ -1243,12 +1233,15 @@ class LiveConsole(AlertBook):
                     tot_a[k] += float(x[k]) * float(x["units"])
             open_after = sum(x.get("pnl") or 0.0 for x in en_after)
             net_after = sum(-x["direction"] * x["entry"] * x["units"] for x in en_after)
+            # the cycle basis AFTER: what the staged closes bank joins the realised, so the
+            # payoff, max P/L, breakevens and T+0 tiles read where Commit will leave them
+            banked = self._staged_close_pnl(legs)
             risk_after = {
-                "realised": round(realised, 2),
-                "realised_total": round(realised_total, 2),
+                "realised": round(realised + banked, 2),
+                "realised_total": round(realised_total + banked, 2),
                 "net_credit": round(net_after, 2) if en_after else None,
                 "unrealised": round(open_after, 2),
-                "mtm": round(realised + open_after, 2),
+                "mtm": round(realised + banked + open_after, 2),
                 "charges": 0.0,
                 "margin": m_after,
                 "margin_source": src_after,

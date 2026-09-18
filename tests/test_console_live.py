@@ -270,3 +270,25 @@ def test_the_ticket_reads_the_brokers_available_margin_and_flags_a_hedge_exit(ru
     run.quote_source = None
     c._funds_cache = None
     assert c.ticket()["broker"] is None
+
+
+def test_a_staged_close_banks_into_the_after_basis_so_the_preview_matches_the_commit(run):
+    """Run 31, 2026-09-18: exiting one lot of a long bought at 1,071 and marked 357 showed
+    the after-book's payoff ₹21k ABOVE where Commit left it — the preview dropped the
+    realised of the staged close. The after basis now carries it at the ticket's price."""
+    c = console_live.open_console(42)
+    short = next(leg for leg in c.legs() if leg["side"] == "S")
+    # mark the short well below its entry so the close BANKS a profit the preview must show
+    run.session.update_quotes({short["symbol"]: short["entry"] * 0.5})
+    c.stage(kind="exit", leg_id=short["id"], lots=1)
+    st = c.state()
+    before, after = st["risk"], st["staged"]["risk_after"]
+    lot = short["lot_size"]
+    expect = (short["entry"] - short["entry"] * 0.5) * lot     # one lot of a short, bought back lower
+    assert after["realised"] - before["realised"] == pytest.approx(expect, abs=1.0)
+    assert after["realised_total"] - before["realised_total"] == pytest.approx(expect, abs=1.0)
+    assert after["mtm"] == pytest.approx(after["realised"] + after["unrealised"], abs=0.01)
+    # and commit lands the book where the preview said
+    c.commit()
+    now = c.state()["risk"]
+    assert now["realised"] == pytest.approx(after["realised"], abs=1.0)

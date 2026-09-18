@@ -265,6 +265,10 @@ async def list_deployments(status: str | None = None, db: Session = Depends(get_
             tile["order_broker"] = snap.get("order_broker")
             tile["resume_orders_pending"] = snap.get("resume_orders_pending")
             tile["strategy_alert"] = snap.get("strategy_alert")
+            # manual mode (a hand-edit paused the strategy) — the tile's amber chip and
+            # tint; never reached the tile before 2026-09-18, so the chip never rendered
+            tile["managed_by"] = snap.get("managed_by")
+            tile["handover"] = snap.get("handover")
             # SuperTrend runs: thin-history count → the tile's chip + "Backfill history now"
             tile["history_thin"] = snap.get("history_thin")
             tile["history_prepared_at"] = snap.get("history_prepared_at")

@@ -1720,6 +1720,21 @@ class LiveRun:
 
         return "live" if isinstance(getattr(self.session, "broker", None), LiveBroker) else "paper"
 
+    def _cycle_block(self) -> dict:
+        try:
+            from skas_algo.services.live_cycles import closed_legs, cycle_info
+
+            txns = list(self.session.transactions)
+            cyc = cycle_info(txns, self.config.underlying)
+            since = cyc.get("entry_at") if cyc.get("open") else None
+            if since is not None and hasattr(since, "isoformat"):
+                since = since.isoformat()
+            closed = closed_legs(txns, str(since)[:16]) if cyc.get("open") else []
+            return {"cycle": cyc, "cycle_closed": closed}
+        except Exception:  # a malformed log must never blank the run page
+            logger.exception("cycle read failed for run %s", self.run_id)
+            return {"cycle": None, "cycle_closed": []}
+
     def snapshot(self) -> dict:
         snap = {
             "run_id": self.run_id,
@@ -1787,6 +1802,10 @@ class LiveRun:
             "decision_time": self.config.decision_time,
             "universe": list(self.config.symbols),
             "excluded_symbols": self.session.excluded_symbols,
+            # The CURRENT cycle (entry stamp/spot, realized before it) and the legs it has
+            # already closed — so the run page's positions table and payoff can stand on
+            # the cycle's basis, not the open legs alone (owner, 2026-09-18).
+            **self._cycle_block(),
             **self.session.snapshot(),
         }
         # Prefer the real Zerodha basket margin (throttled) over the model estimate.

@@ -863,7 +863,7 @@ function RunCard({
             </div>
           )}
           {run.positions?.length ? (
-            <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
+            <LivePayoffChart positions={run.positions} spot={run.underlying_spot} pnlOffset={cycleBanked(run)} />
           ) : null}
           <GreeksHistoryCard run={run} />
           <LiveCyclePanel runId={run.run_id} version={version} />
@@ -1008,7 +1008,7 @@ function RunCard({
           Open basket monitor →
         </Link>
       ) : isOptions && run.positions?.length ? (
-        <LivePayoffChart positions={run.positions} spot={run.underlying_spot} />
+        <LivePayoffChart positions={run.positions} spot={run.underlying_spot} pnlOffset={cycleBanked(run)} />
       ) : null}
       {/* Greeks/P&L history + the trade log stay visible after a cycle closes, so a booked
           position still shows how it evolved, when it exited and the realized P&L. */}
@@ -1413,7 +1413,11 @@ function DeploymentTile({
           ];
 
   return (
-    <div id={`dep-${dep.run_id}`} className={`flex flex-col rounded-[16px] border border-[var(--border)] bg-[var(--card)] p-5 ${expanded ? "md:col-span-2" : ""} ${dep.status !== "active" ? "opacity-70" : ""}`}>
+    <div id={`dep-${dep.run_id}`}
+      /* manual mode tints the whole tile amber (owner, 2026-09-18): a book the owner is
+         managing by hand must not read like one the strategy is watching */
+      className={`flex flex-col rounded-[16px] border p-5 ${dep.managed_by === "manual" ? "border-[var(--warn-text)] bg-[var(--warn-bg)]" : "border-[var(--border)] bg-[var(--card)]"} ${expanded ? "md:col-span-2" : ""} ${dep.status !== "active" ? "opacity-70" : ""}`}
+      title={dep.managed_by === "manual" ? "Manual mode — the strategy is paused; you handle adjustments and exits" : undefined}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           {editing ? (
@@ -2080,6 +2084,13 @@ function thin(values: number[], max = 120): number[] {
   const out = Array.from({ length: max }, (_, k) => values[Math.floor(k * step)]);
   out.push(values[values.length - 1]);
   return out;
+}
+
+/** What the run's current cycle has banked from closed legs: overall realized − what was
+ *  realized before the cycle opened. 0 while flat, so a fresh cycle's payoff starts clean. */
+function cycleBanked(run: LiveRunSnapshot): number {
+  if (!run.cycle?.open) return 0;
+  return (run.realized_pnl ?? 0) - (run.cycle.realized_before ?? 0);
 }
 
 /** The tile's series: the OPEN cycle's P&L since its entry (overall − what was realized before

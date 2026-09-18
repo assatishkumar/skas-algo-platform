@@ -1173,6 +1173,16 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   on a leg whose id is `S<n>` (still staged) EDITS that staged add (`_edit_staged`) — a
   second item on an uncommitted leg would have sent the run an exit for a leg it does not
   hold. Leaving the run with uncommitted changes asks first.
+- **The staged AFTER basis banks the staged closes (2026-09-18).** `risk_after.realised`
+  = the cycle's realised + what the staged closes would bank at the ticket's price
+  (`_staged_close_pnl`); before, exiting one lot of a long bought at 1,071 and marked 357
+  previewed the payoff ₹21k ABOVE where Commit left it. The Live page stands on the same
+  basis: the run snapshot carries `cycle` (`live_cycles.cycle_info`) + `cycle_closed`
+  (`live_cycles.closed_legs`, the reader the console's closed rows use), the positions
+  table shows the closed legs muted with a "cycle so far" line, and `LivePayoffChart`
+  gets `pnlOffset` = realized − the cycle's `realized_before`. The tile now receives
+  `managed_by`/`handover` (it never did, so its "manual mode" chip never rendered) and
+  tints amber in manual mode.
 - A LIVE-mode run whose orders are on the paper broker (the restart demotion) reads
   `mode: "paper"` in the console too — the label follows `order_broker`, never the config.
 - Margin in live mode is the RUN's own figure when it has one (`margin_used`/`margin_source`

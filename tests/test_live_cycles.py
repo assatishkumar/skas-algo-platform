@@ -131,3 +131,40 @@ def test_daily_pnl_rows_days_by_ist_and_carries_the_days_last_unrealized():
                        "realized_cum": 1500.0, "unrealized_eod": -400.0, "overall": 1100.0}
     assert rows[2]["realized_cum"] == 800.0 and rows[2]["overall"] == 800.0
     assert rows[3]["overall"] == 1050.0 and rows[3]["charges_day"] == 5.0
+
+
+def test_closed_legs_are_the_cycles_closing_fills_since_its_entry():
+    """The run page's positions table and payoff stand on the CYCLE (owner 2026-09-18): the
+    legs closed since the cycle opened, one row per closing fill with entry, exit and P&L —
+    never a fill from an earlier cycle."""
+    from skas_algo.services.live_cycles import closed_legs
+
+    log = [
+        _t(4, 9, 15, UP, "BUY", 300, spot=57515.55),
+        _t(4, 9, 17, UP, "SELL", 300, profit=-30345.0, spot=57480.0),      # last cycle
+        _t(7, 9, 31, UP, "BUY", 300, spot=57100.0),
+        _t(7, 9, 31, CE, "SHORT", 600, spot=57100.0),
+        {**_t(18, 11, 34, UP, "SELL", 30, profit=-21459.0), "entry_premium": 1071.35},
+    ]
+    cyc = cycle_info(log, "BANKNIFTY")
+    rows = closed_legs(log, str(cyc["entry_at"])[:16])
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["symbol"] == UP and r["side"] == "B" and r["units"] == 30 and r["lots"] == 1
+    assert r["entry"] == 1071.35 and r["exit"] == 100.0 and r["pnl"] == -21459.0
+    assert r["at"] == "2026-09-18T11:34" and r["action"] == "SELL"
+    # flat → nothing is "this cycle"
+    assert closed_legs(log[:2], None) and cycle_info(log[:2], "BANKNIFTY")["open"] is False
+
+
+def test_an_averaged_in_leg_still_lets_the_cycle_close():
+    """Run 111: a manual BUY on a held symbol is logged AVG_BUY; the walker must count it as
+    an open or the two SELLs that follow leave the symbol at −65 and the cycle never ends."""
+    log = [
+        _t(7, 9, 45, UP, "BUY", 65),
+        {**_t(10, 7, 45, UP, "BUY", 65), "action": "AVG_BUY"},
+        _t(10, 8, 30, UP, "SELL", 65, profit=100.0),
+        _t(10, 8, 30, UP, "SELL", 65, profit=100.0),
+    ]
+    c = cycle_info(log, "BANKNIFTY")
+    assert c["open"] is False and c["last"]["pnl"] == 200.0

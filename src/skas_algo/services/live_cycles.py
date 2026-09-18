@@ -21,7 +21,10 @@ from skas_algo.engine.options.instrument import parse as parse_option
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-_OPENS = {"BUY": 1, "SHORT": -1}
+# AVG_BUY is a second BUY on a symbol already held (`execution.py` labels it so). Missing
+# it, the walk never returned to flat once a leg was averaged in: run 111 read "cycle open
+# since 07 Sep" on a book that settled flat on the 15th (2026-09-18).
+_OPENS = {"BUY": 1, "AVG_BUY": 1, "SHORT": -1}
 _CLOSES = {"SELL": -1, "COVER": 1}
 
 
@@ -114,6 +117,46 @@ def cycle_info(txns: list[dict], underlying: str | None = None) -> dict:
         "realized_before": round(realized_before if is_open else realized, 2),
         "last": last,
     }
+
+
+def closed_legs(txns: list[dict], since: str | None) -> list[dict]:
+    """Option legs the run CLOSED in the current cycle — one row per closing fill at or
+    after ``since`` (the cycle's entry stamp, ``YYYY-MM-DDTHH:MM``) — for the positions
+    tables' closed rows. A leg that left the book still explains the book: its P&L is what
+    the cycle has banked, and the payoff drawn on the open legs alone reads ₹21k higher
+    than the cycle really stands (owner, 2026-09-18). Shared by the console
+    (`console_live`) and the run snapshot so both tables show the same rows."""
+    out: list[dict] = []
+    for t in txns:
+        act = str(t.get("action") or "").upper()
+        if act not in ("SELL", "COVER", "SETTLE"):
+            continue
+        when = str(t.get("date") or "")[:16].replace(" ", "T")
+        if since and when < since:
+            continue
+        sym = str(t.get("ticker") or "")
+        inst = parse_option(sym)
+        if inst is None:
+            continue
+        units = int(t.get("units") or 0)
+        lot = int(inst.lot_size or 1)
+        out.append(
+            {
+                "symbol": sym,
+                "right": inst.right,
+                "strike": float(inst.strike),
+                "expiry": inst.expiry.isoformat(),
+                "side": "S" if act == "COVER" else "B",
+                "lots": max(1, units // lot),
+                "units": units,
+                "entry": round(float(t.get("entry_premium") or 0.0), 2),
+                "exit": round(float(t.get("price") or 0.0), 2),
+                "pnl": round(float(t.get("profit") or 0.0), 2),
+                "at": when,
+                "action": act,
+            }
+        )
+    return out
 
 
 def realized_cumulative(txns: list[dict], stamps: list[datetime]) -> list[float]:
