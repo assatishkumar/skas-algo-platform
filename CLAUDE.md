@@ -1085,7 +1085,10 @@ template) is the phase-2 fix. No deploy path — there is no US broker.
   and the tick loop SWALLOWED both, so a hand-edited run ticked for weeks with a dead
   stop, on LIVE as on paper. A strategy's rule on a book it did not build is a different
   rule; it is not applied at all. The rail re-derives its legs from the PORTFOLIO every
-  slice (a second edit needs no sync), measures P&L from the lots' real fills, and runs
+  slice (a second edit needs no sync), measures the CYCLE's MTM — banked since the book
+  last went from flat to open (`LiveSession._cycle_realised`, the console's "cycle banked"
+  figure) + the open lots at their real fills; the open lots alone let run 31 book
+  "target" at a cycle P&L of ₹3k after two hand exits at −₹42,857 (2026-09-18) — and runs
   ONLY: a stop as `stop_pct` of the margin anchor (inherited from the paused strategy's
   own %-of-margin `stop_pct` where it has one — NEVER invented: a target or stop in
   manual mode is OPTIONAL, owner wording "you handle adjustments and exits", so an unset

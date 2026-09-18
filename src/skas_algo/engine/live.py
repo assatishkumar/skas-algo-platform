@@ -420,6 +420,19 @@ class LiveSession:
             return
         self._hand_over(ts, reason)
 
+    def _cycle_realised(self) -> float:
+        """What the CURRENT cycle has banked: realized since the book last went from flat
+        to open (`services/live_cycles.cycle_info`, the Live tile's and the console's
+        basis). The manual rail's target/stop measure MTM on this plus the open lots."""
+        from skas_algo.services.live_cycles import cycle_info
+
+        txns = list(self.transactions)
+        cyc = cycle_info(txns, None)
+        if not cyc.get("open"):
+            return 0.0
+        total = sum(float(t.get("profit") or 0.0) for t in txns)
+        return total - float(cyc.get("realized_before") or 0.0)
+
     def _hand_over(self, ts: date | datetime, reason: str) -> None:
         from skas_algo.strategies.manual_book import ManualBookStrategy
 
@@ -430,6 +443,7 @@ class LiveSession:
             paused, underlying=getattr(paused, "underlying", None), ts=ts, reason=reason,
             initial_capital=self.portfolio.cash + self.portfolio.invested_capital(),
         )
+        rail.realised_fn = self._cycle_realised
         self.paused_strategy = paused
         self.strategy = rail
         self.managed_by = "manual"
@@ -657,6 +671,7 @@ class LiveSession:
                 paused.load_state(state.get("paused_strategy") or {})
             rail = ManualBookStrategy(underlying=getattr(paused, "underlying", None))
             rail.load_state(state.get("strategy", {}))
+            rail.realised_fn = self._cycle_realised
             self.paused_strategy = paused
             self.strategy = rail
             self.managed_by = "manual"

@@ -16,7 +16,12 @@ to stop applying it and say so on every screen.
 This is never deployed directly (not in the registry): ``LiveSession._hand_over``
 installs it and ``load_state`` reinstalls it after a restart. It re-derives its legs from
 the PORTFOLIO on every slice, so a second manual edit needs no sync and can never corrupt
-it. P&L is measured from the lots' real fills. ``stop_pct == 0`` means NO STOP — never
+it. P&L is the CYCLE's MTM: what the cycle has already banked (the session's
+``realised_fn`` — realized since the book last went from flat to open, the console's
+"cycle banked" figure) plus the open lots marked from their real fills. Measuring the open
+lots alone let run 31 book "target" at a cycle P&L of ₹3k on 2026-09-18: the owner had
+exited two hedge lots by hand at −₹42,857, the survivors read +₹24k, and a ₹20,000 target
+armed on the console's ₹3,128 MTM fired on a number nobody was shown. ``stop_pct == 0`` means NO STOP — never
 invented: the platform must not place an order the owner did not ask for on a book they
 just took by hand — and the tile/console make that absence unmissable (``strategy_alert``).
 """
@@ -87,6 +92,9 @@ class ManualBookStrategy(OpenSettleGuard):
         self.margin_base: float | None = self.margin_anchor if self.margin_anchor > 0 else None
         self.margin_source: str = "manual" if self.margin_anchor > 0 else "pending"
         self.legs: list[dict] = []     # re-derived from the book each slice (display only)
+        # the cycle's realized so far, read from the SESSION (it owns the transaction log);
+        # None = no session behind this rail (a unit-tested rail measures the open lots alone)
+        self.realised_fn = None
         self.exited_at: str | None = None
         self.exit_reason: str | None = None
 
@@ -174,8 +182,18 @@ class ManualBookStrategy(OpenSettleGuard):
                         else "MIXED"})
         return out
 
+    def _cycle_realised(self) -> float:
+        if self.realised_fn is None:
+            return 0.0
+        try:
+            return float(self.realised_fn() or 0.0)
+        except Exception:  # a malformed log must never stop the rail from marking the book
+            return 0.0
+
     def _pnl(self, legs: list[dict], price_of) -> float | None:
-        total = 0.0
+        """The cycle's MTM: banked + the open lots at ``price_of``; None while a leg has no
+        print (hold — never decide on a book that cannot be marked)."""
+        total = self._cycle_realised()
         for leg in legs:
             try:
                 px = price_of(leg["symbol"])
@@ -245,6 +263,8 @@ class ManualBookStrategy(OpenSettleGuard):
             rules.append("No stop or target set (optional — Edit params or the console)")
         if self.time_exit is not None:
             rules.append(f"Square off at {self.time_exit.strftime('%H:%M')}")
+        if self.stop_amt > 0 or self.target_amt > 0 or self.stop_pct > 0 or self.target_pct > 0:
+            rules.append("MTM = the cycle's banked P&L + the open legs (the console's Cycle MTM)")
         rules.append("Expiry settles to intrinsic (engine)")
         return rules
 
@@ -254,6 +274,7 @@ class ManualBookStrategy(OpenSettleGuard):
                 "time_exit": self.time_exit.strftime("%H:%M") if self.time_exit else None,
                 "margin_base": self.margin_base, "margin_source": self.margin_source,
                 "no_stop": self.stop_pct <= 0 and self.stop_amt <= 0,
+                "cycle_realised": self._cycle_realised(),
                 "paused_strategy_id": self.paused_strategy_id,
                 "handover_at": self.handover_at, "handover_label": _when(self.handover_at),
                 "handover_reason": self.handover_reason,

@@ -304,3 +304,30 @@ def test_the_console_commit_stamps_the_ticket_limits_onto_the_request(monkeypatc
     n = c._apply_limits(closes, opens, {f"close:{CE}": 104.0, f"open:NIFTY|{EXP}|24600|PE": 30.0,
                                         "open:NOPE": 1.0})
     assert n == 2 and closes[0]["limit_price"] == 104.0 and opens[0]["limit_price"] == 30.0
+
+
+def test_the_rail_measures_the_cycles_mtm_not_the_open_lots_alone():
+    """Run 31, 2026-09-18: two hedge lots exited by hand at −₹42,857, the survivors +₹24k,
+    a ₹20,000 target armed on the console's ₹3,128 cycle MTM — and the rail booked
+    'target'. The rail's MTM is banked + open; a target the open lots alone would cross
+    must NOT fire while the cycle sits under it."""
+    sid, strategy = _families()[0]
+    sess = _session(strategy)
+    # the owner closes the wing (bought 20) at 5 by hand: −₹975 banked, the rail installs
+    sess.update_quotes({CE: 100.0, PE: 100.0, WING: 5.0})
+    sess.manual_order(TS, closes=[{"symbol": WING}])
+    rail = sess.strategy
+    assert isinstance(rail, ManualBookStrategy) and rail.realised_fn is not None
+    assert rail.rail_status()["cycle_realised"] == pytest.approx(-975.0, abs=60)   # gross, ± charges
+    rail.update(target_amt=6_000)
+    # shorts marked 100 → 50: open +₹6,500 ≥ 6,000, but the cycle is ≈ +₹5,525 → HOLD
+    sess.update_quotes({CE: 50.0, PE: 50.0})
+    assert sess.run_decision(datetime(2026, 1, 5, 10, 40)) == []
+    assert sess.portfolio.lot_symbols()
+    assert rail.strategy_pnl({CE: 50.0, PE: 50.0}) == pytest.approx(5_525.0, abs=60)
+    # 100 → 40: open +₹7,800, cycle ≈ +₹6,825 → the target fires on the CYCLE figure
+    sess.update_quotes({CE: 40.0, PE: 40.0})
+    events = sess.run_decision(datetime(2026, 1, 5, 10, 41))
+    assert events and all(e["exit_reason"] == "rail_target" for e in events)
+    assert not sess.portfolio.lot_symbols()
+    assert any("cycle" in r for r in rail.exit_rules())
