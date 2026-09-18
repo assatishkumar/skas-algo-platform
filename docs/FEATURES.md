@@ -1002,6 +1002,23 @@ Coverage: `tests/test_portfolio.py`, `test_portfolio_sync.py`, `test_portfolio_i
   ledger. Bundle computed on first open (background job, disk-cached); equity runs keep the
   candle-chart trade analysis.
 
+- **Options Console (`/console`, 2026-09-09 → 09-18).** One screen for trading a PAST
+  session by hand (replay: an option chain you click, a payoff, a risk rail, a minute
+  cursor with autoplay, presets, undo, bookmarks, save/load; sessions survive a restart)
+  or a RUNNING deployment (paper/live: the same DTO over the run's own chain and book, a
+  staged basket, an order ticket with LMT prices, the broker's available margin and a
+  hedge-exit warning, typed REAL to send — a commit hands the run to the manual rail).
+  Margin is labelled by source (manual anchor › Kite's today's-equivalent basket › the
+  SPAN-shaped model); the strip carries minute VIX, ATM IV, IV30 + a true IV rank, the
+  cycle range; "payoff on" draws a multi-expiry book at a chosen expiry; the what-if panel
+  prices candidate adjustments side by side. `services/options_console/` imports no order
+  path. Invariants: CLAUDE.md §8d; plan `docs/PLAN-options-console.md`.
+- **Simulator (`/simulator`, 2026-09-11).** Manual backtesting cycle by cycle in the
+  console, stored as an ordinary run: banked cycles, compounding equity, the standard
+  report, and per cycle the decision context of every action, the path (MAE/MFE), the
+  owner's why, counterfactuals, patterns across cycles, a Markdown dossier. §3 `manual_sim`;
+  CLAUDE.md §8e.
+
 React + React Router + React Query + Recharts + Tailwind. Desktop top-nav (Home / Backtest /
 Trade / Live / Docs / Research / Data / Brokers) and a mobile PWA bottom tab bar; light/dark
 theme. All data goes through `api/client.ts` (`/api/v1`) plus a live WebSocket feed.

@@ -2200,6 +2200,9 @@ export interface ConsoleStaged {
   export interface ConsoleTicket {
     rows: ConsoleTicketRow[]; net_cash: number; fill_basis: string; limit_orders: boolean;
     consequence?: string | null; // what Commit does to the RUN (handover / flat / already manual)
+    closes_hedge?: boolean;      // a long is sold while shorts stay — the survivors go naked
+    // the account's available margin at the broker (the run's adapter), null on a cache source
+    broker?: { available: number; used: number; broker: string; as_of: string } | null;
   }
 
 export interface ConsoleRisk {

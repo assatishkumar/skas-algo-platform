@@ -236,3 +236,37 @@ def test_a_pending_leg_can_be_toggled_and_each_pending_change_dropped_on_its_own
     assert [it["kind"] for it in c.staged["items"]] == ["add"]
     c.unstage("S1")                                           # 🗑 on the pending add
     assert c.staged is None and "S1" not in c.disabled
+
+
+def test_the_ticket_reads_the_brokers_available_margin_and_flags_a_hedge_exit(run):
+    """The ticket measured a post-order margin against the run's typed CAPITAL ("₹10.5L
+    short" of a number the RMS never sees). Now it carries the account's available
+    margin from the run's adapter, and flags a SELL-to-close of a long while shorts
+    stay — the hedge coming off that Zerodha's RMS prices naked (owner, 2026-09-18)."""
+    from types import SimpleNamespace
+
+    calls = []
+
+    class _Adapter:
+        def funds(self):
+            calls.append(1)
+            return SimpleNamespace(available=250_000.0, used=90_000.0)
+    run.quote_source = SimpleNamespace(adapter=_Adapter())
+    run.config.broker = "zerodha"
+    c = console_live.open_console(42)
+    long_leg = next(leg for leg in c.legs() if leg["side"] == "B")
+    c.stage(kind="exit", leg_id=long_leg["id"], lots=long_leg["lots"])
+    t = c.ticket()
+    assert t["broker"] == {"available": 250_000.0, "used": 90_000.0, "broker": "zerodha",
+                           "as_of": t["broker"]["as_of"]}
+    assert t["closes_hedge"] is True                     # a long sold, the short stays
+    c.ticket()
+    assert len(calls) == 1                               # cached, not a call per render
+    c.discard()
+    # closing the SHORT is not a hedge exit; a run with no adapter reports no funds
+    short = next(leg for leg in c.legs() if leg["side"] == "S")
+    c.stage(kind="exit", leg_id=short["id"], lots=1)
+    assert c.ticket()["closes_hedge"] is False
+    run.quote_source = None
+    c._funds_cache = None
+    assert c.ticket()["broker"] is None

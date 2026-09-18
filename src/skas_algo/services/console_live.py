@@ -402,6 +402,32 @@ class LiveConsole(AlertBook):
         return {"managed_by": managed_by, "handover": getattr(sess, "handover", None),
                 "rail": rail}
 
+    def broker_funds(self) -> dict | None:
+        """The account's AVAILABLE margin at the broker, from the run's own adapter
+        (`funds()` — Zerodha's equity-segment live balance; Dhan's fund limit), cached
+        30 s. None when the run has no broker session (a cache source). The ticket used to
+        measure a post-order margin against the run's typed CAPITAL, which said "₹10.5L
+        short" of a number that means nothing to the RMS (owner, 2026-09-18)."""
+        adapter = getattr(getattr(self.live, "quote_source", None), "adapter", None)
+        fn = getattr(adapter, "funds", None)
+        if fn is None:
+            return None
+        cached = getattr(self, "_funds_cache", None)
+        if cached and (datetime.now() - cached[0]).total_seconds() < 30:
+            return cached[1]
+        try:
+            f = fn()
+            out = {"available": float(getattr(f, "available", 0.0) or 0.0),
+                   "used": float(getattr(f, "used", 0.0) or 0.0),
+                   "broker": str(getattr(getattr(self.live, "config", None), "broker", "") or ""),
+                   "as_of": datetime.now().strftime("%H:%M:%S")}
+        except Exception as exc:
+            logger.warning("console: broker funds unavailable for run %s: %s",
+                           getattr(self.live, "run_id", "?"), exc)
+            out = None
+        self._funds_cache = (datetime.now(), out)
+        return out
+
     def consequence(self, closes: list[dict], opens: list[dict]) -> str | None:
         """What Commit does to the RUN, in one line, before the owner presses it (owner
         rule 2026-09-10: a hand-edit that leaves lots pauses the strategy)."""
@@ -1018,6 +1044,13 @@ class LiveConsole(AlertBook):
             "rows": rows,
             "net_cash": round(sum(r["cash"] for r in rows), 2),
             "consequence": self.consequence(closes, opens),
+            # a SELL to close a long while shorts stay = a hedge coming off: the RMS prices
+            # the survivors naked, and Zerodha rejects the exit if the account cannot carry
+            # them — exit the shorts first or the structure together (owner, 2026-09-18)
+            "closes_hedge": (any(r["role"] == "close" and r["action"] == "SELL" for r in rows)
+                             and any(leg["side"] == "S" for leg in legs.values()
+                                     if not any(c["symbol"] == leg["symbol"] for c in closes))),
+            "broker": self.broker_funds(),
             "fill_basis": (
                 "the run's LIMIT-at-touch ladder"
                 if self.mode == "live"

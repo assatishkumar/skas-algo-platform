@@ -415,3 +415,38 @@ is untouched (it must count everything).
 
 
 **Status (2026-09-10): SHIPPED** — see CLAUDE.md §1 "always hand over" and `tests/test_handover.py`.
+
+
+---
+---
+
+# Part 3 — The Simulator, the record and the coach (2026-09-11 → 2026-09-15, shipped)
+
+- **Simulator** (`/simulator`, `services/simulator.py`): a backtest whose decisions are the
+  owner's — an `Algo(strategy_id="manual_sim")` with ONE `AlgoRun` whose trade_log grows as
+  cycles are banked and whose metrics is the standard report; the ledger in
+  `AlgoRun.state["sim"]`. Owner decisions: flat-based cycles, compounding, hidden from
+  Runs, the Bank sheet prompts automatically. Console `?sim=<id>` autosaves the tape.
+- **The record** (owner: "log each and every detail… so Claude can analyze every
+  adjustment"): a decision context stamped on every action group (spot, DTE, VIX, ATM IV,
+  IV30 + rank, greeks, MTM, margin, payoff shape from `options_console/payoff.py`), the
+  undo trace (`session.discarded`), the cycle path (`cycle_path`: daily MTM, MAE/MFE, exit
+  vs best), actions labelled by shape with the owner's post-hoc `why`, alerts, and a
+  Markdown dossier (`GET /simulator/{id}/dossier`, `skas-algo sim-dossier`).
+- **The coach** (owner chose all of): the what-if panel (`options_console/whatif.py` —
+  candidates priced at the cursor: close / half / roll the TESTED short out, roll the
+  UNTESTED short in, match the tested side's premium, a wing on every naked short,
+  flatten; ranked by max loss with a tested-side buffer on every row), post-cycle
+  counterfactuals (stops / targets / trail / entry-only / each adjustment removed, over
+  the cycle's own tape), cross-cycle patterns (≥5 cycles), and a Claude review by hand
+  from the dossier. Deterministic arithmetic, never advice.
+- Also shipped in the same window: "payoff on" for multi-expiry books, opposite-side clicks
+  NET the contract, replay sessions written through to disk and rebuilt under the same id,
+  the broker's available margin + a hedge-exit warning on the live ticket (2026-09-18).
+- Invariants: CLAUDE.md §8d (console) and §8e (Simulator). Coverage:
+  `tests/test_options_console.py`, `tests/test_simulator.py`, `tests/test_console_live.py`.
+
+**Deferred by owner decision:** the mobile console screens, FINNIFTY (never captured), a
+SPAN replica (Kite's figure instead), re-centre / add-a-short what-if candidates, a rank
+toggle. **Open:** a `why` box on the OPEN cycle in the console (the API exists; the page
+annotates after banking), the console guide artifact catching up with the record and the coach.

@@ -597,9 +597,25 @@ function OrderTicket({ ticket, staged, risk, riskAfter, mNow, mBefore, isReal, r
               <div className="h-1.5 rounded" style={{ width: `${Math.max(0, Math.min(100, (100 * after) / (capital || 1)))}%`,
                 background: after > capital ? "var(--oc-neg)" : "var(--oc-accent)" }} />
             </div>
-            <div className="text-[10px] mt-1 tabular-nums" style={{ color: after > capital ? "var(--oc-neg)" : "var(--oc-faint)" }}>
-              {pctOf(after, capital)} of capital · {free >= 0 ? `${inr0(free)} free after` : `${inr0(-free)} SHORT of capital`}
+            {ticket.broker ? (() => {
+              const need = after - before;
+              const short = need - ticket.broker.available;
+              return (
+                <div className="text-[10.5px] mt-1 tabular-nums" style={{ color: short > 0 ? "var(--oc-neg)" : "var(--oc-pos)" }}>
+                  {short > 0 ? `INSUFFICIENT · short by ${inr0(short)}` : "sufficient"} · broker available {inr0(ticket.broker.available)}
+                  {need > 0 ? ` · this order needs +${inr0(need)}` : need < 0 ? ` · frees ${inr0(-need)}` : ""}
+                  <span style={{ color: "var(--oc-faint)" }}> · {ticket.broker.broker || "broker"} {ticket.broker.as_of}</span>
+                </div>
+              );
+            })() : null}
+            <div className="text-[10px] mt-1 tabular-nums" style={{ color: "var(--oc-faint)" }}>
+              {pctOf(after, capital)} of the run's capital · {free >= 0 ? `${inr0(free)} under it` : `${inr0(-free)} beyond it`}
             </div>
+            {ticket.closes_hedge && after > before && (
+              <div className="text-[10px] mt-1" style={{ color: "var(--oc-neg)" }}>
+                Closes a hedge: the shorts left behind need {inr0(after - before)} more margin. Zerodha rejects a hedge exit the account cannot carry — exit the shorts first, or the structure together.
+              </div>
+            )}
           </div>
           <div className="rounded-[8px] p-2.5 text-[11px] tabular-nums" style={{ background: "var(--oc-panel2)" }}>
             <div className="text-[9px] font-semibold uppercase tracking-[.06em]" style={{ color: "var(--oc-faint)" }}>Risk before → after</div>

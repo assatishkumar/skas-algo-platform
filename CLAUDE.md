@@ -1359,6 +1359,13 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   limits `"<role>:<symbol>"` (`ConsoleCommit.limits`, `LiveConsole._apply_limits`);
   `ticket.limit_orders` is True now. Coverage: the LIMIT block in
   `tests/test_live_broker.py`, the two limit tests in `tests/test_handover.py`.
+- **The live ticket reads the BROKER's available margin, not the run's capital
+  (2026-09-18).** `LiveConsole.broker_funds()` (the run adapter's `funds()`, 30 s cache)
+  rides on `ticket.broker`, and the page prints sufficient / short by ₹X against the
+  ORDER's margin increase — the old "₹10.5L SHORT of capital" measured against the typed
+  deploy capital, a number the RMS never sees. `ticket.closes_hedge` flags a SELL-to-close
+  of a long while shorts stay: the survivors are priced naked and Zerodha REJECTS a hedge
+  exit the account cannot carry — exit the shorts first or the structure together.
 - The track's "iv ›" jump (`next_iv_spike`, vol points) reads `iv_series()` — the ATM
   CE's last print solved per minute on the parity spot, cached per day+expiry.
 - The replay track's "next 1% move" reads a per-day spot series built in ONE pass over
