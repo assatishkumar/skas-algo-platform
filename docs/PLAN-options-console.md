@@ -448,5 +448,7 @@ is untouched (it must count everything).
 
 **Deferred by owner decision:** the mobile console screens, FINNIFTY (never captured), a
 SPAN replica (Kite's figure instead), re-centre / add-a-short what-if candidates, a rank
-toggle. **Open:** a `why` box on the OPEN cycle in the console (the API exists; the page
-annotates after banking), the console guide artifact catching up with the record and the coach.
+toggle. **Closed 2026-09-18:** the `why` box on the OPEN cycle in the console (an
+"actions this cycle" list under Positions in replay/SIM, each group with its box, saved through
+the session's annotate verb and carried into the bank) and the console guide artifact.
+Nothing on the original plan remains open; what is left is deferred by owner decision.

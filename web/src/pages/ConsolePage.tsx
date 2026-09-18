@@ -16,6 +16,7 @@ import type {
   ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleLiveRun, ConsoleTicket, ConsoleTicketRow, ConsolePreset, ConsoleWhatIf, ConsoleWhatIfCandidate, ConsoleProbe, ConsoleRisk,
   ConsoleState,
   SimOpenSpec,
+  ConsoleFill,
 } from "../types";
 import PayoffSvg, { toPayoffLegs } from "../components/console/PayoffSvg";
 import { buildLivePayoff } from "../lib/payoff";
@@ -334,6 +335,97 @@ function TrackChip({ children, onClick, disabled, title }: {
  *  replay, Apply trades all its legs as one action; Undo takes them all back. */
 /** The coach: candidate adjustments to the open book, priced at the cursor and measured
  *  with the rail's own calculators. It ranks by max loss and says so; it never picks. */
+/** The OPEN cycle's actions with a `why` box on each (the Simulator's record, written
+ *  while it is fresh instead of after banking): journal rows grouped by undo group,
+ *  labelled by shape, the owner's note saved through the session's annotate verb and
+ *  carried into the bank. Replay/SIM only — a deployment's tape is the run's. */
+function ActionsThisCycle({ journal, discarded, onAnnotate, busy, readOnly }: {
+  journal: ConsoleFill[]; discarded: { group: number; undone_at: string; rows: ConsoleFill[] }[];
+  onAnnotate: (group: number, why: string) => void; busy: boolean; readOnly: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Record<number, string>>({});
+  const groups = useMemo(() => {
+    const by = new Map<number, ConsoleFill[]>();
+    for (const r of journal) {
+      if (r.action === "NOOP" || r.group == null) continue;
+      if (!by.has(r.group)) by.set(r.group, []);
+      by.get(r.group)!.push(r);
+    }
+    const held = new Map<string, number>();
+    const out: { group: number; at: string; label: string; why: string | null; rows: ConsoleFill[] }[] = [];
+    for (const [g, rows] of by) {
+      const opens = rows.filter((r) => r.action === "BUY" || r.action === "SHORT");
+      const closes = rows.filter((r) => r.action === "SELL" || r.action === "COVER");
+      const wasFlat = [...held.values()].every((v) => Math.abs(v) < 1e-9);
+      for (const r of rows) {
+        const cur = held.get(r.symbol) ?? 0;
+        if (r.action === "BUY") held.set(r.symbol, cur + r.units);
+        else if (r.action === "SHORT") held.set(r.symbol, cur - r.units);
+        else if (r.action === "SETTLE") held.set(r.symbol, 0);
+        else held.set(r.symbol, cur - (cur > 0 ? r.units : -r.units));
+      }
+      const nowFlat = [...held.values()].every((v) => Math.abs(v) < 1e-9);
+      const right = (r: ConsoleFill) => r.symbol.split("|")[3];
+      let label = "add";
+      if (wasFlat && opens.length && !closes.length) label = "entry";
+      else if (opens.length && closes.length && opens.some((o) => closes.some((c) => right(c) === right(o)))) label = "roll";
+      else if (closes.length && !opens.length) label = nowFlat ? "exit" : "partial exit";
+      else if (opens.length && !closes.length && opens.every((r) => r.action === "BUY") && [...held.values()].some((v) => v < 0)) label = "hedge";
+      else if (opens.length && closes.length) label = "resize";
+      out.push({ group: g, at: rows[0].at, label, why: rows.find((r) => r.why)?.why ?? null, rows });
+    }
+    return out;
+  }, [journal]);
+  if (!groups.length) return null;
+  const missing = groups.filter((g) => !g.why).length;
+  return (
+    <div className="mt-2 pt-2" style={{ borderTop: "1px solid var(--oc-line)" }}>
+      <button type="button" onClick={() => setOpen((o) => !o)}
+        className="text-[10.5px] font-bold uppercase tracking-[.06em]"
+        style={{ color: "var(--oc-faint)" }}
+        title="this cycle's actions, each with a why box — the record the Simulator banks and the dossier prints">
+        {open ? "▾" : "▸"} actions this cycle · {groups.length}{missing && !readOnly ? ` · ${missing} without a why` : ""}
+      </button>
+      {open && (
+        <div className="mt-1 space-y-1.5 text-[11.5px]">
+          {groups.map((a) => (
+            <div key={a.group} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+              <span className="font-semibold w-[76px]" style={{ color: "var(--oc-ink)" }}>{a.label}</span>
+              <span className="tabular-nums" style={{ color: "var(--oc-muted)" }}>{a.at.slice(11, 16)}</span>
+              <span className="tabular-nums" style={{ color: "var(--oc-muted)" }}>
+                {a.rows.map((r) => `${r.action} ${r.units} ${r.symbol.split("|").slice(2).join(" ")} @ ${r.price}`).join(" · ")}
+              </span>
+              {readOnly ? (a.why ? <span className="italic">— {a.why}</span> : null) : (
+                <span className="flex-1 min-w-[220px] flex gap-1.5">
+                  <input className="flex-1 min-w-0 rounded-[4px] bg-transparent px-1.5 py-0.5 text-[11.5px]"
+                    style={{ border: "1px solid var(--oc-line)", color: "var(--oc-ink)" }}
+                    placeholder="why — what you saw and what you meant to do"
+                    value={draft[a.group] ?? a.why ?? ""}
+                    onChange={(e) => setDraft({ ...draft, [a.group]: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (draft[a.group] ?? "") !== (a.why ?? "")) onAnnotate(a.group, draft[a.group] ?? "");
+                      e.stopPropagation();   // the console's own key map must not see the typing
+                    }} />
+                  {(draft[a.group] ?? a.why ?? "") !== (a.why ?? "") && (
+                    <button type="button" className="text-[11px] underline" disabled={busy}
+                      onClick={() => onAnnotate(a.group, draft[a.group] ?? "")}>save</button>
+                  )}
+                </span>
+              )}
+            </div>
+          ))}
+          {discarded.length > 0 && (
+            <div style={{ color: "var(--oc-faint)" }}>
+              taken back: {discarded.map((x) => `${x.rows.map((r) => `${r.action} ${r.units} ${r.symbol.split("|").slice(2).join(" ")}`).join(", ")} (undone ${x.undone_at.slice(11, 16)})`).join(" · ")}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WhatIfPanel({ data, loading, current, onApply, busy }: {
   data: ConsoleWhatIf | undefined; loading: boolean; current: { max_loss: number | null; margin: number | null } | null;
   onApply: (c: ConsoleWhatIfCandidate) => void; busy: boolean;
@@ -1381,6 +1473,11 @@ export default function ConsolePage() {
     onSuccess: (s) => { setState(s); setError(null); },
     onError: (e: Error) => setError(e.message),
   });
+  const annotate = useMutation({
+    mutationFn: (body: { group: number; why: string }) => call((id) => api.consoleAnnotate(id, body.group, body.why)),
+    onSuccess: (s) => { setState(s); setError(null); },
+    onError: (e: Error) => setError(e.message),
+  });
   const applyPreset = useMutation({
     mutationFn: (body: { preset: string; lots: number }) =>
       call((id) => api.consoleApplyPreset(id, body)),
@@ -2120,6 +2217,11 @@ export default function ConsolePage() {
                 </tbody>
               </table>
               </div>
+            )}
+            {!isLive && state && (
+              <ActionsThisCycle journal={state.journal} discarded={state.discarded ?? []}
+                onAnnotate={(group, why) => annotate.mutate({ group, why })}
+                busy={annotate.isPending} readOnly={simReadOnly} />
             )}
           </Panel>
   );
