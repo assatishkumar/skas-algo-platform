@@ -763,7 +763,7 @@ export const STRATEGIES: Rule[] = [
       "Opposite confirmed flip → exit and reverse. Roll 5 days before expiry into the next month, same side.",
     ],
     risk:
-      "The base the % rules read is the manual margin anchor — ₹1,00,000 per lot-set by default — because a hedged long condor's real broker margin is roughly the debit (~₹4-5k), and 2% of that fires on noise; the deck's ~10%/month on an ~₹11k max profit implies about ₹1L of capital per lot. The deck's own probability of profit is 26–31%: most cycles lose part of the debit and the edge has to come from the breakout rebuilds, the profit lock and the half-loss stop. Deck claim: 2025 +49%, 2026 YTD +23% — NOT yet reproduced here; replay on the 1-min store first, then paper.",
+      "The base the % rules read is the manual margin anchor — ₹1,00,000 per lot-set by default — because a hedged long condor's real broker margin is roughly the debit (~₹4-5k), and 2% of that fires on noise; the deck's ~10%/month on an ~₹11k max profit implies about ₹1L of capital per lot. The deck's own probability of profit is 26–31%: most cycles lose part of the debit and the edge has to come from the breakout rebuilds, the profit lock and the half-loss stop. Deck claim: 2025 +49%, 2026 YTD +23% — NOT reproduced: the first 5y store replay (Aug-2021 → Sep-2026, 1 lot, ₹1L anchor, run #341) made −₹22.8k on 76 cycles (29% win, charges ₹23k ≈ the whole loss; put condors +₹4.8k at 40% win, call condors −₹27.6k at 17% win; the half-loss stop closed 35 of 76). 300-wide (#342) −₹47.8k, no stop (#343) −₹31.2k, 300-wide without the lock (#344) −₹48.6k. Study it before deploying.",
   },
   {
     id: "straddle_btst",
@@ -1092,7 +1092,7 @@ export const META: Record<string, Meta> = {
     group: "Directional tilt", biasKind: "bull",
     facts: [["Bias", "With the daily SuperTrend"], ["Instrument", "NIFTY monthly"],
             ["Structure", "Long CE or PE condor (net debit)"], ["Lock", "+2% then +1% steps: wings walk in"],
-            ["Stop", "−50% of max loss"], ["Roll", "5 days before expiry"]],
+            ["Stop", "−50% of max loss"], ["Verdict", "5y replay negative (−₹22.8k, #341)"]],
     deployNote: "Replays on the 1-min store; deploys from the Deploy page (broker quotes for the daily bars). Not forward-tested — paper first, and set the margin anchor.",
     deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
   },

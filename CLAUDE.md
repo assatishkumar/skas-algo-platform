@@ -723,7 +723,9 @@ template) is the phase-2 fix. No deploy path — there is no US broker.
   side) — the walked wing costs more, so the current payoff's near breakeven moves AWAY
   from spot and recomputing it fired the breach rule on the next sample with spot unmoved.
   The stop (−50% of the ENTRY max loss) is always armed; the breach-after-profit rule is
-  the earlier exit on the profitable path. Coverage: `tests/test_directional_condor.py`.
+  the earlier exit on the profitable path. **First 5y replay (#341): −₹22.8k on 76 cycles,
+  charges ≈ the loss, calls lose / puts flat; 300-wide, no-stop, no-lock (#342-#344) worse —
+  the deck's +49% is not reproduced.** Coverage: `tests/test_directional_condor.py`.
 - **call_put_ratio_expiry** (expiry-day-only 1:3 premium-ratio, NIFTY Tue / SENSEX Thu):
   buy ATM straddle 09:20-09:27, sell 3 lots/side at the strikes trading nearest ⅓ of each
   ATM premium (LIVE-chain lookup; >30% tolerance miss → skip the day, `traded_day` guard);

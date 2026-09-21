@@ -537,7 +537,10 @@ are validated paper-first.
   deploy card** — a hedged long condor's broker margin is ≈ the debit (~₹4-5k), so "2% of
   margin" would be ~₹90; 0 = the broker margin frozen at entry (ctor, §1). Subclasses the
   delta base (`phase="condor"`, adjustments inert). Replays on the 1-min store; generic
-  deploy path, broker source. NOT forward-tested; the deck's +49% (2025) unreproduced.
+  deploy path, broker source. **First 5y store replay (run #341, 1 lot, ₹1L anchor): −₹22.8k
+  on 76 cycles, 29% win, charges ₹23k ≈ the whole loss — call condors −₹27.6k (17% win),
+  put condors +₹4.8k (40%); 300-wide, no-stop and no-lock variants (#342-#344) all worse.**
+  The deck's +49% (2025) is not reproduced; not forward-tested.
 - **`straddle_btst` — BTST long ATM straddle.** BUY the ATM CE+PE at 15:20, SELL both at the
   next session's 09:20 — a debit position betting overnight gaps outrun overnight theta.
   **Tested and negative** (2y NIFTY: −₹66.5k); kept for study, not recommended.
