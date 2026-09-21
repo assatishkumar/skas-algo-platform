@@ -1009,3 +1009,23 @@ def test_a_custom_symbol_run_follows_nothing():
         assert live.config.symbols == ["AAA"]
     finally:
         manager.stop(live.run_id)
+
+
+def test_the_editable_surface_walks_the_mro_so_a_subclass_offers_its_bases_knobs():
+    """iron_fly_monthly's own __init__ is (*args, ironfly_adjust=True, **kwargs): the
+    delta base's mark_basis / profit_target_pct / margin_per_set sat behind **kwargs and
+    run 209's Edit-params modal offered ONE knob (owner, 2026-09-21)."""
+    from unittest.mock import MagicMock
+
+    from skas_algo.live.manager import LiveRun
+
+    run = MagicMock(spec=LiveRun)
+    run.session = MagicMock(managed_by="strategy")
+    run.config = MagicMock(strategy_id="iron_fly_monthly", params={"lots": 10})
+    run._PARAM_EDIT_BLOCKLIST = LiveRun._PARAM_EDIT_BLOCKLIST
+    out = LiveRun._editable_param_surface(run)
+    ep = out["editable_params"]
+    assert ep["ironfly_adjust"] is True                 # the subclass's own default wins
+    assert ep["mark_basis"] == "ltp" and "mark_basis" in out["param_defaulted"]
+    assert "profit_target_pct" in ep and "margin_per_set" in ep
+    assert ep["lots"] == 10 and "lots" not in out["param_defaulted"]

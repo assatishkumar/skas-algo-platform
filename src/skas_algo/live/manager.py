@@ -1428,6 +1428,25 @@ class LiveRun:
 
         from skas_algo.strategies.registry import get_strategy
 
+        def _ctor_parameters(factory) -> dict:
+            """Every explicit ctor knob ACROSS THE MRO — a subclass signature like
+            `IronFlyMonthlyStrategy.__init__(self, *args, ironfly_adjust=True, **kwargs)`
+            hides the base's mark_basis / profit_target_pct / margin_per_set behind
+            `**kwargs`, and run 209's Edit-params modal offered ONE knob (owner,
+            2026-09-21). The subclass's own default wins where both declare a name."""
+            if not isinstance(factory, type):
+                return dict(inspect.signature(factory).parameters)
+            out: dict = {}
+            for klass in reversed(factory.__mro__):
+                init = klass.__dict__.get("__init__")
+                if init is None:
+                    continue
+                try:
+                    out.update(inspect.signature(init).parameters)
+                except (TypeError, ValueError):  # pragma: no cover - a C-level __init__
+                    continue
+            return out
+
         if getattr(self.session, "managed_by", "strategy") == "manual":
             r = self.session.strategy.rail_status()
             return {"editable_params": {"stop_pct": r["stop_pct"], "target_pct": r["target_pct"],
@@ -1438,12 +1457,12 @@ class LiveRun:
                     "param_defaulted": []}
         try:
             factory = get_strategy(self.config.strategy_id)
-            sig = inspect.signature(factory.__init__ if isinstance(factory, type) else factory)
+            params = _ctor_parameters(factory)
         except Exception:  # pragma: no cover - unknown/unsignaturable strategy
             return {"editable_params": dict(self.config.params), "param_defaulted": []}
         stored = self.config.params
         vals, defaulted = {}, []
-        for name, p in sig.parameters.items():
+        for name, p in params.items():
             if name in ("self", "universe", "initial_capital"):
                 continue
             if p.kind in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL):

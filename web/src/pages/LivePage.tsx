@@ -23,6 +23,7 @@ import WeeklyStraddlePanel from "../components/WeeklyStraddlePanel";
 import { formatInr } from "../lib/format";
 import { marginDisplay } from "../lib/margin";
 import { isOptionsStrategy, PARAM_ENUMS } from "../lib/params";
+import { DEPLOY_REGISTRY, type DeployField } from "../lib/deploy/registry";
 import { LIVE_CATEGORIES, liveCategoryOf } from "../lib/strategyMeta";
 import { compareOptionSymbol, formatOptionSymbol } from "../lib/symbol";
 import { KebabMenu, Sparkline, Segmented, Tag, type MenuItem } from "../components/redesign";
@@ -1783,6 +1784,15 @@ function DeploymentTile({
 // Params the server refuses to hot-edit (infra — stop + redeploy to change). Mirrored
 // client-side so the panel doesn't offer inputs that would only 422. Arrays/objects
 // (symbols, entry_legs…) are also hidden — only scalar knobs are editable in place.
+/** What a knob MEANS, from the deploy registry (one copy of every label, hint and option
+ *  list): the Edit-params modal used to print raw ctor names — "mark_basis = exit" says
+ *  nothing about what it does (owner, 2026-09-21). First declaration wins. */
+const FIELD_META: Record<string, DeployField> = (() => {
+  const out: Record<string, DeployField> = {};
+  for (const spec of DEPLOY_REGISTRY) for (const fld of spec.fields ?? []) if (!(fld.param in out)) out[fld.param] = fld;
+  return out;
+})();
+
 const PARAM_EDIT_HIDDEN = new Set([
   "strategy_id", "underlying", "symbols", "instrument_class", "mode", "quote_source",
   "broker_account_id", "name", "notes", "auto", "capital", "data_basis", "lookback",
@@ -2025,25 +2035,29 @@ function EditParamsPanel({ dep, busy, onClose, onSave }: {
           {entries.map(([k, v]) => {
             const cur = k in edits ? edits[k] : String(v);
             const dirty = k in edits && edits[k] !== String(v);
+            const meta = FIELD_META[k];
+            const optionList: { value: string; label: string }[] | null =
+              typeof v === "boolean" ? [{ value: "true", label: "true" }, { value: "false", label: "false" }]
+              : meta?.options ? meta.options
+              : PARAM_ENUMS[k] ? PARAM_ENUMS[k].map((o) => ({ value: o, label: o }))
+              : null;
+            // keep a legacy/off-list current value selectable, never blank it out
+            const opts = optionList && !optionList.some((o) => o.value === String(v))
+              ? [{ value: String(v), label: String(v) }, ...optionList] : optionList;
             return (
-              <label key={k} className="flex items-center justify-between gap-2">
-                <span className={`truncate ${dirty ? "text-[var(--accent-deep)] font-medium" : "text-[var(--muted)]"}`}
-                  title={defaulted.has(k) ? `${k} — this run never set it; showing the strategy default` : k}>
-                  {k}{defaulted.has(k) && <span className="ml-1 text-[var(--faint)]">·default</span>}
+              <label key={k} className={`flex items-center justify-between gap-2 ${meta?.options ? "sm:col-span-2" : ""}`}>
+                <span className={`min-w-0 ${dirty ? "text-[var(--accent-deep)] font-medium" : "text-[var(--muted)]"}`}
+                  title={`${k}${defaulted.has(k) ? " — this run never set it; showing the strategy default" : ""}${meta?.hint ? `\n${meta.hint}` : ""}`}>
+                  <span className="truncate block">{meta?.label ?? k}{defaulted.has(k) && <span className="ml-1 text-[var(--faint)]">·default</span>}</span>
+                  {meta?.label && <span className="block text-[10.5px] text-[var(--faint)] truncate">{k}{meta.hint ? ` · ${meta.hint}` : ""}</span>}
                 </span>
-                {typeof v === "boolean" || PARAM_ENUMS[k] ? (
+                {opts ? (
                   <select
-                    className={`rounded bg-[var(--card)] border px-1.5 py-0.5 ${dirty ? "border-[var(--accent-deep)]" : "border-[var(--field-border)]"}`}
+                    className={`max-w-[60%] rounded bg-[var(--card)] border px-1.5 py-0.5 ${dirty ? "border-[var(--accent-deep)]" : "border-[var(--field-border)]"}`}
                     value={cur}
                     onChange={(e) => setEdits((s) => ({ ...s, [k]: e.target.value }))}>
-                    {(typeof v === "boolean"
-                      ? ["true", "false"]
-                      // keep a legacy/off-list current value selectable, never blank it out
-                      : PARAM_ENUMS[k].includes(String(v))
-                        ? PARAM_ENUMS[k]
-                        : [String(v), ...PARAM_ENUMS[k]]
-                    ).map((opt) => (
-                      <option key={opt} value={opt}>{opt}</option>
+                    {opts.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </select>
                 ) : (

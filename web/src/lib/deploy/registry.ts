@@ -112,12 +112,12 @@ const FORCE = f("force_entry", "Force entry now", "toggle", false,
 /** Which prices the %-target/stop are read on (owner 2026-09-07). "exit" = the real fills as
  *  the entry, longs marked at the bid and shorts at the ask — what an exit would fetch NOW.
  *  The ctor keeps "ltp" (§1) so a running deploy is unchanged until it is hot-edited. */
-const MARK_BASIS = f("mark_basis", "P&L marks", "select", "exit", {
+const MARK_BASIS = f("mark_basis", "Target & stop read prices as", "select", "exit", {
   options: [
-    { value: "exit", label: "Exit prices — real fills, longs at bid, shorts at ask" },
-    { value: "ltp", label: "Last traded price (the historical basis)" },
+    { value: "exit", label: "what an exit would fetch now — real fills as the entry, longs at the bid, shorts at the ask (recommended)" },
+    { value: "ltp", label: "last traded price — stale on thin contracts; can book a 'target' the exit then loses" },
   ],
-  hint: "on \"exit\" a +3% reading means +3% if you hit the exit now; paper run 30 booked a +3% target on LTP marks that the book realised as −₹9,765",
+  hint: "on \"exit\" a +3% reading means +3% if you exit now. On \"ltp\" paper run 30 booked a +3% target that realised −₹9,765, and run 209 (SENSEX) a target on prints an hour old that realised −₹27,280.",
 });
 
 const MARGIN_PER_SET = (def: number, extra?: string): DeployField =>
