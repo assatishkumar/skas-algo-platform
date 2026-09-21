@@ -198,7 +198,7 @@ def test_every_family_takes_the_flag_and_defaults_to_exit():
                 "intraday_strangle_combo", "custom_options", "supertrend_spread",
                 "donchian_strangle_monthly", "delta_neutral_monthly", "iron_fly_monthly",
                 "monthly_butterfly", "fair_value_calendar", "volcano_calendar",
-                "double_diagonal_calendar", "put_condor"):
+                "double_diagonal_calendar", "put_condor", "directional_condor"):
         cls = get_strategy(sid)
         assert cls(**kw, **extra.get(sid, {})).mark_basis == "exit", sid
         assert cls(mark_basis="ltp", **kw, **extra.get(sid, {})).mark_basis == "ltp", sid

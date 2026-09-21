@@ -194,6 +194,60 @@ export const V2_REGISTRY: Record<string, StrategyFormSpec> = {
     ],
   },
 
+  directional_condor: {
+    id: "directional_condor",
+    bases: ["intraday"],
+    underlyings: { intraday: ["NIFTY"], eod: NONE },
+    sizing: "intradayHarness",
+    monthlyCycle: true,
+    note: "The 'Biased Condor' (owner deck 2026-09-21): a ONE-SIDED LONG condor for a DEBIT in "
+      + "the direction of the daily SuperTrend(11, 2.9) — calls when green, puts when red. K1 is "
+      + "the first OTM strike on the 100 grid, the three segments are width_pct of spot rounded to "
+      + "the grid (1% ≈ 200 today; 1.25% → 300; the deck's 250 is not on the grid). Enters at "
+      + "09:30 the session after a CONFIRMED flip and WAITS inside a trend otherwise (force to "
+      + "take the current side). The profit lock and the breakeven rules are % of the manual "
+      + "margin anchor (₹1L/lot-set — the broker margin of a hedged long condor is ≈ the debit, "
+      + "so 2% of it would be ~₹90); the stop is % of the entry max loss.",
+    entry: {
+      frequency: "monthly",
+      frequencyHint: "on a confirmed daily SuperTrend flip, 09:30 the next session; same side rebuilds on a breakout",
+      fields: [
+        f("st_period", "SUPERTREND PERIOD", "number", 11),
+        f("st_multiplier", "SUPERTREND MULTIPLIER", "number", 2.9, { step: "any" }),
+        f("confirm_bars", "CONFIRM BARS", "number", 1,
+          { hint: "settled daily bars in the new direction AFTER the flip bar" }),
+        f("width_pct", "SEGMENT WIDTH (% OF SPOT)", "number", 1, { step: "any",
+          hint: "each of the three strike gaps, rounded to the 100 grid" }),
+        TIME("entry_time", "ENTRY TIME", "09:30"),
+        f("force_entry", "FORCE ENTRY", "toggle", false,
+          { hint: "take the CURRENT SuperTrend side on the first day instead of waiting for a flip" }),
+      ],
+    },
+    exit: {
+      basisNote: "lock / breach rules: % of the manual margin anchor (or the entry margin when 0); "
+        + "the stop: % of the entry max loss (the debit)",
+      fields: [
+        f("lock_start_pct", "PROFIT LOCK FROM (% OF BASE)", "number", 2, { step: "any",
+          hint: "past this, both long wings roll one strike toward their short" }),
+        f("lock_step_pct", "LOCK STEP (% OF BASE)", "number", 1, { step: "any",
+          hint: "every further step walks the wings in again (never within one step of the short)" }),
+        f("half_loss_pct", "STOP (% OF MAX LOSS)", "number", 50, { step: "any",
+          hint: "the deck's 'exit at half the visible loss'; 0 = off" }),
+        f("target_pct", "FLAT TARGET (% OF BASE)", "number", 0, { step: "any",
+          hint: "0 = off — the deck has no flat target" }),
+        f("roll_days_before", "ROLL DAYS BEFORE EXPIRY", "number", 5),
+        f("margin_per_set", "MARGIN ANCHOR / LOT-SET (₹)", "number", 100000, { step: "any",
+          hint: "what the lock/breach % rules read. 0 = the broker margin frozen at entry (≈ the debit for a hedged long condor)" }),
+        ...cadenceFields("1min", "1min", "15:20"),
+      ],
+    },
+    extras: [
+      f("expiry_switch_day", "SWITCH TO NEXT MONTH FROM DAY", "number", 15),
+      f("min_leg_oi", "MIN LEG OI", "number", 1),
+      FIFTY,
+    ],
+  },
+
   straddle_btst: {
     id: "straddle_btst",
     bases: ["intraday"],

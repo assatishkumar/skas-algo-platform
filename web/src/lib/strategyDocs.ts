@@ -740,6 +740,32 @@ export const STRATEGIES: Rule[] = [
       "The worst case is known before you enter: the debit. Measured on the 1-min store (58 monthly cycles, Aug-2021 → Jul-2026, unadjusted, held to expiry, 1 lot): 24% hit rate, +₹558/cycle — a mildly positive lottery, three small losses for one large win. The 5y sweep favoured target-only exits with NO adjustments. Backtest-only for now: the deploy route is deliberately deferred.",
   },
   {
+    id: "directional_condor",
+    name: "Directional Condor (daily SuperTrend)",
+    kind: "Options",
+    bias: "Follows the daily trend · defined-risk debit",
+    summary:
+      "The 'Biased Condor' (owner deck, 2026-09-21): a ONE-SIDED LONG condor bought for a debit in the direction of the daily SuperTrend(11, 2.9) — a call condor above spot when it is green, a put condor below spot when it is red. Max loss is the debit paid; max profit is the segment width minus the debit, on the plateau between the two shorts. The deck's samples: bull B24350/S24600/S24850/B25100 at 24,299 → +₹11,661 / −₹4,589; bear B23900/S23600/S23300/B23000 at 23,981 → +₹15,814 / −₹3,685. The deck calls it an iron condor; it is not — all four legs sit on one side.",
+    structure: [
+      "K1 = the first OTM strike on the 100 grid; then SELL at K1 + w, SELL at K1 + 2w, BUY at K1 + 3w (mirrored downward for puts). w = width_pct (1%) of spot rounded to the grid — 1% ≈ 200 today, 1.25% → 300; the deck's 250 is not representable.",
+      "Buy → Sell → Sell → Buy on the monthly expiry (current month before the 15th, else next; never inside the roll window). Longs are placed first.",
+      "Breakevens: K1 + debit (near) and K4 − debit (far). Between them the structure pays; past the far one it gives the profit back.",
+    ],
+    entry: [
+      "At 09:30 the session after a CONFIRMED daily flip (confirm_bars settled bars in the new direction after the flip bar). The SuperTrend reads SETTLED daily bars only — never the forming one.",
+      "A fresh deploy inside a trend WAITS for the next flip. Force entry takes the current side.",
+      "After a profit-lock exit or the stop it stays flat until the NEXT flip; only a same-side breakout past the far breakeven rebuilds at once, from the new spot.",
+    ],
+    exit: [
+      "Profit lock: once the cycle shows +lock_start_pct (2%) of the base, and at every further +lock_step_pct (1%), BOTH long wings roll one strike toward their short (never within one step of it) — the closed wing's profit is banked.",
+      "In profit, then reversal: spot had crossed the near breakeven, the cycle showed ≥ 2% of the base, and spot comes back through it → exit and keep what is showing.",
+      "Straight reversal: stop at −half_loss_pct (50%) of the entry max loss — the deck's 'exit at half the visible loss'.",
+      "Opposite confirmed flip → exit and reverse. Roll 5 days before expiry into the next month, same side.",
+    ],
+    risk:
+      "The base the % rules read is the manual margin anchor — ₹1,00,000 per lot-set by default — because a hedged long condor's real broker margin is roughly the debit (~₹4-5k), and 2% of that fires on noise; the deck's ~10%/month on an ~₹11k max profit implies about ₹1L of capital per lot. The deck's own probability of profit is 26–31%: most cycles lose part of the debit and the edge has to come from the breakout rebuilds, the profit lock and the half-loss stop. Deck claim: 2025 +49%, 2026 YTD +23% — NOT yet reproduced here; replay on the 1-min store first, then paper.",
+  },
+  {
     id: "straddle_btst",
     name: "Straddle BTST (overnight long)",
     kind: "Options",
@@ -1060,6 +1086,14 @@ export const META: Record<string, Meta> = {
             ["Structure", "Long put condor (net debit)"], ["Max loss", "The debit (~₹2k/lot)"],
             ["Exits", "% of MAX LOSS"], ["Entry", "1st trading day of the month"]],
     deployNote: "Backtest-only for now — the deploy route is deliberately deferred until the adjustment policy is settled.",
+    deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
+  directional_condor: {
+    group: "Directional tilt", biasKind: "bull",
+    facts: [["Bias", "With the daily SuperTrend"], ["Instrument", "NIFTY monthly"],
+            ["Structure", "Long CE or PE condor (net debit)"], ["Lock", "+2% then +1% steps: wings walk in"],
+            ["Stop", "−50% of max loss"], ["Roll", "5 days before expiry"]],
+    deployNote: "Replays on the 1-min store; deploys from the Deploy page (broker quotes for the daily bars). Not forward-tested — paper first, and set the margin anchor.",
     deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
   },
   straddle_btst: {

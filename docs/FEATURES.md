@@ -45,7 +45,7 @@ live. The invariant is guarded by golden tests (`tests/test_sst_parity.py`,
 
 ## 3. Strategy catalog
 
-Strategies register in `strategies/registry.py` (38 IDs across 35 files) and onboard there,
+Strategies register in `strategies/registry.py` (39 IDs across 36 files) and onboard there,
 never by editing the engine. `intraday=True` means "decide every tick"; otherwise the run
 decides once per day at a set time. "Backtest" notes whether a strategy runs the FULL shared
 engine, a dedicated Black-Scholes service, or is deploy-only.
@@ -519,6 +519,25 @@ are validated paper-first.
   independently switchable (`down_breach_action`: roll the top long / recenter / none;
   `loss_repair`: roll the lower short up / none) — the 5y sweep favoured target-only exits with
   NO adjustments (best OOS). Backtest-only for now (deploy route deliberately deferred).
+- **`directional_condor` — the "Biased Condor": a one-sided LONG condor on the daily
+  SuperTrend (owner deck 2026-09-21).** SuperTrend(11, 2.9) on NIFTY's SETTLED daily bars
+  (the ema21 `set_daily_bars_fn` provider — broker-first live, cache + forming bar in the
+  replay, the forming row never an input): green → a CALL condor above spot, red → a PUT
+  condor below. K1 = the first OTM 100-strike, then S at K1+w / S at K1+2w / B at K1+3w
+  with w = `width_pct` (1%) of spot rounded to the grid; Buy → Sell → Sell → Buy on the
+  monthly (current month before the 15th else next, never inside the roll window). Enters
+  09:30 the session after a CONFIRMED flip (`confirm_bars`); a fresh deploy inside a trend
+  WAITS for the next flip unless forced. Management: a profit lock (past +2% of the base and
+  every further +1%, BOTH long wings roll one strike toward their short, never within one
+  step); a same-side breakout past the far breakeven → exit and rebuild from the new spot
+  next slice; in profit then back through the near breakeven → exit and stay flat until
+  the next flip; the stop at −50% of the entry max loss (the deck's "half the visible
+  loss"); an opposite flip → exit and reverse; roll 5 days before expiry. **The base the %
+  rules read is the `margin_per_set` MANUAL ANCHOR, ₹1,00,000/lot-set on the form and the
+  deploy card** — a hedged long condor's broker margin is ≈ the debit (~₹4-5k), so "2% of
+  margin" would be ~₹90; 0 = the broker margin frozen at entry (ctor, §1). Subclasses the
+  delta base (`phase="condor"`, adjustments inert). Replays on the 1-min store; generic
+  deploy path, broker source. NOT forward-tested; the deck's +49% (2025) unreproduced.
 - **`straddle_btst` — BTST long ATM straddle.** BUY the ATM CE+PE at 15:20, SELL both at the
   next session's 09:20 — a debit position betting overnight gaps outrun overnight theta.
   **Tested and negative** (2y NIFTY: −₹66.5k); kept for study, not recommended.

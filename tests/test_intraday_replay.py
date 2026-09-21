@@ -396,6 +396,23 @@ def _monthly_day(day, spot=24000.0, exp="2026-08-25", prem=200.0):
     return pd.DataFrame(rows, columns=store.COLUMNS)
 
 
+def _convex_monthly_day(day, spot=24000.0, exp="2026-08-25", prem=250.0):
+    """A monthly chain whose OTM premiums decay GEOMETRICALLY (ITM carry intrinsic) — the
+    convex shape a real chain has, so a long condor is a genuine debit."""
+    minutes = [(9, m) for m in range(15, 60, 5)] + [(h, m) for h in (10, 11, 12, 13, 14)
+                                                    for m in range(0, 60, 5)] + \
+              [(15, m) for m in range(0, 30, 5)]
+    rows = []
+    for k in range(int(spot - 2000), int(spot + 2100), 100):
+        ce = prem * (0.85 ** (max(k - spot, 0.0) / 100.0)) + max(spot - k, 0.0)
+        pe = prem * (0.85 ** (max(spot - k, 0.0) / 100.0)) + max(k - spot, 0.0)
+        for i, (hh, mm) in enumerate(minutes):
+            decay = i * 0.05
+            rows += _leg_rows(day, k, "CE", {(hh, mm): round(max(ce - decay, 1.0), 2)}, exp)
+            rows += _leg_rows(day, k, "PE", {(hh, mm): round(max(pe - decay, 1.0), 2)}, exp)
+    return pd.DataFrame(rows, columns=store.COLUMNS)
+
+
 def test_hni_weekly_replays_on_the_store():
     """The positional family runs on the 1-min store (2026-07-18): hni enters its 1-3-2
     tent at entry_time on the ~8-DTE weekly, margin freezes off the harness push, and the
@@ -498,6 +515,44 @@ def test_ema21_bands_use_forming_bar_not_settled(monkeypatch):
     for t in out["trades"]:
         assert not t["date"].startswith("2026-07-13 15:2") or t["price"] < 5000, \
             "settled poison bar leaked into the bands"
+    assert "metrics" in out["report"]
+
+
+def test_directional_condor_replays_on_the_store_off_settled_daily_bars(monkeypatch):
+    """The biased condor on the store: the daily SuperTrend comes through the ema21 daily-
+    bars hook (settled bars only), a forced run takes the CURRENT side at 09:30 and places
+    the four legs on the 100 grid — two longs, two shorts, equal segments — with the
+    harness margin push spread over the two shorts (`_SHORT_UNITS_PER_SET` = 2)."""
+    from skas_algo.services import intraday_replay as mod
+    from tests.test_directional_condor import bars_fn, daily_series
+
+    d1 = date(2026, 7, 13)
+    # _monthly_day's premiums decay LINEARLY, which makes any condor's debit exactly 0 (no
+    # convexity) and the strategy rightly refuses "a credit, not a long condor" — a real
+    # chain is convex, so this day decays geometrically
+    store.write_day(d1, _convex_monthly_day(d1, spot=24000.0))
+    rows, _ = daily_series("bull", start=date(2026, 1, 5))    # settled well before d1, bull
+    seen = {}
+
+    def fake_provider(u, market):
+        seen["wired"] = u
+        return bars_fn(rows)
+
+    monkeypatch.setattr(mod, "_daily_bars_with_forming", fake_provider)
+    out = run_intraday_backtest("directional_condor", "NIFTY", d1, d1, 500_000,
+                                {"margin_per_lot": 40_000, "lots": 1, "force_entry": True,
+                                 "margin_per_set": 100_000})
+    assert seen["wired"] == "NIFTY"
+    entries = [t for t in out["trades"] if t["action"] in ("BUY", "SHORT")]
+    assert len(entries) == 4, out["trades"][:6]
+    assert all(t["date"].startswith("2026-07-13 09:30") for t in entries), entries
+    assert sorted(t["action"] for t in entries) == ["BUY", "BUY", "SHORT", "SHORT"]
+    assert all(t["ticker"].endswith("|CE") for t in entries)            # bull → calls
+    ks = sorted(float(t["ticker"].split("|")[2]) for t in entries)
+    assert all(k % 100 == 0 for k in ks)
+    assert len({round(b - a) for a, b in zip(ks, ks[1:], strict=False)}) == 1
+    assert all(t["units"] == 65 for t in entries)
+    assert out["report"]["sizing"]["margin_per_lot"] == 40_000
     assert "metrics" in out["report"]
 
 

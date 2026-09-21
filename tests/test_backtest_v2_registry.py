@@ -83,6 +83,11 @@ _INTENTIONAL |= {("intraday_straddle", "exit_time"),
 # expiry day with a deep-ITM short, so "5% of margin" meant very different rupees over one
 # cycle.
 _INTENTIONAL |= {("fair_value_calendar", "margin_per_set")}
+# directional_condor: a hedged long condor's broker margin is ≈ the debit, so the form and
+# the deploy card anchor the lock/breach % rules to ₹1L per lot-set (owner 2026-09-21); the
+# ctor keeps 0 = the broker margin frozen at entry (§1). Cadences carry the 1min policy.
+_INTENTIONAL |= {("directional_condor", "margin_per_set"), ("directional_condor", "profit_check"),
+                 ("directional_condor", "stop_check")}
 
 
 def _ctor_defaults(strategy_id: str) -> dict:

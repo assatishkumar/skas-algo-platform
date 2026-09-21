@@ -239,6 +239,18 @@ const _PC_LABELS = {
 };
 Object.assign(LABELS, _PC_LABELS);
 
+// directional_condor
+Object.assign(LABELS, {
+  st_period: "SuperTrend period",
+  st_multiplier: "SuperTrend multiplier",
+  confirm_bars: "Confirm bars",
+  width_pct: "Segment width (% of spot)",
+  lock_start_pct: "Profit lock from (% of anchor)",
+  lock_step_pct: "Lock step (% of anchor)",
+  half_loss_pct: "Stop (% of max loss)",
+  expiry_switch_day: "Switch to next month from day",
+});
+
 // intraday_strangle_combo
 Object.assign(LABELS, {
   otm_steps: "OTM steps (listing grid)",
@@ -331,6 +343,7 @@ export const OPTIONS_STRATEGIES = [
   "short_premium",
   "21_ema_momentum",
   "supertrend_spread",
+  "directional_condor",
 ];
 
 export function isOptionsStrategy(strategyId: string): boolean {

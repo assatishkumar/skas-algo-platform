@@ -84,6 +84,7 @@ const CATEGORY_OF: Record<string, LiveCategoryId> = {
   straddle_btst: "positional",            // holds OVERNIGHT — "intraday" would lie on the blurb
   double_diagonal_calendar: "positional",
   put_condor: "positional",
+  directional_condor: "positional",     // monthly long condor, held across sessions
   donchian_strangle_bt: "positional",
   fair_value_calendar: "positional",      // monthly cycle, weekly rolls — holds overnight
   volcano_calendar: "positional",         // monthly cycle, holds to the near expiry
@@ -117,6 +118,7 @@ export const STRATEGY_NAMES: Record<string, string> = {
   iron_fly_monthly: "Iron Fly — Monthly",
   double_diagonal_calendar: "Double Diagonal Calendar",
   put_condor: "Put Condor — Monthly (defined risk)",
+  directional_condor: "Directional Condor — daily SuperTrend (long condor)",
   fair_value_calendar: "Fair-Value Calendar — Monthly (premium-matched)",
   volcano_calendar: "Volcano Calendar — Monthly (PE fly + CE calendar)",
   donchian_strangle_monthly: "Donchian Basket Strangle",

@@ -19,6 +19,7 @@ from .call_ratio_monthly import (
 from .custom_equity import CustomEquityStrategy
 from .custom_options import CustomOptionsStrategy
 from .delta_neutral_monthly import DeltaNeutralMonthlyStrategy
+from .directional_condor import DirectionalCondorStrategy
 from .donchian_strangle_bt import DonchianStrangleBtStrategy
 from .donchian_strangle_monthly import DonchianStrangleMonthlyStrategy
 from .double_diagonal_calendar import DoubleDiagonalCalendarStrategy
@@ -61,6 +62,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     CallRatioMonthlyStrategy.strategy_id: CallRatioMonthlyStrategy,
     PutRatioMonthlyStrategy.strategy_id: PutRatioMonthlyStrategy,
     PutCondorStrategy.strategy_id: PutCondorStrategy,
+    DirectionalCondorStrategy.strategy_id: DirectionalCondorStrategy,
     BatmanRatioMonthlyStrategy.strategy_id: BatmanRatioMonthlyStrategy,
     HniWeeklyStrategy.strategy_id: HniWeeklyStrategy,
     StaggeredCoveredCallStrategy.strategy_id: StaggeredCoveredCallStrategy,

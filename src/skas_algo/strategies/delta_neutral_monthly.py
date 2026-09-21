@@ -773,21 +773,7 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
         self._exit_marks = exit_marks
         self._pnl_pair = (pnl_ltp, pnl_exit)
         pnl = pnl_exit if self.mark_basis == "exit" else pnl_ltp
-        # Freeze / re-freeze the threshold base from the latest BROKER margin push.
-        # (Also upgrades runs recovered with an old "model" base — e.g. run 203.)
-        if (manual := self._manual_margin()) > 0:
-            # The manual anchor OUTRANKS the broker push and needs no wait: thresholds are
-            # live from the first tick of the cycle, instead of sitting "pending" until the
-            # manager's basket-margin call lands. Re-asserted every slice so it also
-            # upgrades a cycle recovered with a broker/model base.
-            if self.margin_base != manual or self.margin_source != "manual":
-                self.margin_base = manual
-                self.margin_source = "manual"
-            self._refreeze = False
-        elif self._broker_margin and (self._refreeze or self.margin_source != "broker"):
-            self.margin_base = self._broker_margin
-            self.margin_source = "broker"
-            self._refreeze = False
+        self._apply_margin_push()
         # Cadence-sampled ONCE, here — after the print/pnl/margin-freeze guards above
         # (mixin rule #1: _due consumes its window; sampling before an early return would eat a
         # slot). Profit, stop and adjust each have their OWN cadence now — adjust_check is
@@ -822,6 +808,27 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
         if self._in_cooldown(now):
             return []
         return self._maybe_adjust(ctx, live, marks, now)
+
+    def _apply_margin_push(self) -> None:
+        """Freeze / re-freeze the threshold base from the latest BROKER margin push.
+        (Also upgrades runs recovered with an old "model" base — e.g. run 203.)
+
+        Lifted out of ``_manage`` (2026-09-21) so a subclass with its OWN threshold rules
+        (directional_condor) freezes the base exactly as the family does — one definition of
+        "what the % rules are measured against"; the base's ``_manage`` is byte-identical."""
+        if (manual := self._manual_margin()) > 0:
+            # The manual anchor OUTRANKS the broker push and needs no wait: thresholds are
+            # live from the first tick of the cycle, instead of sitting "pending" until the
+            # manager's basket-margin call lands. Re-asserted every slice so it also
+            # upgrades a cycle recovered with a broker/model base.
+            if self.margin_base != manual or self.margin_source != "manual":
+                self.margin_base = manual
+                self.margin_source = "manual"
+            self._refreeze = False
+        elif self._broker_margin and (self._refreeze or self.margin_source != "broker"):
+            self.margin_base = self._broker_margin
+            self.margin_source = "broker"
+            self._refreeze = False
 
     def _past_open_delay(self, now: datetime) -> bool:
         """True once past MARKET_OPEN + ``adjust_after_open_min`` — the window in which we take NO

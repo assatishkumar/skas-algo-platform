@@ -62,7 +62,7 @@ REPLAYABLE = {"intraday_straddle", "straddle_btst", "weekly_intraday_straddle", 
               "intraday_strangle_combo", "asymmetric_premium_intra", "fair_value_calendar",
               "delta_neutral_monthly", "iron_fly_monthly", "call_ratio_monthly",
               "put_ratio_monthly", "batman_ratio_monthly", "hni_weekly", "21_ema_momentum",
-              "put_condor", "monthly_butterfly", "supertrend_spread"}
+              "put_condor", "monthly_butterfly", "supertrend_spread", "directional_condor"}
 
 # Strategies whose strike rule counts the exchange's LISTING grid (NIFTY 50s), so the
 # harness must NOT apply the platform's NIFTY-100 coarsening. See allow_fifty_strikes.
@@ -109,7 +109,7 @@ _SHORT_UNITS_PER_SET = {"intraday_straddle": 2, "straddle_btst": 2,
                         "put_ratio_monthly": 2, "batman_ratio_monthly": 4,
                         "hni_weekly": 3, "21_ema_momentum": 1, "supertrend_spread": 1,
                         # long condor: 2 short legs per lot-set (the 2 longs are hedges)
-                        "put_condor": 2,
+                        "put_condor": 2, "directional_condor": 2,
                         "intraday_strangle_combo": 2,
                         "asymmetric_premium_intra": 2,
                         # ratio calendar: 2 sold weeklies per side (the instance's

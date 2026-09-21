@@ -697,6 +697,33 @@ template) is the phase-2 fix. No deploy path — there is no US broker.
   template; 28-run sweep on the /docs card, 2026-09-15)** — the hourly spec, daily bars,
   a take-profit and multipliers past 4 all tested worse over five years. Deploy card
   present, NOT forward-tested. Coverage: `tests/test_supertrend_spread.py`.
+- **directional_condor** (`strategies/directional_condor.py`, NIFTY, owner deck 2026-09-21):
+  a ONE-SIDED LONG condor for a DEBIT in the direction of the daily SuperTrend(11, 2.9) —
+  the deck says "iron condor", the rules are not one. Three things a fresh session would
+  otherwise rediscover. (1) **The SuperTrend reads SETTLED daily bars only** through the
+  ema21 `set_daily_bars_fn` hook (replay: `_daily_bars_with_forming`; live:
+  `_daily_bars_live`, broker-first) — `_st_eval` drops every row dated ≥ today, needs
+  `st_period + 30` bars or it does NOT latch the day (a thin cache must never read a
+  direction the backtest never saw), and runs once per session at/after `entry_time`; the
+  flip → `confirm_bars` machine is supertrend_spread's, fed one bar a day. A fresh deploy
+  inside a trend WAITS for the next flip (`_skip` names it); force takes the current side.
+  (2) **The ₹ base of the lock/breach rules is the `margin_per_set` anchor, ₹1L/lot-set on
+  the form + deploy card** (ctor 0 = broker margin frozen at entry, `exit_margin_basis=
+  "entry"`, `pnl_basis="total"`): a hedged long condor's broker margin is ≈ the debit, so
+  a % of it fires on noise; the replay's model margin (two naked shorts, ~₹3-4L) would be
+  as wrong the other way — `_SHORT_UNITS_PER_SET` is 2 like put_condor. The freeze block
+  was lifted out of the base `_manage` into `_apply_margin_push()` (byte-identical) so the
+  subclass shares one definition. (3) **A same-side breakout / reversal / roll exits THIS
+  slice and rebuilds on the NEXT** (`rebuild_pending`, any slice ≥ 09:20): live, the four
+  exits are still in the ladder when entries would place, and a fresh reason opens a new
+  replay cycle. The wing walk (`_walk_wings`) is two EXIT_ALLs then two ENTER_LONGs in one
+  slice, refuses a destination the book holds (run-#203) or one within a step of its short
+  (`lock_exhausted`), banks the closed wings into `adjust_realized`, and leaves the
+  decision breakevens as the ENTRY's (`_breakevens`: the payoff's roots, near/far by trend
+  side) — the walked wing costs more, so the current payoff's near breakeven moves AWAY
+  from spot and recomputing it fired the breach rule on the next sample with spot unmoved.
+  The stop (−50% of the ENTRY max loss) is always armed; the breach-after-profit rule is
+  the earlier exit on the profitable path. Coverage: `tests/test_directional_condor.py`.
 - **call_put_ratio_expiry** (expiry-day-only 1:3 premium-ratio, NIFTY Tue / SENSEX Thu):
   buy ATM straddle 09:20-09:27, sell 3 lots/side at the strikes trading nearest ⅓ of each
   ATM premium (LIVE-chain lookup; >30% tolerance miss → skip the day, `traded_day` guard);
