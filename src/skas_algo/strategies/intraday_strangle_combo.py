@@ -37,7 +37,7 @@ from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import ExitCadenceMixin, bad_close
+from ._options_common import ExitCadenceMixin, MarkBasisMixin, bad_close
 
 # Strike granularity to COUNT OTM steps on — the exchange's LISTING grid, deliberately NOT
 # contract_specs.selection_step (which coarsens NIFTY to 100s under the owner's 2026-07
@@ -83,7 +83,7 @@ def _parse_schedule(raw) -> dict[int, list[str]]:
     return out or {k: list(v) for k, v in _DEFAULT_SCHEDULE.items()}
 
 
-class IntradayStrangleComboStrategy(ExitCadenceMixin):
+class IntradayStrangleComboStrategy(MarkBasisMixin, ExitCadenceMixin):
     strategy_id = "intraday_strangle_combo"
     intraday = True  # ticks every refresh; the session window + per-leg exits self-gate
     # OTM3 is counted on the exchange's LISTING grid (NIFTY 50s), so the live view must NOT
@@ -136,8 +136,10 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         eod_time: str = "15:20",
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
+        mark_basis: str = "exit",   # target/stop read on exit prices (MarkBasisMixin)
         **_ignored,
     ):
+        self._init_mark_basis(mark_basis)
         self.schedule = _parse_schedule(day_schedule)
         scheduled = [u for names in self.schedule.values() for u in names]
         # Precedence: explicit `underlyings` (the replay harness pins it to the one index it
@@ -208,7 +210,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
                 for rec in (self.sides[u][r]["leg"], self.sides[u][r].get("wing")):
                     if rec is None:
                         continue
-                    cur = closes.get(rec["symbol"])
+                    cur = self._marks_for(closes).get(rec["symbol"])
                     if cur is None or bad_close(cur):
                         continue
                     total += (float(cur) - rec["entry"]) * rec["units"] * rec["dir"]
@@ -284,7 +286,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
 
         leg = side["leg"]
         if leg is not None:
-            cur = self._mark(ctx, leg["symbol"])
+            cur = self._mark_for(ctx, leg)
             if cur is None:
                 return []  # no fresh print — never judge a 40% stop on a stale mark
             # 0 = OFF, per the platform convention. Without the guard the comparison reads
@@ -459,7 +461,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         pnl = self.realized.get(u, 0.0)
         for r in open_sides:
             leg = self.sides[u][r]["leg"]
-            cur = self._mark(ctx, leg["symbol"])
+            cur = self._mark_for(ctx, leg)
             if cur is None:
                 return False  # a stale SHORT makes the whole MTM untrustworthy
             pnl += (leg["entry"] - cur) * leg["units"]
@@ -468,7 +470,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
                 # A far wing can go minutes without a print. Never let that BLOCK the stop:
                 # value an unmarked wing at 0 — the conservative direction (overstates the
                 # loss → the stop fires sooner, never later).
-                wcur = self._mark(ctx, wing["symbol"])
+                wcur = self._mark_for(ctx, wing)
                 pnl += ((wcur if wcur is not None else 0.0) - wing["entry"]) * wing["units"]
         # Cadence sampled AFTER every readiness guard (mixin rule #1: _due CONSUMES its
         # window) and keyed per underlying, so a SENSEX slice can't eat NIFTY's slot.
@@ -484,7 +486,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         for r in rights:
             leg = self.sides[u][r]["leg"]
             if leg is not None:
-                cur = self._mark(ctx, leg["symbol"])
+                cur = self._mark_for(ctx, leg)
                 if cur is not None:
                     self.realized[u] += (leg["entry"] - cur) * leg["units"]
                 out.append(Signal(leg["symbol"], SignalAction.EXIT_ALL, reason=reason))
@@ -497,13 +499,22 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         wing = self.sides[u][right].get("wing")
         if wing is None:
             return []
-        cur = self._mark(ctx, wing["symbol"])
+        cur = self._mark_for(ctx, wing)
         if cur is not None:
             self.realized[u] += (cur - wing["entry"]) * wing["units"]
         self.sides[u][right]["wing"] = None
         return [Signal(wing["symbol"], SignalAction.EXIT_ALL, reason=reason)]
 
     # -------------------------------------------------------------- helpers
+    def _mark_for(self, ctx, rec: dict) -> float | None:
+        """A leg/wing record's ACTING mark (MarkBasisMixin): the print guard, then the exit
+        price — a short buys back at the ASK, a wing sells into the BID — against the real
+        fill once the book shows it. LTP under "ltp" or without a two-sided book."""
+        cur = self._mark(ctx, rec["symbol"])
+        if cur is None:
+            return None
+        return self._leg_mark(ctx, rec, cur)
+
     def _mark(self, ctx, symbol: str) -> float | None:
         has_print = getattr(ctx.market, "has_print", None)
         if has_print is not None and not has_print(symbol):
@@ -557,6 +568,7 @@ class IntradayStrangleComboStrategy(ExitCadenceMixin):
         if live:
             rules.insert(2, f"Overall MTM stop ({self._cadence_phrase('stop')}): "
                             + ", ".join(live) + " → close that index and stop for the day")
+        rules.append(f"P&L for these rules is read {self._marks_phrase()}")
         return rules
 
     def basket_status(self, market, portfolio, margin: float | None = None) -> dict:

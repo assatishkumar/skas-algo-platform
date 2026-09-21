@@ -42,7 +42,7 @@ from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 from skas_algo.live.holidays import previous_trading_day
 
-from ._options_common import ExitCadenceMixin, bad_close, legs_mtm_pnl
+from ._options_common import ExitCadenceMixin, MarkBasisMixin, bad_close, legs_mtm_pnl
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ _ALERT_FETCH_FAILED = (
 )
 
 
-class WeeklyIntradayStraddle(ExitCadenceMixin):
+class WeeklyIntradayStraddle(MarkBasisMixin, ExitCadenceMixin):
     strategy_id = "weekly_intraday_straddle"
     intraday = True  # ticks every refresh_seconds; the cycle/entry/exit windows self-gate
 
@@ -101,8 +101,10 @@ class WeeklyIntradayStraddle(ExitCadenceMixin):
         eod_time: str = "15:20",
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
+        mark_basis: str = "exit",   # target/stop read on exit prices (MarkBasisMixin)
         **_ignored,
     ):
+        self._init_mark_basis(mark_basis)
         self.underlying = (underlying or (universe[0] if universe else "NIFTY")).upper()
         self.lots = max(1, int(lots))
         self.entry_start = _hhmm(entry_start, time(9, 20))
@@ -159,8 +161,8 @@ class WeeklyIntradayStraddle(ExitCadenceMixin):
             self._broker_margin = float(value)
 
     def strategy_pnl(self, closes: dict) -> float | None:
-        """The MTM measure the stop check compares (decision-entry basis)."""
-        return legs_mtm_pnl(self.legs, closes)
+        """The MTM measure the stop check compares (on the acting marks)."""
+        return legs_mtm_pnl(self.legs, self._marks_for(closes))
 
     def set_option_bars_fn(self, fn) -> None:
         """Manager wiring: fn(underlying, expiry_iso, strike, right, from_dt, to_dt, minutes)
@@ -496,6 +498,7 @@ class WeeklyIntradayStraddle(ExitCadenceMixin):
                 cur = ctx.close(leg["symbol"])
             except KeyError:
                 return []
+            cur = self._leg_mark(ctx, leg, cur)      # exit price vs the real fill (MarkBasisMixin)
             pnl += (cur - leg["entry"]) * leg["units"] * leg["dir"]
         pnl_pct = 100.0 * pnl / base
         if pnl_pct > self.peak_pct:
@@ -523,6 +526,7 @@ class WeeklyIntradayStraddle(ExitCadenceMixin):
             rules.append(f"Stop out at −{self.stop_loss_pct:g}% of broker margin "
                          f"({self._cadence_phrase('stop')})")
         rules.append(f"Hard square-off {self.eod_exit.strftime('%H:%M')} — never carried")
+        rules.append(f"P&L for these rules is read {self._marks_phrase()}")
         return rules
 
     # --------------------------------------------------------------- monitor

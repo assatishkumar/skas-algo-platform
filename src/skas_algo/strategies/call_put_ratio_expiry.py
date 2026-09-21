@@ -34,7 +34,7 @@ from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import ExitCadenceMixin, bad_close, legs_mtm_pnl
+from ._options_common import ExitCadenceMixin, MarkBasisMixin, bad_close, legs_mtm_pnl
 
 
 def _hhmm(s: str, fallback: time) -> time:
@@ -45,7 +45,7 @@ def _hhmm(s: str, fallback: time) -> time:
         return fallback
 
 
-class CallPutRatioExpiryStrategy(ExitCadenceMixin):
+class CallPutRatioExpiryStrategy(MarkBasisMixin, ExitCadenceMixin):
     strategy_id = "call_put_ratio_expiry"
     intraday = True  # ticks every refresh_seconds; entry window + exits self-gate
 
@@ -70,8 +70,10 @@ class CallPutRatioExpiryStrategy(ExitCadenceMixin):
         eod_time: str = "15:15",
         min_leg_oi: int = 1,
         lot_overrides: dict | None = None,
+        mark_basis: str = "exit",   # target/stop read on exit prices (MarkBasisMixin)
         **_ignored,
     ):
+        self._init_mark_basis(mark_basis)
         self.underlyings = [u.upper() for u in (underlyings or ["NIFTY"])]
         if isinstance(sets, dict):
             self.sets = {u.upper(): max(1, int(v)) for u, v in sets.items()}
@@ -123,7 +125,7 @@ class CallPutRatioExpiryStrategy(ExitCadenceMixin):
         across BOTH underlyings' legs (the thresholds are per-underlying, but one combined
         number is what the owner sanity-checks against the book P&L)."""
         legs = [leg for u in self.underlyings for leg in self.legs.get(u, [])]
-        return legs_mtm_pnl(legs, closes)
+        return legs_mtm_pnl(legs, self._marks_for(closes))
 
     def request_force_entry(self) -> str:
         """Live-page 'Force entry now': next tick enters flat underlyings regardless of
@@ -299,6 +301,7 @@ class CallPutRatioExpiryStrategy(ExitCadenceMixin):
                 cur = ctx.close(leg["symbol"])
             except KeyError:
                 return []
+            cur = self._leg_mark(ctx, leg, cur)      # exit price vs the real fill (MarkBasisMixin)
             pnl += (cur - leg["entry"]) * leg["units"] * leg["dir"]
         # Cadence-sampled AFTER the guards above (mixin rule #1: _due consumes its
         # window), and keyed PER UNDERLYING — one shared clock would let a SENSEX slice
@@ -333,6 +336,7 @@ class CallPutRatioExpiryStrategy(ExitCadenceMixin):
             f"({self._cadence_phrase('profit')})",
             f"Stop out at −{self.stop_pct:g}% of broker margin ({self._cadence_phrase('stop')})",
             f"Hard exit {self.eod_exit.strftime('%H:%M')} — never carried",
+            f"P&L for these rules is read {self._marks_phrase()}",
         ]
 
     # --------------------------------------------------------------- monitor

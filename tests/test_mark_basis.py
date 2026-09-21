@@ -83,12 +83,11 @@ def units(st) -> int:
     return sum(int(lg["units"]) for lg in st.legs)
 
 
-def test_the_default_basis_is_the_old_one_and_only_watches():
-    """mark_basis="ltp": entries stay the decision LTP, marks stay LTP, the target fires on
-    them exactly as before — but the fill is recorded, the shortfall is counted and the
-    disagreement with the exit basis is logged. A running deploy gains evidence, not a
-    behaviour change (§1)."""
-    st, ctx = setup()
+def test_the_ltp_basis_only_watches():
+    """mark_basis="ltp" (the historical basis, opt-in since 2026-09-21): entries stay the
+    decision LTP, marks stay LTP, the target fires on them exactly as before — but the fill
+    is recorded, the shortfall is counted and the disagreement with the exit basis is logged."""
+    st, ctx = setup(mark_basis="ltp")
     assert st.mark_basis == "ltp"
     tick(st, ctx, ENTRY)
     decision = {lg["symbol"]: lg["entry"] for lg in st.legs}
@@ -252,4 +251,6 @@ def test_mark_basis_is_forwarded_through_every_explicit_subclass():
                 DoubleDiagonalCalendarStrategy, PutCondorStrategy):
         s = cls(universe=["NIFTY"], underlying="NIFTY", mark_basis="exit")
         assert s.mark_basis == "exit", f"{cls.__name__} swallowed it into **_ignored"
-        assert cls(universe=["NIFTY"], underlying="NIFTY").mark_basis == "ltp", cls.__name__
+        # the ctor default is "exit" everywhere since 2026-09-21 (owner decision): a run
+        # rebuilt from a snapshot without the key moves to exit prices on its next restart
+        assert cls(universe=["NIFTY"], underlying="NIFTY").mark_basis == "exit", cls.__name__

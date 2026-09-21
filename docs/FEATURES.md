@@ -407,11 +407,15 @@ are validated paper-first.
   2-6× worse month for hit rate, and the condor is unmeasurable. Deploy order: BANKNIFTY
   CE, BANKNIFTY PE, NIFTY CE w200, all plain, variant knobs at 0. The same table and the
   per-variant form settings are on the /docs card (`findings`, `web/src/lib/strategyDocs.ts`).
-  **P&L marks (`mark_basis`, 2026-09-07, whole delta family):** `exit` (deploy default) reads
-  the % target/stop on exit prices — the entry is the book's real fill, a long marks at the
-  bid, a short at the ask — so "+3%" means +3% if you exit now; `ltp` (ctor default, running
-  deploys) is the old decision-LTP basis. Both are computed every slice and the tile shows
-  the gap; `MARKS fill/diverge/exit` log lines record what each basis would have done.
+  **P&L marks (`mark_basis`, 2026-09-07 delta family → EVERY option family 2026-09-21):**
+  `exit` (the default everywhere, ctor included) reads the % target/stop on exit prices —
+  the entry is the book's real fill, a long marks at the bid, a short at the ask — so "+3%"
+  means +3% if you exit now; `ltp` is the old last-traded basis, opt-in, and only watches.
+  `_options_common.MarkBasisMixin` carries it into the ratio family, the intraday decks,
+  call_put_ratio_expiry, custom_options, donchian and supertrend_spread; without a two-sided
+  book (backtest, replay, cache) it is the LTP. The Edit-params modal labels it "Target &
+  stop read prices as". `MARKS fill/diverge/exit` log lines record what each basis would
+  have done.
   Coverage: `tests/test_monthly_butterfly.py`, the split/crossing tests in `tests/test_live_broker.py`.
 - **`fair_value_calendar` — premium-matched ratio calendar with a fair-value side pick (NIFTY).**
   The owner's video spec (ref video: https://www.youtube.com/watch?v=tn-73I63yBw&t=2162s),

@@ -54,7 +54,7 @@ from skas_algo.engine.indicators.supertrend import _supertrend_bars
 from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import SkipReasonMixin
+from ._options_common import MarkBasisMixin, SkipReasonMixin
 
 SESSION_OPEN_MIN = 9 * 60 + 15          # 09:15
 SESSION_MINUTES = 375                   # 09:15 → 15:30
@@ -64,7 +64,7 @@ def _bad(x) -> bool:
     return x is None or x != x or x <= 0  # None / NaN / non-positive
 
 
-class SuperTrendSpreadStrategy(SkipReasonMixin):
+class SuperTrendSpreadStrategy(MarkBasisMixin, SkipReasonMixin):
     strategy_id = "supertrend_spread"
     intraday = True  # ticks every refresh live; the bar boundaries pace the decisions
 
@@ -95,8 +95,10 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         expiry_switch_day: int = 15,
         roll_days_before: int = 5,
         lot_overrides: dict | None = None,
+        mark_basis: str = "exit",   # target/stop read on exit prices (MarkBasisMixin)
         **_ignored,
     ):
+        self._init_mark_basis(mark_basis)
         self.underlying = (underlying or (universe[0] if universe else "NIFTY")).upper()
         self.lots = max(1, int(lots))
         self.timeframe = max(5, int(timeframe))
@@ -331,6 +333,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         #    close — a gap through the stop is seen only there, never intra-bar
         if self.legs and (self.take_profit_pct > 0 or self.stop_loss_pct > 0) \
                 and self.entry_credit > 0:
+            self._adopt_spread_fills(ctx)
             value = self._spread_value(ctx)
             if value is not None and self.stop_loss_pct > 0 \
                     and value >= self.stop_loss_pct / 100.0 * self.entry_credit:
@@ -370,17 +373,32 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
         return signals
 
     def _spread_value(self, ctx) -> float | None:
-        """What closing the spread would cost per share now (short leg − long leg)."""
+        """What closing the spread would cost per share now (short leg − long leg) — on
+        the ACTING marks: the short bought back at the ASK, the long sold into the BID
+        under mark_basis="exit" (MarkBasisMixin); LTP without a two-sided book."""
         try:
             total = 0.0
             for leg in self.legs:
                 px = ctx.close(leg["symbol"])
                 if _bad(px):
                     return None
+                px = self._acting_mark(ctx, leg["symbol"], int(leg["dir"]), float(px))
                 total += -leg["dir"] * float(px)
             return total
         except Exception:
             return None
+
+    def _adopt_spread_fills(self, ctx) -> None:
+        """Once both legs show their real fills, the credit the % rules measure against
+        is what the book actually collected (under "exit"); the decision credit otherwise."""
+        for leg in self.legs:
+            self._adopt_fill(ctx, leg)
+        if self.mark_basis == "exit" and self.legs and all(l.get("fill_seen") for l in self.legs) \
+                and not getattr(self, "_credit_adopted", False):
+            credit = sum(-leg["dir"] * float(leg["entry"]) for leg in self.legs)
+            if credit > 0:
+                self.entry_credit = float(credit)
+            self._credit_adopted = True
 
     # ------------------------------------------------------------------ entry
     def _target_expiry(self, chain, today: date) -> date | None:
@@ -429,6 +447,7 @@ class SuperTrendSpreadStrategy(SkipReasonMixin):
              "entry": float(buy_row.close)},
         ]
         self.entry_credit = float(credit)
+        self._credit_adopted = False
         self.entry_expiry = expiry
         self.entry_bar = self.bars_closed
         self._entered()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time
 from math import floor
 
@@ -333,3 +334,127 @@ class EntrySpreadGateMixin:
                 return (f"{label}: bid {bid:.2f} / ask {ask:.2f} = {spr:.1f}% spread > "
                         f"{cap:g}% cap — not paying that to open")
         return None
+
+
+_marks_log = logging.getLogger("skas_algo.strategies.marks")
+
+
+class MarkBasisMixin:
+    """Read a %-target/stop on the prices an EXIT would get, against the REAL fills.
+
+    Every option family used to measure its rule on the last traded price against the
+    price it was THINKING about at the decision. The platform's exits are limit-at-touch,
+    so a long sells into the BID and a short buys back at the ASK; and the entry cost is
+    what the book paid, not the LTP. Paper run 30 booked a "+3% target" that realised
+    −₹9,765 (2026-09-04); run 209 booked a "target" on SENSEX prints an hour old that
+    realised −₹27,280 (2026-09-18). The delta family got `mark_basis` first (2026-09-07);
+    since 2026-09-21 (owner decision) EVERY family reads "exit" by default, ctor included.
+
+    Fail-open by construction: with no two-sided book (the backtest chain, a cache
+    source, the 1-min replay) the exit price IS the LTP and a lot list that is not a list
+    of lots adopts nothing — so backtests and replays decide exactly as before. `"ltp"`
+    is still accepted and only watches. Leg records are ``{symbol, dir, units, entry}``
+    dicts (the shape every family but custom_options/donchian keeps).
+    """
+
+    mark_basis: str = "exit"
+    entry_shortfall: float = 0.0
+
+    def _init_mark_basis(self, mark_basis) -> None:
+        mb = str(mark_basis or "exit")
+        if mb not in ("ltp", "exit"):
+            raise ValueError(f"mark_basis must be 'ltp' or 'exit', got {mark_basis!r}")
+        self.mark_basis = mb
+        self.entry_shortfall = 0.0
+        self._exit_marks: dict[str, float] = {}
+
+    # ---- prices
+    def _exit_price(self, ctx, symbol: str, direction: int, ltp: float) -> float:
+        """The price an exit would cross NOW: bid for a long, ask for a short; the LTP
+        when there is no two-sided book (same fail-open as the spread gate)."""
+        ba_fn = getattr(getattr(ctx, "market", None), "_bid_ask", None)
+        if ba_fn is None:
+            return ltp
+        try:
+            ba = ba_fn(symbol)
+        except Exception:  # pragma: no cover - a chain read must not stop a decision
+            return ltp
+        if not ba:
+            return ltp
+        bid, ask = ba
+        px = bid if int(direction) > 0 else ask
+        try:
+            px = float(px)
+        except (TypeError, ValueError):
+            return ltp
+        return px if px > 0 else ltp
+
+    def _acting_mark(self, ctx, symbol: str, direction: int, ltp: float) -> float:
+        """What the threshold reads for this leg: the exit price under "exit", the LTP
+        under "ltp". Remembered so the snapshot's P&L (`_marks_for`) shows the same."""
+        px = self._exit_price(ctx, symbol, direction, ltp) if self.mark_basis == "exit" else ltp
+        if not hasattr(self, "_exit_marks"):
+            self._exit_marks = {}
+        self._exit_marks[symbol] = px
+        return px
+
+    def _marks_for(self, closes: dict) -> dict:
+        """LTP closes overlaid with the last acting marks — the snapshot's strategy_pnl
+        then reads what the thresholds read."""
+        if self.mark_basis != "exit":
+            return closes
+        return {**closes, **getattr(self, "_exit_marks", {})}
+
+    # ---- fills
+    def _adopted_fill(self, ctx, symbol: str):
+        """The book's average fill for ``symbol`` (units-weighted over its lots), or None
+        when there is no book, no lots, or the lots are not lot objects (a replay's int)."""
+        try:
+            lots = ctx.lots(symbol) or []
+        except Exception:  # pragma: no cover - a ctx without a book
+            return None
+        if not isinstance(lots, (list, tuple)) or not lots:
+            return None
+        try:
+            units = sum(float(lot.units) for lot in lots)
+            cost = sum(float(lot.units) * float(lot.price) for lot in lots)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if units <= 0 or cost <= 0:
+            return None
+        return cost / units
+
+    def _adopt_fill(self, ctx, leg: dict) -> None:
+        """Once per leg dict: record the real fill (``entry_fill``/``entry_ltp``), count the
+        shortfall against the decision price, and under "exit" make the fill the entry."""
+        if leg.get("fill_seen"):
+            return
+        fill = self._adopted_fill(ctx, leg["symbol"])
+        if fill is None:
+            return
+        decision = float(leg["entry"])
+        direction = int(leg.get("dir", 1))
+        slip = (fill - decision) * float(leg.get("units") or 0) * direction
+        leg["fill_seen"] = True
+        leg["entry_ltp"] = decision
+        leg["entry_fill"] = round(fill, 4)
+        self.entry_shortfall = float(getattr(self, "entry_shortfall", 0.0)) + slip
+        if self.mark_basis == "exit":
+            leg["entry"] = fill
+        _marks_log.info(
+            "MARKS fill %s sym=%s dir=%+d units=%d decision=%.2f fill=%.2f slip_per_unit=%+.2f "
+            "shortfall=%+.0f cycle_shortfall=%+.0f basis=%s%s",
+            getattr(self, "strategy_id", "?"), leg["symbol"], direction,
+            int(leg.get("units") or 0), decision, fill, (fill - decision) * direction, slip,
+            self.entry_shortfall, self.mark_basis, " adopted" if self.mark_basis == "exit" else "",
+        )
+
+    def _leg_mark(self, ctx, leg: dict, ltp: float) -> float:
+        """Adopt the leg's fill (once) and return its acting mark — the one call a
+        threshold loop needs per leg."""
+        self._adopt_fill(ctx, leg)
+        return self._acting_mark(ctx, leg["symbol"], int(leg.get("dir", 1)), ltp)
+
+    def _marks_phrase(self) -> str:
+        return ("at exit prices (longs at bid, shorts at ask, against the real fills)"
+                if self.mark_basis == "exit" else "at last traded prices")

@@ -32,7 +32,7 @@ from skas_algo.engine.options.contract_specs import expiry_weekday_for, lot_size
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import ExitCadenceMixin, bad_close, legs_mtm_pnl
+from ._options_common import ExitCadenceMixin, MarkBasisMixin, bad_close, legs_mtm_pnl
 
 
 def _hhmm(s: str, fallback: time) -> time:
@@ -43,7 +43,7 @@ def _hhmm(s: str, fallback: time) -> time:
         return fallback
 
 
-class IntradayStraddleStrategy(ExitCadenceMixin):
+class IntradayStraddleStrategy(MarkBasisMixin, ExitCadenceMixin):
     strategy_id = "intraday_straddle"
     intraday = True  # ticks every refresh_seconds; entry window + exits self-gate
 
@@ -79,8 +79,10 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
         stop_check: str = "tick",
         eod_time: str = "15:20",         # what "eod" means for the cadences (not the exit)
         lot_overrides: dict | None = None,
+        mark_basis: str = "exit",   # target/stop read on exit prices (MarkBasisMixin)
         **_ignored,
     ):
+        self._init_mark_basis(mark_basis)
         self.underlying = (underlying or (universe[0] if universe else "NIFTY")).upper()
         self.lots = max(1, int(lots))
         self.strike_delta = float(strike_delta or 0.0)
@@ -121,7 +123,7 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
     def strategy_pnl(self, closes: dict) -> float | None:
         """The MTM measure the stop/trail compares (decision-entry basis) — open legs
         plus anything already banked by per-leg bookings today."""
-        mtm = legs_mtm_pnl(self.legs, closes)
+        mtm = legs_mtm_pnl(self.legs, self._marks_for(closes))
         if mtm is None:
             return self.leg_realized if self.leg_realized else None
         return mtm + self.leg_realized
@@ -298,6 +300,9 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
                 cur = ctx.close(leg["symbol"])
             except KeyError:
                 return []
+            # the acting mark (MarkBasisMixin): a short buys back at the ASK, against the
+            # real fill — the per-leg booking below reads the same price
+            cur = self._leg_mark(ctx, leg, cur)
             pnl += (cur - leg["entry"]) * leg["units"] * leg["dir"]
             marks.append((leg, cur))
         pnl_pct = 100.0 * pnl / base
@@ -384,6 +389,7 @@ class IntradayStraddleStrategy(ExitCadenceMixin):
             rules.append(f"Book a leg alone once it has melted {self.leg_book_pct:g}% of its "
                          f"entry premium ({self._cadence_phrase('profit')})")
         rules.append(f"Hard exit {self.exit_time.strftime('%H:%M')} — never carried")
+        rules.append(f"P&L for these rules is read {self._marks_phrase()}")
         return rules
 
     # --------------------------------------------------------------- monitor

@@ -159,7 +159,7 @@ class MonthlyButterflyStrategy(EntrySpreadGateMixin, DeltaNeutralMonthlyStrategy
         pnl_basis: str = "total",
         exit_margin_basis: str = "entry",
         min_leg_oi: int = 1,
-        mark_basis: str = "ltp",
+        mark_basis: str = "exit",
         lot_overrides: dict | None = None,
         risk_free_rate: float = 0.065,
         # How far (%) a real order may be pushed THROUGH the touch when it does not fill at

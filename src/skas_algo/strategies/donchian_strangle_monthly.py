@@ -32,13 +32,13 @@ from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import OpenSettleGuard, bad_close
+from ._options_common import MarkBasisMixin, OpenSettleGuard, bad_close
 
 _EOD_CUTOFF = time(15, 15)  # breach_basis="close" → only flip a breach at/after this IST time
 _R_FREE = 0.065             # risk-free for the 30Δ flip's implied-vol / delta calc
 
 
-class DonchianStrangleMonthlyStrategy(OpenSettleGuard):
+class DonchianStrangleMonthlyStrategy(MarkBasisMixin, OpenSettleGuard):
     strategy_id = "donchian_strangle_monthly"
     intraday = True  # tick-driven DERIV run — the portfolio stop + breach/flip checks run every refresh
 
@@ -66,8 +66,10 @@ class DonchianStrangleMonthlyStrategy(OpenSettleGuard):
         flip_delta: str = "atm",                     # flip strike: "atm" | "30delta" (LIVE chain)
         max_flips: int = 2,                          # per name, then close it
         lot_overrides: dict | None = None,
+        mark_basis: str = "exit",   # target/stop read on exit prices (MarkBasisMixin)
         **_ignored,
     ):
+        self._init_mark_basis(mark_basis)
         self._expiry_param = expiry
         self.leg_defs = list(legs or [])
         self.portfolio_sl_pct = portfolio_sl_pct
@@ -414,7 +416,10 @@ class DonchianStrangleMonthlyStrategy(OpenSettleGuard):
             stop_threshold = self.portfolio_sl_pct / 100.0 * self.agg_notional
             target_threshold = self.portfolio_target_pct / 100.0 * self.premium_collected
         try:
-            net_now = self._net_value(open_legs, lambda s: ctx.close(s))
+            # the ACTING marks (MarkBasisMixin): a short buys back at the ASK, a long sells
+            # into the BID — the entries were priced at the fill side already (fill_price)
+            net_now = self._net_value(
+                open_legs, lambda s: self._acting_mark(ctx, s, self._dir(s), ctx.close(s)))
         except KeyError:
             return []
         net_entry = self._net_value(open_legs, lambda s: self.entry_close[s])
@@ -445,6 +450,7 @@ class DonchianStrangleMonthlyStrategy(OpenSettleGuard):
                 continue
             if bad_close(mark):
                 continue
+            mark = self._acting_mark(ctx, s, -1, mark)   # a short's buy-back: the ASK
             if (entry - mark) / entry >= frac:  # short: captured = premium decayed away
                 signals.append(Signal(s, SignalAction.EXIT_ALL, reason="leg_target"))
                 contrib = self._sign(s) * (entry - mark) * self.units[s]
@@ -584,6 +590,9 @@ class DonchianStrangleMonthlyStrategy(OpenSettleGuard):
 
     def _sign(self, symbol: str) -> float:
         return 1.0 if self.leg_side.get(symbol) == "sell" else -1.0  # +credit / −debit
+
+    def _dir(self, symbol: str) -> int:
+        return -1 if self.leg_side.get(symbol) == "sell" else 1
 
     def _net_value(self, legs, price_of) -> float:
         return sum(self._sign(s) * price_of(s) * self.units[s] for s in legs)

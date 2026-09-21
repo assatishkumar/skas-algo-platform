@@ -1026,6 +1026,6 @@ def test_the_editable_surface_walks_the_mro_so_a_subclass_offers_its_bases_knobs
     out = LiveRun._editable_param_surface(run)
     ep = out["editable_params"]
     assert ep["ironfly_adjust"] is True                 # the subclass's own default wins
-    assert ep["mark_basis"] == "ltp" and "mark_basis" in out["param_defaulted"]
+    assert ep["mark_basis"] == "exit" and "mark_basis" in out["param_defaulted"]   # exit everywhere, 2026-09-21
     assert "profit_target_pct" in ep and "margin_per_set" in ep
     assert ep["lots"] == 10 and "lots" not in out["param_defaulted"]

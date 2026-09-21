@@ -121,8 +121,24 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   `_exit_mark` marks a long at the BID and a short at the ASK (`ctx.market._bid_ask`, the
   manager's touch precedent), LTP when there is no book — so the backtest chain and a cache
   source decide exactly as before (§3). `marks` handed to the delta solves/adjustments stays
-  LTP. **Ctor default `"ltp"` (§1)**, deploy models + registry default `"exit"`; hot-editable
-  on a running tile. **Both bases are computed every slice whichever is acted on**, and the
+  LTP. **"exit" EVERYWHERE since 2026-09-21 (owner decision), the CTOR default included** —
+  a deliberate departure from §1 like the 09:20 guard: run 209 (iron fly, SENSEX) booked
+  a "target" on prints an hour and two hours old (the 77,300 CE last traded 10:52, the
+  75,600 PE 09:57) that the exit realised as −₹27,280, and a running deploy on the old
+  basis is the one exposed; a snapshot without the key moves to exit prices on its next
+  restart, a persisted `"ltp"` still works and only watches. The implementation for every
+  OTHER family is `_options_common.MarkBasisMixin` (`_exit_price` / `_acting_mark` /
+  `_leg_mark` / `_adopt_fill` / `_marks_for`), wired at each threshold: the ratio base
+  (call/put/batman/hni), intraday_straddle (its per-leg book too), weekly_intraday_straddle,
+  call_put_ratio_expiry, intraday_strangle_combo (short at ask, wing at bid, the ₹ MTM stop
+  and both per-leg rules), custom_options + donchian (parallel dicts, side → direction;
+  donchian's entries were already at `fill_price`), supertrend_spread (the spread's close
+  cost, `entry_credit` re-based on the fills). ema21 and momentum_theta have no mark
+  threshold and no flag. Adjustment/roll logic everywhere stays on LTP. Fail-open: no
+  `_bid_ask` (backtest chain, replay, cache source) → the LTP, and a replay's int `lots`
+  adopts nothing, so every replay pin and parity suite is byte-identical. Hot-editable on
+  a running tile (the modal labels it "Target & stop read prices as"). Coverage:
+  `tests/test_mark_basis_families.py`. **Both bases are computed every slice whichever is acted on**, and the
   evidence is in the log, prefixed `MARKS ` like `ORDER `: `MARKS fill` per leg at adoption
   (decision vs fill, ₹ shortfall, cumulative `entry_shortfall` for the cycle — persisted),
   `MARKS diverge` (≤1/min) whenever the two bases DISAGREE on a threshold, naming what the

@@ -91,7 +91,7 @@ class DoubleDiagonalCalendarStrategy(DeltaNeutralMonthlyStrategy):
         stop_check: str = "tick",
         eod_time: str = "15:20",
         min_leg_oi: int = 1,
-        mark_basis: str = "ltp",
+        mark_basis: str = "exit",
         lot_overrides: dict | None = None,
         entry_legs: list[dict] | None = None,  # manual override: explicit legs, skips delta pick
         margin_per_set: float = 0.0,   # ₹ per lot-set; 0 = derive from broker

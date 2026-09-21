@@ -76,7 +76,7 @@ class PutCondorStrategy(DeltaNeutralMonthlyStrategy):
         adjust_check: str | None = None,
         eod_time: str = "15:20",
         min_leg_oi: int = 1,
-        mark_basis: str = "ltp",
+        mark_basis: str = "exit",
         risk_free_rate: float = 0.065,
         lot_overrides: dict | None = None,
         **_ignored,

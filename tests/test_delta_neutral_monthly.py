@@ -534,7 +534,8 @@ def _roll_once(st, ctx):
 def test_pnl_basis_total_folds_in_roll_realized():
     """A roll banks the closed short's realized into realized_rolls; under pnl_basis="total" the
     decision P&L = open-leg MTM + that banked realized. "open_legs" ignores it (§1 default)."""
-    st, ctx = _enter_broker(DeltaNeutralMonthlyStrategy(pnl_basis="total"))
+    # ltp basis: this test is about pnl_basis, and it hands strategy_pnl its own closes
+    st, ctx = _enter_broker(DeltaNeutralMonthlyStrategy(pnl_basis="total", mark_basis="ltp"))
     pe_entry, pe_units, cover = _roll_once(st, ctx)
     assert round(st.realized_rolls, 2) == round((pe_entry - cover) * pe_units, 2)
     assert st.realized_rolls > 0

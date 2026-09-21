@@ -33,6 +33,7 @@ from skas_algo.engine.types import Signal, SignalAction
 
 from ._options_common import (
     EntryVolFilterMixin,
+    MarkBasisMixin,
     ExitCadenceMixin,
     SkipReasonMixin,
     TrailingStopMixin,
@@ -48,7 +49,7 @@ def _last_weekday_of_month(d: date, weekday: int) -> date:
     return last - timedelta(days=(last.weekday() - weekday) % 7)
 
 
-class CallRatioMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, EntryVolFilterMixin,
+class CallRatioMonthlyStrategy(MarkBasisMixin, SkipReasonMixin, ExitCadenceMixin, EntryVolFilterMixin,
                                TrailingStopMixin):
     strategy_id = "call_ratio_monthly"
     right = "CE"  # PutRatioMonthlyStrategy flips this to "PE" (the downside mirror)
@@ -131,8 +132,10 @@ class CallRatioMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, EntryVolFilter
         # NORMAL management — the %-of-margin profit/stop AND the native time exit (batman:
         # max_holding_days; HNI: exit_weekday). One-shot. Default None → runs unchanged (§1).
         entry_legs: list[dict] | None = None,
+        mark_basis: str = "exit",   # target/stop read on exit prices (MarkBasisMixin)
         **_ignored,
     ):
+        self._init_mark_basis(mark_basis)
         self.underlying = (underlying or (universe[0] if universe else "NIFTY")).upper()
         self.initial_capital = float(initial_capital)
         self.strike_mode = strike_mode
@@ -292,8 +295,9 @@ class CallRatioMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, EntryVolFilter
             self._frozen_margin = float(value)
 
     def strategy_pnl(self, closes: dict) -> float | None:
-        """The MTM measure _manage compares against the target/stop (decision-entry basis)."""
-        return legs_mtm_pnl(self.legs, closes)
+        """The MTM measure _manage compares against the target/stop — on the acting marks
+        (exit prices against the real fills under mark_basis="exit")."""
+        return legs_mtm_pnl(self.legs, self._marks_for(closes))
 
     def _risk_base(self, ctx=None) -> float:
         """Rupee base the profit-target/stop percentages apply to. LIVE: the broker basket
@@ -350,6 +354,7 @@ class CallRatioMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, EntryVolFilter
             rules.append(
                 f"Time exit after {self.max_holding_days}d ({self._cadence_phrase('time')})"
             )
+        rules.append(f"P&L for these rules is read {self._marks_phrase()}")
         return rules
 
     # ------------------------------------------------------------------ helpers
@@ -741,10 +746,12 @@ class CallRatioMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, EntryVolFilter
             if not all(market.has_print(leg["symbol"]) for leg in self.legs):
                 return []
         try:
-            pnl = sum(
-                leg["dir"] * (ctx.close(leg["symbol"]) - leg["entry"]) * leg["units"]
-                for leg in self.legs
-            )
+            # each leg on its ACTING mark: the exit price against the real fill under
+            # mark_basis="exit" (MarkBasisMixin), the LTP against the decision under "ltp"
+            pnl = 0.0
+            for leg in self.legs:
+                px = self._leg_mark(ctx, leg, ctx.close(leg["symbol"]))
+                pnl += leg["dir"] * (px - leg["entry"]) * leg["units"]
         except KeyError:
             return []  # a leg didn't print today; manage next slice
         base = self._risk_base(ctx)
@@ -773,6 +780,8 @@ class CallRatioMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, EntryVolFilter
 
     def _flat(self) -> None:
         self.legs = []
+        self.entry_shortfall = 0.0
+        self._exit_marks = {}
         self.entry_expiry = None
         self.entry_date = None
         self._frozen_margin = None  # re-frozen from the broker push after the next entry

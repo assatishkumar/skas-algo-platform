@@ -21,10 +21,10 @@ from skas_algo.engine.options.contract_specs import lot_size_for
 from skas_algo.engine.options.instrument import make
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import OpenSettleGuard, bad_close
+from ._options_common import MarkBasisMixin, OpenSettleGuard, bad_close
 
 
-class CustomOptionsStrategy(OpenSettleGuard):
+class CustomOptionsStrategy(MarkBasisMixin, OpenSettleGuard):
     strategy_id = "custom_options"
     intraday = True  # decide every tick (the loop already ticks DERIV; explicit for clarity)
 
@@ -43,8 +43,10 @@ class CustomOptionsStrategy(OpenSettleGuard):
         leg_stops: dict | None = None,             # {leg_index: fraction} per-leg premium stop
         lot_size: int = 0,                         # explicit contract lot size (req. for stock F&O)
         lot_overrides: dict | None = None,
+        mark_basis: str = "exit",   # target/stop read on exit prices (MarkBasisMixin)
         **_ignored,
     ):
+        self._init_mark_basis(mark_basis)
         self.underlying = (underlying or (universe[0] if universe else "NIFTY")).upper()
         self._expiry_param = expiry
         self.leg_defs = list(legs or [])
@@ -140,6 +142,10 @@ class CustomOptionsStrategy(OpenSettleGuard):
         # still runs — a book the engine already closed must still be marked done.
         if not self._open_settled(self._now(ctx)):
             return []
+        # The book's real fills become the entries (once per leg) and every mark below is
+        # the ACTING mark — the exit price by side under mark_basis="exit" (MarkBasisMixin).
+        self._adopt_entries(ctx, open_legs)
+        mark_of = lambda s: self._acting_mark(ctx, s, self._dir(s), ctx.close(s))  # noqa: E731
 
         # 1) Per-leg premium target / stop.
         leg_sigs: list[Signal] = []
@@ -149,7 +155,7 @@ class CustomOptionsStrategy(OpenSettleGuard):
             if tgt is None and stp is None:
                 continue
             try:
-                cur = ctx.close(s)
+                cur = mark_of(s)
             except KeyError:
                 continue
             entry = self.entry_close[s]
@@ -171,7 +177,7 @@ class CustomOptionsStrategy(OpenSettleGuard):
         # 2) Combined P&L as a fraction of |net entry premium| over the still-open legs.
         if self.profit_target_pct is not None or self.stop_loss_pct is not None:
             try:
-                net_now = self._net_value(open_legs, lambda s: ctx.close(s))
+                net_now = self._net_value(open_legs, mark_of)
             except KeyError:
                 net_now = None
             net_entry = self._net_value(open_legs, lambda s: self.entry_close[s])
@@ -204,6 +210,27 @@ class CustomOptionsStrategy(OpenSettleGuard):
 
     def _sign(self, symbol: str) -> float:
         return 1.0 if self.leg_side.get(symbol) == "sell" else -1.0  # +credit / −debit
+
+    def _dir(self, symbol: str) -> int:
+        return -1 if self.leg_side.get(symbol) == "sell" else 1
+
+    def _adopt_entries(self, ctx, legs) -> None:
+        """Once per leg: the book's real fill replaces the decision close as the entry
+        (under "exit"); the shortfall is counted either way."""
+        seen = getattr(self, "_fill_seen", None)
+        if seen is None:
+            seen = self._fill_seen = set()
+        for s in legs:
+            if s in seen:
+                continue
+            fill = self._adopted_fill(ctx, s)
+            if fill is None:
+                continue
+            seen.add(s)
+            decision = float(self.entry_close.get(s, 0.0) or 0.0)
+            self.entry_shortfall += (fill - decision) * float(self.units.get(s, 0)) * self._dir(s)
+            if self.mark_basis == "exit":
+                self.entry_close[s] = fill
 
     def _net_value(self, legs, price_of) -> float:
         return sum(self._sign(s) * price_of(s) * self.units[s] for s in legs)

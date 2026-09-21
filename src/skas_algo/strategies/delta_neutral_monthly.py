@@ -164,7 +164,7 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
         # book realised as −₹9,765. Both bases are computed EVERY slice whichever one is acted
         # on, and every disagreement is logged (``MARKS`` lines) so a running LTP deploy
         # still reports what the exit basis would have done.
-        mark_basis: str = "ltp",
+        mark_basis: str = "exit",
         # Which MARGIN the %-thresholds are ₹-anchored to (owner design 2026-07-27, the
         # "two-margin scheme"): "current" = re-freeze after every structural change (the
         # historical behaviour, §1 default — the iron-fly targets 2.5% of the fly's smaller
@@ -212,7 +212,11 @@ class DeltaNeutralMonthlyStrategy(SkipReasonMixin, ExitCadenceMixin, TrailingSto
         self.trail_step_pct = float(trail_step_pct)
         self.trail_mode = str(trail_mode or "ratchet")
         self.pnl_basis = str(pnl_basis or "open_legs")
-        self.mark_basis = str(mark_basis or "ltp")
+        # "exit" EVERYWHERE since 2026-09-21 (owner decision) — including this ctor default,
+        # a deliberate departure from §1: run 209 booked a "target" on SENSEX prints an
+        # hour old that the exit realised as −₹27,280, and a running deploy on the old
+        # basis is the one exposed. A persisted "ltp" still works and still only watches.
+        self.mark_basis = str(mark_basis or "exit")
         if self.mark_basis not in ("ltp", "exit"):
             raise ValueError(f"mark_basis must be 'ltp' or 'exit', got {mark_basis!r}")
         self.exit_margin_basis = str(exit_margin_basis or "current")
