@@ -331,3 +331,26 @@ def test_the_rail_measures_the_cycles_mtm_not_the_open_lots_alone():
     assert events and all(e["exit_reason"] == "rail_target" for e in events)
     assert not sess.portfolio.lot_symbols()
     assert any("cycle" in r for r in rail.exit_rules())
+
+
+def test_the_rail_reads_the_open_lots_at_exit_prices():
+    """mark_basis everywhere (2026-09-21) includes the manual rail: a rupee target on a book
+    of shorts is measured at the ASK, so a print that says +target while the ask says not
+    yet holds — the run 209 failure cannot recur on a handed-over book either."""
+    sid, strategy = _families()[0]
+    sess = _session(strategy)
+    sess.manual_order(TS, closes=[{"symbol": WING}])
+    rail = sess.strategy
+    assert isinstance(rail, ManualBookStrategy) and rail.mark_basis == "exit"
+    rail.update(target_amt=5_000)
+    banked = rail.rail_status()["cycle_realised"]
+    # the two shorts print 50 below entry (+₹6,500 on 130 units, past the target once the
+    # wing's small banked loss is added) — but the ASK sits 20 above the print
+    sess.update_quotes({CE: 50.0, PE: 50.0})
+    sess.market._bid_ask = lambda sym: (30.0, 70.0)
+    assert sess.run_decision(datetime(2026, 1, 5, 10, 40)) == []
+    assert rail.strategy_pnl({CE: 50.0, PE: 50.0}) == pytest.approx(banked + 30.0 * 130, abs=1.0)
+    # a real book at the print: the target fires
+    sess.market._bid_ask = lambda sym: (50.0, 50.0)
+    events = sess.run_decision(datetime(2026, 1, 5, 10, 41))
+    assert events and all(e["exit_reason"] == "rail_target" for e in events)

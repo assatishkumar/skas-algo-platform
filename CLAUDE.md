@@ -133,8 +133,10 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   call_put_ratio_expiry, intraday_strangle_combo (short at ask, wing at bid, the ₹ MTM stop
   and both per-leg rules), custom_options + donchian (parallel dicts, side → direction;
   donchian's entries were already at `fill_price`), supertrend_spread (the spread's close
-  cost, `entry_credit` re-based on the fills). ema21 and momentum_theta have no mark
-  threshold and no flag. Adjustment/roll logic everywhere stays on LTP. Fail-open: no
+  cost, `entry_credit` re-based on the fills), and the MANUAL RAIL (`manual_book`: the
+  rupee target/stop on a handed-over book read the open lots at exit prices; the entries
+  are the lots' real fills already). ema21 and momentum_theta have no mark threshold and
+  no flag. Adjustment/roll logic everywhere stays on LTP. Fail-open: no
   `_bid_ask` (backtest chain, replay, cache source) → the LTP, and a replay's int `lots`
   adopts nothing, so every replay pin and parity suite is byte-identical. Hot-editable on
   a running tile (the modal labels it "Target & stop read prices as"). Coverage:

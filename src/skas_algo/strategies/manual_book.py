@@ -32,7 +32,7 @@ from datetime import date, datetime, time
 
 from skas_algo.engine.types import Signal, SignalAction
 
-from ._options_common import OpenSettleGuard
+from ._options_common import MarkBasisMixin, OpenSettleGuard
 
 # Which paused-strategy attribute carries a %-OF-MARGIN stop this rail may inherit. The
 # ratio family's `stop_loss_pct` is a fraction of CAPITAL, custom_options' a fraction of
@@ -63,7 +63,7 @@ def _hhmm(v) -> time | None:
         return None
 
 
-class ManualBookStrategy(OpenSettleGuard):
+class ManualBookStrategy(MarkBasisMixin, OpenSettleGuard):
     strategy_id = "manual_book"
     intraday = True                # tick-driven like every option deck
 
@@ -73,8 +73,11 @@ class ManualBookStrategy(OpenSettleGuard):
                  margin_anchor: float = 0.0, stop_amt: float = 0.0, target_amt: float = 0.0,
                  paused_strategy_id: str | None = None,
                  handover_at: str | None = None, handover_reason: str | None = None,
-                 **_ignored) -> None:
+                 mark_basis: str = "exit", **_ignored) -> None:
         self.underlying = (underlying or (universe[0] if universe else "NIFTY")).upper()
+        # the rupee target/stop read the OPEN lots at exit prices (a long at the bid, a short
+        # at the ask) — the entries are the lots' real fills already (MarkBasisMixin)
+        self._init_mark_basis(mark_basis)
         self.initial_capital = float(initial_capital or 0.0)
         self.stop_pct = float(stop_pct or 0.0)          # % of the margin anchor, 0 = OFF
         self.target_pct = float(target_pct or 0.0)      # % of the margin anchor, 0 = OFF
@@ -190,9 +193,10 @@ class ManualBookStrategy(OpenSettleGuard):
         except Exception:  # a malformed log must never stop the rail from marking the book
             return 0.0
 
-    def _pnl(self, legs: list[dict], price_of) -> float | None:
+    def _pnl(self, legs: list[dict], price_of, ctx=None) -> float | None:
         """The cycle's MTM: banked + the open lots at ``price_of``; None while a leg has no
-        print (hold — never decide on a book that cannot be marked)."""
+        print (hold — never decide on a book that cannot be marked). With a ``ctx`` the
+        mark is the ACTING one — the exit price by side under mark_basis="exit"."""
         total = self._cycle_realised()
         for leg in legs:
             try:
@@ -201,6 +205,8 @@ class ManualBookStrategy(OpenSettleGuard):
                 return None
             if px is None:
                 return None
+            if ctx is not None:
+                px = self._acting_mark(ctx, leg["symbol"], int(leg["dir"]), float(px))
             total += leg["dir"] * (float(px) - leg["entry"]) * leg["units"]
         return total
 
@@ -218,7 +224,7 @@ class ManualBookStrategy(OpenSettleGuard):
         tgt, stp = self._thresholds()
         if tgt is None and stp is None:
             return []
-        pnl = self._pnl(legs, ctx.close)
+        pnl = self._pnl(legs, ctx.close, ctx)
         if pnl is None:
             return []                                   # a leg without a print: hold
         if stp is not None and pnl <= -stp:
@@ -240,7 +246,7 @@ class ManualBookStrategy(OpenSettleGuard):
     # 2026-09-10) — the banner says "manual mode", never an alarm about what is unset.
 
     def strategy_pnl(self, closes: dict) -> float | None:
-        return self._pnl(self.legs, closes.get) if self.legs else None
+        return self._pnl(self.legs, self._marks_for(closes).get) if self.legs else None
 
     def exit_amounts(self) -> tuple[float | None, float | None]:
         return self._thresholds()
@@ -264,7 +270,8 @@ class ManualBookStrategy(OpenSettleGuard):
         if self.time_exit is not None:
             rules.append(f"Square off at {self.time_exit.strftime('%H:%M')}")
         if self.stop_amt > 0 or self.target_amt > 0 or self.stop_pct > 0 or self.target_pct > 0:
-            rules.append("MTM = the cycle's banked P&L + the open legs (the console's Cycle MTM)")
+            rules.append("MTM = the cycle's banked P&L + the open legs (the console's Cycle MTM), "
+                         f"read {self._marks_phrase()}")
         rules.append("Expiry settles to intrinsic (engine)")
         return rules
 
