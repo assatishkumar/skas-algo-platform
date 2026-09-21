@@ -842,6 +842,7 @@ def cycle_briefs(cycles: list[dict]) -> list[dict]:
             "underlying": c.get("underlying"),
             "expiry": c.get("expiry"),
             "n_legs": len(legs),
+            "manual": bool(c.get("manual")),
             "symbols": sorted({str(lg.get("symbol")) for lg in legs if lg.get("symbol")}),
         })
     return out

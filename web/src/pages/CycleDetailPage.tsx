@@ -103,6 +103,7 @@ export function CycleDetail({ m, active, toggle, setActive, onClose }: {
         </Chip>
         <Chip tone="chip">{m.underlying} · {expiryLabel(m.expiry)}</Chip>
         <Chip tone="chip">{m.legs.length} LEGS · {m.n_rolls + m.n_hedges} ADJ</Chip>
+        {m.manual && <Chip tone="danger">✋ MANUAL INTERVENTION</Chip>}
         {onLive && !onClose && (
           <Link to={`/console?fork=local:${m.run_id}:${m.index}`}
             className="rounded-[8px] px-2.5 py-1 text-[12px] font-bold text-[var(--accent-deep)] border border-[var(--border)] hover:underline"

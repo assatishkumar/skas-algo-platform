@@ -1444,6 +1444,9 @@ def runs() -> list[dict]:
                 "underlying": str(live.config.underlying).upper(),
                 "status": snap.get("status"),
                 "open_positions": snap.get("open_positions"),
+                # manual mode: a handed-over run, or a manual run (listed even while flat —
+                # it is the one run the console exists to build a book into)
+                "managed_by": snap.get("managed_by"),
             }
         )
     return out

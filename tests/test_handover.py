@@ -354,3 +354,38 @@ def test_the_rail_reads_the_open_lots_at_exit_prices():
     sess.market._bid_ask = lambda sym: (50.0, 50.0)
     events = sess.run_decision(datetime(2026, 1, 5, 10, 41))
     assert events and all(e["exit_reason"] == "rail_target" for e in events)
+
+
+def test_a_manual_run_is_manual_from_its_first_tick_and_a_commit_never_hands_over():
+    """`manual_options` (the console's "+ New manual run"): the rail IS the strategy, so the
+    session is in manual mode before anything is traded, the console's manual_order adds
+    legs without a handover, its rupee rules manage the book, and a restart keeps it so."""
+    from skas_algo.strategies.manual_options import ManualOptionsStrategy
+
+    st = ManualOptionsStrategy(universe=["NIFTY"], underlying="NIFTY", target_amt=2_000)
+    sd = FakeLiveSD(_biz(date(2026, 1, 1), date(2026, 1, 20)))
+    mv, _chain, settler, margin = build_live_options_run(sd, "NIFTY", now=TS)
+    sess = LiveSession(st, initial_capital=500_000, market_view=mv, settler=settler,
+                       margin_model=margin, charge_model=ChargeModel())
+    assert sess.managed_by == "manual" and sess.paused_strategy is None
+    assert sess.handover["reason"] == "manual_run" and st.realised_fn is not None
+    assert sess.run_decision(TS) == []                       # flat: the rail has nothing to do
+    sess.update_quotes({CE: 100.0, PE: 100.0})
+    sess.manual_order(TS, opens=[{"right": "CE", "strike": 25000, "lots": 1, "side": "sell",
+                                  "expiry": EXP}])
+    assert sess.strategy is st and sess.managed_by == "manual"   # no second rail, no handover
+    assert sess.portfolio.lot_symbols() == [CE]
+    assert st.exit_rules()[0].startswith("Manual run")
+    # the rupee target the owner set: the short decays 40 → ₹2,600 on 65 units ≥ ₹2,000
+    sess.update_quotes({CE: 60.0})
+    events = sess.run_decision(datetime(2026, 1, 5, 10, 40))
+    assert events and all(e["exit_reason"] == "rail_target" for e in events)
+    # a restart rebuilds the strategy from the snapshot; the rail is still the strategy
+    state = sess.export_state()
+    st2 = ManualOptionsStrategy(universe=["NIFTY"], underlying="NIFTY", target_amt=2_000)
+    sess2 = LiveSession(st2, initial_capital=500_000, market_view=mv, settler=settler,
+                        margin_model=margin, charge_model=ChargeModel())
+    sess2.load_state(state)
+    assert sess2.managed_by == "manual" and sess2.strategy is st2 and sess2.paused_strategy is None
+    with pytest.raises(ValueError, match="not paused"):
+        sess2.resume_strategy(TS)                            # nothing to resume on a manual run

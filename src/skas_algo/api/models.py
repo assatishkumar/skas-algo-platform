@@ -118,6 +118,22 @@ class ConsoleRestore(BaseModel):
     fork: dict | None = None            # a forked deployment cycle's record (console_fork)
 
 
+class ManualRunCreate(BaseModel):
+    """The console's "+ New manual run": a FLAT `manual_options` deployment on the live
+    chain, traded by hand from the console. A LIVE run is a definition here — real orders
+    still need the account armed and the typed REAL on every send (§1)."""
+
+    name: str
+    underlying: str = "NIFTY"
+    mode: Literal["PAPER", "LIVE"] = "PAPER"
+    broker_account_id: int
+    capital: float = 500_000
+    stop_amt: float = 0.0               # rupee stop on the cycle's MTM, 0 = none
+    target_amt: float = 0.0             # rupee target, 0 = none
+    time_exit: str | None = None        # "15:15" hard square-off, None = hold to expiry
+    notes: str | None = None
+
+
 class ConsoleForkOpen(BaseModel):
     """Open the console AS a deployment's cycle: the run's actual fills restored on the
     cycle's entry day, ready to be watched, forked and traded differently."""

@@ -811,14 +811,14 @@ function RunCard({
               : " A target or stop is optional (Edit params)."}
             {run.rail?.time_exit ? ` Square-off ${run.rail.time_exit}.` : ""}
           </span>
-          <button
+          {run.strategy_id !== "manual_options" && <button
             disabled={busy || (run.positions ?? []).length > 0}
             title={(run.positions ?? []).length > 0 ? "Exit the positions first — the strategy cannot take over legs it did not open" : "Reinstall the paused strategy on the flat book"}
             onClick={() => { if (confirm("Reinstall the paused strategy? Its own rules decide whether it re-enters.")) act(() => api.liveResumeStrategy(run.run_id)); }}
             className="rounded bg-amber-700 hover:bg-amber-800 disabled:opacity-40 text-white px-2.5 py-1 text-xs font-medium"
           >
             Resume strategy
-          </button>
+          </button>}
         </div>
       )}
       {run.quote_error && (
@@ -1374,7 +1374,7 @@ function DeploymentTile({
           ...(dep.mode === "PAPER" ? [{ label: "⚡ Go LIVE", onClick: () => setShowGoLive(true) }] : []),
           { label: "Exit positions", tone: "warn", onClick: () => { if (positions > 0 && confirm("Exit ALL open positions for this strategy now, at live prices?")) act(() => api.liveFlatten(dep.run_id)); } },
           { label: "Mark closed at broker", onClick: () => setShowAdopt(true) },
-          ...(dep.managed_by === "manual" ? [{
+          ...(dep.managed_by === "manual" && dep.strategy_id !== "manual_options" ? [{
             label: positions > 0 ? "Resume strategy (flatten first)" : "Resume strategy",
             onClick: () => {
               if (positions > 0) { alert("The book still holds positions — flatten it first. The strategy cannot take over legs it did not open."); return; }
@@ -2348,8 +2348,13 @@ export default function LivePage() {
         ) : (
           <div className="space-y-[18px]">
             {LIVE_CATEGORIES.map((cat) => {
-              const catGroups = groups.filter(([sid, deps]) =>
-                liveCategoryOf(sid, deps[0]?.instrument_class) === cat.id);
+              // the Manual category holds every run in manual mode, whatever its strategy;
+              // the other categories hold the rest (owner, 2026-09-21)
+              const catGroups = groups
+                .map(([sid, deps]) => [sid, deps.filter((d) =>
+                  cat.id === "manual" ? d.managed_by === "manual" : d.managed_by !== "manual")] as [string, typeof deps])
+                .filter(([sid, deps]) => deps.length > 0
+                  && (cat.id === "manual" || liveCategoryOf(sid, deps[0]?.instrument_class) === cat.id));
               if (catGroups.length === 0) return null;
               const catDeps = catGroups.flatMap(([, deps]) => deps);
               const catAgg = catDeps.reduce(

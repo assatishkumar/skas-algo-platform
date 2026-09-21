@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { api } from "../api/client";
+import { api, brokers as brokersApi } from "../api/client";
 import type {
   ConsoleAlert, ConsoleChainLeg, ConsoleChainRow, ConsoleLeg, ConsoleLiveRun, ConsoleTicket, ConsoleTicketRow, ConsolePreset, ConsoleWhatIf, ConsoleWhatIfCandidate, ConsoleProbe, ConsoleRisk,
   ConsoleState,
@@ -525,6 +525,88 @@ function ForkStrip({ fork, cursorKey, risk, traded, next, onFork, busy }: {
         {fork.clamped.length ? `${fork.clamped.length} fill${fork.clamped.length === 1 ? "" : "s"} moved into session hours · ` : ""}
         fork fills at the store's last trade, no spread
       </span>
+    </div>
+  );
+}
+
+/** "+ New manual run" (owner 2026-09-21): a FLAT paper/live deployment with no strategy
+ *  behind it, on the account's live chain. The console then lists it, every click stages,
+ *  and Commit places through the run's own order path. A LIVE run is a definition here;
+ *  every real send still needs the account armed and the typed REAL. */
+function NewManualRunPanel({ onClose, onCreated }: { onClose: () => void; onCreated: (runId: number) => void }) {
+  const { data: accounts } = useQuery({ queryKey: ["brokers"], queryFn: brokersApi.list });
+  const [name, setName] = useState("");
+  const [underlying, setUnderlyingSel] = useState("NIFTY");
+  const [mode, setMode] = useState<"PAPER" | "LIVE">("PAPER");
+  const [account, setAccount] = useState<number | "">("");
+  const [capital, setCapital] = useState("500000");
+  const [target, setTarget] = useState("");
+  const [stop, setStop] = useState("");
+  const [timeExit, setTimeExit] = useState("");
+  const [real, setReal] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const create = useMutation({
+    mutationFn: () => api.consoleCreateManualRun({
+      name: name.trim(), underlying, mode, broker_account_id: Number(account),
+      capital: Number(capital) || 500_000,
+      target_amt: Number(target) || 0, stop_amt: Number(stop) || 0,
+      time_exit: timeExit.trim() || null,
+    }),
+    onSuccess: (r) => onCreated(r.run_id),
+    onError: (e: Error) => setErr(e.message),
+  });
+  const ready = name.trim().length > 0 && account !== "" && (mode === "PAPER" || real === "REAL");
+  const field = "h-[24px] rounded-[5px] px-2 text-[11.5px]";
+  const fieldStyle = { background: "var(--oc-panel)", border: "1px solid var(--oc-line)", color: "var(--oc-ink)" };
+  return (
+    <div className="absolute left-3 top-10 z-30 w-[520px] rounded-[8px] p-3 text-[12px] shadow-lg"
+      style={{ background: "var(--oc-surface)", border: "1px solid var(--oc-line)", color: "var(--oc-ink)" }}>
+      <div className="flex items-center justify-between mb-1">
+        <b>New manual run</b>
+        <button type="button" onClick={onClose} className="text-[11px] underline">close</button>
+      </div>
+      <div className="text-[10.5px] mb-2" style={{ color: "var(--oc-faint)" }}>
+        a flat run on the account's live chain with no strategy behind it — build the book here, commit through the run's own order path; the rail runs whatever target / stop / square-off you set
+      </div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+        <label className="flex items-center justify-between gap-2 col-span-2">name
+          <input className={`${field} flex-1`} style={fieldStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. BN iron fly by hand" /></label>
+        <label className="flex items-center justify-between gap-2">account
+          <select className={field} style={fieldStyle} value={account} onChange={(e) => setAccount(e.target.value ? Number(e.target.value) : "")}>
+            <option value="">pick…</option>
+            {(accounts ?? []).map((a) => <option key={a.id} value={a.id}>{a.label} · {a.broker}{a.has_session ? "" : " · no session"}</option>)}
+          </select></label>
+        <label className="flex items-center justify-between gap-2">underlying
+          <select className={field} style={fieldStyle} value={underlying} onChange={(e) => setUnderlyingSel(e.target.value)}>
+            {["NIFTY", "BANKNIFTY", "SENSEX"].map((u) => <option key={u} value={u}>{u}</option>)}
+          </select></label>
+        <label className="flex items-center justify-between gap-2">mode
+          <select className={field} style={{ ...fieldStyle, color: mode === "LIVE" ? "var(--oc-neg)" : "var(--oc-ink)" }} value={mode} onChange={(e) => setMode(e.target.value as "PAPER" | "LIVE")}>
+            <option value="PAPER">PAPER</option><option value="LIVE">LIVE (real money)</option>
+          </select></label>
+        <label className="flex items-center justify-between gap-2">capital ₹
+          <input className={`${field} w-28 text-right`} style={fieldStyle} inputMode="decimal" value={capital} onChange={(e) => setCapital(e.target.value)} /></label>
+        <label className="flex items-center justify-between gap-2" title="rupee target on the cycle's MTM (banked + open, read at exit prices); blank = none">target ₹
+          <input className={`${field} w-28 text-right`} style={fieldStyle} inputMode="decimal" value={target} onChange={(e) => setTarget(e.target.value)} placeholder="none" /></label>
+        <label className="flex items-center justify-between gap-2" title="rupee stop on the cycle's MTM; blank = none">stop ₹
+          <input className={`${field} w-28 text-right`} style={fieldStyle} inputMode="decimal" value={stop} onChange={(e) => setStop(e.target.value)} placeholder="none" /></label>
+        <label className="flex items-center justify-between gap-2" title="hard square-off time, HH:MM; blank = hold to expiry">square-off
+          <input className={`${field} w-28 text-right`} style={fieldStyle} value={timeExit} onChange={(e) => setTimeExit(e.target.value)} placeholder="15:15 or blank" /></label>
+        {mode === "LIVE" && (
+          <label className="flex items-center justify-between gap-2 col-span-2" style={{ color: "var(--oc-neg)" }}>
+            type REAL — this run's sends reach the broker when the account is armed
+            <input className={`${field} w-24`} style={{ ...fieldStyle, borderColor: "var(--oc-neg)" }} value={real} onChange={(e) => setReal(e.target.value)} placeholder="REAL" /></label>
+        )}
+      </div>
+      {err && <div className="mt-1.5 text-[11px]" style={{ color: "var(--oc-neg)" }}>{err}</div>}
+      <div className="mt-2 flex items-center gap-2">
+        <button type="button" disabled={!ready || create.isPending} onClick={() => { setErr(null); create.mutate(); }}
+          className="px-3 h-[24px] rounded-[5px] text-[11.5px] font-semibold disabled:opacity-40"
+          style={{ background: mode === "LIVE" ? "var(--oc-neg)" : "var(--oc-accent)", color: "#fff" }}>
+          {create.isPending ? "creating…" : `Create ${mode} run`}
+        </button>
+        <span className="text-[10.5px]" style={{ color: "var(--oc-faint)" }}>opens in the console once created; it stays flat until you commit a book</span>
+      </div>
     </div>
   );
 }
@@ -1435,8 +1517,10 @@ export default function ConsolePage() {
   // would list them — and the send lives there. Esc closes it.
   const [ticketOpen, setTicketOpen] = useState(false);
   useEffect(() => { if (!state?.staged) setTicketOpen(false); }, [state?.staged]);
+  const [showNewManual, setShowNewManual] = useState(false);
   const switchSource = (v: string) => {
     setPendingSwitch(null);
+    if (v === "new-manual") { setShowNewManual(true); return; }
     if (v === "replay") {
       opened.current = false; setState(null); setParams({}, { replace: true }); open.mutate({ underlying, expiry: null });
     } else {
@@ -2439,6 +2523,7 @@ export default function ConsolePage() {
           style={{ border: `1px solid ${isReal ? "var(--oc-neg)" : "var(--oc-accent)"}`,
             color: isReal ? "var(--oc-neg)" : "var(--oc-accent)", background: "transparent" }}>
           <option value="replay">REPLAY</option>
+          <option value="new-manual">+ New manual run…</option>
           {liveRuns?.recovering && (
             <option value="__recovering" disabled>… backend recovering runs — list is partial</option>
           )}
@@ -2447,15 +2532,20 @@ export default function ConsolePage() {
           {/* only runs HOLDING positions (owner, 2026-09-10) — a flat run has nothing to
               adjust here; build a fresh book on the Trade page instead */}
           {[...(liveRuns?.runs ?? [])]
-            .filter((r: ConsoleLiveRun) => (r.open_positions ?? 0) > 0)
+            // …plus a MANUAL run even while flat: it is the one run the console builds a book into
+            .filter((r: ConsoleLiveRun) => (r.open_positions ?? 0) > 0 || r.managed_by === "manual")
             .sort((a, b) => (b.open_positions ?? 0) - (a.open_positions ?? 0) || a.run_id - b.run_id)
             .map((r: ConsoleLiveRun) => (
             <option key={r.run_id} value={`run:${r.run_id}`}>
               {r.mode === "LIVE" && r.order_broker === "live" ? "LIVE" : "PAPER"} · #{r.run_id} {r.name} · {r.underlying}
-              {" · "}{r.open_positions ? `${r.open_positions} leg${r.open_positions === 1 ? "" : "s"}` : "flat"}
+              {" · "}{r.open_positions ? `${r.open_positions} leg${r.open_positions === 1 ? "" : "s"}` : "flat"}{r.managed_by === "manual" ? " · manual" : ""}
             </option>
           ))}
         </select>
+        {showNewManual && (
+          <NewManualRunPanel onClose={() => setShowNewManual(false)}
+            onCreated={(rid) => { setShowNewManual(false); qc.invalidateQueries({ queryKey: ["console-live-runs"] }); openLive.mutate(rid); }} />
+        )}
         <select value={underlying}
           onChange={(e) => { setUnderlying(e.target.value); opened.current = false; setState(null); }}
           className="h-[22px] rounded-[5px] px-1.5 text-[11px] font-semibold"
@@ -2521,7 +2611,9 @@ export default function ConsolePage() {
                 <span className="ml-1.5 px-1.5 rounded-[3px] font-bold"
                   title={`Manual mode: ${state.session.handover?.strategy_id ?? state.session.strategy_id} is paused after your change — you handle adjustments and exits. A target or stop is optional (Edit params on the Live tile). Resume from the Live page once flat.`}
                   style={{ background: "var(--oc-caution)", color: "#fff" }}>
-                  manual mode · {state.session.handover?.strategy_id ?? "strategy"} paused
+                  {state.session.strategy_id === "manual_options"
+                    ? "manual run · you build and manage the book"
+                    : `manual mode · ${state.session.handover?.strategy_id ?? "strategy"} paused`}
                 </span>
               )}
             </span>

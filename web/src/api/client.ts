@@ -187,6 +187,11 @@ export const api = {
     request<ConsoleState>("/console/sessions/fork", { method: "POST", body: JSON.stringify(body) }),
   consoleForkHere: (id: string) => request<ConsoleState>(`/console/sessions/${id}/fork`, { method: "POST" }),
   consoleForkSources: () => request<ForkSources>("/console/fork-sources"),
+  // "+ New manual run": a flat manual_options deployment on the account's live chain
+  consoleCreateManualRun: (body: { name: string; underlying: string; mode: "PAPER" | "LIVE"; broker_account_id: number;
+    capital: number; stop_amt?: number; target_amt?: number; time_exit?: string | null; notes?: string | null }) =>
+    request<{ run_id: number; name: string; mode: string; underlying: string; managed_by: string | null }>(
+      "/console/manual-runs", { method: "POST", body: JSON.stringify(body) }),
   runCycles: (runId: number) => request<RunCycles>(`/runs/${runId}/cycles`),
   consoleGet: (id: string) => request<ConsoleState>(`/console/sessions/${id}`),
   consoleLiveRuns: () => request<{ runs: ConsoleLiveRun[]; recovering?: boolean }>("/console/live-runs"),

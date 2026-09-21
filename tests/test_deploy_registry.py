@@ -129,6 +129,7 @@ _DEPLOYS_ELSEWHERE = {
     "donchian_strangle_monthly": "Trade → Screener (the basket comes from a scan)",
     "donchian_strangle_bt": "backtest-only sibling of donchian_strangle_monthly — no live path",
     "manual_sim": "the Simulator (/simulator) — a manual backtest traded in the console; never deployed",
+    "manual_options": "the console's '+ New manual run' (POST /console/manual-runs) — a flat run traded by hand",
 }
 
 

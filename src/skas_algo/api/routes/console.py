@@ -14,7 +14,11 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from skas_algo.api.deps import get_db
+from skas_algo.data.provider import get_available_symbols, get_price_loader
 
 from skas_algo.api.models import (
     ConsoleAlert,
@@ -34,6 +38,7 @@ from skas_algo.api.models import (
     ConsoleStage,
     ConsoleTransport,
     ConsoleUnstage,
+    ManualRunCreate,
 )
 from skas_algo.data.option_intraday_store import captured_days
 from skas_algo.services import (
@@ -204,6 +209,39 @@ async def open_fork(body: ConsoleForkOpen) -> dict:
         registry.drop(session.id)
         raise HTTPException(status_code=422, detail=f"fork failed: {exc}") from exc
     return session.state()
+
+
+@router.post("/manual-runs")
+def create_manual_run(body: ManualRunCreate, db: Session = Depends(get_db),
+                      loader=Depends(get_price_loader),
+                      avail: set[str] = Depends(get_available_symbols)) -> dict:
+    """"+ New manual run": a flat `manual_options` deployment on the account's live chain,
+    in manual mode from its first tick. The console then lists it, every click stages,
+    and Commit places through the run's own manual-order path — the SAME start path every
+    /trade deploy uses (`start_deployment`), no second order path. Quotes come from the
+    account's own broker (the source must match `account.broker`)."""
+    from skas_algo.api.models import LiveStartRequest
+    from skas_algo.api.routes.live import start_deployment
+    from skas_algo.db.models import BrokerAccount
+
+    account = db.get(BrokerAccount, body.broker_account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="broker account not found")
+    u = body.underlying.upper()
+    if u not in UNDERLYINGS:
+        raise HTTPException(status_code=422, detail=f"unknown underlying {body.underlying!r}")
+    req = LiveStartRequest(
+        strategy_id="manual_options", name=body.name, notes=body.notes,
+        instrument_class="DERIV", underlying=u, capital=float(body.capital),
+        params={"underlying": u, "stop_amt": float(body.stop_amt or 0),
+                "target_amt": float(body.target_amt or 0), "time_exit": body.time_exit},
+        mode=body.mode, quote_source=str(account.broker), broker_account_id=account.id,
+        refresh_seconds=5, auto=True,
+    )
+    live = start_deployment(req, db, loader, avail)
+    snap = live.snapshot()
+    return {"run_id": live.run_id, "name": live.config.name, "mode": snap.get("mode"),
+            "underlying": u, "managed_by": snap.get("managed_by")}
 
 
 @router.get("/fork-sources")

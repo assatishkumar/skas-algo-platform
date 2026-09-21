@@ -1419,6 +1419,25 @@ The page gates a real send behind a typed REAL; per §1 Claude never presses it.
   `tests/test_peer.py` (no other HTTP verb in its source); `SKAS_PEER_API_URL/_TOKEN`,
   the token from `skas-algo mint-token` on the peer. The console package imports neither
   module (pin in `tests/test_options_console.py`). Coverage: `tests/test_console_fork.py`.
+- **A MANUAL RUN (`manual_options`, owner ask 2026-09-21) — "+ New manual run" in the
+  console's source dropdown (`POST /console/manual-runs`).** A flat paper/live deployment
+  whose strategy IS the manual rail (`ManualOptionsStrategy(ManualBookStrategy)`): it
+  starts in manual mode (`LiveSession.__init__` sets `managed_by="manual"` for any
+  `ManualBookStrategy`, `load_state` keeps it — there is no paused strategy and nothing to
+  resume), the console lists it even while flat (`runs()` carries `managed_by`), every
+  click stages and Commit places through the SAME `manual_order` path — a commit never
+  hands over twice. The route builds a `LiveStartRequest` and calls `start_deployment`,
+  the path every /trade deploy uses; the quote source is the account's own broker. LIVE
+  here is a run DEFINITION (the page asks for a typed REAL to create one); every real send
+  still needs the §1 gates. Deploy path allowlisted in `tests/test_deploy_registry.py`.
+  **The Live page's "Manual" section** holds every run in manual mode — manual runs AND
+  handed-over strategy runs — by `managed_by`, not by strategy (`strategyMeta.ts`
+  category "manual"; a run returns to its group on Resume). **A cycle a hand touched
+  stays on the strategy's own record, MARKED** (`reconstruct_cycles` and its frontend
+  mirror `optionCycles.ts` set `manual` on a MANUAL-tagged fill, a `rail_*` exit or a
+  `broker_closed` adoption; the cycle table shows "✋ manual", the detail page a chip).
+  Coverage: the manual-run test in `tests/test_handover.py`, the marker test in
+  `tests/test_cycle_detail.py`.
 - Full plan + phases: `docs/PLAN-options-console.md`.
 
 ## 8e. The Simulator (`/simulator`) — manual backtesting, cycle by cycle (2026-09-11)

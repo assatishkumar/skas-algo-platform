@@ -454,3 +454,24 @@ def test_every_event_gives_the_payoff_panel_a_priceable_book():
     assert sorted(lg["price"] for lg in exit_ev["closed"]) == [40.0, 50.0]
     # every leg row carries the IV solved at its open — the model fallback for an unmarked leg
     assert all(0.05 < lg["open_iv"] < 1.0 for lg in m["legs"])
+
+
+def test_a_hand_in_the_cycle_marks_it_manual_on_the_strategys_own_record():
+    """Owner 2026-09-21: a strategy run that ended in manual mode keeps the cycle on ITS
+    record, flagged — a MANUAL fill, the rail's exit or a broker-adopted close all mark it;
+    a cycle the strategy ran end to end does not."""
+    ce = "NIFTY|2026-09-08|24200|CE"
+    clean = [
+        {"date": "2026-08-31 09:45", "ticker": ce, "action": "SHORT", "units": 65, "price": 100.0, "tag": "STRATEGY"},
+        {"date": "2026-09-04 15:15", "ticker": ce, "action": "COVER", "units": 65, "price": 60.0, "tag": "STRATEGY",
+         "exit_reason": "target"},
+    ]
+    handed = [
+        {"date": "2026-09-07 09:45", "ticker": ce, "action": "SHORT", "units": 65, "price": 100.0, "tag": "STRATEGY"},
+        {"date": "2026-09-10 11:34", "ticker": ce, "action": "COVER", "units": 30, "price": 90.0, "tag": "MANUAL"},
+        {"date": "2026-09-11 11:40", "ticker": ce, "action": "COVER", "units": 35, "price": 80.0, "tag": "STRATEGY",
+         "exit_reason": "rail_target"},
+    ]
+    cycles = reconstruct_cycles(clean + handed)          # newest first
+    assert [c["manual"] for c in cycles] == [True, False]
+    assert cycles[0]["exit_reason"] == "rail_target" and cycles[0]["net_pnl"] == 300 + 700

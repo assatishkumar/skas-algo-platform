@@ -401,6 +401,10 @@ export function CycleSummary({ cycles, points, runId, forkable }: {
                       {WEEKDAYS[weekdayOf(r.c.entry_date) as number]}
                     </span>
                   )}
+                  {r.c.manual && (
+                    <span className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold bg-amber-900/40 text-amber-300"
+                      title="a hand touched this cycle: a console fill, the manual rail's exit, or a close adopted from the broker — recorded on this strategy, marked">✋ manual</span>
+                  )}
                 </td>
                 <td className="py-1.5 pr-3">{r.c.exit_date ?? <span className="text-slate-500">open</span>}</td>
                 <td className="py-1.5 pr-3 text-right">{r.held != null ? `${r.held}d` : "—"}</td>

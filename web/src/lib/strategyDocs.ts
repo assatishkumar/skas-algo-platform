@@ -186,6 +186,29 @@ export const STRATEGIES: Rule[] = [
     links: [{ label: "Strategy video (YouTube)", url: "https://www.youtube.com/watch?v=iorriHcOpdU" }],
   },
   {
+    id: "manual_options",
+    name: "Manual run (console)",
+    kind: "Options",
+    bias: "Yours · a book you build and manage by hand",
+    summary:
+      "A paper or live deployment with NO strategy behind it: it starts flat, appears in the console's source list, and every leg you click is staged and committed through the run's own order path. The manual rail runs the optional rupee target and stop on the cycle's MTM (read at exit prices), a hard square-off time if you set one, and the engine's expiry settlement. Nothing enters on its own.",
+    structure: [
+      "Whatever you build in the console: any legs, any expiries, netted per contract.",
+      "One run per book; several runs can share an account (reconciliation counts every lot).",
+    ],
+    entry: [
+      "\"+ New manual run\" in the console's source dropdown: name, account, PAPER or LIVE, capital, underlying, optional ₹ target / ₹ stop / square-off time.",
+      "Then B / S on the chain → Review & commit. On a LIVE run the send needs the account armed and the typed REAL, every time.",
+    ],
+    exit: [
+      "Your hand from the console, or the rail: ₹ target / ₹ stop on the cycle's banked + open P&L at exit prices, the square-off time, expiry settlement.",
+      "Each cycle is recorded on this run with its fills, like any deployment; the cycle detail page and the fork work on it.",
+    ],
+    risk:
+      "There is no strategy watching this book. Whatever you leave unset is unset: with no stop the only guard is the square-off time and expiry. Size it like a hand-traded book.",
+    links: [],
+  },
+  {
     id: "intraday_straddle",
     name: "Intraday Straddle (9xx)",
     kind: "Options",
@@ -862,6 +885,13 @@ export const META: Record<string, Meta> = {
             ["Entry", "09:20–09:27 IST"], ["Exits", "+1.1% / −1% of margin"], ["Flat by", "15:20 — always"]],
     deployNote: "Deploy-only, broker quotes required (⅓-premium strikes come off the LIVE chain). Paper-first.",
     deployCta: { label: "Deploy CP ratio expiry", to: "/trade" },
+  },
+  manual_options: {
+    group: "Premium selling", biasKind: "neutral",
+    facts: [["Bias", "Yours"], ["Underlying", "NIFTY / BANKNIFTY / SENSEX"], ["Structure", "what you build"],
+            ["Entry", "your clicks, from the console"], ["Exits", "₹ target / ₹ stop / square-off (optional)"], ["Deploy", "Console → + New manual run"]],
+    deployNote: "Deploys from the console: create the flat run, then build the book on the live chain and commit. Manual mode from the first tick.",
+    deployCta: { label: "Open the console", to: "/console" },
   },
   intraday_straddle: {
     group: "Intraday options", biasKind: "neutral",

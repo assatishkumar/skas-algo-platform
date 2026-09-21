@@ -77,10 +77,18 @@ def reconstruct_cycles(trades: list[dict]) -> list[dict]:
                 "entry_spot": t.get("underlying_spot"),
                 "exit_spot": None,
                 "exit_reason": None,
+                "manual": False,
             }
             open_c[key] = cyc
         if mm["expiry"] > cyc["expiry"]:
             cyc["expiry"] = mm["expiry"]
+        # a hand in the cycle (owner 2026-09-21): a MANUAL-tagged fill (the console / a manual
+        # order), the manual rail's exit, or a close adopted from the broker — the cycle
+        # stays on the strategy's own record, marked
+        if (str(t.get("tag") or "").upper() == "MANUAL"
+                or str(t.get("exit_reason") or "").startswith("rail_")
+                or t.get("exit_reason") == "broker_closed"):
+            cyc["manual"] = True
         legs, sym = cyc["legs"], t["ticker"]
         units, price = float(t.get("units") or 0), float(t.get("price") or 0)
         # ONE record per OPEN→CLOSE episode, not per symbol. A strategy that re-sells the
@@ -213,6 +221,7 @@ def _finalize_recon(cyc: dict) -> dict:
         "daily_pnl": [],
         "legs_detail": legs_detail,
         "live": any_open,
+        "manual": bool(cyc.get("manual")),
     }
 
 
@@ -483,6 +492,7 @@ def build_cycle_detail(
         "days_held": cycle.get("holding_days"),
         "n_rolls": n_roll,
         "n_hedges": n_hedge,
+        "manual": bool(cycle.get("manual")),      # a hand touched this cycle (console / rail)
         "max_margin": round(max_margin) if max_margin else None,
         "worst_mtm": round(min((d["pnl"] for d in daily), default=0.0)),
         # absolute ₹ profit-target / stop for THIS cycle, off its entry margin (None-safe)

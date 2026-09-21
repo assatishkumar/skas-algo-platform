@@ -1059,6 +1059,7 @@ export interface CycleDetailLeg {
 export interface CycleDetail {
   run_id: number; index: number; strategy_id: string; run_name: string; live?: boolean;
   is_deployment?: boolean; // the RUN is paper/live (→ breadcrumb to /live), vs a backtest
+  manual?: boolean;        // a hand touched this cycle: a console fill, the rail's exit, a broker-adopted close
   underlying: string; expiry: string; lot_size?: number | null; // contract lot size (lots = units / lot_size)
   entered_at: string; exited_at: string | null;
   exit_reason: string | null; entry_spot: number | null; exit_spot: number | null;
@@ -2134,6 +2135,7 @@ export interface ConsoleLiveRun {
   run_id: number; name: string; strategy_id: string;
   mode: "PAPER" | "LIVE"; order_broker: "live" | "paper" | null;
   underlying: string; status: string | null; open_positions: number | null;
+  managed_by?: "strategy" | "manual" | null;   // a manual run is listed even while flat
 }
 
 export interface ConsoleSaved {
@@ -2309,7 +2311,7 @@ export interface ConsoleFork {
 export interface ForkCycleBrief {
   index: number; entered_at: string | null; exited_at: string | null; exit_reason: string | null;
   net: number | null; live: boolean; underlying: string | null; expiry: string | null;
-  n_legs: number; symbols: string[];
+  n_legs: number; symbols: string[]; manual?: boolean;
 }
 export interface ForkSourceRun {
   run_id: number; name: string; mode: string; strategy_id?: string | null; underlying?: string | null;

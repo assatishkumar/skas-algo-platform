@@ -30,6 +30,7 @@ from .hni_weekly import HniWeeklyStrategy
 from .intraday_straddle import IntradayStraddleStrategy
 from .intraday_strangle_combo import IntradayStrangleComboStrategy
 from .iron_fly_monthly import IronFlyMonthlyStrategy
+from .manual_options import ManualOptionsStrategy
 from .manual_sim import ManualSimStrategy
 from .momentum_theta_intra import MomentumThetaGainerIntra
 from .monthly_butterfly import MonthlyButterflyStrategy
@@ -83,6 +84,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     WeeklyIntradayStraddle.strategy_id: WeeklyIntradayStraddle,
     CustomOptionsStrategy.strategy_id: CustomOptionsStrategy,
     ManualSimStrategy.strategy_id: ManualSimStrategy,
+    ManualOptionsStrategy.strategy_id: ManualOptionsStrategy,
     CustomEquityStrategy.strategy_id: CustomEquityStrategy,
     DonchianStrangleMonthlyStrategy.strategy_id: DonchianStrangleMonthlyStrategy,
     DonchianStrangleBtStrategy.strategy_id: DonchianStrangleBtStrategy,

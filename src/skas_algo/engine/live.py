@@ -96,6 +96,16 @@ class LiveSession:
         self.paused_strategy = None
         self.managed_by: str = "strategy"          # "strategy" | "manual"
         self.handover: dict | None = None
+        # A MANUAL RUN (`manual_options`, the console's "+ New manual run"): the rail IS the
+        # strategy, so the book is the owner's from the first tick — the console's commits
+        # never hand anything over, and there is nothing to resume.
+        from skas_algo.strategies.manual_book import ManualBookStrategy
+
+        if isinstance(strategy, ManualBookStrategy):
+            self.managed_by = "manual"
+            self.handover = {"at": None, "reason": "manual_run",
+                             "strategy_id": getattr(strategy, "strategy_id", "manual_options")}
+            strategy.realised_fn = self._cycle_realised
         self.lookback = lookback
         self.tax_rate = tax_rate
         self.withdrawal_rate = withdrawal_rate
@@ -661,11 +671,18 @@ class LiveSession:
         self.stops.load(state.get("stops", []))
         if state.get("marks") and hasattr(self.market, "load_marks"):
             self.market.load_marks(state["marks"])  # last live quotes → price legs while disconnected
-        if state.get("managed_by") == "manual":
+        from skas_algo.strategies.manual_book import ManualBookStrategy
+
+        if isinstance(self.strategy, ManualBookStrategy):
+            # a MANUAL RUN: the rail is the strategy itself — load its knobs, stay manual
+            self.strategy.load_state(state.get("strategy", {}))
+            self.strategy.realised_fn = self._cycle_realised
+            self.managed_by = "manual"
+            self.paused_strategy = None
+            self.handover = state.get("handover") or self.handover
+        elif state.get("managed_by") == "manual":
             # Recovery built the ORIGINAL strategy from params_snapshot; hydrate it as the
             # paused one and put the rail back in front of it.
-            from skas_algo.strategies.manual_book import ManualBookStrategy
-
             paused = self.strategy
             if hasattr(paused, "load_state"):
                 paused.load_state(state.get("paused_strategy") or {})

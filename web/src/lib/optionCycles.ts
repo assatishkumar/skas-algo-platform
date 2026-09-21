@@ -36,6 +36,7 @@ export interface ReconCycle {
   holding_days?: number;
   entry_spot?: number | null; // underlying spot at entry (captured at trade time)
   exit_spot?: number | null; // underlying spot at exit
+  manual?: boolean; // a hand touched this cycle (a MANUAL fill, the rail's exit, a broker-adopted close)
 }
 
 const ENTRY = new Set(["BUY", "SHORT"]);
@@ -97,6 +98,9 @@ export function reconstructCycles(trades: Trade[]): ReconCycle[] {
       open.set(m.underlying, cyc);
     }
     if (m.expiry > cyc.expiry) cyc.expiry = m.expiry; // the cycle settles at its furthest leg
+    // owner 2026-09-21: a cycle a hand touched stays on the strategy's record, MARKED —
+    // the same rule as services/cycle_detail.reconstruct_cycles; keep the two in step
+    if ((t.tag ?? "").toUpperCase() === "MANUAL" || (t.exit_reason ?? "").startsWith("rail_") || t.exit_reason === "broker_closed") cyc.manual = true;
 
     // ONE record per OPEN→CLOSE episode, not per symbol: a strategy that re-sells the same
     // strike after booking it (intraday_strangle_combo's per-leg re-entry) would otherwise

@@ -6,7 +6,7 @@
  * strategy HOLDS across sessions (until the opposite signal) — it belongs in Positional;
  * the category blurb "squared off by market close" would be false for it. */
 
-export type LiveCategoryId = "intraday" | "positional" | "equity";
+export type LiveCategoryId = "manual" | "intraday" | "positional" | "equity";
 
 export const LIVE_CATEGORIES: {
   id: LiveCategoryId;
@@ -16,6 +16,16 @@ export const LIVE_CATEGORIES: {
   fg: string;
   icon: string; // pipe-separated svg segments (path | pl:polyline | c:circle)
 }[] = [
+  {
+    // runs in MANUAL mode (owner 2026-09-21): manual runs built from the console and any
+    // strategy run handed over after a hand-edit — membership is the run's `managed_by`,
+    // not its strategy, so a handed-over run comes back to its group on Resume
+    id: "manual",
+    name: "Manual",
+    desc: "Books you manage by hand from the console — manual runs and handed-over strategies. A strategy run returns to its group on Resume.",
+    bg: "var(--warn-bg)", fg: "var(--warn-text)",
+    icon: "M18 11V6a2 2 0 0 0-4 0v5|M14 10V4a2 2 0 0 0-4 0v6|M10 10.5V6a2 2 0 0 0-4 0v8|M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15",
+  },
   {
     id: "intraday",
     name: "Intraday Options",
@@ -55,6 +65,7 @@ const CATEGORY_OF: Record<string, LiveCategoryId> = {
   staggered_covered_call: "positional",
   "21_ema_momentum": "positional",
   supertrend_spread: "positional",
+  manual_options: "positional",          // never shown there: a manual run is always in manual mode → the Manual group
   delta_neutral_monthly: "positional",
   iron_fly_monthly: "positional",
   supertrend_momentum: "equity",
@@ -111,6 +122,7 @@ export const STRATEGY_NAMES: Record<string, string> = {
   donchian_strangle_monthly: "Donchian Basket Strangle",
   donchian_strangle_bt: "Donchian Strangle — Backtest",
   straddle_btst: "Straddle BTST (overnight long)",
+  manual_options: "Manual run (console)",
   // options — intraday
   intraday_straddle: "Intraday Straddle",
   weekly_intraday_straddle: "Weekly VWAP Straddle",
@@ -126,6 +138,7 @@ export function strategyName(id: string): string {
 }
 
 const GROUP_LABEL: Record<LiveCategoryId, string> = {
+  manual: "Manual",
   intraday: "Options — intraday",
   positional: "Options — positional",
   equity: "Equity",
@@ -136,7 +149,7 @@ const GROUP_LABEL: Record<LiveCategoryId, string> = {
 export function groupedStrategyOptions(ids: string[]):
     { label: string; options: { value: string; label: string }[] }[] {
   const buckets: Record<LiveCategoryId, { value: string; label: string }[]> = {
-    intraday: [], positional: [], equity: [],
+    manual: [], intraday: [], positional: [], equity: [],
   };
   for (const id of ids) {
     buckets[liveCategoryOf(id, "DERIV")].push({ value: id, label: strategyName(id) });
