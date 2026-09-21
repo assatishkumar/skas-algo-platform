@@ -444,8 +444,26 @@ const dShort = (m: string | null | undefined) => {
 /** The comparison a fork exists for: what the ACTUAL book was worth at this minute (the
  *  run's real fills marked on the store) beside what THIS tape is worth, and — once the
  *  fork's book is flat — the actual cycle's net beside the fork's. Arithmetic, no advice. */
-function ForkStrip({ fork, cursorKey, risk, traded }: {
+/** The next ACTUAL fill ahead of the cursor on a forked cycle — what stepping forward will
+ *  bring back — named by what it does (run 209: "+1m" landed on the run's own exit and read
+ *  as the console exiting by itself, owner 2026-09-21). */
+function nextActual(journal: ConsoleFill[], cursorKey: string, legsOpen: number) {
+  const ahead = journal.filter((f) => f.action !== "NOOP" && f.at > cursorKey);
+  if (!ahead.length) return null;
+  const at = ahead.reduce((m, f) => (f.at < m ? f.at : m), ahead[0].at);
+  const rows = ahead.filter((f) => f.at === at);
+  const closes = rows.filter((f) => f.action === "SELL" || f.action === "COVER").length;
+  const opens = rows.length - closes;
+  const label = closes && !opens ? (closes >= legsOpen ? "the run's EXIT" : "a partial exit")
+    : opens && !closes ? (legsOpen ? "an add" : "the entry") : "an adjustment";
+  const sameDay = at.slice(0, 10) === cursorKey.slice(0, 10);
+  return { at, count: rows.length, total: ahead.length, label,
+    when: sameDay ? at.slice(11, 16) : `${dShort(at)} ${at.slice(11, 16)}` };
+}
+
+function ForkStrip({ fork, cursorKey, risk, traded, next, onFork, busy }: {
   fork: ConsoleFork; cursorKey: string; risk: ConsoleRisk | null | undefined; traded: boolean;
+  next: ReturnType<typeof nextActual>; onFork: () => void; busy: boolean;
 }) {
   const series = fork.actual_series;
   let actual: [string, number] | null = null;
@@ -483,6 +501,21 @@ function ForkStrip({ fork, cursorKey, risk, traded }: {
             ? `${inr0(risk?.realised ?? 0)} vs ${inr0(fork.actual.net)} (${(risk?.realised ?? 0) - fork.actual.net >= 0 ? "+" : ""}${inr0((risk?.realised ?? 0) - fork.actual.net)})`
             : `${inr0(risk?.realised ?? 0)} vs actual still open`}
           title="the fork's book is flat: what it banked beside what the run actually banked (gross, the KPI's basis)" />
+      )}
+      {!fork.forked_at && next && (
+        <span className="inline-flex items-center gap-1.5 text-[11.5px]" style={{ color: "var(--oc-caution)" }}
+          title={`stepping forward replays the run's real fills; the next one is ${next.label} (${next.count} fill${next.count === 1 ? "" : "s"}) at ${next.when}. Fork here to take the book over BEFORE it.`}>
+          <b>next actual: {next.label} at {next.when}</b>
+          <button type="button" onClick={onFork} disabled={busy}
+            className="px-2 h-[20px] rounded-[4px] text-[11px] font-semibold disabled:opacity-40"
+            style={{ background: "var(--oc-caution)", color: "#fff" }}>✂ fork here</button>
+        </span>
+      )}
+      {!fork.forked_at && !next && fork.exited_at && cursorKey >= fork.exited_at && (
+        <span className="text-[11.5px]" style={{ color: "var(--oc-caution)" }}
+          title="the run's own exit has landed; the tape is now what really happened. Rewind (−1m, −1h, −1d) to before it and press fork here to try a different path.">
+          <b>the run exited here ({fork.exited_at.slice(11, 16)} on {dShort(fork.exited_at)})</b> · rewind before it and fork to try a different path
+        </span>
       )}
       <span className="ml-auto text-[10.5px]" style={{ color: "var(--oc-faint)" }}
         title="the actuals are the run's real fills (bid/ask at the broker); the fork's own fills are the store's last trade with no spread">
@@ -1798,6 +1831,7 @@ export default function ConsolePage() {
   const cursorKey = state ? `${state.session.date}T${state.session.clock}` : "";
   // actual fills still ahead of the cursor on a forked cycle — what "fork here" would drop
   const forkAhead = state?.fork ? state.journal.filter((f) => f.action !== "NOOP" && f.at > cursorKey).length : 0;
+  const forkNext = state?.fork ? nextActual(state.journal, cursorKey, state.legs.filter((l) => l.enabled).length) : null;
   // autosave the open cycle's tape after every change (debounced); never on a read-only replay
   const journalKey = state ? `${state.session.date}|${state.session.clock}|${state.journal.length}|${state.alerts.length}|${state.bookmarks.length}|${state.discarded?.length ?? 0}` : "";
   useEffect(() => {
@@ -2511,7 +2545,7 @@ export default function ConsolePage() {
           {state?.fork && forkAhead > 0 && !isLive && (
             <Chip title="drop the run's actual fills after this minute so the rest can be traded differently (kept on the record as 'forked here')"
               onClick={() => forkHere.mutate()} disabled={forkHere.isPending}>
-              ✂ {forkAhead} actual fill{forkAhead === 1 ? "" : "s"} ahead · fork here
+              ✂ fork here · next actual: {forkNext?.label ?? "a fill"} at {forkNext?.when ?? "?"}{forkAhead > (forkNext?.count ?? 0) ? ` · ${forkAhead} fills ahead` : ""}
             </Chip>
           )}
           <Chip disabled={!state || isLive} title="bookmark this minute (B)"
@@ -2751,7 +2785,8 @@ export default function ConsolePage() {
       </div>
 
       {state?.fork && !isLive && (
-        <ForkStrip fork={state.fork} cursorKey={cursorKey} risk={state.risk} traded={simTraded} />
+        <ForkStrip fork={state.fork} cursorKey={cursorKey} risk={state.risk} traded={simTraded}
+          next={forkNext} onFork={() => forkHere.mutate()} busy={forkHere.isPending} />
       )}
       {simId != null && !simReadOnly && state && (simTraded && simFlat || bankMsg) && (
         /* the Simulator's bank sheet: prompts the moment the book is flat after trading */
