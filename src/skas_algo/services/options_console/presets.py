@@ -46,7 +46,11 @@ PRESETS: tuple[Preset, ...] = (
     Preset("short_strangle", "Short strangle", "Sell Δ0.25 call + Δ0.25 put",
            (LegRule("CE", "S", "delta", delta=0.25), LegRule("PE", "S", "delta", delta=0.25)),
            defined=False, tags=("neutral", "theta")),
-    Preset("iron_condor", "Iron condor", "Δ0.20 strangle · wings 2 steps out",
+    # The condor is a SEARCH, not fixed anchors (owner 2026-09-21): symmetric shorts and
+    # wings chosen so reward:risk sits between 1:1 and 1.3:1 — the credit is at least half
+    # the wing width — taking the furthest shorts that manage it. The rules below are the
+    # FALLBACK when no such pair is quoted (`_resolve_condor`).
+    Preset("iron_condor", "Iron condor", "Shorts + wings for reward:risk 1:1 → 1.3:1 · widest first",
            (LegRule("CE", "S", "delta", delta=0.20), LegRule("PE", "S", "delta", delta=0.20),
             LegRule("CE", "B", "step", ref=0, steps=2), LegRule("PE", "B", "step", ref=1, steps=2)),
            defined=True, tags=("neutral", "defined")),
@@ -66,7 +70,65 @@ PRESETS: tuple[Preset, ...] = (
     Preset("call_ratio", "Call ratio 1:2", "Buy ATM call · sell 2× Δ0.25 call",
            (LegRule("CE", "B", "atm"), LegRule("CE", "S", "delta", delta=0.25, lots=2)),
            defined=False, tags=("mild bullish", "ratio")),
+    Preset("put_ratio", "Put ratio 1:2", "Buy ATM put · sell 2× Δ0.25 put",
+           (LegRule("PE", "B", "atm"), LegRule("PE", "S", "delta", delta=0.25, lots=2)),
+           defined=False, tags=("mild bearish", "ratio")),
 )
+
+CONDOR_RR = (1.0, 1.3)          # reward:risk band the condor is built for (owner 2026-09-21)
+CONDOR_MAX_SHORT_STEPS = 20
+CONDOR_MAX_WING_STEPS = 6
+
+
+def _resolve_condor(rows: list[dict], atm: float, grid: float, lots: int) -> dict | None:
+    """Symmetric iron condor by reward:risk. Every (short distance s, wing width w) with all
+    four legs quoted is priced: credit = shorts − wings, risk = w·grid − credit, rr =
+    credit / risk. The furthest shorts whose rr lands inside CONDOR_RR win (highest POP
+    that still pays ≥ 1:1); ties take the narrower wing. With nothing inside the band the
+    nearest rr is built and NAMED, never a silent substitute. None → let the fixed-anchor
+    fallback run (it reports its own reason)."""
+    by_k = {float(r["strike"]): r for r in rows}
+
+    def q(k: float, right: str):
+        r = by_k.get(float(k))
+        cell = r and r[right.lower()]
+        return cell if cell and cell.get("quoted") and cell.get("ltp") else None
+
+    cands: list[tuple] = []
+    for s in range(1, CONDOR_MAX_SHORT_STEPS + 1):
+        ce_s, pe_s = q(atm + s * grid, "CE"), q(atm - s * grid, "PE")
+        if not (ce_s and pe_s):
+            continue
+        for w in range(1, CONDOR_MAX_WING_STEPS + 1):
+            ce_l, pe_l = q(atm + (s + w) * grid, "CE"), q(atm - (s + w) * grid, "PE")
+            if not (ce_l and pe_l):
+                continue
+            credit = float(ce_s["ltp"]) + float(pe_s["ltp"]) - float(ce_l["ltp"]) - float(pe_l["ltp"])
+            risk = w * grid - credit
+            if credit <= 0 or risk <= 0:
+                continue
+            cands.append((s, w, credit / risk, ce_s, pe_s, ce_l, pe_l))
+    if not cands:
+        return None
+    lo, hi = CONDOR_RR
+    inside = [c for c in cands if lo <= c[2] <= hi]
+    if inside:
+        s, w, rr, ce_s, pe_s, ce_l, pe_l = max(inside, key=lambda c: (c[0], -c[1]))
+        note = None
+    else:
+        mid = (lo + hi) / 2
+        s, w, rr, ce_s, pe_s, ce_l, pe_l = min(cands, key=lambda c: (abs(c[2] - mid), -c[0], c[1]))
+        note = f"no strikes give reward:risk {lo:g}–{hi:g} today — nearest is {rr:.2f}:1"
+    n = max(1, int(lots))
+    legs = [
+        {"right": "CE", "side": "S", "strike": atm + s * grid, "lots": n, "ltp": float(ce_s["ltp"]), "delta": ce_s.get("delta"), "i": 0},
+        {"right": "PE", "side": "S", "strike": atm - s * grid, "lots": n, "ltp": float(pe_s["ltp"]), "delta": pe_s.get("delta"), "i": 1},
+        {"right": "CE", "side": "B", "strike": atm + (s + w) * grid, "lots": n, "ltp": float(ce_l["ltp"]), "delta": ce_l.get("delta"), "i": 2},
+        {"right": "PE", "side": "B", "strike": atm - (s + w) * grid, "lots": n, "ltp": float(pe_l["ltp"]), "delta": pe_l.get("delta"), "i": 3},
+    ]
+    rule = (f"Shorts ±{int(s * grid)} · wings {int(w * grid)} wide · reward:risk {rr:.2f}:1"
+            + (f" · {note}" if note else ""))
+    return {"legs": legs, "ok": True, "reason": None, "rule": rule, "rr": round(rr, 3)}
 
 BY_ID = {p.id: p for p in PRESETS}
 
@@ -79,6 +141,10 @@ def resolve(preset: Preset, rows: list[dict], atm: float | None, grid: float,
     be honoured, with no strike invented for it."""
     if atm is None or not rows:
         return {"legs": [], "ok": False, "reason": "no chain at the cursor"}
+    if preset.id == "iron_condor":
+        found = _resolve_condor(rows, float(atm), grid, lots)
+        if found is not None:
+            return found
     by_k = {float(r["strike"]): r for r in rows}
 
     def quoted(k: float, right: str) -> dict | None:

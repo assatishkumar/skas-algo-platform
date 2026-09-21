@@ -735,7 +735,7 @@ class ConsoleSession(AlertBook):
             margin, source = self.margin(legs, broker=False) if r["ok"] else (0.0, "model")
             credit = sum((1 if x["side"] == "S" else -1) * x["ltp"] * x["lots"] * lot
                          for x in r["legs"]) if r["ok"] else None
-            out.append({"id": p.id, "name": p.name, "rule": p.rule, "defined": p.defined,
+            out.append({"id": p.id, "name": p.name, "rule": r.get("rule") or p.rule, "defined": p.defined,
                         "tags": list(p.tags), "ok": r["ok"], "reason": r["reason"],
                         "legs": [self._leg_out(leg) for leg in legs] if r["ok"] else [],
                         "margin": margin, "margin_source": source,

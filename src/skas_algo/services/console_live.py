@@ -854,7 +854,7 @@ class LiveConsole(AlertBook):
                 {
                     "id": p.id,
                     "name": p.name,
-                    "rule": p.rule,
+                    "rule": r.get("rule") or p.rule,
                     "defined": p.defined,
                     "tags": list(p.tags),
                     "ok": r["ok"],

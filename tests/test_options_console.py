@@ -1663,3 +1663,51 @@ def test_a_replayed_close_lands_on_the_leg_of_its_own_side():
     s.restore(j, [], [])
     assert [(leg.side, leg.lots) for leg in s.legs] == [("S", 2)]
     assert s.realized == pytest.approx((152.0 - 150.0) * 65)
+
+
+def _ladder(atm=24000.0, grid=100.0, n=8):
+    """A synthetic quoted ladder n steps either side of ATM: premiums decay a little faster
+    each step out (24, 25, 26 … per step), deltas fall 0.06 a step."""
+    ltp = [300.0]
+    for d in range(1, n + 1):
+        ltp.append(ltp[-1] - (23 + d))
+    rows = []
+    for d in range(-n, n + 1):
+        k = atm + d * grid
+        dist = abs(d)
+        ce = {"quoted": True, "ltp": ltp[dist] if d >= 0 else 300.0 + 100 * dist, "delta": round(max(0.02, 0.5 - 0.06 * d), 3)}
+        pe = {"quoted": True, "ltp": ltp[dist] if d <= 0 else 300.0 + 100 * dist, "delta": round(-max(0.02, 0.5 + 0.06 * d), 3)}
+        rows.append({"strike": k, "atm": d == 0, "ce": ce, "pe": pe})
+    return rows
+
+
+def test_the_condor_is_built_for_reward_to_risk_between_one_and_one_point_three():
+    """Owner 2026-09-21: the iron condor preset picks symmetric shorts and wings whose
+    credit is at least half the wing width (reward:risk 1:1 → 1.3:1), the FURTHEST shorts
+    that manage it. On this ladder a 100-wide wing s steps out pays 2×(24+s+1): s=4 gives
+    56/44 = 1.27 (in), s=5 gives 58/42 = 1.38 (out)."""
+    from skas_algo.services.options_console import presets
+
+    r = presets.resolve(presets.BY_ID["iron_condor"], _ladder(), 24000.0, 100.0, 1)
+    assert r["ok"] and r["rr"] == pytest.approx(56 / 44, abs=0.01)
+    strikes = {(l["side"], l["right"]): l["strike"] for l in r["legs"]}
+    assert strikes == {("S", "CE"): 24400.0, ("S", "PE"): 23600.0,
+                       ("B", "CE"): 24500.0, ("B", "PE"): 23500.0}
+    assert "reward:risk 1.27:1" in r["rule"] and "nearest" not in r["rule"]
+    # nothing inside the band → the nearest is built and SAID, never a silent substitute
+    rows = _ladder()
+    for row in rows:                       # halve every premium: rr collapses to ~0.4
+        row["ce"]["ltp"] /= 2.5
+        row["pe"]["ltp"] /= 2.5
+    r2 = presets.resolve(presets.BY_ID["iron_condor"], rows, 24000.0, 100.0, 1)
+    assert r2["ok"] and r2["rr"] < 1.0 and "nearest is" in r2["rule"]
+
+
+def test_the_put_ratio_mirrors_the_call_ratio():
+    from skas_algo.services.options_console import presets
+
+    r = presets.resolve(presets.BY_ID["put_ratio"], _ladder(), 24000.0, 100.0, 1)
+    assert r["ok"]
+    assert [(l["side"], l["right"], l["strike"], l["lots"]) for l in r["legs"]] == [
+        ("B", "PE", 24000.0, 1), ("S", "PE", 23600.0, 2)]      # Δ0.26 is the nearest to 0.25
+    assert [p.id for p in presets.PRESETS].count("put_ratio") == 1
