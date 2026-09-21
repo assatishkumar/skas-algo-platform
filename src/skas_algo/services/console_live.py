@@ -437,8 +437,12 @@ class LiveConsole(AlertBook):
         sid = self.live.config.strategy_id
         if h["managed_by"] == "manual":
             r = h["rail"] or {}
+            if sid == "manual_options":
+                return ("A manual run: the change lands on the book as is — you manage it "
+                        "(a target or stop is optional: Alerts here, or Edit params on the tile).")
             return (f"This run is already in manual mode ({sid} paused since "
-                    f"{r.get('handover_label') or '?'}). The change lands on the book as is.")
+                    f"{r.get('handover_label') or 'the hand-over'}). The change lands on the "
+                    "book as is.")
         # would the book be flat afterwards? (every held symbol closed in full, nothing opened)
         held = {leg["symbol"]: leg["units"] for leg in self.legs()}
         closing = {}
@@ -878,19 +882,36 @@ class LiveConsole(AlertBook):
         return self.apply_basket(r["legs"], label=p.name)
 
     def scale_book(self, factor: float) -> dict | None:
+        """The whole-book multiplier on a deployment: the HELD legs get resize items, and
+        STAGED adds / resizes are scaled in place (a book built from scratch in the console
+        is all staged — the multiplier used to replace those items with nothing, owner
+        2026-09-21); staged exits are kept as they are."""
         legs = self.legs()
-        if not legs:
-            raise ValueError("nothing to scale")
         if factor <= 0:
             raise ValueError("the multiplier must be positive")
-        items = []
+        items: list[dict] = []
+        covered: set[str] = set()
+        for it in (self.staged or {}).get("items", []):
+            it2 = dict(it)
+            if it2["kind"] in ("add", "resize"):
+                want = int(round(int(it2["lots"]) * factor))
+                if want < 1:
+                    raise ValueError(f"{int(it2['strike'])} {it2['right']} would go below one lot")
+                it2["lots"] = want
+            if it2["kind"] in ("resize", "exit", "roll"):
+                covered.add(str(it2.get("leg_id")))
+            items.append(it2)
         for leg in legs:
+            if leg["id"] in covered:
+                continue
             want = int(round(leg["lots"] * factor))
             if want < 1:
                 raise ValueError(f"{int(leg['strike'])} {leg['right']} would go below one lot")
             if want != leg["lots"]:
                 items.append(self._item(kind="resize", leg_id=leg["id"], lots=want))
         if not items:
+            if not legs:
+                raise ValueError("nothing to scale")
             return None
         self.staged = {"items": items, "label": f"Scale ×{factor:g}"}
         return self.staged

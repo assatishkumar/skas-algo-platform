@@ -2367,9 +2367,9 @@ export default function ConsolePage() {
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[13px] font-semibold">Positions</span>
               <span className="text-[10.5px] flex items-center gap-1" style={{ color: "var(--oc-faint)" }}>
-                {state?.legs.length ? (
+                {legsShown.length ? (
                   <span className="inline-flex items-center gap-1 mr-2"
-                    title="multiplier: every leg's lots × n, one action (U undoes)">
+                    title="multiplier: every leg's lots × n, one action (U undoes); on a deployment it scales the staged legs too">
                     <MiniBtn disabled={mult <= 1} onClick={() => scale.mutate(mult - 1)}>−</MiniBtn>
                     <b className="text-[11px] tabular-nums" style={{ color: "var(--oc-ink)", minWidth: 22, textAlign: "center" }}>
                       ×{mult}</b>

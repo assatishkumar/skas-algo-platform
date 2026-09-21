@@ -293,3 +293,18 @@ def test_a_staged_close_banks_into_the_after_basis_so_the_preview_matches_the_co
     c.commit()
     now = c.state()["risk"]
     assert now["realised"] == pytest.approx(after["realised"], abs=1.0)
+
+
+def test_the_multiplier_scales_a_book_that_is_still_staged(run):
+    """A book built from scratch on a manual run is ALL staged; ×2 must double the staged
+    adds (and keep them), not replace them with a resize of nothing (owner 2026-09-21)."""
+    c = console_live.open_console(42)
+    c.stage(kind="add", right="PE", strike=24800, side="B", lots=1)
+    c.stage(kind="add", right="CE", strike=24800, side="S", lots=2)
+    c.scale_book(2)
+    adds = [it for it in c.staged["items"] if it["kind"] == "add"]
+    assert sorted(it["lots"] for it in adds) == [2, 4]
+    # the held legs got resize items alongside
+    assert any(it["kind"] == "resize" for it in c.staged["items"])
+    after = {b["symbol"]: b["lots"] for b in c.state()["staged"]["after_legs"]}
+    assert after["NIFTY|" + c.expiry + "|24800|PE"] == 2 and after["NIFTY|" + c.expiry + "|24800|CE"] == 4
