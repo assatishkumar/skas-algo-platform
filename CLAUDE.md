@@ -2024,6 +2024,15 @@ check's sampling cadence ("checked every 15 min"); the deploy form defaults `pro
 to **1min** (constructor defaults unchanged — §1).
 
 **Footguns when launching:**
+- **A runtime import must be in `[project.dependencies]` — the dev extras never reach the
+  VPS.** `vps-update.sh` runs `pip install -e .` (no `[dev]`), so a package the Mac venv has
+  only through `pip install -e ".[dev]"` is absent on the box. 2026-09-22: `services/peer.py`
+  imported `httpx` (a dev extra for the test client) at module level, the routes import it,
+  and the VPS crash-looped on `ModuleNotFoundError` from 08:38 until a hand `pip install`
+  — the whole API and the live loop down, 37 minutes before the open. Now declared, and the
+  peer imports it lazily so an optional feature can never take the process down again.
+  Before shipping a new import: `venv/bin/pip show <pkg>` says whether it is "Required-by"
+  the project, or grep pyproject.
 - **Relative SQLite path.** `SKAS_DATABASE_URL=sqlite:///./skas_algo.db` is relative to the CWD —
   start the backend from the **repo root** or it opens/creates a *different, empty* DB (no accounts /
   sessions / runs). The real DB is `./skas_algo.db` at the root.

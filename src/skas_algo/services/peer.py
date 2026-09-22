@@ -16,8 +16,6 @@ from __future__ import annotations
 import logging
 import re
 
-import httpx
-
 from skas_algo.config import get_settings
 
 logger = logging.getLogger("skas_algo.peer")
@@ -28,7 +26,7 @@ _ALLOWED = (
     re.compile(r"^/live/\d+/trades$"),
     re.compile(r"^/runs/\d+/cycles$"),
 )
-_transport: httpx.BaseTransport | None = None     # tests inject httpx.MockTransport
+_transport = None     # tests inject an httpx.MockTransport
 
 
 class PeerError(Exception):
@@ -48,6 +46,13 @@ def _get(path: str):
     """The one transport. A path outside the whitelist raises BEFORE any I/O."""
     if not any(p.match(path) for p in _ALLOWED):
         raise PeerError(f"peer path not allowed: {path}")
+    # Imported HERE, not at module level: httpx was a dev-only extra until 2026-09-22 and a
+    # top-level import took the whole API down on the VPS (crash loop, 08:38, 37 minutes
+    # before the open). The peer is optional; a missing package must fail a peer CALL only.
+    try:
+        import httpx
+    except ImportError as exc:  # pragma: no cover - the dependency is declared now
+        raise PeerError("httpx is not installed on this box (pip install -e .)") from exc
     s = get_settings()
     url = base_url()
     if not url:
