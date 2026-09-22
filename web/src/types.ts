@@ -141,6 +141,10 @@ export interface LiveHoldings {
     daily_budget: number | null; pots_total: number;
     plan: { symbol: string; price: number; units: number; cost: number }[];
     plan_total: number;
+    plan_for?: string;                    // the session the plan is for (the next one, once shopped)
+    bought?: { symbol: string; price: number; units: number; cost: number }[];   // the day's real fills
+    bought_total?: number;
+    funded_by?: { symbol: string; price: number; units: number; cost: number } | null;
     affordable: { symbol: string; price: number; units: number; cost: number }[];
     affordable_total: number;
     blocked_by: "cash" | "pots" | null;   // why an empty plan is empty

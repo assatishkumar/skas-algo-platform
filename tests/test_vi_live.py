@@ -193,3 +193,36 @@ def test_the_group_row_metrics_leave_the_fund_source_out_of_unrealized_and_the_o
     assert n == 4 and len(pos) == 4
     pos, n = _tile_positions(snap, None)
     assert n == 4
+
+
+def test_after_the_walk_the_strip_shows_the_real_fills_and_previews_the_next_session():
+    """2026-09-22, run 28 after 15:05: nine names bought, and the tile read "Bought today:
+    nothing — no pot affords a share" because it previewed TODAY against the pots the walk
+    had just spent. Once shopped, the strip lists the day's fills (and the sale that funded
+    them) and the plan is for the NEXT session, with tomorrow's credit in the pots."""
+    st = _strat()
+    st.settled_cash = 300.0
+    st.pot = {"AAA": 2.0, "BBB": 5.0, "CCC": 1.0}          # spent by today's walk
+    st.pot_day = D.isoformat()
+    st.last_shop_day = D.isoformat()
+    pf = Portfolio(cash=50_000.0)
+    txns = [_tx(D, FUND, "SELL", 40, 116.0), _tx(D, "AAA", "BUY", 3, 99.0),
+            _tx(D, "AAA", "BUY", 1, 99.4), _tx(D, "BBB", "BUY", 1, 190.0)]
+    mkt = Market(prev={"AAA": 100, "BBB": 200, "CCC": 50}, last={"AAA": 99, "BBB": 190, "CCC": 51})
+    out = value_investing_report(_run(st, mkt, txns, pf), today=D)
+    today = out["today"]
+    assert today["shopped_today"]
+    assert [(b["symbol"], b["units"], b["price"]) for b in today["bought"]] == [
+        ("AAA", 4, 99.1), ("BBB", 1, 190.0)]
+    assert today["bought_total"] == 586.4
+    assert today["funded_by"] == {"symbol": FUND, "units": 40, "price": 116.0, "cost": 4640.0}
+    # the plan is for the next session, with the daily credit applied to the pots
+    assert today["plan_for"] == "2026-09-09"
+    assert today["pots_total"] == 8.0 + 3_000.0
+    # ... and the pots are untouched by the preview
+    assert st.pot == {"AAA": 2.0, "BBB": 5.0, "CCC": 1.0} and st.pot_day == D.isoformat()
+    # before the walk the strip is the same-day preview, and no fills are listed
+    st.last_shop_day = None
+    before = value_investing_report(_run(st, mkt, [], pf), today=D)["today"]
+    assert not before["shopped_today"] and before["bought"] == []
+    assert before["plan_for"] == D.isoformat()

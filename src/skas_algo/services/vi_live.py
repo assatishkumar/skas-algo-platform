@@ -21,6 +21,30 @@ from skas_algo.services.holdings import holdings_report
 MIN_XIRR_DAYS = 90   # younger than this, an annualised return is noise
 
 
+def _fills_on(txns: list[dict], day: date, *, side: str, exclude: str | None = None,
+              only: str | None = None) -> list[dict[str, Any]]:
+    """The day's fills of one side, aggregated per symbol (units, average price, cost),
+    in fill order. A trade's ``date`` is ``"YYYY-MM-DD HH:MM"`` over the wire and a
+    datetime in-process; only the day matters here."""
+    agg: dict[str, dict[str, float]] = {}
+    for t in txns:
+        sym = str(t.get("ticker") or "").upper()
+        if not sym or str(t.get("action") or "").upper() != side:
+            continue
+        if (exclude and sym == exclude) or (only and sym != only):
+            continue
+        if str(t.get("date") or "")[:10] != day.isoformat():
+            continue
+        units = float(t.get("units") or 0)
+        px = float(t.get("price") or 0)
+        a = agg.setdefault(sym, {"units": 0.0, "cost": 0.0})
+        a["units"] += units
+        a["cost"] += units * px
+    return [{"symbol": s, "units": int(a["units"]),
+             "price": round(a["cost"] / a["units"], 2) if a["units"] else 0.0,
+             "cost": round(a["cost"], 2)} for s, a in agg.items()]
+
+
 def _marks(market, symbols: list[str]) -> dict[str, float]:
     out: dict[str, float] = {}
     for sym in symbols:
@@ -88,11 +112,22 @@ def value_investing_report(live, today: date | None = None) -> dict[str, Any]:
     if firsts and (today - min(firsts)).days < MIN_XIRR_DAYS:
         report["totals"]["xirr_pct"] = None
 
-    # --- today: the real ranking and planner on copies (nothing is credited or spent) ---
+    # --- today: what the decision BOUGHT, or what it WILL buy ---
+    # After 15:05 the pots are spent, so a preview of "today" reads "nothing affords a
+    # share" on a day that just bought nine names (owner, 2026-09-22). Once the walk has
+    # run, the strip shows the REAL fills of the day and previews the NEXT session instead.
+    shopped = getattr(strategy, "last_shop_day", None) == today.isoformat()
+    bought = _fills_on(txns, today, side="BUY", exclude=fund)
+    funded = _fills_on(txns, today, side="SELL", only=fund)
+    plan_for = today
+    if shopped:
+        from skas_algo.live.holidays import next_trading_day
+
+        plan_for = next_trading_day(today)
     preview: dict[str, Any] = {}
     if market is not None and hasattr(strategy, "preview_plan"):
         try:
-            preview = strategy.preview_plan(market, today)
+            preview = strategy.preview_plan(market, plan_for)
         except Exception:  # pragma: no cover - a preview must never break the tile
             preview = {}
     plan = {sym: (px, units, cost) for sym, px, units, cost in preview.get("plan", [])}
@@ -190,7 +225,13 @@ def value_investing_report(live, today: date | None = None) -> dict[str, Any]:
                 None if preview.get("plan")
                 else "cash" if preview.get("affordable") else "pots"
             ),
-            "shopped_today": getattr(strategy, "last_shop_day", None) == today.isoformat(),
+            "shopped_today": shopped,
+            # the day's REAL fills (present once the 15:05 walk has run), and the sale that
+            # funded them; `plan_for` names the session the plan above is for
+            "bought": bought,
+            "bought_total": round(sum(b["cost"] for b in bought), 2),
+            "funded_by": funded[0] if funded else None,
+            "plan_for": plan_for.isoformat(),
             "sizing": getattr(strategy, "sizing", None),
         },
         "cash": round(float(portfolio.cash), 2),

@@ -64,6 +64,12 @@ function StatusChip({ r }: { r: LiveHoldingRow }) {
   return null;
 }
 
+function planDayLabel(iso?: string): string {
+  if (!iso) return "tomorrow";
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+
 export default function ValueInvestingPanel({ runId, version }: { runId: number; version: number }) {
   const { data, isLoading, error } = useLiveHoldings(runId, version);
   if (isLoading) return <div className="mt-3 text-[12.5px] text-[var(--faint)]">Reading the holdings…</div>;
@@ -106,8 +112,21 @@ function Body({ h }: { h: LiveHoldings }) {
               </span>
             ) : null}</span>
           <span><span className="text-[var(--faint)]">Settling later</span> <b>{formatInr(today.settling ?? 0)}</b></span>
+          {today.shopped_today && (
+            <span>
+              <span className="text-[var(--faint)]">Bought today</span>{" "}
+              {(today.bought ?? []).length ? (
+                <b>{(today.bought ?? []).map((b) => `${b.symbol} ${b.units}`).join(" · ")} = {formatInr(today.bought_total ?? 0)}</b>
+              ) : (
+                <b className="text-[var(--faint)]">nothing</b>
+              )}
+              {today.funded_by ? (
+                <span className="text-[var(--faint)]"> · funded by {today.funded_by.symbol} {today.funded_by.units} sold ({formatInr(today.funded_by.cost)})</span>
+              ) : null}
+            </span>
+          )}
           <span>
-            <span className="text-[var(--faint)]">{today.shopped_today ? "Bought today" : "Will buy at 15:05"}</span>{" "}
+            <span className="text-[var(--faint)]">{today.shopped_today ? `Next buy ${planDayLabel(today.plan_for)} 15:05` : "Will buy at 15:05"}</span>{" "}
             {today.plan.length ? (
               <b>{today.plan.map((p) => `${p.symbol} ${p.units}`).join(" · ")} = {formatInr(today.plan_total)}</b>
             ) : today.blocked_by === "cash" ? (
