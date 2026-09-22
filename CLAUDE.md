@@ -1,6 +1,7 @@
 # CLAUDE.md — working notes for agents
 
-Operational nuances + invariants for this repo. The README orients you; `docs/` holds design intent;
+Operational nuances + invariants for this repo. `docs/README-dev.md` orients you (the root README is
+the public-facing overview since 2026-09-22); `docs/` holds design intent;
 **this file is the "how to work here safely" layer.** Keep it tight and high-signal.
 
 > **Maintain this file.** As the platform matures, update CLAUDE.md when a new invariant, footgun, or
@@ -218,7 +219,7 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
 
 ## 2. Docs are intent; code + comments + git log are truth
 - `docs/PLAN.md` is aspirational (mentions things not built / not built that way). Trust the code when
-  they disagree. The README is kept current; deep design lives in `docs/`.
+  they disagree. `docs/README-dev.md` is kept current; deep design lives in `docs/`.
 - **Inline comments are the design memory** — unusually rich "why" comments encode invariants and
   footguns. Read them, trust them, and match their density/voice when adding code. Commit messages share
   that voice (concise: *what* + *the guard/why*).
@@ -2022,6 +2023,14 @@ itself stays stale). If you add a new place that swaps `live.quote_source`, call
 fill-slippage away from the book P&L; the UI shows both), and `exit_rules` now state each
 check's sampling cadence ("checked every 15 min"); the deploy form defaults `profit_check`
 to **1min** (constructor defaults unchanged — §1).
+
+**A broker-free demo box (2026-09-22): `scripts/demo.sh`.** Its OWN database, option store
+and console dir under `./demo/` (gitignored) on port 8090, seeded by `skas-algo demo-seed`
+with synthetic NIFTY days (convex surface, random-walk spot, a print a minute).
+`SKAS_OPTION_INTRADAY_DIR` is the store override the seeder REQUIRES — it refuses the real
+store path, because a synthetic day beside the capture is indistinguishable from data.
+Screenshots and recordings for the public showcase (the root README + `docs/showcase/`)
+come from this box or from the console in replay; a Live-page shot must be the PAPER toggle. Still needs the sibling `skas-data` installed.
 
 **Footguns when launching:**
 - **A runtime import must be in `[project.dependencies]` — the dev extras never reach the

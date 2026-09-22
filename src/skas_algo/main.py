@@ -242,8 +242,21 @@ def main() -> None:
         action="store_true",
         help="re-pull ALL remote days (default: only days this box is missing)",
     )
+    ds = sub.add_parser(
+        "demo-seed",
+        help="Write synthetic NIFTY option days into the 1-min store (scripts/demo.sh — set "
+             "SKAS_OPTION_INTRADAY_DIR first; refuses to write into the real store)",
+    )
+    ds.add_argument("--days", type=int, default=5, help="trading days to write (default 5)")
+    ds.add_argument("--end", default=None, help="last day, YYYY-MM-DD (default: last Friday)")
     args = parser.parse_args()
 
+    if args.cmd == "demo-seed":
+        from skas_algo.services.demo_seed import seed
+
+        for line in seed(days=args.days, end=args.end):
+            print(line)
+        return
     if args.cmd == "hash-password":
         _hash_password()
         return

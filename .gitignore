@@ -58,3 +58,5 @@ web/.vite/
 web-mobile/dist/
 web-mobile/ios/App/App/public/
 web-mobile/ios/DerivedData/
+demo/
+docs/private/

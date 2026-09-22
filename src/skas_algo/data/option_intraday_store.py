@@ -22,6 +22,7 @@ same-day EOD task plus a small missing-days sweep (live/manager.py).
 from __future__ import annotations
 
 import logging
+import os
 import time as _time
 from datetime import date, datetime, time
 from pathlib import Path
@@ -31,7 +32,11 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-OPTION_INTRADAY_DIR = Path.home() / ".skas_data" / "option_intraday" / "1min"
+# SKAS_OPTION_INTRADAY_DIR points a throwaway box (scripts/demo.sh) at its own store so a
+# synthetic day can never land beside the real capture. Unset = the real store.
+OPTION_INTRADAY_DIR = (Path(os.environ["SKAS_OPTION_INTRADAY_DIR"]).expanduser()
+                       if os.environ.get("SKAS_OPTION_INTRADAY_DIR")
+                       else Path.home() / ".skas_data" / "option_intraday" / "1min")
 _THROTTLE_S = 0.35  # ~3 historical requests/sec allowed (intraday_bars.py precedent)
 _SESSION_OPEN = time(9, 15)
 # F&O trades to 15:45 since the CAS extension (2026-08-03) — a `to` of 15:45 returns
