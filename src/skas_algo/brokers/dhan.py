@@ -300,6 +300,10 @@ class _Master:
         # come from the master rather than be reconstructed.
         self.option_ts: dict[tuple[str, str, float, str], str] = {}
         self.expiries: dict[str, set[str]] = {}  # underlying -> {expiry_iso}
+        # Tick size in RUPEES per security id. The master lists SEM_TICK_SIZE in PAISE
+        # (ZYDUSLIFE 10.0000 = ₹0.10, IDEA options 1.0000 = ₹0.01) — the price-banded NSE
+        # tick the order path must snap to (LiveBroker._tick_for; run 28, 2026-09-21).
+        self.tick: dict[str, float] = {}
 
     @classmethod
     def parse(cls, text: str) -> _Master:
@@ -310,6 +314,14 @@ class _Master:
             seg = row.get("SEM_SEGMENT")
             sid = row.get("SEM_SMST_SECURITY_ID") or ""
             ts = row.get("SEM_TRADING_SYMBOL") or ""
+            try:
+                paise = float(row.get("SEM_TICK_SIZE") or 0)
+            except ValueError:
+                paise = 0.0
+            if paise > 0 and sid:
+                # no exchange ticks under half a paisa, so a value below 0.5 can only be a
+                # file that already speaks rupees — keep it as is rather than divide it
+                m.tick[sid] = round(paise / 100.0, 4) if paise >= 0.5 else paise
             if seg == "I":
                 m.index[ts.upper()] = sid
             elif seg == "E" and (row.get("SEM_SERIES") or "") == "EQ":
@@ -427,6 +439,20 @@ class DhanAdapter:
         return self._master().option_ts.get(
             (inst.underlying.upper(), inst.expiry.isoformat(), float(inst.strike), inst.right)
         )
+
+    def tick_size(self, symbol: str) -> float | None:
+        """The exchange tick for an internal symbol, in rupees, from the scrip master —
+        what LiveBroker snaps a re-price to. None when the symbol is not in the master."""
+        from skas_algo.engine.options.instrument import parse
+
+        m = self._master()
+        inst = parse(symbol)
+        if inst is not None:
+            hit = m.option.get((inst.underlying.upper(), inst.expiry.isoformat(),
+                                float(inst.strike), inst.right))
+            return m.tick.get(str(hit[0])) if hit else None
+        sid = m.equity.get(symbol.upper())
+        return m.tick.get(str(sid)) if sid else None
 
     # ------------------------------------------------------------- real orders
     # PREREQUISITE, and it is not optional: Dhan requires the account's STATIC IP to be

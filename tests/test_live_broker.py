@@ -876,6 +876,57 @@ def test_an_equity_entry_crosses_one_percent_once_then_gives_up():
     assert [b for (b, _, _) in a.modified] == ["KITE-1"]  # the retry was never re-priced
 
 
+class TickAdapter(LadderAdapter):
+    """An adapter that knows the exchange tick (Dhan's scrip master / Kite's dump)."""
+
+    def __init__(self, tick, **kw):
+        super().__init__(**kw)
+        self.tick = tick
+        self.asked: list[str] = []
+
+    def tick_size(self, symbol):
+        self.asked.append(symbol)
+        return self.tick
+
+
+def test_a_reprice_snaps_to_the_instruments_tick_not_a_flat_five_paise():
+    """Run 28, 2026-09-21: ZYDUSLIFE BUY at the ₹1,165.00 touch, 1% re-price 1,176.65 —
+    a multiple of ₹0.05 but NOT of the ₹0.10 tick a ₹1,000-5,000 stock carries. NSE
+    rejected the modify AND the cancel-and-replace ("EXCH:16283: The order price is not
+    multiple of the tick size") and the run halted. The adapter's tick wins."""
+    a = TickAdapter(0.10, fills_at=1e9)
+    lb = make(a, touch_fn=lambda s, side: 1165.0)
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("ZYDUSLIFE", OrderSide.BUY, 1))
+    assert [p for (_, t, p) in a.modified if t is OrderType.LIMIT] == [1176.7]
+    assert a.placed[1].price == 1176.7                  # the retry sits on the tick too
+    assert a.asked and a.asked[0] == "ZYDUSLIFE"
+    # a SELL gives way, floored onto the tick: 1165 × 0.99 = 1153.35 → 1153.30
+    a2 = TickAdapter(0.10, fills_at=-1, side=OrderSide.SELL)
+    lb2 = make(a2, touch_fn=lambda s, side: 1165.0)
+    with pytest.raises(OrderExecutionError):
+        lb2.execute(BrokerOrder("ZYDUSLIFE", OrderSide.SELL, 1))
+    assert [p for (_, t, p) in a2.modified if t is OrderType.LIMIT][0] == 1153.3
+
+
+def test_without_an_adapter_tick_the_price_band_decides_and_never_finer_than_five_paise():
+    """No ``tick_size`` on the adapter (the fakes, a Zerodha equity) → NSE's price band,
+    floored at ₹0.05: a coarser snap is always a valid price, a finer one is the bug."""
+    lb = make(FakeAdapter(initial=PENDING))
+    assert lb._tick_for("ITC", 100.0) == 0.05             # band says 0.01; 0.05 is valid too
+    assert lb._tick_for("ZYDUSLIFE", 1165.0) == 0.10
+    assert lb._tick_for("MRF", 12000.0) == 1.0
+    assert lb._tick_for("NIFTY|2026-07-07|24500|CE", 1165.0) == 0.05   # options: never coarser
+    assert lb._protected_price(1165.0, OrderSide.BUY, pct=1.0, tick=0.10) == 1176.7
+    assert lb._protected_price(1165.0, OrderSide.BUY, pct=1.0) == 1176.65   # the old snap
+    # end to end: the band drives the ladder for a Zerodha-style adapter with no tick
+    a = LadderAdapter(fills_at=1e9)
+    lb = make(a, touch_fn=lambda s, side: 1165.0)
+    with pytest.raises(OrderExecutionError):
+        lb.execute(BrokerOrder("ZYDUSLIFE", OrderSide.BUY, 1))
+    assert [p for (_, t, p) in a.modified if t is OrderType.LIMIT] == [1176.7]
+
+
 def test_an_option_entry_still_crosses_three_percent():
     """The equity number must not tighten options — 3% of a ₹100 premium is ₹3, which is
     ordinary for a contract whose spread is measured in percents."""

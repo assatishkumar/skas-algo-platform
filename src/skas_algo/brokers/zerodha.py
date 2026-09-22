@@ -74,6 +74,7 @@ class ZerodhaAdapter:
         self._nfo_index: dict = {}  # name -> {expiry_iso -> {strike -> {"CE": ts, "PE": ts}}}
         self._nfo_lot: dict = {}    # name -> contract lot size
         self._ts_exchange: dict = {}  # tradingsymbol -> exchange, NFO omitted (the default)
+        self._ts_tick: dict = {}      # tradingsymbol -> tick size (₹), from the dump
         self._loaded_exchanges: set[str] = set()  # F&O dumps loaded OK (per exchange, sticky)
 
     # ------------------------------------------------------------------ kite
@@ -361,12 +362,28 @@ class ZerodhaAdapter:
                 by_strike.setdefault(strike, {})[it] = ts
                 if exchange != "NFO":
                     self._ts_exchange[ts] = exchange
+                if r.get("tick_size"):
+                    self._ts_tick[ts] = float(r["tick_size"])
                 if r.get("lot_size"):
                     self._nfo_lot[name] = int(r["lot_size"])
             self._loaded_exchanges.add(exchange)  # sticky: don't re-fetch a good dump
 
     def _exchange_of(self, tradingsymbol: str) -> str:
         return self._ts_exchange.get(tradingsymbol, "NFO")
+
+    def tick_size(self, symbol: str) -> float | None:
+        """The exchange tick (₹) for an OPTION from the instruments dump; None for an equity
+        (the NSE cash dump is not loaded — LiveBroker then uses the price band)."""
+        from skas_algo.engine.options.instrument import parse
+
+        inst = parse(symbol)
+        if inst is None:
+            return None
+        try:
+            ts = self._option_tradingsymbol(inst)
+        except Exception:  # pragma: no cover - a dump that failed to load
+            return None
+        return self._ts_tick.get(ts) if ts else None
 
     def _option_tradingsymbol(self, inst) -> str | None:
         """Resolve an option instrument to its Kite NFO tradingsymbol via the instruments dump."""

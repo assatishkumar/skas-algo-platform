@@ -167,6 +167,19 @@ Operational nuances + invariants for this repo. The README orients you; `docs/` 
   **BANKNIFTY lot is 30, not 35**: the contract table's 2026-01-01 → 35 row was unsourced;
   the live dump reads 30 for every listed series (verified 2026-09-04). Backtests dated
   2026 that ran before the fix sized BANKNIFTY 17% too large.
+- **A re-price snaps to the INSTRUMENT's tick, never a flat ₹0.05 (2026-09-22).** NSE's
+  equity tick is price-banded since 2024-06-10 — ₹0.01 under ₹250, ₹0.05 to ₹1,000, ₹0.10
+  to ₹5,000, ₹0.50 to ₹10,000, ₹1 to ₹20,000 — and the ladder snapped every rung to
+  ₹0.05: run 28's ZYDUSLIFE entry (Dhan, 2026-09-21) timed out at the ₹1,165.00 touch, the
+  +1% re-price 1,176.65 was off the ₹0.10 tick, NSE rejected the modify AND the
+  cancel-and-replace ("EXCH:16283: The order price is not multiple of the tick size"), and
+  the run halted. The 8 Sep TCS re-price that "never landed" was the same failure, unseen
+  because the `noreprice` trace did not exist yet. Now `LiveBroker._tick_for(symbol, ref)`
+  asks the adapter first (`DhanAdapter.tick_size` reads the scrip master's SEM_TICK_SIZE —
+  in PAISE; `ZerodhaAdapter.tick_size` reads the NFO/BFO dump for options, None for cash),
+  else the price band FLOORED at ₹0.05 — a coarser snap is always a valid price, a finer
+  one is the bug; options are never coarser than 0.05. The escalate/retry trace lines carry
+  `tick=`. Coverage: the two tick tests in tests/test_live_broker.py.
 - Safety rails live in LiveBroker pre-flight: per-order notional cap, per-run daily order cap,
   market-hours check, account-level rate governor (settings SKAS_LIVE_MAX_ORDER_NOTIONAL /
   _MAX_ORDERS_PER_DAY / _ORDER_TIMEOUT_S). An `OrderExecutionError` (reject/unfillable) or hourly

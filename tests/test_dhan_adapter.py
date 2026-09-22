@@ -26,7 +26,8 @@ MASTER_CSV = "\n".join([
     _HDR,
     "NSE,I,13,INDEX,0,NIFTY,1.0,Nifty 50,0001-01-01,,XX,0.05,,INDEX,X,NIFTY",
     "NSE,I,21,INDEX,0,INDIA VIX,1.0,India VIX,0001-01-01,,XX,0.05,,INDEX,X,INDIA VIX",
-    "NSE,E,2885,EQUITY,0,RELIANCE,1.0,Reliance,0001-01-01,,XX,0.05,,ES,EQ,RELIANCE",
+    "NSE,E,2885,EQUITY,0,RELIANCE,1.0,Reliance,0001-01-01,,XX,5.0000,,ES,EQ,RELIANCE",
+    "NSE,E,7929,EQUITY,0,ZYDUSLIFE,1.0,Zydus,0001-01-01,,XX,10.0000,,ES,EQ,ZYDUSLIFE",
     ("NSE,D,49081,OPTIDX,0,NIFTY-Jul2026-24500-CE,65.0,NIFTY 28 JUL 24500 CALL,"
      "2026-07-28 14:30:00,24500.00000,CE,0.05,M,OP,,"),
     ("NSE,D,49082,OPTIDX,0,NIFTY-Jul2026-24500-PE,65.0,NIFTY 28 JUL 24500 PUT,"
@@ -90,6 +91,10 @@ def test_master_parse_hyphenated_underlying_and_bse_filter():
     assert m.index["NIFTY"] == "13" and m.index["INDIA VIX"] == "21"
     assert m.equity["RELIANCE"] == "2885"
     assert m.lot["NIFTY"] == 65 and m.lot["BAJAJ-AUTO"] == 75
+    # SEM_TICK_SIZE is PAISE in the master: ZYDUSLIFE 10.0000 → ₹0.10 (run 28, 2026-09-21)
+    assert m.tick["7929"] == 0.10 and m.tick["2885"] == 0.05
+    assert a.tick_size("ZYDUSLIFE") == 0.10 and a.tick_size("RELIANCE") == 0.05
+    assert a.tick_size("NOSUCH") is None
 
 
 def test_token_adopts_jwt_expiry_and_validates():

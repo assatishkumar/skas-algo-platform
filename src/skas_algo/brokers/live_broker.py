@@ -390,7 +390,9 @@ class LiveBroker:
                     except Exception:  # pragma: no cover - no book → fall back below
                         fresh = None
                 base = float(fresh or touch or 0.0)
-                want = self._protected_price(base, order.side, pct=pct) if base > 0 else None
+                tick = self._tick_for(order.symbol, base) if base > 0 else 0.05
+                want = (self._protected_price(base, order.side, pct=pct, tick=tick)
+                        if base > 0 else None)
                 if want is not None and cap is not None:
                     want = self._clamp(want, order.side, cap)
                     if abs(want - float(place_price or 0.0)) < 0.011:
@@ -408,7 +410,7 @@ class LiveBroker:
                     if base > 0:
                         self._trace(client_id, "escalate", rung=f"{i + 1}/{len(ladder)}",
                                     pct=f"{pct:.1f}%", touch=f"{base:.2f}",
-                                    limit=f"{want:.2f}")
+                                    limit=f"{want:.2f}", tick=f"{tick:g}")
                         self.adapter.modify_order(
                             broker_id, order_type=OrderType.LIMIT, price=want)
                     else:
@@ -564,14 +566,16 @@ class LiveBroker:
         rungs = (self.protect_ladder if _is_opt(order.symbol)
                  else self.protect_ladder_equity)
         pct = float(rungs[0]) if rungs else 0.0
-        want = self._protected_price(base, order.side, pct=pct) if base > 0 else None
+        tick = self._tick_for(order.symbol, base) if base > 0 else 0.05
+        want = (self._protected_price(base, order.side, pct=pct, tick=tick)
+                if base > 0 else None)
         if want is not None and order.order_type is OrderType.LIMIT and order.price:
             want = self._clamp(want, order.side, float(order.price))
         self._trace(cid, "retry", attempt="2/2",
                     reason="broker confirmed the cancel with nothing filled",
                     touch=f"{base:.2f}" if base > 0 else "MISSING",
                     pct=f"{pct:.1f}%", limit=f"{want:.2f}" if want else "none",
-                    elapsed=f"{_time.monotonic() - started:.1f}s")
+                    tick=f"{tick:g}", elapsed=f"{_time.monotonic() - started:.1f}s")
         logger.warning(
             "cancel-and-replace: %s %s %s cancelled unfilled after the ladder — placing ONE fresh "
             "order at the protected price %s (touch %s, +%.1f%%); no further retry after this",
@@ -589,16 +593,53 @@ class LiveBroker:
                         elapsed=f"{_time.monotonic() - started:.1f}s")
             raise
 
-    def _protected_price(self, touch: float, side, pct: float | None = None) -> float:
+    def _protected_price(self, touch: float, side, pct: float | None = None,
+                         tick: float = 0.05) -> float:
         """The escalation limit: cross the touch by ``pct`` (default ``protect_pct``) —
-        BUY pays up, SELL gives way — snapped OUTWARD to the ₹0.05 tick so the price
-        stays marketable."""
+        BUY pays up, SELL gives way — snapped OUTWARD to the instrument's ``tick`` so the
+        price stays marketable AND valid (see ``_tick_for``)."""
         frac = (self.protect_pct if pct is None else pct) / 100.0
         mult = 1 + frac if side is OrderSide.BUY else 1 - frac
         raw = touch * mult
-        ticks = raw / 0.05
-        snapped = (math.ceil(ticks) if side is OrderSide.BUY else math.floor(ticks)) * 0.05
-        return max(0.05, round(snapped, 2))
+        tick = float(tick) if tick and tick > 0 else 0.05
+        ticks = raw / tick
+        snapped = (math.ceil(ticks) if side is OrderSide.BUY else math.floor(ticks)) * tick
+        return max(tick, round(snapped, 2))
+
+    # NSE's equity tick is PRICE-BANDED (circular effective 2024-06-10): ₹0.01 under ₹250,
+    # ₹0.05 to ₹1,000, ₹0.10 to ₹5,000, ₹0.50 to ₹10,000, ₹1 to ₹20,000, ₹5 above. Options
+    # are never coarser than ₹0.05 (index 0.05; stock options 0.05 or 0.01). A coarser snap
+    # than the true tick is always still a valid price; a FINER one is what the exchange
+    # rejects — so the fallback is the band floored at 0.05, never a flat 0.05.
+    _EQUITY_TICK_BANDS = ((1000.0, 0.05), (5000.0, 0.10), (10000.0, 0.50), (20000.0, 1.0))
+
+    def _tick_for(self, symbol: str, ref_price: float) -> float:
+        """The tick to snap a re-price to: the ADAPTER's figure (the exchange master, which
+        also carries per-name exceptions) when it has one, else the price band.
+
+        2026-09-21, run 28 (Dhan): a ZYDUSLIFE entry at the ₹1,165.00 touch timed out, the
+        1% re-price 1,176.65 was snapped to ₹0.05, and NSE rejected both the modify and the
+        cancel-and-replace with "EXCH:16283: The order price is not multiple of the tick
+        size" — a ₹1,165 stock ticks in ₹0.10. The run halted with the signal intact. The
+        8 Sep TCS re-price that "never landed at the broker" (TCS also ₹0.10) was the same
+        thing, unrecognised: the noreprice trace did not exist yet."""
+        fn = getattr(self.adapter, "tick_size", None)
+        if fn is not None:
+            try:
+                got = fn(symbol)
+                if got and float(got) > 0:
+                    return float(got)
+            except Exception:  # pragma: no cover - a master read that fails → the band
+                logger.warning("tick_size(%s) failed on the adapter; using the price band",
+                               symbol, exc_info=True)
+        from skas_algo.engine.options.instrument import is_option_symbol as _is_opt
+
+        if _is_opt(symbol):
+            return 0.05
+        for upto, tick in self._EQUITY_TICK_BANDS:
+            if ref_price < upto:
+                return tick
+        return 5.0
 
     def _await_terminal(self, broker_id: str, deadline_s: float, *,
                         cid: str = "-", phase: str = "") -> dict:
