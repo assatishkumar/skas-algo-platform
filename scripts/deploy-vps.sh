@@ -120,11 +120,11 @@ NEXT STEPS (yours — this script never touches brokers, arming, or orders):
 
   2. Open that URL on a device on your tailnet, log in with the password you just set.
 
-  3. Connect the Satish Kite (Zerodha) account in the UI (Brokers page) and log in.
+  3. Connect the real-orders Zerodha account in the UI (Brokers page) and log in.
      Keep this account DEDICATED to the VPS — do not hand-trade it, and remove it from the
      Mac (a fresh Kite login supersedes the other machine's token).
 
-  4. Deploy hni_weekly as PAPER first (quote_source=zerodha, Satish) to confirm it enters
+  4. Deploy hni_weekly as PAPER first (quote_source=zerodha, that account) to confirm it enters
      off the live chain. Only then: flip SKAS_LIVE_TRADING_ENABLED=true in .env, restart
      (sudo systemctl restart skas-algo), arm the account, and go-live with a tiny first order.
 

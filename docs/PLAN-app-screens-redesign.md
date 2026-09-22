@@ -1,7 +1,7 @@
 # Plan: Backtest / Live / Trade screen redesign (Calm-Hero language)
 
 ## Context
-A design handoff (`/Users/satish/git/temp/design_handoff_app_screens`) re-skins three **functional**
+A design handoff (`<the design-handoff folder>`) re-skins three **functional**
 screens — Backtest, Live, Trade — into the same calm/teal "Calm Hero" language already shipped on Home.
 Goal: match the mocks' look (tokens, typography, layout, expandable groups, leaderboard, sparklines,
 chain builder, screener modal) **while preserving all existing API wiring and behavior** (deploy,

@@ -19,17 +19,16 @@ private HTTPS, with the backend serving the built React SPA on a single origin.
                                                                 │
                                                           SQLite  ·  in-process live engine
                                                                 │
-                                                          Zerodha (Satish Kite) — REAL orders
+                                                          Zerodha (real-orders account) — REAL orders
 ```
 
-- **Two independent instances.** Mac = paper dev on **Priya Kite**. VPS = real orders on **Satish
-  Kite**. Separate DBs, separate Kite accounts, no shared state. Real orders only fire from the VPS
+- **Two independent instances.** Mac = paper dev on **the paper Zerodha account**. VPS = real orders on **the real-orders Zerodha account**. Separate DBs, separate Kite accounts, no shared state. Real orders only fire from the VPS
   because Zerodha accepts `place_order` only from the whitelisted static IP.
 
 ## Prerequisites
 
 - A Lightsail (Ubuntu) instance with a **static IP**, and that IP **allowlisted on the Kite developer
-  console** for your Satish Kite app (Data/quotes work without it; `place_order` does not).
+  console** for your Kite Connect app (Data/quotes work without it; `place_order` does not).
 - The Lightsail firewall closed to the world for :8080 (Tailscale reaches the backend over the
   tailnet; nothing public is needed). Only allow SSH (and Tailscale's UDP) inbound.
 - This repo **and** its sibling `../skas-data` cloned side by side on the box.
@@ -93,10 +92,10 @@ WebSocket upgrades to `wss` automatically.
 
 ## Going live (your hand, in order)
 
-1. **Brokers page → connect Satish Kite**, log in (paste the request token). Keep this account
+1. **Brokers page → connect the real-orders Zerodha account**, log in (paste the request token). Keep this account
    **dedicated to the VPS** — no manual trades, and remove/retire it on the Mac (a fresh Kite login
    supersedes the other machine's token).
-2. **Deploy `hni_weekly` as PAPER** (`quote_source=zerodha`, Satish account, `mode=PAPER`) from the
+2. **Deploy `hni_weekly` as PAPER** (`quote_source=zerodha`, that account, `mode=PAPER`) from the
    Deploy page. Confirm it enters the NIFTY-weekly 1-3-2 tent off the live chain.
 3. When satisfied: set `SKAS_LIVE_TRADING_ENABLED=true` in `.env` → `sudo systemctl restart
    skas-algo` → **arm** the account → promote the run (`go-live`). Do a **tiny first order** and
@@ -133,7 +132,7 @@ WebSocket upgrades to `wss` automatically.
   (`git branch --show-current`; `git log --oneline -3` should show the commits). A browser showing
   the OLD UI after a correct deploy is usually the **PWA service worker** cache — hard-refresh
   (Cmd/Ctrl+Shift+R) or unregister the SW in DevTools → Application.
-- **Daily Kite re-login:** Zerodha tokens die ~06:00 IST; log Satish Kite back in each morning
+- **Daily Kite re-login:** Zerodha tokens die ~06:00 IST; log the real-orders Zerodha account back in each morning
   before market open (the run self-heals to real quotes on a valid session).
 - **Backups:** startup + nightly (~16:30 IST) SQLite `VACUUM INTO` snapshots to `backups/`
   (retain 7); set `SKAS_BACKUP_REMOTE_CMD` so a nightly copy also lands off-box.
@@ -170,7 +169,7 @@ runs 24/7 it can capture every day. Enable it there as a rolling backup:
   PaperBroker. Splitting real orders to Dhan (your step 4) needs the Dhan order path built first;
   real orders are **Zerodha-only** today. (Dhan live quotes also need the paid Data APIs plan.)
 - **Dedicated account** — reconciliation compares the broker's *net account* book against the
-  platform's aggregate; any manual trade in the Satish account trips a `book mismatch` halt.
+  platform's aggregate; any manual trade in that account trips a `book mismatch` halt.
 - **Account exclusivity** — never log the same Kite account in on both the Mac and the VPS.
 - **Mac stays paper** — leave `SKAS_LIVE_TRADING_ENABLED` false and/or accounts disarmed there.
 - **One backend only** — never run two backend processes against the same DB.

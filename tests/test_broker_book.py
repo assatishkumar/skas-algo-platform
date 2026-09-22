@@ -46,7 +46,7 @@ def test_two_runs_on_opposite_sides_net_to_the_brokers_figure_and_show_what_it_b
         15: _run(15, "fv_call_1_1_4", 780, 1, 141.35),
     }
     book = build_book(mgr, 1, _Adapter([{"tradingsymbol": TS, "quantity": 585}]),
-                      account={"id": 1, "label": "Satish Kite", "broker": "zerodha"})
+                      account={"id": 1, "label": "Ops Kite", "broker": "zerodha"})
     assert book["ok"] is True and book["mismatch"] is None
     [row] = book["rows"]
     assert row["tradingsymbol"] == TS and row["symbol"] == SYM and row["segment"] == "fno"

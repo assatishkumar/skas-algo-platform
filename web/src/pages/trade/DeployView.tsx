@@ -218,7 +218,7 @@ export default function DeployView() {
   // Accounts must MATCH the chosen feed: the backend rejects a quote_source that disagrees
   // with the account's broker, so offering a Dhan account under "Zerodha (live)" would only
   // produce a 422. The old bespoke builders hardcoded `broker === "zerodha"` and so hid Dhan
-  // entirely — which is why Volcano showed only SatishKite on the VPS (owner, 2026-08-28).
+  // entirely — which is why Volcano showed only the Kite account on the VPS (owner, 2026-08-28).
   const sessioned = (accounts ?? []).filter(
     (a) => a.has_session && (quoteSource === "cache" || (a.broker || "zerodha") === quoteSource),
   );

@@ -40,14 +40,14 @@ def test_a_dhan_run_shows_and_pushes_kites_figure_and_keeps_dhans_sum_as_the_foo
 
     def kite(legs):
         asked.append(legs)
-        return (588_000.0, "Satish Kite")
+        return (588_000.0, "Ops Kite")
 
     monkeypatch.setattr(mgr, "_kite_reference_margin", kite)
     pushed: list = []
     run = _fake_run("dhan", 1_344_016.25, pushed)
     LiveRun._maybe_refresh_margin(run)
     assert run._margin == 588_000.0 and run._margin_via == "reference"
-    assert run._margin_via_label == "Satish Kite" and run._margin_dhan_sum == 1_344_016.25
+    assert run._margin_via_label == "Ops Kite" and run._margin_dhan_sum == 1_344_016.25
     assert pushed == [588_000.0]  # the %-rules that freeze off the broker push get Kite's number
     # the same legs, direction and size, were what Kite priced
     assert {(l["symbol"], l["direction"], l["units"]) for l in asked[0]} == {
@@ -86,11 +86,11 @@ def test_the_kite_reference_pricer_needs_a_logged_in_zerodha_account(monkeypatch
         yield None
 
     monkeypatch.setattr(mgr, "session_scope", fake_scope)
-    dhan = SimpleNamespace(broker="dhan", label="SatishDhan")
-    kite = SimpleNamespace(broker="zerodha", label="Satish Kite")
+    dhan = SimpleNamespace(broker="dhan", label="Ops Dhan")
+    kite = SimpleNamespace(broker="zerodha", label="Ops Kite")
     monkeypatch.setattr(broker_svc, "list_accounts", lambda db: [dhan, kite])
     monkeypatch.setattr(broker_svc, "has_valid_session", lambda a: a is kite and getattr(a, "ok", False))
     monkeypatch.setattr(broker_svc, "make_adapter", lambda a: SimpleNamespace(basket_margin=lambda legs: 588_000.0))
     assert mgr._kite_reference_margin([]) is None
     kite.ok = True
-    assert mgr._kite_reference_margin([]) == (588_000.0, "Satish Kite")
+    assert mgr._kite_reference_margin([]) == (588_000.0, "Ops Kite")

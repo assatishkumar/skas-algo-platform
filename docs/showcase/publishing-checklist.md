@@ -1,32 +1,30 @@
 # Publishing checklist
 
-This repository runs real money and its working notes are operational. Nothing here goes
-public until every line below is done. The recommended route is a separate showcase
-repository built from `docs/showcase/` plus selected modules; the second route, making this
-repository public, needs the same scrub applied to the full history.
+This repository runs real money and its working notes are operational — and it IS public.
+The lines below are what keeps that safe; the guard test fails the suite if an identifier
+comes back.
 
 ## Blockers (either route)
 
 - [ ] **The sibling `skas-data` package is a hard import.** A visitor cannot run anything
       without it. Either publish it too (after its own secret scrub: Kite credentials were
       committed there in the past) or ship a stub provider for the demo.
-- [ ] **Operational identifiers in the working notes.** `CLAUDE.md`, `docs/DEPLOY.md`,
-      `docs/ARCHITECTURE.md` and the FEATURES catalog name the VPS public IP, the Tailscale
-      address, the hostname, broker account labels and people. Strip or generalise every one.
-- [ ] **Git history.** `git log -p` grep for `api_key`, `access_token`, `secret`, `password`,
-      `Bearer `, phone numbers and the IPs above. `.env` is ignored, but check that it never
-      landed in an early commit. If anything is found, the showcase route is the only safe one;
-      do not rewrite and force-push a repository other machines pull from.
+- [x] **Operational identifiers in the working notes** — scrubbed from the files on
+      2026-09-22 (the VPS IP, the Mac's Tailscale address and tailnet, account labels, a person's
+      name, a home-directory path) and guarded by `tests/test_no_identifiers.py`. They remain in
+      OLD commits; the owner accepted that (all VPS ports are closed from the internet, Tailscale
+      addresses are unroutable, the keys once exposed were rotated).
+- [x] **Git history** — scanned 2026-09-22: no secret-shaped value in any commit; `.env`,
+      the database and backups were never tracked.
 - [ ] **Run-specific notes.** The docs quote real P&L, run numbers and account behaviour.
       Fine as anonymised examples in the showcase documents; remove from anything published
       verbatim.
 - [ ] **Screenshots.** The eight in `docs/showcase/img/` were taken on the Mac (paper box).
-      Two need a decision before publishing: `research.png` shows a broker-session label in
-      the "Compare BS vs market" dropdown (crop or blur it), and `live-paper-fleet.png` is the
-      PAPER fleet with paper rupees (the caption says so; keep it that way or drop it). Never
+      `research.png` was retaken on the demo box (no broker session in the dropdown);
+      `live-paper-fleet.png` is the PAPER fleet with paper rupees and the caption says so. Never
       publish a Live-page shot from the production box.
 
-## Showcase repository contents
+## If a separate showcase repository is ever made
 
 - [ ] The root `README.md` as is (image paths already point at `docs/showcase/img/`).
 - [ ] `docs/design-decisions.md`, `docs/lessons-from-live.md`.

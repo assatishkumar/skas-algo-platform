@@ -23,6 +23,7 @@ export SKAS_OPTION_BARS_BACKUP_DIR=""
 export SKAS_WS_FEED_ENABLED=0
 export SKAS_LIVE_TRADING_ENABLED=0
 export SKAS_API_PORT="${SKAS_API_PORT:-8090}"
+export SKAS_SERVE_WEBAPP=1          # serve web/dist from the same port (opt-in in settings)
 unset SKAS_AUTH_PASSWORD_HASH SKAS_AUTH_JWT_SECRET SKAS_PEER_API_URL SKAS_PEER_API_TOKEN
 
 if [ ! -d venv ]; then

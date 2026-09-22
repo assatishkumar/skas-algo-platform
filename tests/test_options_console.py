@@ -1158,14 +1158,14 @@ def test_the_margin_source_order_is_manual_then_zerodha_then_model():
 
     def fn(underlying, legs, *, spot, day):
         calls.append({"u": underlying, "legs": legs, "spot": spot, "day": day})
-        return {"total": 91000.0, "account": "Satish Kite", "spot_today": 25000.0,
+        return {"total": 91000.0, "account": "Ops Kite", "spot_today": 25000.0,
                 "legs": legs, "shifted": True}
 
     assert s.state()["risk"]["margin_source"] == "model"          # no fn injected
     s.margin_fn = fn
     r = s.state()["risk"]
     assert (r["margin"], r["margin_source"]) == (91000.0, "zerodha")
-    assert r["margin_note"]["account"] == "Satish Kite" and r["margin_detail"] is None
+    assert r["margin_note"]["account"] == "Ops Kite" and r["margin_detail"] is None
     assert calls[0]["u"] == "NIFTY" and calls[0]["day"] == DAY and calls[0]["spot"] > 0
     assert sorted(x["side"] for x in calls[0]["legs"]) == ["B", "S"]
     # the same book shape is NOT asked again on the next tick
@@ -1252,14 +1252,14 @@ def test_the_kite_equivalent_prices_a_mapped_basket_and_caches_it(monkeypatch):
             seen.append(legs)
             return 90828.0
 
-    monkeypatch.setattr(cm, "_account", lambda: ("Satish Kite", _Adapter()))
+    monkeypatch.setattr(cm, "_account", lambda: ("Ops Kite", _Adapter()))
     legs = [{"right": "CE", "strike": 24000, "expiry": "2026-04-28", "side": "S", "lots": 1},
             {"right": "CE", "strike": 24200, "expiry": "2026-04-28", "side": "B", "lots": 1}]
     # `today` pinned: the mapping picks the listed expiry nearest 14 DTE FROM TODAY, and the
     # bare date.today() made this test drift a week after it was written (2026-09-15)
     today = _d(2026, 9, 10)
     got = cm.kite_equivalent("NIFTY", legs, spot=24000.0, day=_d(2026, 4, 14), today=today)
-    assert got and got["total"] == 90828.0 and got["account"] == "Satish Kite" and got["shifted"]
+    assert got and got["total"] == 90828.0 and got["account"] == "Ops Kite" and got["shifted"]
     assert [x["strike"] for x in got["legs"]] == [25000.0, 25200.0]
     assert [x["expiry"] for x in got["legs"]] == ["2026-09-22", "2026-09-22"]
     first = seen[0][0]

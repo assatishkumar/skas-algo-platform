@@ -418,7 +418,7 @@ template) is the phase-2 fix. No deploy path — there is no US broker.
   (`api.dhan.co/v2`), NOT the `dhanhq` SDK — the file was already raw REST for quotes/chain/
   master and the order path is four endpoints; no new dependency. Dhan specifics that are
   load-bearing: **order APIs only accept calls from a STATIC IP whitelisted on the DhanHQ
-  portal** (the VPS, 13.205.157.28, is — quotes work without it, so an unwhitelisted box
+  portal** (the VPS's static IP is — it lives in the private ops note, not here; quotes work without it, so an unwhitelisted box
   looks healthy until the first order is rejected); **statuses are normalised in the adapter**
   (TRADED→COMPLETE, EXPIRED→CANCELLED, PART_TRADED left NON-terminal so the escalation still
   cancels-and-books the remainder) because LiveBroker's `_TERMINAL` is Kite vocabulary;

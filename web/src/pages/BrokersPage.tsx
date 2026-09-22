@@ -172,7 +172,7 @@ function ConnectCard({ onDone }: { onDone: (msg: string, id: number) => void }) 
       <div className="mt-4 grid grid-cols-2 gap-3">
         <label className="col-span-2 block">
           <FieldLabel text="Label" />
-          <input className={fieldCls} placeholder={broker === "zerodha" ? "e.g. Satish Kite" : "e.g. Satish Dhan"}
+          <input className={fieldCls} placeholder={broker === "zerodha" ? "e.g. Main Kite" : "e.g. Main Dhan"}
             value={f.label} onChange={set("label")} />
         </label>
         <label className="block">
