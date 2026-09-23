@@ -1317,6 +1317,12 @@ function DeploymentTile({
   const mdisp = marginDisplay(snapshot?.margin_used != null ? snapshot : m);
   const marginUsed = mdisp.value;
   const realized = snapshot?.realized_pnl ?? m.realized_pnl ?? null;
+  // this cycle's P&L off the LIVE figures above (the snapshot's cycle wins — it is the
+  // fresher read; the persisted tile's stands in for a stopped deployment)
+  const tileCycle = cyclePnl({
+    cycle: snapshot?.cycle ?? dep.cycle,
+    metrics: { realized_pnl: realized ?? 0, unrealized_pnl: upnl ?? 0 },
+  });
   // Deployment lot-set count (the ×N on the strategy's base structure). Scalar strategies expose a
   // single number; multi-underlying ones (momentum_theta, cp_ratio_expiry) expose a per-name map.
   const lotSets = typeof snapshot?.lots === "number" ? snapshot.lots : null;
@@ -1594,7 +1600,7 @@ function DeploymentTile({
           </div>
         </div>
       ) : (
-      <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
+      <div className="mt-3 grid grid-cols-4 gap-2 text-sm">
         <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2">
           <div className="text-[var(--muted)] text-[11px] mb-0.5">Realized</div>
           <div className="font-semibold tabular-nums">
@@ -1608,6 +1614,14 @@ function DeploymentTile({
           <div className="font-semibold tabular-nums">
             {upnl != null
               ? <span className={upnl >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}>{formatInr(upnl)}</span>
+              : <span className="text-[var(--strong)]">—</span>}
+          </div>
+        </div>
+        <div className="rounded-[12px] bg-[var(--stat)] px-2.5 py-2" title="this cycle's P&L: realized + unrealized since the book last went from flat to open; while flat, the last closed cycle's net">
+          <div className="text-[var(--muted)] text-[11px] mb-0.5">{tileCycle?.open === false ? "Last cycle" : "Cycle P&L"}</div>
+          <div className="font-semibold tabular-nums">
+            {tileCycle
+              ? <span className={tileCycle.open ? (tileCycle.value >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]") : "text-[var(--muted)]"}>{formatInr(tileCycle.value)}</span>
               : <span className="text-[var(--strong)]">—</span>}
           </div>
         </div>
@@ -2112,6 +2126,19 @@ function cycleBanked(run: LiveRunSnapshot): number {
   return (run.realized_pnl ?? 0) - (run.cycle.realized_before ?? 0);
 }
 
+/** The run's CYCLE P&L for the rows and the tile (owner ask 2026-09-23, beside Realized and
+ *  Unrealized): while a cycle is open, overall (realized + unrealized) minus what was realized
+ *  before it opened; while flat, the last closed cycle's net, flagged so the UI can mute it. */
+function cyclePnl(run: { cycle?: DeploymentCycle | null; metrics?: { realized_pnl?: number | null; unrealized_pnl?: number | null } | null }): { value: number; open: boolean } | null {
+  const cyc = run.cycle;
+  if (cyc?.open) {
+    const overall = (run.metrics?.realized_pnl ?? 0) + (run.metrics?.unrealized_pnl ?? 0);
+    return { value: overall - (cyc.realized_before ?? 0), open: true };
+  }
+  if (cyc?.last) return { value: cyc.last.pnl ?? 0, open: false };
+  return null;
+}
+
 /** The tile's series: the OPEN cycle's P&L since its entry (overall − what was realized before
  *  it), the LAST closed cycle while flat, and only when neither can be read, the run's overall.
  *  `pnl` in the samples is unrealized; `realized_cum` lifts it to overall. */
@@ -2361,13 +2388,15 @@ export default function LivePage() {
                 (a, d) => {
                   a.realized += d.metrics?.realized_pnl ?? 0;
                   a.upnl += d.metrics?.unrealized_pnl ?? 0;
+                  const c = cyclePnl(d);
+                  if (c?.open) { a.cycle += c.value; a.inCycle += 1; }
                   a.open += d.metrics?.open_positions ?? 0;
                   a.capital += cat.id === "equity"
                     ? (d.metrics?.invested ?? 0)
                     : (d.metrics?.margin_used ?? 0);
                   return a;
                 },
-                { realized: 0, upnl: 0, open: 0, capital: 0 },
+                { realized: 0, upnl: 0, cycle: 0, inCycle: 0, open: 0, capital: 0 },
               );
               const Mini = ({ label, value, tone }: { label: string; value: string; tone?: number }) => (
                 <div className="text-right">
@@ -2395,6 +2424,7 @@ export default function LivePage() {
                       <Mini label="Capital" value={formatInr(catAgg.capital)} />
                       <Mini label="Realized" value={formatInr(catAgg.realized)} tone={catAgg.realized} />
                       <Mini label="Unrealized" value={formatInr(catAgg.upnl)} tone={catAgg.upnl} />
+                      <Mini label="Cycle" value={catAgg.inCycle ? formatInr(catAgg.cycle) : "—"} tone={catAgg.inCycle ? catAgg.cycle : undefined} />
                       <Mini label="Open" value={String(catAgg.open)} />
                     </div>
                   </div>
@@ -2404,6 +2434,9 @@ export default function LivePage() {
                     const upnl = deps.reduce((s2, d) => s2 + (d.metrics?.unrealized_pnl ?? 0), 0);
                     const realized = deps.reduce((s2, d) => s2 + (d.metrics?.realized_pnl ?? 0), 0);
                     const positions = deps.reduce((s2, d) => s2 + (d.metrics?.open_positions ?? 0), 0);
+                    // cycle P&L sums the OPEN cycles only — a flat run adds nothing to a row
+                    const cycles = deps.map(cyclePnl).filter((c): c is { value: number; open: boolean } => !!c && c.open);
+                    const cycle = cycles.reduce((s2, c) => s2 + c.value, 0);
                     const isOpt = deps.some((d) => d.instrument_class === "DERIV" || isOptionsStrategy(d.strategy_id));
                     const last = gi === catGroups.length - 1;
                     return (
@@ -2428,6 +2461,12 @@ export default function LivePage() {
                             <span className="text-[var(--muted)] whitespace-nowrap">
                               Unrealized{" "}
                               <span className={`tabular-nums font-medium ${upnl >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{formatInr(upnl)}</span>
+                            </span>
+                            <span className="text-[var(--muted)] whitespace-nowrap" title="the open cycles' P&L (realized + unrealized since each book last went from flat to open)">
+                              Cycle{" "}
+                              {cycles.length
+                                ? <span className={`tabular-nums font-medium ${cycle >= 0 ? "text-[var(--pos)]" : "text-[var(--danger)]"}`}>{formatInr(cycle)}</span>
+                                : <span className="tabular-nums text-[var(--faint)]">—</span>}
                             </span>
                             <span className="text-[var(--muted)]">{positions} open</span>
                           </div>
