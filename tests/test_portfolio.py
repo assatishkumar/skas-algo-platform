@@ -933,7 +933,7 @@ def test_a_verified_zero_yield_is_not_reported_as_unknown():
     assert view["unpriced_value"] == pytest.approx(400_000)
 
 
-# ------------------------------------------------------------------ the typed position carries into the ledger
+# ------------------------------------------------ the typed position carries into the ledger
 
 
 def test_the_first_ledger_row_carries_the_typed_position_in_as_an_opening_row(
@@ -1025,3 +1025,27 @@ def test_opening_row_prices_the_typed_cost_and_estimates_units_when_unknown():
                       before="2026-09-22")
     assert est["units"] == 20.0 and est["on_date"] == "2026-09-21" and "estimated" in est["note"]
     assert opening_row({"invested": 0.0, "units": None}) is None
+
+
+def test_a_first_row_that_is_a_sell_consumes_the_typed_position_it_carried_in(
+    client: TestClient,
+):
+    """GOLDCASE, 2026-09-23 on the old build: a SELL of 32,680 units typed as the first row
+    left the ledger 32,680 oversold, because there was nothing to sell out of. The opening
+    row lands first, dated before the sell, and the sell consumes it."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Gold case", "asset_class": "etf", "last_price": 23.87,
+        "units": 40_000.0, "invested": 800_000.0, "buy_month": "2026-09",
+    }).json()["id"]
+    r = client.post(f"/api/v1/portfolio/holdings/{hid}/transactions", json={
+        "on_date": "2026-09-01", "kind": "sell", "units": 32_680, "price": 25.0,
+    })
+    assert r.status_code == 200 and r.json()["opening_id"] is not None
+    rows = sorted(client.get(f"/api/v1/portfolio/transactions/{hid}").json()["transactions"],
+                  key=lambda x: x["on_date"])
+    assert [(x["kind"], x["on_date"]) for x in rows] == [
+        ("buy", "2026-08-31"), ("sell", "2026-09-01")]
+    view = next(h for h in client.get("/api/v1/portfolio").json()["holdings"] if h["id"] == hid)
+    assert view["oversold_units"] == 0 and view["units"] == pytest.approx(40_000 - 32_680)
+    assert view["realized"] == pytest.approx(32_680 * (25.0 - 20.0))      # sold above the ₹20 cost
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
