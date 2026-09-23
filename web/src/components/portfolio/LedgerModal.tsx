@@ -115,6 +115,24 @@ export default function LedgerModal({
         )}
       </div>
 
+      {holding.opening_missing && (
+        <div className="mb-3">
+          <Notice tone="warn">
+            This ledger began without the position you had typed —{" "}
+            <b>{(holding.typed_units ?? 0).toLocaleString("en-IN")} units · cost {money(holding.typed_invested ?? 0)}</b>
+            {" "}— so the holding shows only the rows below.{" "}
+            <button
+              disabled={busy}
+              onClick={() => act(() => papi.addOpeningBalance(holding.id))}
+              className="font-extrabold text-[var(--accent-deep)] underline disabled:opacity-50"
+            >
+              Carry it in as the opening row
+            </button>
+            {" "}(or paste the full history with replace, which needs no opening row).
+          </Notice>
+        </div>
+      )}
+
       {holding.oversold_units > 0 && (
         <div className="mb-3">
           <Notice tone="warn">
@@ -158,8 +176,9 @@ export default function LedgerModal({
                   <span
                     className="text-[11px] font-extrabold"
                     style={{ color: t.kind === "buy" ? "var(--accent-deep)" : "var(--note)" }}
+                    title={t.note ?? undefined}
                   >
-                    {t.kind.toUpperCase()}
+                    {t.note?.startsWith("opening balance") ? "OPENING" : t.kind.toUpperCase()}
                   </span>
                   <span className="text-right font-semibold tabular-nums text-[var(--muted)]">
                     {t.units.toLocaleString("en-IN")}

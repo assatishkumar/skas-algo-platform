@@ -37,7 +37,7 @@ def _txn_map(db: Session) -> dict[int, list[dict]]:
     for t in db.execute(select(PortfolioTransaction)).scalars().all():
         out.setdefault(t.holding_id, []).append({
             "id": t.id, "on_date": t.on_date, "kind": t.kind,
-            "units": t.units, "price": t.price, "fees": t.fees,
+            "units": t.units, "price": t.price, "fees": t.fees, "note": t.note,
         })
     return out
 

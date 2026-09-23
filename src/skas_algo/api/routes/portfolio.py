@@ -42,7 +42,7 @@ from skas_algo.db.models import (
     PortfolioTransaction,
 )
 from skas_algo.services import portfolio as pf
-from skas_algo.services.portfolio import build_ledger
+from skas_algo.services.portfolio import OPENING_NOTE, build_ledger, opening_row
 from skas_algo.services.portfolio_history import current_views, growth_series, record_snapshot
 from skas_algo.services.portfolio_import import (
     guess_asset_class,
@@ -275,19 +275,67 @@ def delete_holding(holding_id: int, db: Session = Depends(get_db)) -> dict:
 # ------------------------------------------------------------------ transactions
 
 
+def _typed_position(h: PortfolioHolding) -> dict:
+    return {"invested": h.invested, "units": h.units, "last_price": h.last_price,
+            "buy_month": h.buy_month}
+
+
+def _carry_typed_position(db: Session, h: PortfolioHolding, *, before: str) -> int | None:
+    """When a holding's FIRST ledger row lands, write its typed position in as the opening
+    row so the ledger starts from what was already held (services/portfolio.opening_row).
+    Returns the opening row's id, or None when there was nothing to carry."""
+    existing = db.execute(
+        select(PortfolioTransaction).where(PortfolioTransaction.holding_id == h.id)
+    ).scalars().first()
+    if existing is not None:
+        return None
+    op = opening_row(_typed_position(h), before=before)
+    if op is None:
+        return None
+    row = PortfolioTransaction(holding_id=h.id, **op)
+    db.add(row)
+    db.flush()
+    return row.id
+
+
 @router.post("/holdings/{holding_id}/transactions")
 def add_transaction(
     holding_id: int, body: PortfolioTransactionInput, db: Session = Depends(get_db)
 ) -> dict:
-    if db.get(PortfolioHolding, holding_id) is None:
+    h = db.get(PortfolioHolding, holding_id)
+    if h is None:
         raise HTTPException(404, "holding not found")
+    opening_id = _carry_typed_position(db, h, before=body.on_date.isoformat())
     row = PortfolioTransaction(
         holding_id=holding_id, on_date=body.on_date.isoformat(), kind=body.kind,
         units=body.units, price=body.price, fees=body.fees, note=body.note,
     )
     db.add(row)
     db.commit()
-    return {"id": row.id}
+    return {"id": row.id, "opening_id": opening_id}
+
+
+@router.post("/holdings/{holding_id}/opening-balance")
+def add_opening_balance(holding_id: int, db: Session = Depends(get_db)) -> dict:
+    """Repair for a ledger that began WITHOUT the typed position (every ledger started
+    before 2026-09-23 did): write the typed units and cost in as the opening row, dated
+    before the ledger's first row. Idempotent — a second call answers 409."""
+    h = db.get(PortfolioHolding, holding_id)
+    if h is None:
+        raise HTTPException(404, "holding not found")
+    rows = db.execute(
+        select(PortfolioTransaction).where(PortfolioTransaction.holding_id == holding_id)
+        .order_by(PortfolioTransaction.on_date)
+    ).scalars().all()
+    if any(str(r.note or "").startswith(OPENING_NOTE) for r in rows):
+        raise HTTPException(409, "this ledger already has an opening row")
+    op = opening_row(_typed_position(h), before=rows[0].on_date if rows else None)
+    if op is None:
+        raise HTTPException(409, "nothing typed to carry in — the holding has no units or cost")
+    row = PortfolioTransaction(holding_id=holding_id, **op)
+    db.add(row)
+    db.commit()
+    return {"id": row.id, "on_date": op["on_date"], "units": op["units"], "price": op["price"]}
 
 
 @router.delete("/transactions/{txn_id}")
@@ -491,6 +539,11 @@ def import_transactions(body: PortfolioTransactionImport, db: Session = Depends(
                 PortfolioTransaction.holding_id == body.holding_id
             )
         )
+    elif body.rows:
+        # an APPEND that starts the ledger carries the typed position in first (a replace
+        # is the full history by definition, so nothing is carried)
+        first = min(r.on_date.isoformat() for r in body.rows)
+        _carry_typed_position(db, db.get(PortfolioHolding, body.holding_id), before=first)
     for r in body.rows:
         db.add(PortfolioTransaction(
             holding_id=body.holding_id, on_date=r.on_date.isoformat(), kind=r.kind,

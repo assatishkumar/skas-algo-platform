@@ -931,3 +931,97 @@ def test_a_verified_zero_yield_is_not_reported_as_unknown():
     assert amzn["expected_annual"] == 0.0            # answered, not absent
     # Only the genuinely unknown one counts toward the caveat.
     assert view["unpriced_value"] == pytest.approx(400_000)
+
+
+# ------------------------------------------------------------------ the typed position carries into the ledger
+
+
+def test_the_first_ledger_row_carries_the_typed_position_in_as_an_opening_row(
+    client: TestClient,
+):
+    """2026-09-23: a fund held as a typed position (1,929 units, ₹2.0L) got one BUY typed
+    into its ledger and the whole holding collapsed to that buy — the ledger is the truth
+    the moment a row exists. Now the typed position becomes the ledger's first row."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Small Cap Fund", "asset_class": "mf", "last_price": 104.0,
+        "units": 1500.0, "invested": 150_000.0, "buy_month": "2025-03",
+    }).json()["id"]
+    r = client.post(f"/api/v1/portfolio/holdings/{hid}/transactions", json={
+        "on_date": "2026-09-22", "kind": "buy", "units": 1929.28, "price": 104.0,
+    })
+    assert r.status_code == 200 and r.json()["opening_id"] is not None
+    rows = client.get(f"/api/v1/portfolio/transactions/{hid}").json()["transactions"]
+    assert [x["kind"] for x in rows] == ["buy", "buy"]
+    opening = min(rows, key=lambda x: x["on_date"])
+    assert opening["on_date"] == "2025-03-01" and opening["units"] == pytest.approx(1500.0)
+    assert opening["price"] == pytest.approx(100.0)
+    assert opening["note"].startswith("opening balance")
+    view = next(h for h in client.get("/api/v1/portfolio").json()["holdings"] if h["id"] == hid)
+    assert view["units"] == pytest.approx(1500.0 + 1929.28)
+    assert view["invested"] == pytest.approx(150_000.0 + 1929.28 * 104.0)
+    assert view["basis"] == "ledger" and not view["opening_missing"]
+    # a second row carries nothing more
+    client.post(f"/api/v1/portfolio/holdings/{hid}/transactions", json={
+        "on_date": "2026-09-23", "kind": "buy", "units": 10, "price": 105.0,
+    })
+    rows = client.get(f"/api/v1/portfolio/transactions/{hid}").json()["transactions"]
+    assert sum(1 for x in rows if str(x.get("note") or "").startswith("opening balance")) == 1
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
+def test_an_appending_import_carries_the_typed_position_but_a_replace_does_not(
+    client: TestClient,
+):
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Typed then imported", "asset_class": "etf", "last_price": 100.0,
+        "units": 50.0, "invested": 4_000.0, "buy_month": "2024-01",
+    }).json()["id"]
+    rows = [{"on_date": "2026-01-10", "kind": "buy", "units": 10, "price": 90.0}]
+    client.post("/api/v1/portfolio/transactions/import",
+                json={"holding_id": hid, "replace": False, "rows": rows})
+    got = client.get(f"/api/v1/portfolio/transactions/{hid}").json()["transactions"]
+    assert len(got) == 2
+    assert any(str(x.get("note") or "").startswith("opening balance") for x in got)
+    # a REPLACE is the full history by definition: nothing carried in
+    client.post("/api/v1/portfolio/transactions/import",
+                json={"holding_id": hid, "replace": True, "rows": rows})
+    got = client.get(f"/api/v1/portfolio/transactions/{hid}").json()["transactions"]
+    assert len(got) == 1 and not str(got[0].get("note") or "").startswith("opening balance")
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
+def test_a_ledger_that_began_without_the_typed_position_can_carry_it_in_afterwards(
+    client: TestClient,
+):
+    """The repair for every ledger started before the fix: the modal offers it while the
+    typed units disagree with the ledger's, the opening row lands dated before the first
+    row, and a second call is refused."""
+    hid = client.post("/api/v1/portfolio/holdings", json={
+        "name": "Reset by one buy", "asset_class": "mf", "last_price": 104.0,
+        "units": 1500.0, "invested": 150_000.0, "buy_month": "",
+    }).json()["id"]
+    # the pre-fix shape: one row, no opening
+    client.post("/api/v1/portfolio/transactions/import", json={
+        "holding_id": hid, "replace": True,
+        "rows": [{"on_date": "2026-09-22", "kind": "buy", "units": 1929.28, "price": 104.0}],
+    })
+    view = next(h for h in client.get("/api/v1/portfolio").json()["holdings"] if h["id"] == hid)
+    assert view["opening_missing"] and view["typed_units"] == 1500.0
+    r = client.post(f"/api/v1/portfolio/holdings/{hid}/opening-balance")
+    assert r.status_code == 200 and r.json()["on_date"] == "2026-09-21"   # the day before
+    view = next(h for h in client.get("/api/v1/portfolio").json()["holdings"] if h["id"] == hid)
+    assert not view["opening_missing"] and view["units"] == pytest.approx(1500.0 + 1929.28)
+    assert client.post(f"/api/v1/portfolio/holdings/{hid}/opening-balance").status_code == 409
+    client.delete(f"/api/v1/portfolio/holdings/{hid}")
+
+
+def test_opening_row_prices_the_typed_cost_and_estimates_units_when_unknown():
+    from skas_algo.services.portfolio import opening_row
+
+    row = opening_row({"invested": 1000.0, "units": 40.0, "buy_month": "2023-06"})
+    assert row == {"on_date": "2023-06-01", "kind": "buy", "units": 40.0, "price": 25.0,
+                   "fees": 0.0, "note": row["note"]}
+    est = opening_row({"invested": 1000.0, "units": None, "last_price": 50.0, "buy_month": ""},
+                      before="2026-09-22")
+    assert est["units"] == 20.0 and est["on_date"] == "2026-09-21" and "estimated" in est["note"]
+    assert opening_row({"invested": 0.0, "units": None}) is None

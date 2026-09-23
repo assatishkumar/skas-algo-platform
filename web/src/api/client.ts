@@ -619,6 +619,11 @@ export const portfolio = {
     }),
   deleteTransaction: (txnId: number) =>
     request<{ deleted: number }>(`/portfolio/transactions/${txnId}`, { method: "DELETE" }),
+  // A ledger that began before 2026-09-23 replaced the typed position with its first row;
+  // this writes the typed units and cost in as the opening row, dated before that row.
+  addOpeningBalance: (holdingId: number) =>
+    request<{ id: number; on_date: string; units: number; price: number }>(
+      `/portfolio/holdings/${holdingId}/opening-balance`, { method: "POST" }),
   // replace:true is the safe re-import — appending would double every buy and the cost
   // basis would look merely "a bit high" rather than obviously wrong.
   importTransactions: (holdingId: number, rows: TransactionInput[], replace: boolean) =>

@@ -1580,6 +1580,16 @@ A personal net-worth screen (`/portfolio`, 2026-09) that happens to live in this
 no orders, reaches no order path, and its only broker calls are `holdings()` and quotes. Keep it
 that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` may import from
 `live/` beyond read-only adapter use.
+- **The FIRST ledger row carries the typed position in (2026-09-23).** The ledger outranks
+  the typed figures the moment one row exists, so a single BUY typed into a fund held as a
+  typed position replaced the whole holding with that buy ("adding a ledger is resetting the
+  investment"). `services/portfolio.opening_row` turns the typed units and cost into the
+  ledger's opening row (dated the first-buy month, or the day before the row being added;
+  note `OPENING_NOTE`, shown as OPENING in the modal); `add_transaction` and an APPENDING
+  import write it when the ledger is empty, a REPLACE import never does (it is the full
+  history). Ledgers that began before the fix show `opening_missing` and the modal offers
+  `POST /portfolio/holdings/{id}/opening-balance` (idempotent, 409 on a repeat). The
+  view's transaction dicts must carry `note` for the flag to clear.
 - **The transaction ledger is the source of truth when it exists.** `PortfolioTransaction` rows
   drive FIFO lots → cost basis, real money-weighted XIRR, per-LOT tax and realized gains. A
   holding with no rows falls back to typed `invested`/`units`/`value` (PPF, EPF and property will

@@ -20,7 +20,7 @@ shape, and ``basis`` says which one produced it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from skas_algo.services.holdings import xirr
 
@@ -359,6 +359,47 @@ def accrued_fd_value(
     )
 
 
+OPENING_NOTE = "opening balance — the position as typed before the ledger began"
+
+
+def opening_row(holding: dict, *, before: str | None = None) -> dict | None:
+    """The ledger row that carries a holding's TYPED position into its ledger.
+
+    "Adding a ledger to an existing investment is resetting the entire investment to the
+    added ledger amount" (owner, 2026-09-23): the ledger is the source of truth the moment
+    one row exists, so the first BUY typed into a holding that already had units and a
+    cost replaced the whole position with that one buy. The fix keeps the invariant and the
+    expectation both: the typed position becomes the ledger's FIRST row — one lot, dated at
+    the holding's first-buy month (or the day before the row being added, when that is
+    earlier), priced at the typed cost per unit, labelled so it can be deleted if the
+    history is later pasted in full. None when there is nothing typed to carry, or when the
+    typed units are unknown and no price can turn the rupees into units."""
+    invested = float(holding.get("invested") or 0.0)
+    units = holding.get("units")
+    units = float(units) if units else 0.0
+    last_price = holding.get("last_price")
+    approx = False
+    if units <= 0 and invested > 0 and last_price:
+        units = invested / float(last_price)          # rupees only: units at the last price
+        approx = True
+    if units <= 0:
+        return None
+    price = invested / units if invested > 0 else 0.0
+    month = str(holding.get("buy_month") or "")
+    on_date = f"{month}-01" if len(month) == 7 else None
+    if before and (on_date is None or on_date >= before):
+        on_date = (date.fromisoformat(before) - timedelta(days=1)).isoformat()
+    if on_date is None:
+        on_date = date.today().isoformat()
+    note = OPENING_NOTE + (" (units estimated from the rupees at the last price)" if approx else "")
+    return {"on_date": on_date, "kind": "buy", "units": round(units, 4),
+            "price": round(price, 4), "fees": 0.0, "note": note}
+
+
+def has_opening_row(transactions: list[dict]) -> bool:
+    return any(str(t.get("note") or "").startswith(OPENING_NOTE) for t in transactions)
+
+
 def holding_view(holding: dict, transactions: list[dict], *, today: date | None = None) -> dict:
     """One holding's derived facts. ``transactions`` may be empty — see the module docstring.
 
@@ -518,6 +559,16 @@ def holding_view(holding: dict, transactions: list[dict], *, today: date | None 
         "note": holding.get("note"),
         "basis": "ledger" if has_ledger else "summary",
         "txn_count": len(transactions),
+        # the position as TYPED (ignored once a ledger exists) and whether the ledger has
+        # absorbed it — the modal offers to carry it in when a ledger began without it
+        "typed_units": float(holding.get("units") or 0.0),
+        "typed_invested": float(holding.get("invested") or 0.0),
+        "opening_missing": bool(
+            has_ledger and not has_opening_row(transactions)
+            and float(holding.get("units") or 0.0) > 0
+            and abs(float(holding.get("units") or 0.0) - float(units or 0.0))
+            > 0.005 * float(holding.get("units") or 0.0)
+        ),
         "oversold_units": round(led.oversold, 4) if led.oversold > 1e-9 else 0.0,
         "realized": round(led.realized, 2),
         "disposals": [

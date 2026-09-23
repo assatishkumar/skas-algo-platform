@@ -97,6 +97,10 @@ export interface Holding {
   note: string | null;
   basis: "ledger" | "summary";
   txn_count: number;
+  typed_units?: number;        // the position as typed (ignored once a ledger exists)
+  typed_invested?: number;
+  opening_missing?: boolean;   // the ledger began without the typed position
+
   oversold_units: number;
   realized: number;
   disposals: Disposal[];
