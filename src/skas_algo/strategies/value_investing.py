@@ -53,7 +53,6 @@ from skas_algo.engine.context import AlgoContext
 from skas_algo.engine.types import Signal, SignalAction
 from skas_algo.live.holidays import next_trading_day
 
-
 _SIZING_MODES = frozenset({"one_share", "balanced", "equal_value"})
 
 
@@ -674,18 +673,38 @@ class ValueInvestingStrategy:
                               reason="drip"))
         return out, cash
 
-    def _check_runway(self, fund_units: int, fund_px: float, cash: float, today: date) -> None:
-        """Days of budget the fund source still covers, measured AFTER today's sale."""
+    _RUNWAY_MARK = " covers about "
+
+    def _runway(self, fund_units: float, fund_px: float, cash: float) -> tuple[int, str] | None:
+        """(days, message) when the fund source covers ≤ ``warn_days_left`` days of budget,
+        else None. One definition for the decision's push and the live banner."""
         if self.daily_budget <= 0:
-            return
+            return None
         runway = fund_units * fund_px + max(0.0, cash)
         days = int(runway // self.daily_budget)
         if days > self.warn_days_left:
-            return
-        msg = (f"{self.fund_source} covers about {days} more day(s) of the ₹"
-               f"{self.daily_budget:,.0f} budget (₹{runway:,.0f} left) — top it up.")
-        self._alert(msg)
-        self._notify_once("low_fund", today, msg)
+            return None
+        return days, (f"{self.fund_source}{self._RUNWAY_MARK}{days} more day(s) of the ₹"
+                      f"{self.daily_budget:,.0f} budget (₹{runway:,.0f} left) — top it up.")
+
+    def _set_runway_alert(self, msg: str | None) -> None:
+        """Replace the runway sentence in ``strategy_alert`` (or drop it when ``msg`` is None)
+        without touching the other sentences the decision wrote."""
+        parts = [x for x in (self.strategy_alert or "").split(" · ")
+                 if x and self._RUNWAY_MARK not in x]
+        if msg:
+            parts.append(msg)
+        self.strategy_alert = " · ".join(parts) or None
+
+    def _check_runway(self, fund_units: int, fund_px: float, cash: float, today: date) -> None:
+        """Days of budget the fund source still covers, measured AFTER today's sale — the
+        once-a-day push. The BANNER is re-derived live in ``basket_status`` (2026-09-24: the
+        decision warned "2 days, ₹10,410 left" at 15:05, the owner's top-up of 431 units was
+        adopted at 15:06, and the tile said "top it up" beside "11 days of runway" all night)."""
+        got = self._runway(fund_units, fund_px, cash)
+        self._set_runway_alert(got[1] if got else None)
+        if got:
+            self._notify_once("low_fund", today, got[1])
 
     def _flag_unpriced(self, present: set[str]) -> None:
         """A watchlist name outside the run's symbol list is never priced, so it is silently
@@ -808,6 +827,11 @@ class ValueInvestingStrategy:
         except Exception:  # pragma: no cover - an unpriced fund source must not break the tile
             px = 0.0
         fund_value = fund_units * px
+        # The runway sentence of the banner follows the LIVE fund (a top-up adopted from the
+        # broker, a price move), not the units the last decision happened to see.
+        if px > 0:
+            got = self._runway(fund_units, px, float(self.settled_cash or 0.0))
+            self._set_runway_alert(got[1] if got else None)
         # Before the FIRST decision the ledger is genuinely unset — _settle seeds it inside
         # on_slice — so reporting 0 claims "you cannot spend anything" when the account holds
         # money (owner, 2026-08-28: ₹5,342 in Dhan, tile said ₹0). Project what _settle will

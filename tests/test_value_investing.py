@@ -1081,3 +1081,28 @@ def test_the_broker_balance_still_caps_the_preview():
     st.set_broker_funds(1200.0)
     p = st.preview_plan(_view({"INFY": (1500.0, 1530.0)}), date(2026, 9, 9))
     assert p["spendable"] == 1200.0 and p["broker_funds"] == 1200.0
+
+
+def test_the_runway_banner_follows_the_live_fund_not_the_last_decision():
+    """2026-09-24: the 15:05 decision warned "2 days, ₹10,410 left"; the owner's top-up of 431
+    units was adopted a minute later; the tile showed "top it up" beside "11 days of runway"
+    until the next decision. The banner's runway sentence now tracks the live fund."""
+    view = _view({"AAA": (100, 95), FUND: (100, 100)})
+    ctx, pf = _ctx(view)
+    _fund_lots(pf, 3)
+    st = _strat(watchlist="AAA", daily_budget=100.0, warn_days_left=2)
+    st.on_slice(ctx)
+    assert "covers about 2 more day(s)" in st.strategy_alert
+    # the top-up lands in the portfolio between decisions
+    _fund_lots(pf, 50)
+    b = st.basket_status(view, pf)
+    assert b["runway_days"] >= 50
+    assert not st.strategy_alert or "covers about" not in st.strategy_alert
+    # ... and comes back if the fund drains again, without wiping other sentences
+    st._alert("something else the decision said")
+    pf._lots[FUND] = []
+    _fund_lots(pf, 2)                              # ₹200 left: two days of a ₹100 budget
+    st.basket_status(view, pf)
+    assert "something else the decision said" in st.strategy_alert
+    assert "covers about 2 more day(s)" in st.strategy_alert
+    assert st.strategy_alert.count("covers about") == 1
