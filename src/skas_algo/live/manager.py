@@ -2104,7 +2104,12 @@ class LiveRunManager:
         counted: list[dict] = []
         skipped: list[dict] = []
         _acct_runs = []
-        for run in self.runs.values():
+        # A SNAPSHOT of the runs: recovery adds sessions on a background thread while the API
+        # already answers, and a Brokers-page read during that window walked a dict that
+        # grew under it — "dictionary changed size during iteration", a 500 on the book view
+        # two seconds after the 2026-09-25 restart. The hourly reconcile never raced it
+        # (market hours only), the page did.
+        for run in list(self.runs.values()):
             if run.config.mode.upper() != "LIVE":
                 continue
             if run.config.broker_account_id != account_id:
@@ -2503,7 +2508,7 @@ class LiveRunManager:
         adapter = broker_svc.make_adapter(account)
         return [
             rid
-            for rid, live in self.runs.items()
+            for rid, live in list(self.runs.items())
             if (live.on_cache_fallback or live.quote_error)
             and live.config.broker_account_id == account_id
             and self.promote_quote_source(rid, db, adapter=adapter)
