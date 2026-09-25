@@ -148,6 +148,11 @@ class Settings(BaseSettings):
     # WebSocket feed (push) with a REST fallback on any staleness; False forces the legacy
     # per-run REST polling. Broker-agnostic surface — Dhan/cache paths are unaffected.
     ws_feed_enabled: bool = True
+    # /portfolio's scheduled passes (09:30 reprice, 16:00 snapshot, BIDS evaluation and its
+    # push). ON where the portfolio is authoritative (the VPS); OFF on a box that only holds
+    # a COPY pulled for testing (`skas-algo portfolio-pull`) — two boxes snapshotting and
+    # notifying the same book would write two histories and double every alert.
+    portfolio_maintenance: bool = True
     ws_feed_stale_s: float = 10.0  # in-market: a mark older than this → REST fallback
 
     # --- Option intraday-bar capture (the self-built GFD replacement) ---

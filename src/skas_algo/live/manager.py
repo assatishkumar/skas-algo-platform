@@ -2585,8 +2585,11 @@ class LiveRunManager:
                 await self._maybe_refresh_universes()
                 await self._maybe_daily_cache_refresh()
                 await self._maybe_daily_option_capture()
-                await self._maybe_morning_portfolio_sync()
-                await self._maybe_daily_portfolio_snapshot()
+                from skas_algo.config import get_settings as _gs
+
+                if _gs().portfolio_maintenance:  # off on a box holding a pulled COPY
+                    await self._maybe_morning_portfolio_sync()
+                    await self._maybe_daily_portfolio_snapshot()
                 await self._maybe_daily_backup()
             except asyncio.CancelledError:  # pragma: no cover
                 return

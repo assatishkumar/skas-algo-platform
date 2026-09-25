@@ -1576,6 +1576,15 @@ and is the only box with both broker sessions and an always-on maintenance loop 
 daily snapshot — a laptop that sleeps leaves a hole in a history nothing back-fills. The
 Mac's portfolio tables are DEV-ONLY and deliberately empty; never treat local numbers as
 real, and never edit the two in parallel.
+**To test on the real book, PULL it (2026-09-25): `skas-algo portfolio-pull [--host algo]`**
+(`services/portfolio_pull.py`) — reads every `portfolio*` table off the VPS over ssh with a
+read-only SQLite URI, backs up, and replaces ONLY those tables locally in one transaction
+(column-intersected; a table the peer lacks is emptied). Broker account ids differ per box, so
+`broker_account_id` is remapped by broker + label (spaces/case ignored) and CLEARED when
+there is no match — never trusted as an id. It REFUSES unless `SKAS_PORTFOLIO_MAINTENANCE=0`
+(set in the Mac's `.env`): that switch turns off the 09:30 / 16:00 passes (reprice,
+snapshot, BIDS evaluation, pushes), so the copy never writes a second history or doubles an
+alert. One way only; edits made on the Mac are thrown away by the next pull.
 A personal net-worth screen (`/portfolio`, 2026-09) that happens to live in this repo. It places
 no orders, reaches no order path, and its only broker calls are `holdings()` and quotes. Keep it
 that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` may import from

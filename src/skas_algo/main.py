@@ -249,6 +249,13 @@ def main() -> None:
     )
     ds.add_argument("--days", type=int, default=5, help="trading days to write (default 5)")
     ds.add_argument("--end", default=None, help="last day, YYYY-MM-DD (default: last Friday)")
+    pp = sub.add_parser(
+        "portfolio-pull",
+        help="Copy the peer's /portfolio tables into this box (read-only on the peer; needs "
+             "SKAS_PORTFOLIO_MAINTENANCE=0 here)",
+    )
+    pp.add_argument("--host", default="algo", help="ssh host of the peer (default: algo)")
+    pp.add_argument("--dry-run", action="store_true", help="read and count, write nothing")
     args = parser.parse_args()
 
     if args.cmd == "demo-seed":
@@ -288,6 +295,13 @@ def main() -> None:
         return
     if args.cmd == "restore-option-bars":
         _restore_option_bars(args)
+        return
+    if args.cmd == "portfolio-pull":
+        import json
+
+        from skas_algo.services.portfolio_pull import pull
+
+        print(json.dumps(pull(args.host, dry_run=args.dry_run), indent=2))
         return
     uvicorn.run(
         "skas_algo.api.app:app",
