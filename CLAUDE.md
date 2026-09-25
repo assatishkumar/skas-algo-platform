@@ -1601,6 +1601,13 @@ that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` ma
   quote account (`_bids_auto_accounts`), else SUGGEST — a dip is never dropped because no
   run exists. Accept appends a ledger BUY through `portfolio_history.carry_typed_position`
   (moved out of the route); skip consumes the level. Never an order path in this module.
+  **A dollar-quoted holding ladders in DOLLARS** (`currency_of` / `ladder_price`, owner
+  2026-09-25): its peak, trigger and amounts read `native_price` and the `usd_*` defaults —
+  the rupee price also moves with USD/INR, and a weaker rupee must not read as a smaller
+  dip. Accept converts the $ fill to rupees at the holding's last-sync rate (the ledger is
+  INR) and keeps the $ figure in the note. The tab groups rows US stocks / Mutual funds /
+  ETFs / Stocks with units, avg price, LTP, value, returns (`_position`: in $ for a typed US
+  position, in ₹ for one with a ledger — its $ cost is unknowable, §8a).
   Coverage: `tests/test_bids_ladder.py`, `tests/test_bids_portfolio.py`.
 - **The FIRST ledger row carries the typed position in (2026-09-23).** The ledger outranks
   the typed figures the moment one row exists, so a single BUY typed into a fund held as a

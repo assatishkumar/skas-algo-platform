@@ -169,3 +169,52 @@ def test_excluded_and_manual_peak_via_the_api(client: TestClient):
     assert client.post(f"/api/v1/portfolio/bids/suggestions/{sid}/skip").status_code == 409
     assert client.put("/api/v1/portfolio/bids/defaults",
                       json={"amount": 2500}).json()["amount"] == 2500
+
+
+def test_a_us_holding_ladders_in_dollars_on_the_usd_defaults_and_books_rupees():
+    """Owner 2026-09-25: separate ₹ and $ configs. The dip is read on the DOLLAR price (a
+    weaker rupee must not look like a smaller dip), amounts come from usd_*, and the accepted
+    dollar fill lands in the rupee ledger at the holding's last-sync rate."""
+    with session_scope() as db:
+        h = _holding(db, "MSFT", "us", 400.0 * 85, source="global", ref="MSFT", units=10.0,
+                     invested=300000.0)
+        h.native_currency, h.native_price, h.native_invested = "USD", 400.0, 3500.0
+        db.commit()
+        bids.save_defaults(db, {"dip_pct": 5.0, "amount": 5000.0,
+                                "usd_dip_pct": 10.0, "usd_amount": 200.0, "usd_max_levels": 3})
+        bids.evaluate_portfolio(db, D0, notify=False)
+        rule = db.execute(select(PortfolioBidsRule)).scalars().one()
+        assert rule.peak == 400.0                                  # dollars, not rupees
+        # the rupee price rises with USD/INR while the dollar price falls 10%: L1 fires
+        h.native_price, h.last_price, h.price_asof = 360.0, 360.0 * 90, "2026-09-02"
+        db.commit()
+        out = bids.evaluate_portfolio(db, date(2026, 9, 2), notify=False)
+        assert [(n["level"], n["amount"], n["currency"]) for n in out["new"]] == [(1, 200.0, "USD")]
+        v = bids.view(db)
+        row = v["rows"][0]
+        assert row["currency"] == "USD" and row["group"] == "US stocks"
+        assert row["rule"] == {"dip_pct": 10.0, "amount": 200.0, "max_levels": 3}
+        pos = row["position"]
+        assert pos["currency"] == "USD" and pos["ltp"] == 360.0
+        assert pos["avg_price"] == pytest.approx(350.0) and pos["value"] == pytest.approx(3600.0)
+        assert pos["gain_pct"] == pytest.approx(2.86, abs=0.01)
+        s = v["pending"][0]
+        assert s["currency"] == "USD"
+        bids.accept(db, s["id"], units=0.5, price=360.0, on_date=date(2026, 9, 2))
+        buy = db.execute(select(PortfolioTransaction).where(
+            PortfolioTransaction.note.like("BIDS%"))).scalars().one()
+        assert buy.price == pytest.approx(360.0 * 90)              # booked in rupees
+        assert "$360.00 at 90.00" in buy.note
+
+
+def test_rows_carry_group_and_an_inr_position():
+    with session_scope() as db:
+        _holding(db, "ITC", "stk", 300.0, source="broker", ref="ITC", units=100.0,
+                 invested=25000.0)
+        _holding(db, "Flexi", "mf", 50.0, source="amfi", ref="INF9", units=10.0, invested=400.0)
+        db.commit()
+        rows = {r["name"]: r for r in bids.view(db)["rows"]}
+        assert rows["ITC"]["group"] == "Stocks" and rows["Flexi"]["group"] == "Mutual funds"
+        p = rows["ITC"]["position"]
+        assert p["currency"] == "INR" and p["units"] == 100.0 and p["avg_price"] == 250.0
+        assert p["ltp"] == 300.0 and p["value"] == 30000.0 and p["gain_pct"] == 20.0

@@ -1042,6 +1042,13 @@ or SKIPS; either way the level is consumed and the next X% still fires. Phase 2 
 ETF like value_investing; those holdings then show AUTO instead of SUGGEST. Tables
 `portfolio_bids_rule` / `portfolio_bids_suggestion`; routes under `/portfolio/bids`.
 
+Rupee and dollar holdings have **separate defaults**: a US stock's ladder runs on its dollar
+price with its own X / $y / N, so a move in USD/INR never reads as a dip, and an accepted
+dollar buy is booked in the rupee ledger at the holding's last-sync rate. The tab groups
+holdings as US stocks, Mutual funds, ETFs and Stocks, each with a group total, and every row
+shows units, average price, LTP, current value and returns beside its ladder (peak, dip,
+levels fired, next level).
+
 ## 13. Web application (`web/`)
 
 - **Analyze workbench (`/analyze`, 2026-07)**: per-run backtest analytics for options runs —

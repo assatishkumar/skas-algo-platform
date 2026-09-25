@@ -16,6 +16,12 @@ the day it entered BIDS ("joined"), not an old high it may be far below — so j
 fires a lump of levels at once, and no price history is needed for any asset class. The peak
 then rises with every new high ("high") and resets the ladder; the owner can type a
 reference high instead ("manual"), which restarts the ladder from it. The panel says which.
+
+A holding quoted in a foreign currency (a US stock) runs its ladder in THAT currency (owner
+2026-09-25: "different config for INR and $"): the dip is measured on the dollar price — the
+rupee price also moves with USD/INR, and a weaker rupee must not read as a smaller dip — and
+its amounts come from the ``usd_*`` defaults, in dollars. Accepting converts the dollar fill
+to rupees at the rate of the holding's last sync, because the ledger is kept in rupees.
 """
 
 from __future__ import annotations
@@ -44,7 +50,12 @@ DEFAULTS = {
     "amount": 5000.0,
     "max_levels": 5,
     "fund_source": "LIQUIDBEES",
+    # the same three knobs for holdings quoted in dollars (US stocks), in dollars
+    "usd_dip_pct": 5.0,
+    "usd_amount": 100.0,
+    "usd_max_levels": 5,
 }
+CLASS_GROUPS = {"us": "US stocks", "mf": "Mutual funds", "etf": "ETFs", "stk": "Stocks"}
 ELIGIBLE_CLASSES = ("stk", "etf", "mf", "us")
 BIDS_NOTE = "BIDS"
 
@@ -73,12 +84,37 @@ def eligible(h: PortfolioHolding) -> bool:
     return str(h.asset_class or "").lower() in ELIGIBLE_CLASSES
 
 
+def currency_of(h: PortfolioHolding) -> str:
+    """The currency the holding is QUOTED in — its ladder, rule amounts and suggestions are
+    all in it. INR unless the sync recorded a foreign quote with a price."""
+    ccy = str(h.native_currency or "").upper()
+    if ccy and ccy != "INR" and h.native_price and float(h.native_price) > 0:
+        return ccy
+    return "INR"
+
+
+def ladder_price(h: PortfolioHolding) -> float:
+    """The price the ladder reads: the native quote for a foreign holding, else last_price."""
+    if currency_of(h) != "INR":
+        return float(h.native_price or 0.0)
+    return float(h.last_price or 0.0)
+
+
+def fx_to_inr(h: PortfolioHolding) -> float:
+    """Rupees per unit of the holding's currency at its last sync (1 for INR)."""
+    if currency_of(h) == "INR":
+        return 1.0
+    return float(h.last_price or 0.0) / float(h.native_price)
+
+
 def rule_for(h: PortfolioHolding, r: PortfolioBidsRule | None, d: dict) -> LadderRule:
+    pre = "" if currency_of(h) == "INR" else "usd_"
     return LadderRule(
-        dip_pct=float(r.dip_pct if r is not None and r.dip_pct is not None else d["dip_pct"]),
-        amount=float(r.amount if r is not None and r.amount is not None else d["amount"]),
+        dip_pct=float(r.dip_pct if r is not None and r.dip_pct is not None
+                      else d[f"{pre}dip_pct"]),
+        amount=float(r.amount if r is not None and r.amount is not None else d[f"{pre}amount"]),
         max_levels=int(r.max_levels if r is not None and r.max_levels is not None
-                       else d["max_levels"]),
+                       else d[f"{pre}max_levels"]),
     )
 
 
@@ -131,7 +167,7 @@ def seed(h: PortfolioHolding, r: PortfolioBidsRule, today: date) -> None:
     """First sight of a holding: it joins at today's price. Never overwrites a typed peak."""
     if r.peak is not None:
         return
-    px = float(h.last_price or 0.0)
+    px = ladder_price(h)
     if px <= 0:
         return
     r.peak = px
@@ -163,7 +199,8 @@ def evaluate_portfolio(db: Session, today: date | None = None, *, auto_accounts=
         return out
     rules = _rules(db)
     for h in db.execute(select(PortfolioHolding)).scalars().all():
-        if not eligible(h) or not h.last_price or h.last_price <= 0:
+        px = ladder_price(h)
+        if not eligible(h) or px <= 0:
             continue
         r = rules.get(h.id)
         if mode_of(h, r, auto_accounts) != "suggest":
@@ -180,7 +217,7 @@ def evaluate_portfolio(db: Session, today: date | None = None, *, auto_accounts=
         if r.last_eval_asof == asof:
             continue
         rule = rule_for(h, r, d)
-        res = evaluate(LadderState(r.peak, int(r.levels_fired or 0)), float(h.last_price), rule)
+        res = evaluate(LadderState(r.peak, int(r.levels_fired or 0)), px, rule)
         out["evaluated"] += 1
         if res.state.peak != r.peak:          # a new high: the ladder resets
             if res.reset:
@@ -192,11 +229,12 @@ def evaluate_portfolio(db: Session, today: date | None = None, *, auto_accounts=
         for t in res.triggers:
             s = PortfolioBidsSuggestion(
                 holding_id=h.id, peak=r.peak, peak_asof=r.peak_asof or asof, level=t.level,
-                trigger_price=t.trigger_price, price=float(h.last_price), amount=t.amount,
+                trigger_price=t.trigger_price, price=px, amount=t.amount,
                 created_on=asof, status="pending")
             db.add(s)
             out["new"].append({"holding": h.name, "level": t.level, "amount": t.amount,
-                               "trigger_price": t.trigger_price, "price": float(h.last_price)})
+                               "trigger_price": t.trigger_price, "price": px,
+                               "currency": currency_of(h)})
         r.levels_fired = res.state.levels_fired
         r.last_eval_asof = asof
     db.commit()
@@ -205,11 +243,15 @@ def evaluate_portfolio(db: Session, today: date | None = None, *, auto_accounts=
     return out
 
 
+def _sym(ccy: str | None) -> str:
+    return {"INR": "₹", "USD": "$"}.get(str(ccy or "INR").upper(), f"{ccy} ")
+
+
 def _notify(new: list[dict]) -> None:
     try:
         from skas_algo.notify import Alert, AlertLevel, build_notifier
 
-        lines = [f"{n['holding']} · L{n['level']} · ₹{n['amount']:,.0f} "
+        lines = [f"{n['holding']} · L{n['level']} · {_sym(n.get('currency'))}{n['amount']:,.0f} "
                  f"(at {n['price']:,.2f}, trigger {n['trigger_price']:,.2f})" for n in new[:12]]
         more = f"\n… +{len(new) - 12} more" if len(new) > 12 else ""
         build_notifier().send(Alert(
@@ -224,7 +266,9 @@ def _notify(new: list[dict]) -> None:
 def accept(db: Session, sid: int, *, units: float, price: float, on_date: date,
            fees: float = 0.0) -> dict:
     """Record the owner's buy for a suggestion: a BUY row in the holding's ledger (the typed
-    position carried in first when the ledger is empty — §8a), and the suggestion closed."""
+    position carried in first when the ledger is empty — §8a), and the suggestion closed.
+    ``price`` is in the holding's currency; a foreign fill is booked in rupees at the rate of
+    the holding's last sync (the ledger is kept in rupees), and the note keeps the original."""
     from skas_algo.services.portfolio_history import carry_typed_position
 
     s = db.get(PortfolioBidsSuggestion, sid)
@@ -235,11 +279,15 @@ def accept(db: Session, sid: int, *, units: float, price: float, on_date: date,
     if units <= 0 or price <= 0:
         raise ValueError("units and price must be positive")
     h = db.get(PortfolioHolding, s.holding_id)
+    ccy = currency_of(h)
+    fx = fx_to_inr(h)
+    note = f"{BIDS_NOTE} L{s.level} · dip {_sym(ccy)}{s.trigger_price:,.2f}"
+    if ccy != "INR":
+        note += f" · {_sym(ccy)}{float(price):,.2f} at {fx:,.2f}"
     carry_typed_position(db, h, before=on_date.isoformat())
     row = PortfolioTransaction(
         holding_id=s.holding_id, on_date=on_date.isoformat(), kind="buy", units=float(units),
-        price=float(price), fees=float(fees or 0.0),
-        note=f"{BIDS_NOTE} L{s.level} · dip {s.trigger_price:,.2f}")
+        price=round(float(price) * fx, 4), fees=float(fees or 0.0), note=note)
     db.add(row)
     db.flush()
     s.status = "accepted"
@@ -262,9 +310,41 @@ def skip(db: Session, sid: int) -> dict:
 
 
 # ------------------------------------------------------------------ the tab's view
+def _position(h: PortfolioHolding, rec: dict | None, ccy: str) -> dict:
+    """Units, average cost, LTP, value and return — in the ladder's currency where the
+    holding's own cost is known in it (a typed US position), else in rupees. A US holding
+    with a ledger has only a rupee cost basis, and dividing it by today's rate would not
+    recover the dollars paid (§8a), so it is shown in rupees and says so."""
+    rec = rec or {}
+    units = float(rec.get("units") or 0.0)
+    inv_inr = float(rec.get("invested") or 0.0)
+    val_inr = float(rec.get("value") or 0.0)
+    out = {"units": units or None, "value_inr": val_inr, "invested_inr": inv_inr,
+           "gain_inr": val_inr - inv_inr}
+    native_ok = (ccy != "INR" and not rec.get("txn_count") and h.native_invested
+                 and units > 0)
+    if native_ok:
+        ltp = float(h.native_price)
+        inv = float(h.native_invested)
+        val = units * ltp
+        out.update({"currency": ccy, "ltp": ltp, "invested": inv, "value": val,
+                    "avg_price": inv / units})
+    else:
+        out.update({"currency": "INR", "ltp": float(h.last_price or 0.0) or None,
+                    "invested": inv_inr, "value": val_inr,
+                    "avg_price": inv_inr / units if units > 0 and inv_inr > 0 else None})
+    out["gain"] = out["value"] - out["invested"]
+    out["gain_pct"] = (round(out["gain"] / out["invested"] * 100.0, 2)
+                       if out["invested"] > 0 else None)
+    return out
+
+
 def view(db: Session, *, auto_accounts=None) -> dict:
+    from skas_algo.services.portfolio_history import current_views
+
     d = defaults(db)
     rules = _rules(db)
+    recs = {v["id"]: v for v in current_views(db)}
     rows = []
     for h in db.execute(select(PortfolioHolding).order_by(PortfolioHolding.name)).scalars().all():
         if not eligible(h):
@@ -273,9 +353,13 @@ def view(db: Session, *, auto_accounts=None) -> dict:
         rule = rule_for(h, r, d)
         state = LadderState(r.peak if r else None, int(r.levels_fired or 0) if r else 0)
         nxt = next_trigger(state, rule)
-        px = float(h.last_price or 0.0)
+        px = ladder_price(h)
+        ccy = currency_of(h)
+        cls = str(h.asset_class or "").lower()
         rows.append({
             "holding_id": h.id, "name": h.name, "asset_class": h.asset_class,
+            "group": CLASS_GROUPS.get(cls, cls), "currency": ccy,
+            "position": _position(h, recs.get(h.id), ccy),
             "sync_source": h.sync_source, "symbol": h.sync_ref,
             "broker_account_id": h.broker_account_id,
             "mode": mode_of(h, r, auto_accounts),
@@ -292,20 +376,23 @@ def view(db: Session, *, auto_accounts=None) -> dict:
             "next": ({"level": nxt.level, "trigger_price": nxt.trigger_price,
                       "amount": nxt.amount} if nxt else None),
         })
-    names = {h.id: h.name for h in db.execute(select(PortfolioHolding)).scalars().all()}
+    hs = db.execute(select(PortfolioHolding)).scalars().all()
+    names = {h.id: h.name for h in hs}
+    ccys = {h.id: currency_of(h) for h in hs}
     sugg = db.execute(select(PortfolioBidsSuggestion).order_by(
         PortfolioBidsSuggestion.created_on.desc(), PortfolioBidsSuggestion.id.desc())
     ).scalars().all()
     return {
         "defaults": d,
         "rows": rows,
-        "pending": [_sdict(s, names) for s in sugg if s.status == "pending"],
-        "recent": [_sdict(s, names) for s in sugg if s.status != "pending"][:30],
+        "pending": [_sdict(s, names, ccys) for s in sugg if s.status == "pending"],
+        "recent": [_sdict(s, names, ccys) for s in sugg if s.status != "pending"][:30],
     }
 
 
-def _sdict(s: PortfolioBidsSuggestion, names: dict) -> dict:
+def _sdict(s: PortfolioBidsSuggestion, names: dict, ccys: dict | None = None) -> dict:
     return {"id": s.id, "holding_id": s.holding_id, "holding": names.get(s.holding_id),
+            "currency": (ccys or {}).get(s.holding_id, "INR"),
             "level": s.level, "peak": s.peak, "trigger_price": s.trigger_price,
             "price": s.price, "amount": s.amount,
             "units_hint": round(s.amount / s.price, 4) if s.price else None,

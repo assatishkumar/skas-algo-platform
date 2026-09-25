@@ -1351,6 +1351,10 @@ class BidsDefaultsInput(BaseModel):
     amount: float | None = Field(default=None, gt=0)
     max_levels: int | None = Field(default=None, ge=1, le=20)
     fund_source: str | None = None
+    # the same knobs for holdings quoted in dollars (US stocks), amount in dollars
+    usd_dip_pct: float | None = Field(default=None, gt=0, le=50)
+    usd_amount: float | None = Field(default=None, gt=0)
+    usd_max_levels: int | None = Field(default=None, ge=1, le=20)
 
 
 class BidsRuleInput(BaseModel):

@@ -716,12 +716,35 @@ export interface BidsDefaults {
   amount: number;
   max_levels: number;
   fund_source: string;
+  usd_dip_pct: number;            // the same knobs for dollar-quoted holdings, in dollars
+  usd_amount: number;
+  usd_max_levels: number;
+}
+
+/** Units, average cost, LTP, value and return — in the holding's own currency where its
+ *  cost is known in it (a typed US position), else in rupees (`currency` says which). The
+ *  `_inr` figures are always rupees, for group totals. */
+export interface BidsPosition {
+  currency: string;
+  units: number | null;
+  avg_price: number | null;
+  ltp: number | null;
+  value: number;
+  invested: number;
+  gain: number;
+  gain_pct: number | null;
+  value_inr: number;
+  invested_inr: number;
+  gain_inr: number;
 }
 
 export interface BidsRow {
   holding_id: number;
   name: string;
   asset_class: string;
+  group: string;                  // "US stocks" | "Mutual funds" | "ETFs" | "Stocks"
+  currency: string;               // the ladder's currency: peak, price, amounts, suggestions
+  position: BidsPosition;
   sync_source: string | null;
   symbol: string | null;
   broker_account_id: number | null;
@@ -744,6 +767,7 @@ export interface BidsSuggestion {
   id: number;
   holding_id: number;
   holding: string | null;
+  currency: string;
   level: number;
   peak: number;
   trigger_price: number;
