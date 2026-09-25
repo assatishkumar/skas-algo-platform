@@ -1341,3 +1341,32 @@ class PortfolioHoldingTagsInput(BaseModel):
     as adding and no partial-update path can leave a stale link behind."""
 
     tag_ids: list[int] = Field(default_factory=list)
+
+
+class BidsDefaultsInput(BaseModel):
+    """Portfolio → BIDS defaults. Any field left out keeps its current value."""
+
+    enabled: bool | None = None
+    dip_pct: float | None = Field(default=None, gt=0, le=50)
+    amount: float | None = Field(default=None, gt=0)
+    max_levels: int | None = Field(default=None, ge=1, le=20)
+    fund_source: str | None = None
+
+
+class BidsRuleInput(BaseModel):
+    """One holding's BIDS overrides. ``null`` clears an override back to the default
+    (send the field explicitly); ``peak`` types a reference high and resets the ladder."""
+
+    enabled: bool | None = None
+    dip_pct: float | None = Field(default=None, gt=0, le=50)
+    amount: float | None = Field(default=None, gt=0)
+    max_levels: int | None = Field(default=None, ge=1, le=20)
+    peak: float | None = Field(default=None, gt=0)
+
+
+class BidsAcceptInput(BaseModel):
+    units: float = Field(gt=0)
+    price: float = Field(gt=0)
+    on_date: date
+    fees: float = Field(default=0.0, ge=0)
+

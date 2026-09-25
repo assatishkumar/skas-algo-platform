@@ -21,6 +21,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -473,3 +474,55 @@ class PortfolioTag(Base, TimestampMixin):
     holdings: Mapped[list[PortfolioHolding]] = relationship(
         secondary=portfolio_holding_tag, back_populates="tags", lazy="selectin",
     )
+
+
+class PortfolioBidsRule(Base, TimestampMixin):
+    """BIDS (Buy In Dips, owner design 2026-09-25) — one row per holding the owner has touched
+    or the engine has seeded: the per-holding overrides (NULL = the portfolio default) and the
+    ladder's STATE. The ladder itself is services/bids_ladder.py."""
+
+    __tablename__ = "portfolio_bids_rule"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    holding_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolio_holding.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)   # False = excluded
+    dip_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_levels: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ladder state
+    peak: Mapped[float | None] = mapped_column(Float, nullable=True)
+    peak_asof: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # where the peak came from: joined (the price the day the holding entered BIDS — owner
+    # decision 2026-09-25, never an old high) | high (a new high since) | manual (typed)
+    peak_source: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    levels_fired: Mapped[int] = mapped_column(Integer, default=0)
+    last_eval_asof: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+
+class PortfolioBidsSuggestion(Base, TimestampMixin):
+    """A level the ladder fired on a holding that cannot be bought automatically (a mutual
+    fund, a US stock, a broker holding with no BIDS run). The owner ACCEPTS it — a BUY row in
+    the holding's ledger, placed by their own hand — or SKIPS it; either way the level is
+    consumed and the next X% still fires. Expired when a new high resets the ladder."""
+
+    __tablename__ = "portfolio_bids_suggestion"
+    __table_args__ = (UniqueConstraint("holding_id", "peak_asof", "level",
+                                       name="uq_bids_suggestion_level"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    holding_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolio_holding.id", ondelete="CASCADE"), index=True
+    )
+    peak: Mapped[float] = mapped_column(Float)
+    peak_asof: Mapped[str] = mapped_column(String(10))
+    level: Mapped[int] = mapped_column(Integer)
+    trigger_price: Mapped[float] = mapped_column(Float)
+    price: Mapped[float] = mapped_column(Float)            # the close that fired it
+    amount: Mapped[float] = mapped_column(Float)
+    created_on: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(10), default="pending")  # pending|accepted|skipped|expired
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    txn_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+

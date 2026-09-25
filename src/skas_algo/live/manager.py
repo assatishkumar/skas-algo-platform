@@ -2647,6 +2647,7 @@ class LiveRunManager:
             logger.info("portfolio sync (%s): %s issue(s)",
                         "all sources" if not skip_sources else f"skipping {','.join(skip_sources)}",
                         len(report.issues))
+            self._run_bids_evaluation(db)
 
     async def _maybe_daily_portfolio_snapshot(self) -> None:
         """Refresh the /portfolio auto holdings and stamp one history point per day.
@@ -2698,6 +2699,23 @@ class LiveRunManager:
             row = record_snapshot(db)
             if row is not None:
                 logger.info("portfolio snapshot %s: %.2f", row.on_date, row.value)
+            self._run_bids_evaluation(db)
+
+    def _run_bids_evaluation(self, db) -> None:
+        """BIDS over the portfolio (services/bids.py): after each repricing pass, run every
+        suggest-mode holding's ladder on its fresh price. Evaluated once per price DATE, so
+        the 09:30 pass (US close, overnight NAVs) and the 16:00 pass (the Indian close) never
+        double-count a close. Never an order path; a failure never breaks maintenance."""
+        try:
+            from skas_algo.api.routes.portfolio import _bids_auto_accounts
+            from skas_algo.services.bids import evaluate_portfolio
+
+            out = evaluate_portfolio(db, auto_accounts=_bids_auto_accounts())
+            if out["new"] or out["resets"]:
+                logger.info("bids: %d evaluated, %d new suggestion(s), %d reset(s)",
+                            out["evaluated"], len(out["new"]), out["resets"])
+        except Exception:
+            logger.exception("bids evaluation failed")
 
     async def _maybe_daily_backup(self) -> None:
         """One DB snapshot per day, after the session + settlement (~16:30 IST)."""

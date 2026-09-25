@@ -1580,6 +1580,19 @@ A personal net-worth screen (`/portfolio`, 2026-09) that happens to live in this
 no orders, reaches no order path, and its only broker calls are `holdings()` and quotes. Keep it
 that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` may import from
 `live/` beyond read-only adapter use.
+- **BIDS — Buy In Dips (2026-09-25, `services/bids.py`, Portfolio → BIDS).** Every
+  stk/etf/mf/us holding is bought again at each further X% below its peak — k·y at level k
+  (linear), ≤ N levels, reset on a new high. ONE pure ladder (`services/bids_ladder.py`)
+  serves the suggestion engine and, in phase 2, the auto strategy — never re-derive a dip
+  elsewhere. A holding JOINS AT TODAY'S PRICE (owner decision: an old 52-week high would
+  fire a lump of levels on day one), `peak_source` joined/high/manual says which. Evaluated
+  once per PRICE DATE (`last_eval_asof`) after the 09:30 and 16:00 repricing passes
+  (`manager._run_bids_evaluation`), so the two passes never double-count a close. Mode is
+  derived: AUTO only when a RUNNING `bids` deployment trades the symbol on the holding's
+  quote account (`_bids_auto_accounts`), else SUGGEST — a dip is never dropped because no
+  run exists. Accept appends a ledger BUY through `portfolio_history.carry_typed_position`
+  (moved out of the route); skip consumes the level. Never an order path in this module.
+  Coverage: `tests/test_bids_ladder.py`, `tests/test_bids_portfolio.py`.
 - **The FIRST ledger row carries the typed position in (2026-09-23).** The ledger outranks
   the typed figures the moment one row exists, so a single BUY typed into a fund held as a
   typed position replaced the whole holding with that buy ("adding a ledger is resetting the

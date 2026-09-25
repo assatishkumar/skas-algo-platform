@@ -123,6 +123,8 @@ import type {
   HoldingInput,
   LedgerPreview,
   PortfolioPayload,
+  BidsDefaults,
+  BidsPayload,
   SeedResult,
   SyncReport,
   TransactionInput,
@@ -600,6 +602,25 @@ export const api = {
  * would let the KPI strip and the Allocation tab disagree for a frame. */
 export const portfolio = {
   get: () => request<PortfolioPayload>("/portfolio"),
+  // BIDS — buy in dips over the market-linked holdings (services/bids.py)
+  bids: () => request<BidsPayload>("/portfolio/bids"),
+  bidsDefaults: (body: Partial<BidsDefaults>) =>
+    request<BidsDefaults>("/portfolio/bids/defaults", { method: "PUT", body: JSON.stringify(body) }),
+  bidsRule: (holdingId: number, body: Record<string, number | boolean | null>) =>
+    request<BidsPayload>(`/portfolio/bids/rules/${holdingId}`, {
+      method: "PUT", body: JSON.stringify(body),
+    }),
+  bidsEvaluate: () =>
+    request<{ evaluated: number; new: unknown[]; resets: number }>("/portfolio/bids/evaluate", {
+      method: "POST",
+    }),
+  bidsAccept: (sid: number, body: { units: number; price: number; on_date: string; fees?: number }) =>
+    request<{ id: number; status: string; txn_id: number }>(
+      `/portfolio/bids/suggestions/${sid}/accept`, { method: "POST", body: JSON.stringify(body) }),
+  bidsSkip: (sid: number) =>
+    request<{ id: number; status: string }>(`/portfolio/bids/suggestions/${sid}/skip`, {
+      method: "POST",
+    }),
   createHolding: (body: HoldingInput) =>
     request<{ id: number }>("/portfolio/holdings", {
       method: "POST", body: JSON.stringify(body),

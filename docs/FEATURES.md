@@ -1024,6 +1024,24 @@ Coverage: `tests/test_portfolio.py`, `test_portfolio_sync.py`, `test_portfolio_i
 
 ---
 
+### BIDS — Buy In Dips (Portfolio → BIDS, 2026-09-25)
+
+Every market-linked holding — stocks, ETFs, mutual funds, US stocks — is bought again each
+time it falls another X% below its peak: level 1 invests y, level 2 invests 2y, level k
+invests k·y (a linear ladder), up to N levels; a new high moves the peak up and resets the
+ladder. A holding **joins at today's price**, never at an older high it may already be far
+below, so joining never fires a lump of levels. X, y and N are portfolio defaults (5% ·
+₹5,000 · 5) that any holding can override; a holding can be excluded, and a typed reference
+high restarts its ladder from that price. The ladder is one pure function
+(`services/bids_ladder.py`) the whole feature shares. **Phase 1 is suggest-only**: after the
+09:30 and 16:00 repricing passes each holding is judged once per new price date; a fired
+level becomes a suggestion (plus one notification) that the owner ACCEPTS — a BUY row in the
+holding's ledger for the order they placed themselves, the typed position carried in first —
+or SKIPS; either way the level is consumed and the next X% still fires. Phase 2 adds a
+`bids` deployment that buys broker-held stocks/ETFs automatically at 15:05, funded from an
+ETF like value_investing; those holdings then show AUTO instead of SUGGEST. Tables
+`portfolio_bids_rule` / `portfolio_bids_suggestion`; routes under `/portfolio/bids`.
+
 ## 13. Web application (`web/`)
 
 - **Analyze workbench (`/analyze`, 2026-07)**: per-run backtest analytics for options runs —

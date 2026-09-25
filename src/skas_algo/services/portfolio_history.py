@@ -140,3 +140,26 @@ def growth_series(db: Session, *, limit_days: int = 1500) -> dict:
         "enough_for_trend": len(rows) >= MIN_POINTS_FOR_TREND,
         "since": dates[0] if dates else None,
     }
+
+
+def carry_typed_position(db: Session, h, *, before: str) -> int | None:
+    """When a holding's FIRST ledger row lands, write its typed position in as the opening
+    row so the ledger starts from what was already held (services/portfolio.opening_row).
+    Returns the opening row's id, or None when there was nothing to carry. Shared by the
+    ledger routes and BIDS' accept (2026-09-25)."""
+    from skas_algo.services.portfolio import opening_row
+
+    existing = db.execute(
+        select(PortfolioTransaction).where(PortfolioTransaction.holding_id == h.id)
+    ).scalars().first()
+    if existing is not None:
+        return None
+    op = opening_row({"invested": h.invested, "units": h.units, "last_price": h.last_price,
+                      "buy_month": h.buy_month}, before=before)
+    if op is None:
+        return None
+    row = PortfolioTransaction(holding_id=h.id, **op)
+    db.add(row)
+    db.flush()
+    return row.id
+

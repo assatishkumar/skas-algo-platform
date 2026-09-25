@@ -19,6 +19,9 @@ from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
 from skas_algo.api.models import (
+    BidsAcceptInput,
+    BidsDefaultsInput,
+    BidsRuleInput,
     PortfolioBucketInput,
     PortfolioDividendInput,
     PortfolioGoalInput,
@@ -43,7 +46,12 @@ from skas_algo.db.models import (
 )
 from skas_algo.services import portfolio as pf
 from skas_algo.services.portfolio import OPENING_NOTE, build_ledger, opening_row
-from skas_algo.services.portfolio_history import current_views, growth_series, record_snapshot
+from skas_algo.services.portfolio_history import (
+    carry_typed_position,
+    current_views,
+    growth_series,
+    record_snapshot,
+)
 from skas_algo.services.portfolio_import import (
     guess_asset_class,
     parse_ledger_paste,
@@ -281,21 +289,7 @@ def _typed_position(h: PortfolioHolding) -> dict:
 
 
 def _carry_typed_position(db: Session, h: PortfolioHolding, *, before: str) -> int | None:
-    """When a holding's FIRST ledger row lands, write its typed position in as the opening
-    row so the ledger starts from what was already held (services/portfolio.opening_row).
-    Returns the opening row's id, or None when there was nothing to carry."""
-    existing = db.execute(
-        select(PortfolioTransaction).where(PortfolioTransaction.holding_id == h.id)
-    ).scalars().first()
-    if existing is not None:
-        return None
-    op = opening_row(_typed_position(h), before=before)
-    if op is None:
-        return None
-    row = PortfolioTransaction(holding_id=h.id, **op)
-    db.add(row)
-    db.flush()
-    return row.id
+    return carry_typed_position(db, h, before=before)
 
 
 @router.post("/holdings/{holding_id}/transactions")
@@ -840,3 +834,84 @@ def snapshot_now(db: Session = Depends(get_db)) -> dict:
     if row is None:
         return {"recorded": False, "reason": "no holdings tracked yet"}
     return {"recorded": True, "on_date": row.on_date, "value": row.value}
+
+
+# ------------------------------------------------------------------ BIDS (buy in dips)
+
+
+def _bids_auto_accounts() -> dict[int, set[str]]:
+    """{broker account: symbols} traded by RUNNING bids deployments — the holdings that buy
+    automatically. Phase 1 has no bids strategy yet, so this is empty and every holding is a
+    suggestion; the read is here so phase 2 changes nothing on this side."""
+    try:
+        from skas_algo.live.manager import manager
+
+        out: dict[int, set[str]] = {}
+        for live in list(manager.runs.values()):
+            cfg = live.config
+            if getattr(cfg, "strategy_id", None) != "bids" or cfg.broker_account_id is None:
+                continue
+            out.setdefault(cfg.broker_account_id, set()).update(
+                str(x).upper() for x in (cfg.symbols or []))
+        return out
+    except Exception:  # pragma: no cover - the tab must render without the live manager
+        return {}
+
+
+@router.get("/bids")
+def bids_view(db: Session = Depends(get_db)) -> dict:
+    from skas_algo.services import bids
+
+    return bids.view(db, auto_accounts=_bids_auto_accounts())
+
+
+@router.put("/bids/defaults")
+def bids_defaults(body: BidsDefaultsInput, db: Session = Depends(get_db)) -> dict:
+    from skas_algo.services import bids
+
+    return bids.save_defaults(db, body.model_dump(exclude_none=True))
+
+
+@router.put("/bids/rules/{holding_id}")
+def bids_rule(holding_id: int, body: BidsRuleInput, db: Session = Depends(get_db)) -> dict:
+    from skas_algo.services import bids
+
+    try:
+        bids.update_rule(db, holding_id, body.model_dump(exclude_unset=True))
+    except KeyError:
+        raise HTTPException(404, "holding not found") from None
+    return bids.view(db, auto_accounts=_bids_auto_accounts())
+
+
+@router.post("/bids/evaluate")
+def bids_evaluate(db: Session = Depends(get_db)) -> dict:
+    """The hand trigger for the pass the maintenance loop runs at 09:30 and 16:00."""
+    from skas_algo.services import bids
+
+    return bids.evaluate_portfolio(db, auto_accounts=_bids_auto_accounts())
+
+
+@router.post("/bids/suggestions/{sid}/accept")
+def bids_accept(sid: int, body: BidsAcceptInput, db: Session = Depends(get_db)) -> dict:
+    from skas_algo.services import bids
+
+    try:
+        return bids.accept(db, sid, units=body.units, price=body.price, on_date=body.on_date,
+                           fees=body.fees)
+    except KeyError:
+        raise HTTPException(404, "suggestion not found") from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.post("/bids/suggestions/{sid}/skip")
+def bids_skip(sid: int, db: Session = Depends(get_db)) -> dict:
+    from skas_algo.services import bids
+
+    try:
+        return bids.skip(db, sid)
+    except KeyError:
+        raise HTTPException(404, "suggestion not found") from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+

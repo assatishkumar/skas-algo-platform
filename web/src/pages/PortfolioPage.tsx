@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { brokers as brokerApi, portfolio as papi } from "../api/client";
 import AllocationView from "../components/portfolio/AllocationView";
+import BidsView from "../components/portfolio/BidsView";
 import BucketsView from "../components/portfolio/BucketsView";
 import GoalsView from "../components/portfolio/GoalsView";
 import GrowthView from "../components/portfolio/GrowthView";
@@ -19,9 +20,10 @@ import {
 } from "../lib/portfolio";
 
 type Tab =
-  | "Overview" | "Allocation" | "Growth" | "Income" | "Goals" | "Buckets" | "Rebalance" | "Tax";
+  | "Overview" | "Allocation" | "Growth" | "Income" | "Goals" | "Buckets" | "Rebalance" | "Tax"
+  | "BIDS";
 const TABS: Tab[] = [
-  "Overview", "Allocation", "Growth", "Income", "Goals", "Buckets", "Rebalance", "Tax",
+  "Overview", "Allocation", "Growth", "Income", "Goals", "Buckets", "Rebalance", "Tax", "BIDS",
 ];
 
 /** Per-device view preferences. These are genuinely per-device (a phone wants compact rows,
@@ -390,6 +392,7 @@ export default function PortfolioPage() {
             />
           )}
           {tab === "Tax" && <TaxView rows={rows} payload={data} />}
+          {tab === "BIDS" && <BidsView />}
         </>
       )}
 

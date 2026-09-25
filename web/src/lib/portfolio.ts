@@ -708,3 +708,58 @@ export interface TagRow {
   color: string;
   count?: number;
 }
+
+// ------------------------------------------------------------------ BIDS (buy in dips)
+export interface BidsDefaults {
+  enabled: boolean;
+  dip_pct: number;
+  amount: number;
+  max_levels: number;
+  fund_source: string;
+}
+
+export interface BidsRow {
+  holding_id: number;
+  name: string;
+  asset_class: string;
+  sync_source: string | null;
+  symbol: string | null;
+  broker_account_id: number | null;
+  mode: "auto" | "suggest" | "excluded";
+  dip_pct: number | null;         // override, null = the default
+  amount: number | null;
+  max_levels: number | null;
+  rule: { dip_pct: number; amount: number; max_levels: number };   // effective
+  peak: number | null;
+  peak_asof: string | null;
+  peak_source: "joined" | "high" | "manual" | null;
+  levels_fired: number;
+  price: number | null;
+  price_asof: string | null;
+  drawdown_pct: number | null;
+  next: { level: number; trigger_price: number; amount: number } | null;
+}
+
+export interface BidsSuggestion {
+  id: number;
+  holding_id: number;
+  holding: string | null;
+  level: number;
+  peak: number;
+  trigger_price: number;
+  price: number;
+  amount: number;
+  units_hint: number | null;
+  created_on: string;
+  status: "pending" | "accepted" | "skipped" | "expired";
+  txn_id: number | null;
+  resolved_at: string | null;
+}
+
+export interface BidsPayload {
+  defaults: BidsDefaults;
+  rows: BidsRow[];
+  pending: BidsSuggestion[];
+  recent: BidsSuggestion[];
+}
+
