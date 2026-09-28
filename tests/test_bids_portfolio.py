@@ -91,7 +91,7 @@ def test_a_level_is_suggested_once_and_a_gap_suggests_every_level_crossed():
         _reprice(db, h.id, 94.0, "2026-09-02")
         out = bids.evaluate_portfolio(db, date(2026, 9, 2), notify=False)
         assert [(n["level"], n["amount"]) for n in out["new"]] == [(1, 1000.0)]
-        # the same price date again (the 16:00 pass after the 09:30 one) adds nothing
+        # evaluating the SAME price again (a second pass, a Check-now click) adds nothing
         assert bids.evaluate_portfolio(db, date(2026, 9, 2), notify=False)["new"] == []
         _reprice(db, h.id, 84.0, "2026-09-03")                          # -16%: L2 and L3
         out = bids.evaluate_portfolio(db, date(2026, 9, 3), notify=False)
@@ -218,3 +218,40 @@ def test_rows_carry_group_and_an_inr_position():
         p = rows["ITC"]["position"]
         assert p["currency"] == "INR" and p["units"] == 100.0 and p["avg_price"] == 250.0
         assert p["ltp"] == 300.0 and p["value"] == 30000.0 and p["gain_pct"] == 20.0
+
+
+def test_a_same_day_reprice_through_a_trigger_fires_the_09_28_southbank_case():
+    """2026-09-28: the 09:30 pass joined SOUTHBANK at 49.95 and a reprice the same morning
+    moved it to 48.94, through the 48.95 L1, with the SAME price date. A once-per-price-date
+    latch skipped it; the 16:00 close (same date again) would have been skipped too."""
+    with session_scope() as db:
+        h = _holding(db, "SOUTHBANK", "stk", 49.95, source="broker", ref="SOUTHBANK",
+                     asof="2026-09-28")
+        db.commit()
+        bids.save_defaults(db, {"dip_pct": 2.0, "amount": 5000.0, "max_levels": 10})
+        day = date(2026, 9, 28)
+        assert bids.evaluate_portfolio(db, day, notify=False)["new"] == []     # joins
+        _reprice(db, h.id, 48.94, "2026-09-28")                               # same date
+        out = bids.evaluate_portfolio(db, day, notify=False)
+        assert [(n["level"], n["amount"]) for n in out["new"]] == [(1, 5000.0)]
+        _reprice(db, h.id, 47.90, "2026-09-28")                               # the close, past L2 47.95
+        assert [n["level"] for n in bids.evaluate_portfolio(db, day, notify=False)["new"]] == [2]
+
+
+def test_a_second_ladder_the_same_day_revives_the_expired_row_instead_of_crashing():
+    with session_scope() as db:
+        h = _holding(db, "Fund", "mf", 100.0, source="amfi", ref="INF7", asof="2026-09-28")
+        db.commit()
+        bids.save_defaults(db, {"dip_pct": 5.0, "amount": 1000.0, "max_levels": 3})
+        day = date(2026, 9, 28)
+        bids.evaluate_portfolio(db, day, notify=False)                  # joins at 100
+        _reprice(db, h.id, 110.0, "2026-09-28")                         # new high, same day
+        bids.evaluate_portfolio(db, day, notify=False)
+        _reprice(db, h.id, 104.0, "2026-09-28")                         # L1 of the new ladder
+        assert [n["level"] for n in bids.evaluate_portfolio(db, day, notify=False)["new"]] == [1]
+        _reprice(db, h.id, 111.0, "2026-09-28")                         # another high: expires it
+        bids.evaluate_portfolio(db, day, notify=False)
+        _reprice(db, h.id, 105.0, "2026-09-28")                         # L1 again, same peak date
+        assert [n["level"] for n in bids.evaluate_portfolio(db, day, notify=False)["new"]] == [1]
+        v = bids.view(db)
+        assert len(v["pending"]) == 1 and v["pending"][0]["price"] == 105.0

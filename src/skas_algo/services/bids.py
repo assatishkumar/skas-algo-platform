@@ -190,8 +190,15 @@ def _expire_pending(db: Session, holding_id: int) -> int:
 def evaluate_portfolio(db: Session, today: date | None = None, *, auto_accounts=None,
                        notify=True) -> dict:
     """Run every eligible, non-excluded holding in SUGGEST mode through the ladder on its
-    latest price — once per new price date (``last_eval_asof``), so the 09:30 and 16:00 passes
-    never double-count a close. Returns {evaluated, new: [suggestion dicts], resets}."""
+    latest price. Returns {evaluated, new: [suggestion dicts], resets}.
+
+    Every call evaluates — there is deliberately NO once-per-price-date latch. One existed
+    until 2026-09-28 and it swallowed real dips: the 09:30 pass joined SOUTHBANK at ₹49.95
+    and stamped the date, a reprice the same morning moved it to ₹48.94 (through its ₹48.95
+    L1) with the SAME price date, and nothing re-checked it — the 16:00 close of an Indian
+    stock carries the same date as its 09:30 print, so the close was never evaluated at all.
+    Re-evaluating is safe because the ladder is idempotent: ``levels_fired`` is persisted, so
+    the same price fires nothing twice. ``last_eval_asof`` now only records when it last ran."""
     today = today or date.today()
     d = defaults(db)
     out = {"evaluated": 0, "new": [], "resets": 0}
@@ -214,24 +221,34 @@ def evaluate_portfolio(db: Session, today: date | None = None, *, auto_accounts=
             seed(h, r, today)
             r.last_eval_asof = asof
             continue                         # the joining price is the reference, not a dip
-        if r.last_eval_asof == asof:
-            continue
         rule = rule_for(h, r, d)
         res = evaluate(LadderState(r.peak, int(r.levels_fired or 0)), px, rule)
         out["evaluated"] += 1
-        if res.state.peak != r.peak:          # a new high: the ladder resets
+        if res.reset or res.state.peak != r.peak:   # a new high: the ladder resets
             if res.reset:
                 out["resets"] += 1
             _expire_pending(db, h.id)
-            r.peak = res.state.peak
-            r.peak_asof = asof
-            r.peak_source = "high"
+            if res.state.peak != r.peak:
+                r.peak = res.state.peak
+                r.peak_asof = asof
+                r.peak_source = "high"
         for t in res.triggers:
-            s = PortfolioBidsSuggestion(
-                holding_id=h.id, peak=r.peak, peak_asof=r.peak_asof or asof, level=t.level,
-                trigger_price=t.trigger_price, price=px, amount=t.amount,
-                created_on=asof, status="pending")
-            db.add(s)
+            peak_asof = r.peak_asof or asof
+            # (holding, peak date, level) is unique: a second ladder the same day (a new
+            # high then a fresh dip) meets the row the first one left EXPIRED — revive it
+            # rather than let the unique key abort the whole pass. A row the owner resolved
+            # (accepted / skipped) is theirs and is never reopened.
+            s = db.execute(select(PortfolioBidsSuggestion).where(
+                PortfolioBidsSuggestion.holding_id == h.id,
+                PortfolioBidsSuggestion.peak_asof == peak_asof,
+                PortfolioBidsSuggestion.level == t.level)).scalars().first()
+            if s is not None and s.status != "expired":
+                continue
+            if s is None:
+                s = PortfolioBidsSuggestion(holding_id=h.id, peak_asof=peak_asof, level=t.level)
+                db.add(s)
+            s.peak, s.trigger_price, s.price, s.amount = r.peak, t.trigger_price, px, t.amount
+            s.created_on, s.status, s.resolved_at, s.txn_id = asof, "pending", None, None
             out["new"].append({"holding": h.name, "level": t.level, "amount": t.amount,
                                "trigger_price": t.trigger_price, "price": px,
                                "currency": currency_of(h)})

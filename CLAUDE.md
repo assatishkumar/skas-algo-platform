@@ -1595,8 +1595,13 @@ that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` ma
   serves the suggestion engine and, in phase 2, the auto strategy — never re-derive a dip
   elsewhere. A holding JOINS AT TODAY'S PRICE (owner decision: an old 52-week high would
   fire a lump of levels on day one), `peak_source` joined/high/manual says which. Evaluated
-  once per PRICE DATE (`last_eval_asof`) after the 09:30 and 16:00 repricing passes
-  (`manager._run_bids_evaluation`), so the two passes never double-count a close. Mode is
+  after the 09:30 and 16:00 repricing passes (`manager._run_bids_evaluation`) and on EVERY
+  call — **no once-per-price-date latch** (removed 2026-09-28: an Indian stock's 09:30 print
+  and its 16:00 close carry the SAME price date, so the latch skipped the close and every
+  same-day reprice; SOUTHBANK sat through its L1 unsuggested). The ladder is idempotent
+  (`levels_fired` persisted), so re-evaluating a price fires nothing twice; a second ladder
+  the same day REVIVES the expired (holding, peak date, level) row instead of tripping the
+  unique key. Mode is
   derived: AUTO only when a RUNNING `bids` deployment trades the symbol on the holding's
   quote account (`_bids_auto_accounts`), else SUGGEST — a dip is never dropped because no
   run exists. Accept appends a ledger BUY through `portfolio_history.carry_typed_position`
