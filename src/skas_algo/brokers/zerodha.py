@@ -201,11 +201,19 @@ class ZerodhaAdapter:
         Distinct from ``positions()``, which is the day's book: an ETF bought weeks ago sits
         in holdings and appears in positions not at all. value_investing needs this because
         the owner tops its funding ETF up directly in the broker, outside the run.
+
+        PLEDGED UNITS ARE HELD UNITS (owner 2026-09-29). Kite reports a pledged holding with
+        ``quantity`` 0 and the units in ``collateral_quantity``; counting only quantity +
+        t1_quantity dropped a fully pledged ETF entirely, so the BIDS run could not adopt
+        HDFCMOMENT / LOWVOLIETF / its LIQUIDCASE fund, and pledging or unpledging a held
+        name would have changed the broker count and halted it. Adoption, reconciliation,
+        the Brokers page and the portfolio sync all read this one method.
         """
         out: dict[str, dict] = {}
         for h in self._kite_client().holdings() or []:
             sym = str(h.get("tradingsymbol") or "").upper()
-            qty = float(h.get("quantity") or 0) + float(h.get("t1_quantity") or 0)
+            qty = (float(h.get("quantity") or 0) + float(h.get("t1_quantity") or 0)
+                   + float(h.get("collateral_quantity") or 0))
             if sym and qty > 0:
                 out[sym] = {"units": qty, "avg_price": float(h.get("average_price") or 0.0)}
         return out

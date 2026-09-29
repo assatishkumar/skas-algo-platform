@@ -6,14 +6,19 @@ the tab uses (``services/bids_ladder.evaluate``): a new high moves the peak up a
 ladder, and every further X% below the peak fires the next level, k·y rupees at level k, up
 to N levels. A fired level becomes one whole-unit BUY of the ETF.
 
-FUNDING (owner answers 2026-09-29: "keep a cash float", Zerodha). The shared
-``EntryFundingMixin`` in ``park`` mode: the capital sits in ``fund_source`` (LIQUIDCASE) and
-``float_parts`` × the first-level amount is kept as SETTLED cash, so a level that fires buys
-the same day; the ETF is sold after every spend to refill the float for tomorrow (an equity
-CNC sale settles T+1), and the excess is parked back. A level the settled cash cannot cover
-is QUEUED and retried at each decision, re-sized at that day's price, until it fills — or
-until the price recovers to the peak, which cancels it (the dip is gone). Signal order is the
-mixin's load-bearing one: fund sales, then buys, then the park-back.
+FUNDING — the owner's model, in their words (2026-09-29): "LIQUIDCASE is for funding. No
+buying here. Whenever we need to buy any ETF or Stock configured for BIDS, the corresponding
+LIQUIDCASE is sold." So every fired level SELLS whole units of ``fund_source`` worth what the
+buy costs, in the same decision and ahead of the buy, and the fund is NEVER bought — no float
+top-up, no park-back (the first version used the mixin's ``park`` mode, which parks any cash
+above a float back into the fund; with ₹30k of capital that would have bought LIQUIDCASE).
+An equity sale settles T+1, so today's buy is paid from the run's own cash — the deploy
+CAPITAL is that buffer — and the sale replaces it tomorrow. A level the settled cash cannot
+cover is QUEUED (its sale already placed, ``funded``) and retried at each decision, re-sized
+at that day's price, WITHOUT selling again; it is cancelled if the price recovers to the peak
+and the proceeds simply stay as cash. No fund left to sell → alert, and the buy still goes
+ahead from cash if it can (a dip is never dropped). The mixin supplies only the settlement
+LEDGER here (``_settle`` / ``_credit`` / ``_want`` / ``funding_state``), never its float.
 
 ONE LADDER, TWO HALVES. Live, ``set_bids_rules_fn`` (wired by the manager, read-only over the
 portfolio tables) supplies each symbol's rule from the tab — its X / y / N, whether it is
@@ -26,11 +31,13 @@ whose orders reach the broker only; a PAPER run never touches the real portfolio
 backtest there is no hook: the ctor's X / y / N apply to every symbol and a symbol joins at
 its first price, the tab's own joining rule.
 
-The run ADOPTS the account's existing units of every watched ETF (``adoptable_symbols``),
-exactly as value_investing adopts stray shares: reconciliation compares the symbols a run
-holds against the broker's whole holding, so the first 10-unit buy of an ETF the account
-already held 75,000 of would otherwise read as a mismatch and halt the run. It never sells a
-watched ETF — the only sales are of the fund.
+The run ADOPTS the account's existing units of every watched ETF and of the fund
+(``adoptable_symbols``), exactly as value_investing adopts stray shares: reconciliation
+compares the symbols a run holds against the broker's whole holding, so the first 10-unit buy
+of an ETF the account already held 75,000 of would otherwise read as a mismatch and halt the
+run. PLEDGED units count as held (``ZerodhaAdapter.holdings`` adds ``collateral_quantity``),
+so pledging is invisible to this strategy. It never sells a watched ETF — the only sales are
+of the fund.
 """
 
 from __future__ import annotations
@@ -38,7 +45,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from skas_algo.engine.types import Signal
+from skas_algo.engine.types import Signal, SignalAction
 from skas_algo.services.bids_ladder import LadderRule, LadderState, evaluate
 
 from ._funding import EntryFundingMixin
@@ -59,20 +66,18 @@ class BidsStrategy(EntryFundingMixin):
         amount: float = 5000.0,          # y — level k invests k × y
         max_levels: int = 10,            # N — no level beyond N until a new high resets
         watchlist: str = "",             # comma-separated ETFs; blank = every symbol
-        # ---- funding (EntryFundingMixin) — a new strategy, so the defaults ARE the design ----
-        funding: str = "park",
+        # ---- funding: the fund is SOLD per buy and never bought (module docstring) ----
         fund_source: str | None = "LIQUIDCASE",
-        float_parts: float = 3.0,        # settled cash kept = this × the first-level amount
         settlement_days: int = 1,
-        funding_buffer_pct: float = 5.0,
-        fund_seed: str = "never",        # a live deploy must never place a surprise ETF buy
-        fund_size_cap: bool = False,
-        **_ignored,
+        fund_seed: str = "never",        # "if_empty" = BACKTEST bootstrap only (buys the fund)
+        **_ignored,                      # float_parts / funding_buffer_pct of old snapshots
     ):
         self.universe = [str(s).upper() for s in (universe or [])]
-        self._init_funding(funding, fund_source, float_parts, settlement_days,
-                           funding_buffer_pct, fund_seed, fund_size=initial_capital,
-                           fund_size_cap=fund_size_cap)
+        # the mixin's LEDGER only: park mode keeps its T+1 settlement bookkeeping; float 0
+        # and no call to _fund_signals, so nothing here ever parks or tops up a float
+        self._init_funding("park", fund_source or "LIQUIDCASE", 0.0, settlement_days,
+                           0.0, fund_seed, fund_size=initial_capital, fund_size_cap=False)
+        self._lot_taken: dict[int, int] = {}      # fund lot id -> units already sold this decision
         self.dip_pct = float(dip_pct)
         self.amount = float(amount)
         self.max_levels = int(max_levels)
@@ -105,14 +110,14 @@ class BidsStrategy(EntryFundingMixin):
     def on_fund_adopted(self, symbol: str, units: float, price: float) -> None:
         """Deliberately NOT the mixin's bookkeeping. There the deploy capital is ETF + float
         and adopted fund units are subtracted from the run's cash; here the deploy CAPITAL IS
-        THE FLOAT — the settled cash this run may spend — so the owner never has to know the
-        fund's value at deploy. With the mixin's rule a capital below the fund's value read
-        as zero settled cash and every level queued forever. Sale proceeds and park-back
-        buys still move the run's cash through the engine as usual."""
+        THE CASH BUFFER the run spends, so the owner never has to know the fund's value at
+        deploy. With the mixin's rule a capital below the fund's value read as zero settled
+        cash and every level queued forever. Fund sale proceeds still move the run's cash
+        through the engine as usual."""
         return None
 
     def _float_target_hint(self) -> float:
-        return self.float_parts * self.amount if self.funding == "park" else 0.0
+        return 0.0                                  # no float: the fund is never bought
 
     # ------------------------------------------------------------------ helpers
     def _symbols(self) -> list[str]:
@@ -164,16 +169,54 @@ class BidsStrategy(EntryFundingMixin):
                              "peak_asof": today.isoformat()}
         return None
 
+    def _sell_fund(self, ctx, cost: float, today: date, sales: list[Signal]) -> float:
+        """Sell whole fund units worth ``cost`` (rounded UP) — one EXIT per lot, FIFO, across
+        the lots not already spoken for this decision. Returns the rupees raised (0 = dry)."""
+        fund = self.fund_source
+        try:
+            px = float(ctx.close(fund))
+        except KeyError:
+            self._alert(f"{fund} has no price today — nothing sold to fund the buy")
+            return 0.0
+        if px <= 0 or cost <= 0:
+            return 0.0
+        want = -(-cost // px)                        # ceil, whole units
+        left = int(want)
+        for lot in list(ctx.lots(fund) or []):
+            if left <= 0:
+                break
+            free = int(lot.units) - int(self._lot_taken.get(lot.id, 0))
+            take = min(left, free)
+            if take <= 0:
+                continue
+            self._lot_taken[lot.id] = self._lot_taken.get(lot.id, 0) + take
+            sales.append(Signal(symbol=fund, action=SignalAction.EXIT, lot_id=lot.id,
+                                quantity=take, reason="fund_source", meta={"tag": "FUND"}))
+            left -= take
+        sold = int(want) - left
+        if sold <= 0:
+            self._alert(f"FUND DRY — no {fund} left to sell; buying from cash while it lasts. "
+                        f"Top {fund} up in the broker.")
+            self._notify_once("fund_dry", today, f"{fund} has nothing left to sell for BIDS — "
+                              f"top it up. Buys continue from cash while it lasts.")
+            return 0.0
+        if left > 0:
+            self._alert(f"{fund} covered {sold} of the {int(want)} units a buy needed")
+        self._credit(today, sold * px)               # T+1: spendable tomorrow
+        return sold * px
+
     # ------------------------------------------------------------------ decide
     def on_slice(self, ctx) -> list[Signal]:
         today = ctx.today() if hasattr(ctx, "today") else date.today()
         if self.last_shop_day == today.isoformat():
             return []                                  # one decision a day
-        float_target = self._float_target_hint()
         self._settle(ctx, today)
-        seed = self._maybe_seed(ctx, float_target)
+        # backtest bootstrap only (fund_seed="if_empty"): park the capital in the fund but
+        # leave 3 first-level buys of cash, the buffer a live deploy's capital is
+        seed = self._maybe_seed(ctx, 3.0 * self.amount)
         if seed:
             return seed
+        self._lot_taken: dict[int, int] = {}
         present = set(ctx.present_symbols())
         symbols = self._symbols()
         rules = self._rules(symbols)
@@ -191,10 +234,13 @@ class BidsStrategy(EntryFundingMixin):
             return bool(r and r.get("enabled", True))
 
         buys: list[Signal] = []
+        sales: list[Signal] = []
         self.last_fired = []
 
-        def buy(sym: str, rupees: float, close: float) -> bool:
+        def buy(sym: str, rupees: float, close: float, *, funded: bool) -> bool:
             units = max(1, int(rupees // close))      # whole units; one at least
+            if not funded:
+                self._sell_fund(ctx, units * close, today, sales)   # the fund pays for it
             sig = self._want(sym, units, close, today)
             if sig is not None:
                 sig.reason = "bids_level"
@@ -217,7 +263,7 @@ class BidsStrategy(EntryFundingMixin):
                 self.queued.pop(sym, None)
                 self._cancel_pending(sym, today, "the price recovered to its high before it was funded")
                 continue
-            buy(sym, float(self.queued[sym]["amount"]), close)
+            buy(sym, float(self.queued[sym]["amount"]), close, funded=True)   # sold already
 
         # 2. today's ladders
         for sym in symbols:
@@ -246,14 +292,18 @@ class BidsStrategy(EntryFundingMixin):
             levels = [t.level for t in out.triggers]
             self.last_fired.append({"symbol": sym, "levels": levels, "amount": rupees,
                                     "price": close, "day": today.isoformat()})
-            if not buy(sym, rupees, close):
-                self.queued[sym] = {"amount": rupees, "levels": levels,
+            if not buy(sym, rupees, close, funded=False):
+                self.queued[sym] = {"amount": rupees, "levels": levels, "funded": True,
                                     "since": today.isoformat()}
 
-        # 3. the fund: sell what tomorrow needs, park the excess — then order the legs
-        self._fund_signals(ctx, today, float_target)
+        if self.queued:
+            owed = sum(float(q["amount"]) for q in self.queued.values())
+            self._alert(f"WAITING FOR CASH — {', '.join(sorted(self.queued))} (₹{owed:,.0f}); "
+                        f"the {self.fund_source} sale settles T+1 and the buy is retried then")
         self.last_shop_day = today.isoformat()
-        return self._fund_exits + buys + self._late_buys + self._park_buy
+        # ORDER: fund sales first, then buys — a rejected BUY halts the run and abandons the
+        # rest of the decision, and the sale must never sit behind it
+        return sales + buys
 
     # ------------------------------------------------------------------ (de)serialize
     def initial_state(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -281,4 +331,7 @@ class BidsStrategy(EntryFundingMixin):
             f"Buys each further {self.dip_pct:g}% below the peak: level k invests k × "
             f"₹{self.amount:,.0f}, up to {self.max_levels} levels; a new high resets "
             "(per-holding rules from Portfolio → BIDS outrank these when live)",
-        ] + self.funding_rules()
+            f"Each buy sells {self.fund_source} worth what it costs, in the same decision; "
+            f"{self.fund_source} is never bought. Today's buy is paid from the run's cash and "
+            f"the sale replaces it T+1",
+        ]

@@ -128,11 +128,15 @@ def test_a_level_the_float_cannot_cover_is_queued_retried_and_cancelled_when_the
     ctx.closes["HDFCMOMENT"] = 29.40
     sig = s.on_slice(ctx)
     assert _buys(sig) == [] and s.queued["HDFCMOMENT"]["amount"] == 5000.0
-    assert "WAITING FOR FUNDS" in (s.strategy_alert or "")
+    assert "WAITING FOR CASH" in (s.strategy_alert or "")
+    fund_sale = [x for x in sig if x.symbol == FUND]
+    assert sum(x.quantity for x in fund_sale) == 50           # sold NOW for 4,998, rounded up
     ctx.apply(sig)                                            # the fund sale settles tomorrow
     ctx.next_day()
     ctx.closes["HDFCMOMENT"] = 29.60                          # still below the peak
-    assert _buys(s.on_slice(ctx)) == [("HDFCMOMENT", 168)]    # retried, re-sized at today's price
+    sig = s.on_slice(ctx)
+    assert _buys(sig) == [("HDFCMOMENT", 168)]                # retried, re-sized at today's price
+    assert [x for x in sig if x.symbol == FUND] == []         # funded once — never sold twice
     assert s.queued == {}
     # a second one, queued and then the price recovers to the high → cancelled, not bought
     s2, ctx2 = _run(cash=0.0, fund_units=0)
@@ -190,6 +194,42 @@ def test_state_round_trips_and_the_fund_is_adoptable_but_never_bought_on_a_dip()
     s2.load_state(s.export_state())
     assert s2.ladders == s.ladders and s2.last_shop_day == s.last_shop_day
     assert s2.adopted_value == s.adopted_value
+
+
+def test_the_fund_is_never_bought_however_much_cash_sits_idle():
+    """Owner 2026-09-29: "LIQUIDCASE is for funding. No buying here." The first version
+    parked cash above a float back into the fund — with ₹30k of capital that bought it."""
+    s, ctx = _run(cash=10_00_000)
+    for day in range(5):
+        sig = s.on_slice(ctx)
+        assert not any(x.symbol == FUND and x.action is SignalAction.ENTER_LONG for x in sig)
+        ctx.apply(sig)
+        ctx.next_day()
+        ctx.closes["HDFCMOMENT"] *= 0.97
+
+
+def test_each_buy_sells_the_fund_worth_its_cost_before_the_buy():
+    s, ctx = _run()
+    s.on_slice(ctx)
+    ctx.next_day()
+    ctx.closes["HDFCMOMENT"] = 29.40                          # L1 ₹5,000 → 170 units = 4,998
+    ctx.closes["BANKBEES"] = 489.0                            # L1 ₹5,000 → 10 units = 4,890
+    sig = s.on_slice(ctx)
+    kinds = [(x.symbol, x.action) for x in sig]
+    first_buy = next(i for i, k in enumerate(kinds) if k[1] is SignalAction.ENTER_LONG)
+    assert all(k[0] == FUND and k[1] is SignalAction.EXIT for k in kinds[:first_buy])
+    assert sum(x.quantity for x in sig if x.symbol == FUND) == 50 + 49
+    assert sorted(_buys(sig)) == [("BANKBEES", 10), ("HDFCMOMENT", 170)]
+
+
+def test_a_dry_fund_still_buys_from_cash_and_says_so():
+    s, ctx = _run(fund_units=0)
+    s.on_slice(ctx)
+    ctx.next_day()
+    ctx.closes["HDFCMOMENT"] = 29.40
+    sig = s.on_slice(ctx)
+    assert _buys(sig) == [("HDFCMOMENT", 170)] and [x for x in sig if x.symbol == FUND] == []
+    assert "FUND DRY" in s.strategy_alert
 
 
 # ------------------------------------------------------------------ portfolio side
@@ -294,10 +334,17 @@ def test_bids_replays_through_the_real_engine():
     tx = result.transactions
     aaa = [(t["date"], t["units"], t["price"]) for t in tx
            if t["ticker"] == "AAA" and t["action"] in ("BUY", "AVG_BUY")]
-    # 97.5 (−2.5%) → L1 ₹5,000; 96 (−4%) → L2 ₹10,000; 95 (−5%) stays L2 (L3 is 94);
-    # 101 resets; 98.5 (−2.5% of 101) → L1 again ₹5,000
-    assert [(u, p) for _, u, p in aaa] == [(51, 97.5), (104, 96.0), (50, 98.5)]
-    assert any(t["ticker"] == FUND and t["action"] == "SELL" for t in tx)
+    # day 1 has no bars, day 2 seeds the fund (a seed decision does nothing else), so AAA
+    # joins at 99 on day 3: 97.5 is −1.5% (nothing); 96 → L1 ₹5,000 (L1 97.02); 95 → L2
+    # ₹10,000 (L2 95.04); 101 resets; 98.5 (−2.5% of 101) → L1 again ₹5,000
+    assert [(u, p) for _, u, p in aaa] == [(52, 96.0), (105, 95.0), (50, 98.5)]
+    # every buy sold the fund worth its cost the same day; the fund was bought only by the
+    # day-1 backtest seed, never afterwards
+    fund_sells = [(t["date"], t["units"]) for t in tx if t["ticker"] == FUND and t["action"] == "SELL"]
+    assert [u for _, u in fund_sells] == [50, 100, 50]
+    assert [d for d, _ in fund_sells] == [d for d, _, _ in aaa]
+    fund_buys = [t for t in tx if t["ticker"] == FUND and t["action"] in ("BUY", "AVG_BUY")]
+    assert len(fund_buys) == 1
     cash = [float(h["cash"]) for h in result.history if "cash" in h]
     assert cash and min(cash) >= 0
     assert st.ladders["AAA"]["peak"] == 101.0 and st.ladders["AAA"]["levels_fired"] == 1

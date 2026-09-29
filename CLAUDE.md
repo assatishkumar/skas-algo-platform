@@ -609,12 +609,18 @@ template) is the phase-2 fix. No deploy path — there is no US broker.
 - **bids** (`strategies/bids.py`, equity, 2026-09-29) — the AUTOMATIC half of Portfolio →
   BIDS (§8a): broker ETFs on ONE account bought at 15:05 at each further X% below their
   peak, through the SAME `services/bids_ladder.evaluate` the tab uses. Four load-bearing
-  choices. (1) **Deploy capital = the cash FLOAT, not the fund** — `on_fund_adopted` is
-  overridden to a no-op; with the mixin's "capital = ETF + float" rule a capital below the
-  fund's value read as zero settled cash and every level queued forever. Funding is the
-  shared `EntryFundingMixin` in `park` mode (float = `float_parts` × the first-level
-  amount, the fund sold T+1 to refill it); a level it cannot cover is QUEUED, retried daily
-  at that day's price, cancelled when the price recovers to its peak. (2) **Rules come
+  choices. (1) **Funding is the owner's model, verbatim: "LIQUIDCASE is for funding. No
+  buying here."** Each fired level SELLS whole fund units worth its cost (rounded up), in
+  the same decision and AHEAD of the buy (`_sell_fund`, one EXIT per lot); the fund is
+  NEVER bought. The mixin gives only its T+1 settlement LEDGER — never `_fund_signals`
+  (v1 used `park` mode, whose park-back would have bought ₹15k of LIQUIDCASE on a ₹30k
+  capital). Deploy capital = the CASH that pays today's buys while the sale settles —
+  `on_fund_adopted` is a no-op (the mixin's "capital = ETF + float" rule read a capital
+  below the fund's value as zero cash). A level the cash cannot cover is QUEUED `funded`,
+  retried daily WITHOUT selling again, cancelled when the price recovers to its peak; a dry
+  fund buys from cash + alerts. **Pledged = held**: `ZerodhaAdapter.holdings()` adds
+  `collateral_quantity` (adoption, reconciliation, Brokers page and portfolio sync all read
+  it) — a fully pledged ETF used to be dropped entirely. (2) **Rules come
   from the tab live** (`set_bids_rules_fn` → `services.bids.auto_rules`, read-only, every
   decision): enabled (class on, not excluded, not the fund), X/y/N, and the tab's ladder —
   a holding moving SUGGEST→AUTO carries its peak and fired levels; a typed manual peak is

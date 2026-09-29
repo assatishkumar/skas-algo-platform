@@ -104,11 +104,12 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   high resets). Once a day at 15:05 it runs the SAME ladder the tab uses, with each
   holding's rule from the tab (its X / y / N, whether it is switched on, and the ladder
   already built, so a holding moving from suggested to automatic carries its fired levels
-  across). The deploy **capital is a cash float** (3 × the first-level amount by default)
-  so a level buys the day it fires; after each spend it sells just enough of the fund ETF
-  (LIQUIDCASE) to refill the float for tomorrow, T+1 (the shared `EntryFundingMixin` in
-  `park` mode). A level the float cannot cover is queued and retried daily, and cancelled
-  if the price recovers to its high first. It never sells a watched ETF. The run adopts the
+  across). **Each buy sells LIQUIDCASE worth what it costs, in the same decision, and
+  LIQUIDCASE is never bought.** The sale settles T+1, so today's buy is paid from the
+  run's cash — the deploy capital is that buffer (3 × the first-level amount by default) —
+  and the sale replaces it the next day. A level the cash cannot cover is queued (its sale
+  already placed) and retried daily, and cancelled if the price recovers to its high first.
+  Pledged units count as held, so pledging an ETF or the fund changes nothing. It never sells a watched ETF. The run adopts the
   account's existing units of every listed ETF and of the fund so reconciliation matches
   the broker. A LIVE run writes its fills into the holdings' ledgers and its ladders onto
   the tab; a PAPER run touches nothing on /portfolio and leaves the holdings suggested.

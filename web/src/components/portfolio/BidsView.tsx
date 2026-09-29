@@ -331,7 +331,7 @@ function AutoCard({ d, candidates, fundName, autoCount }: {
     state: { prefill: {
       strategy_id: "bids", name: "BIDS auto", capital: d.amount * 3,
       params: { watchlist: syms.join(","), dip_pct: d.dip_pct, amount: d.amount,
-                max_levels: d.max_levels, fund_source: fundName || d.fund_source, float_parts: 3 },
+                max_levels: d.max_levels, fund_source: fundName || d.fund_source },
     } },
   });
   return (
@@ -355,8 +355,9 @@ function AutoCard({ d, candidates, fundName, autoCount }: {
         </div>
       ))}
       <div className="mt-2 text-[12px] font-semibold text-[var(--faint)]">
-        Buys at 15:05 from a settled-cash float (capital = the float, 3 × the first-level amount by default)
-        and sells {fundName || d.fund_source} to refill it for the next day. Each holding keeps its rule from this tab.
+        Buys at 15:05 and sells {fundName || d.fund_source} worth each buy in the same decision — the fund is never
+        bought. Capital is the cash that pays today's buys while the sale settles (T+1); 3 × the first-level amount
+        by default. Pledged units count as held. Each holding keeps its rule from this tab.
         Deploy PAPER first; a paper run buys nothing real and the holdings stay suggested.
       </div>
     </Card>

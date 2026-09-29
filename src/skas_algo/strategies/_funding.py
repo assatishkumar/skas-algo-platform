@@ -364,11 +364,13 @@ class EntryFundingMixin:
         if not fund or ctx.lots(fund):
             self.seeded = True
             return None
-        self.seeded = True
         try:
             px = float(ctx.close(fund))
         except KeyError:
+            # not priced yet (a run's first slice can have no bars) — try again next decision;
+            # stamping `seeded` here used to skip the bootstrap for good
             return None
+        self.seeded = True
         units = int(max(0.0, self._spendable - float_target) // px) if px > 0 else 0
         if units <= 0:
             return None

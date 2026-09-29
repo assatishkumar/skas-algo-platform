@@ -842,13 +842,13 @@ export const STRATEGIES: Rule[] = [
     structure: [
       "A watchlist of ETFs you already hold on one broker account (the BIDS tab fills it).",
       "Each holding keeps its rule from Portfolio \u2192 BIDS \u2014 its X / y / N, whether it is switched on, and the ladder the tab had already built, fired levels included.",
-      "The capital is a small CASH FLOAT (3 \u00d7 the first-level amount by default), so a level buys the day it fires.",
-      "After every spend it sells just enough of the fund ETF (LIQUIDCASE) to refill the float for the next day \u2014 an ETF sale settles T+1.",
+      "Every buy sells the fund ETF (LIQUIDCASE) worth what it costs, in the same decision. LIQUIDCASE is never bought.",
+      "The sale settles T+1, so today's buy is paid from the run's cash \u2014 the capital, 3 \u00d7 the first-level amount by default \u2014 and the sale replaces it the next day. Pledged units count as held.",
     ],
     entry: [
       "Once a day at 15:05. A holding joins BIDS at that day's price; each further X% below the peak fires the next level.",
       "A gap through several levels buys all of them at once. Whole units only, at least one.",
-      "A level the float cannot cover is queued and retried each day at that day's price \u2014 and cancelled if the price gets back to its high first.",
+      "A level the cash cannot cover is queued (its fund sale already placed) and retried each day at that day's price \u2014 cancelled if the price gets back to its high first.",
     ],
     exit: [
       "Never. The watched ETFs are held indefinitely.",

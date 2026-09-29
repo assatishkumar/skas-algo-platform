@@ -642,16 +642,15 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
         hint: "the fallback only — each holding's rule on Portfolio → BIDS outranks it live" }),
       f("amount", "First level (₹) — level k invests k × this", "number", 5000, { step: "any" }),
       f("max_levels", "Max levels", "number", 10),
-      f("fund_source", "Fund source (ETF sold to pay)", "text", "LIQUIDCASE"),
-      f("float_parts", "Cash float (× the first-level amount)", "number", 3, { step: "any",
-        hint: "settled cash kept so a level buys the day it fires; the fund is sold to refill it for tomorrow (T+1). Deploy CAPITAL = this float in rupees" }),
-      f("funding_buffer_pct", "Pre-sale buffer %", "number", 5, { step: "any" }),
+      f("fund_source", "Fund source (ETF sold for each buy — never bought)", "text", "LIQUIDCASE"),
       f("settlement_days", "Settlement days (T+1)", "number", 1),
     ],
-    fixed: { lookback: 1, tax_rate: 0, funding: "park", fund_seed: "never" },
-    warn: "Capital is the CASH FLOAT only (e.g. ₹15,000 = 3 × ₹5,000), not the fund. The run adopts the "
-      + "account's existing units of every listed ETF and of the fund, so a manual sale of one "
-      + "of them in the broker will show as a book mismatch and halt it. Needs a BROKER quote source.",
+    fixed: { lookback: 1, tax_rate: 0, fund_seed: "never" },
+    warn: "Each buy sells the fund ETF worth what it costs, in the same decision; the fund is "
+      + "never bought. CAPITAL is the cash that pays today's buys while that sale settles "
+      + "(T+1) — e.g. 3 × the first-level amount — not the fund. The run adopts the account's "
+      + "units of every listed ETF and of the fund, pledged or not, so a manual sale of one of "
+      + "them in the broker shows as a book mismatch and halts it. Needs a BROKER quote source.",
   },
   {
     id: "short_premium",

@@ -278,3 +278,29 @@ def test_bfo_failure_is_retried_not_permanently_cached():
     assert adapter.option_expiries("SENSEX") == [_BFO_EXP.isoformat()]
     assert adapter._loaded_exchanges == {"NFO", "BFO"}
     assert kite.calls.count("NFO") == 1 and "BFO" in kite.calls
+
+
+def test_pledged_units_are_held_units():
+    """Owner 2026-09-29: a pledged holding reads quantity 0 with the units in
+    collateral_quantity. It must count in full — adoption and reconciliation both read this."""
+
+    class _Kite:
+        def holdings(self):
+            return [
+                {"tradingsymbol": "HDFCMOMENT", "quantity": 0, "t1_quantity": 0,
+                 "collateral_quantity": 75714, "average_price": 29.68},
+                {"tradingsymbol": "PHARMABEES", "quantity": 3852, "t1_quantity": 0,
+                 "collateral_quantity": 5000, "average_price": 22.37},
+                {"tradingsymbol": "NIFTYBEES", "quantity": 6600, "t1_quantity": 25,
+                 "collateral_quantity": 0, "average_price": 270.28},
+                {"tradingsymbol": "SGBAUG28V", "quantity": 0, "t1_quantity": 0,
+                 "collateral_quantity": 0, "average_price": 0},
+            ]
+
+    adapter = ZerodhaAdapter(CREDS, armed=False, live_enabled=False)
+    adapter._kite = _Kite()
+    got = adapter.holdings()
+    assert got["HDFCMOMENT"]["units"] == 75714.0          # fully pledged: present, in full
+    assert got["PHARMABEES"]["units"] == 8852.0           # free + pledged
+    assert got["NIFTYBEES"]["units"] == 6625.0            # free + settling
+    assert "SGBAUG28V" not in got                         # nothing held
