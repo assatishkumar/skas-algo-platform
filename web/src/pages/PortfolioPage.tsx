@@ -253,9 +253,9 @@ export default function PortfolioPage() {
                 )}
                 {sync.discovered.length > 0 && (
                   <div className="mt-1 font-semibold">
-                    Your broker also holds{" "}
-                    {sync.discovered.map((d) => `${d.symbol} (${d.units})`).join(", ")} — not
-                    tracked here. Add them if you want them counted.
+                    Held at a broker but not on the portfolio:{" "}
+                    {sync.discovered.map((d) => `${d.symbol} (${d.units}${d.broker ? ` at ${d.broker}` : ""})`).join(", ")}.
+                    Add them if you want them counted.
                   </div>
                 )}
               </div>

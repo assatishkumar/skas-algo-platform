@@ -44,8 +44,23 @@ logger = logging.getLogger(__name__)
 _UNITS_EPSILON = 1e-4
 
 # NSE series markers on a tradingsymbol (a REIT is PGINVIT-IV to quote, PGINVIT in the
-# holdings book). Used ONLY to compare the two, never to build a quote key.
-_SERIES_SUFFIX = re.compile(r"-(RR|IV|BE|SG|E|F)$")
+# holdings book; a sovereign gold bond is SGBAUG28V-GB to quote, SGBAUG28V there — 2026-09-29).
+# Used ONLY to compare the two, never to build a quote key.
+_SERIES_SUFFIX = re.compile(r"-(RR|IV|BE|SG|GB|E|F)$")
+
+
+def _held(book: dict, sym: str):
+    """The holdings-book row for a holding's quote symbol: exact, else by the series-free
+    symbol on either side (the book lists SGBAUG28V for the SGBAUG28V-GB we quote)."""
+    if sym in book:
+        return book[sym]
+    bare = _SERIES_SUFFIX.sub("", sym)
+    if bare in book:
+        return book[bare]
+    for key, row in book.items():
+        if _SERIES_SUFFIX.sub("", key) == bare:
+            return row
+    return None
 
 
 @dataclass
@@ -260,7 +275,7 @@ def _sync_broker(
     key = f"account:{account.id}"
     for h in holds_here:
         sym = (h.sync_ref or "").strip().upper()
-        held = book.get(sym)
+        held = _held(book, sym)
         # A successful read that omits the symbol means zero held HERE — a real sell-out.
         updated = dict(h.broker_units or {})
         updated[key] = float(held["units"]) if held else 0.0
@@ -309,7 +324,7 @@ def _sync_broker(
             report.updated.append(h.name)
             continue
 
-        held = book.get(sym)
+        held = _held(book, sym)
         ledger_units = _ledger_units(db, h.id)
         broker_units = float(held["units"]) if held else None
         units = ledger_units if ledger_units is not None else broker_units
@@ -349,8 +364,13 @@ def _sync_broker(
     # Compared with the series suffix stripped: a REIT quotes as PGINVIT-IV but appears in the
     # holdings book as PGINVIT, and a false "you aren't tracking this" on a position that IS
     # tracked teaches the owner to ignore the whole list.
+    # EVERY broker-priced holding counts as tracked, not only this account's group: a name
+    # priced at Zerodha whose value_investing buys sit at Dhan (INFY, TCS…) IS on the
+    # portfolio, and the Dhan pass used to list it as "not tracked here" (2026-09-29).
     tracked = set()
-    for h in holdings:
+    everything = db.execute(select(PortfolioHolding).where(
+        PortfolioHolding.sync_source == "broker")).scalars().all()
+    for h in list(holdings) + list(everything):
         ref = (h.sync_ref or "").strip().upper()
         if ref:
             tracked.add(ref)

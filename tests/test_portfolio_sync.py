@@ -739,3 +739,58 @@ def test_skip_sources_leaves_that_source_untouched(amfi_cache):
         assert report.updated == [] and row.last_price is None
         report = sync_portfolio(db, holding_ids=[hid])
         assert len(report.updated) == 1
+
+
+def test_a_series_suffixed_quote_symbol_finds_its_bare_holdings_row(fake_broker):
+    """2026-09-29: a sovereign gold bond quotes as SGBAUG28V-GB but Zerodha's holdings book
+    lists SGBAUG28V (65 pledged units). The sync reported "not in the holdings book" and
+    offered SGBAUG28V as untracked — the same holding, twice wrong."""
+    holder, account_id = fake_broker
+
+    class _SGB(_FakeAdapter):
+        def holdings(self):
+            return {"SGBAUG28V": {"units": 65.0, "avg_price": 15094.92}}
+
+    holder["adapter"] = _SGB()
+    with session_scope() as db:
+        row = PortfolioHolding(name="SGBAUG28V-GB", asset_class="gold", sync="auto",
+                               sync_source="broker", sync_ref="SGBAUG28V-GB",
+                               broker_account_id=account_id, units=None)
+        db.add(row)
+        db.commit()
+        rep = sync_portfolio(db, holding_ids=[row.id])
+        assert db.get(PortfolioHolding, row.id).units == pytest.approx(65.0)
+        assert not any("holdings book" in i["reason"] for i in rep.issues)
+        assert rep.discovered == []
+        db.delete(db.get(PortfolioHolding, row.id))
+        db.commit()
+
+
+def test_a_name_priced_at_another_account_is_not_offered_as_untracked(fake_broker):
+    """INFY priced at Zerodha, value_investing's INFY at Dhan: the Dhan pass must not call
+    it 'not tracked'. A name on no holding at all (GOLDBEES here) still is."""
+    from skas_algo.db.models import BrokerAccount
+
+    holder, account_id = fake_broker
+    with session_scope() as db:
+        other = BrokerAccount(broker="dhan", label="other", user_id="X2")
+        db.add(other)
+        db.flush()
+        # ITC is priced at `other`; this account prices LIQ and its book also holds ITC + GOLDBEES
+        priced_elsewhere = PortfolioHolding(name="ITC", asset_class="stk", sync="auto",
+                                            sync_source="broker", sync_ref="ITC",
+                                            broker_account_id=other.id, units=12.0,
+                                            units_locked=True)
+        slice_here = PortfolioHolding(name="LIQ", asset_class="etf", sync="auto",
+                                      sync_source="broker", sync_ref="LIQ",
+                                      broker_account_id=account_id, units=1.0,
+                                      units_locked=True)
+        db.add_all([priced_elsewhere, slice_here])
+        db.commit()
+        rep = sync_portfolio(db, holding_ids=[slice_here.id])
+        found = {d["symbol"] for d in rep.discovered if d["broker_account_id"] == account_id}
+        assert "ITC" not in found and "GOLDBEES" in found
+        for r in (priced_elsewhere, slice_here):
+            db.delete(db.get(PortfolioHolding, r.id))
+        db.delete(db.get(BrokerAccount, other.id))
+        db.commit()
