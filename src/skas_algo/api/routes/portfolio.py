@@ -840,9 +840,10 @@ def snapshot_now(db: Session = Depends(get_db)) -> dict:
 
 
 def _bids_auto_accounts() -> dict[int, set[str]]:
-    """{broker account: symbols} traded by RUNNING bids deployments — the holdings that buy
-    automatically. Phase 1 has no bids strategy yet, so this is empty and every holding is a
-    suggestion; the read is here so phase 2 changes nothing on this side."""
+    """{broker account: symbols} traded by RUNNING bids deployments whose orders reach the
+    BROKER — the holdings that buy automatically. A PAPER run (or a LIVE run demoted to paper
+    orders) does not count: it buys nothing real, and counting it would silence the
+    suggestions for the very holdings it is not buying."""
     try:
         from skas_algo.live.manager import manager
 
@@ -850,6 +851,8 @@ def _bids_auto_accounts() -> dict[int, set[str]]:
         for live in list(manager.runs.values()):
             cfg = live.config
             if getattr(cfg, "strategy_id", None) != "bids" or cfg.broker_account_id is None:
+                continue
+            if live.order_broker() != "live":
                 continue
             out.setdefault(cfg.broker_account_id, set()).update(
                 str(x).upper() for x in (cfg.symbols or []))

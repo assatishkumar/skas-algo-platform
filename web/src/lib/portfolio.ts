@@ -806,6 +806,7 @@ export interface BidsPayload {
   defaults: BidsDefaults;
   classes: BidsClass[];
   fund?: BidsFund;
+  auto_candidates?: Record<string, string[]>;   // broker account id → ETFs a BIDS run could buy
   rows: BidsRow[];
   pending: BidsSuggestion[];
   recent: BidsSuggestion[];

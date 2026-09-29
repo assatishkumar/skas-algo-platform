@@ -45,6 +45,7 @@ from .staggered_covered_call import StaggeredCoveredCallStrategy
 from .straddle_btst import StraddleBtstStrategy
 from .supertrend_momentum import SuperTrendMomentumStrategy
 from .supertrend_spread import SuperTrendSpreadStrategy
+from .bids import BidsStrategy
 from .value_investing import ValueInvestingStrategy
 from .volcano_calendar import VolcanoCalendarStrategy
 from .weekly_intraday_straddle import WeeklyIntradayStraddle
@@ -58,6 +59,7 @@ _REGISTRY: dict[str, Callable[..., Any]] = {
     SuperTrendMomentumStrategy.strategy_id: SuperTrendMomentumStrategy,
     NiftyShopStrategy.strategy_id: NiftyShopStrategy,
     ValueInvestingStrategy.strategy_id: ValueInvestingStrategy,
+    BidsStrategy.strategy_id: BidsStrategy,
     ShortPremiumStrategy.strategy_id: ShortPremiumStrategy,
     CallRatioMonthlyStrategy.strategy_id: CallRatioMonthlyStrategy,
     PutRatioMonthlyStrategy.strategy_id: PutRatioMonthlyStrategy,

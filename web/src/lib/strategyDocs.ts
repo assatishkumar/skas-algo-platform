@@ -833,6 +833,31 @@ export const STRATEGIES: Rule[] = [
       "It is a savings discipline, not a trading edge: it buys weakness without asking whether the weakness is deserved, so the watchlist is the entire risk decision. Warns on the Live page and by push when the fund source has ~2 days of runway left. Needs a BROKER quote source \u2014 on the cache source every change reads 0.00% and the ranking is meaningless (the strategy detects that and refuses the day). Do not read the trade table: the only SELLs in it are ETF funding sales, so win rate and realized P&L describe a cash sweep. Read the 'Portfolio \u2014 what you own' panel instead \u2014 what you hold, what it is worth, its money-weighted return, and the same rupees on the same days into the index for comparison.",
   },
   {
+    id: "bids",
+    name: "BIDS \u2014 Buy In Dips (automatic)",
+    kind: "Equity",
+    bias: "Accumulation \u00b7 buys each further dip, never sells",
+    summary:
+      "Your broker ETFs are bought again each time they fall another X% below their recent high: level 1 invests y, level 2 invests 2y, and so on up to N levels, and a new high resets the ladder. It is the automatic half of Portfolio \u2192 BIDS: the same ladder and the same per-holding rules, bought at the broker instead of suggested.",
+    structure: [
+      "A watchlist of ETFs you already hold on one broker account (the BIDS tab fills it).",
+      "Each holding keeps its rule from Portfolio \u2192 BIDS \u2014 its X / y / N, whether it is switched on, and the ladder the tab had already built, fired levels included.",
+      "The capital is a small CASH FLOAT (3 \u00d7 the first-level amount by default), so a level buys the day it fires.",
+      "After every spend it sells just enough of the fund ETF (LIQUIDCASE) to refill the float for the next day \u2014 an ETF sale settles T+1.",
+    ],
+    entry: [
+      "Once a day at 15:05. A holding joins BIDS at that day's price; each further X% below the peak fires the next level.",
+      "A gap through several levels buys all of them at once. Whole units only, at least one.",
+      "A level the float cannot cover is queued and retried each day at that day's price \u2014 and cancelled if the price gets back to its high first.",
+    ],
+    exit: [
+      "Never. The watched ETFs are held indefinitely.",
+      "The only sales are of the fund ETF, to pay for the buys.",
+    ],
+    risk:
+      "It buys weakness without asking whether it is deserved \u2014 the list and the ladder are the whole risk decision, and a long fall buys all N levels. The run adopts the account's existing units of every listed ETF and of the fund so reconciliation can match the broker: a manual sale of one of them in the broker then reads as a book mismatch and halts the run until acknowledged. Mutual funds and US stocks cannot be bought here and stay as suggestions on the tab.",
+  },
+  {
     id: "happy_twins",
     name: "Happy Twins (dual SuperTrend)",
     kind: "Equity",
@@ -1117,6 +1142,14 @@ export const META: Record<string, Meta> = {
             ["Exits", "Never"], ["Cadence", "Every trading day"]],
     deployNote: "Backtestable, and live-capable from day one \u2014 but only on a broker quote source (the cache source makes every change read 0.00%).",
     deployCta: { label: "Run a backtest", to: "/backtest?tab=new" },
+  },
+  bids: {
+    group: "Equity income", biasKind: "income",
+    facts: [["Bias", "Accumulation"], ["Universe", "Your broker ETFs"],
+            ["Sizing", "k \u00d7 y at level k"], ["Funded by", "LIQUIDCASE, T+1"],
+            ["Exits", "Never"], ["Cadence", "Daily 15:05"]],
+    deployNote: "Deploy from Portfolio \u2192 BIDS \u2192 Automatic buying, PAPER first. Live on a broker quote source only.",
+    deployCta: { label: "Open Portfolio \u2192 BIDS", to: "/portfolio" },
   },
   happy_twins: {
     group: "Equity trend", biasKind: "bull",

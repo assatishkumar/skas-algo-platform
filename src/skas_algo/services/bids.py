@@ -42,6 +42,7 @@ from skas_algo.db.models import (
 import math
 
 from skas_algo.services.bids_ladder import LadderRule, LadderState, evaluate, next_trigger
+from skas_algo.services.portfolio_history import carry_typed_position
 
 logger = logging.getLogger("skas_algo.bids")
 
@@ -372,8 +373,6 @@ def accept(db: Session, sid: int, *, units: float, price: float, on_date: date,
     position carried in first when the ledger is empty — §8a), and the suggestion closed.
     ``price`` is in the holding's currency; a foreign fill is booked in rupees at the rate of
     the holding's last sync (the ledger is kept in rupees), and the note keeps the original."""
-    from skas_algo.services.portfolio_history import carry_typed_position
-
     s = db.get(PortfolioBidsSuggestion, sid)
     if s is None:
         raise KeyError(sid)
@@ -523,6 +522,17 @@ def view(db: Session, *, auto_accounts=None) -> dict:
     pending = [_sdict(s, names, ccys) for s in sugg
                if s.status == "pending" and s.holding_id in shown]
     fund_view = _fund_view(db, d, fund, recs, pending)
+    # what an automatic run could trade, per broker account: broker-quoted stocks/ETFs of an
+    # included class, rupee-quoted, not excluded, not the fund — the deploy card's watchlist
+    auto: dict[str, list[str]] = {}
+    for h in hs:
+        cls = str(h.asset_class or "").lower()
+        r = rules.get(h.id)
+        if (h.sync_source == "broker" and h.broker_account_id is not None
+                and cls in ("stk", "etf") and eligible(h, included)
+                and (fund is None or h.id != fund.id) and currency_of(h) == "INR"
+                and (r is None or r.enabled) and str(h.sync_ref or "").strip()):
+            auto.setdefault(str(h.broker_account_id), []).append(str(h.sync_ref).strip().upper())
     return {
         "defaults": d,
         # every class BIDS can run on, with how many holdings each has and whether it is in
@@ -532,6 +542,7 @@ def view(db: Session, *, auto_accounts=None) -> dict:
         # an excluded class's pending rows are expired at the next check; never shown before
         "pending": pending,
         "fund": fund_view,
+        "auto_candidates": {k: sorted(set(v)) for k, v in auto.items()},
         "recent": [_sdict(s, names, ccys) for s in sugg if s.status != "pending"][:30],
     }
 
@@ -571,3 +582,86 @@ def _sdict(s: PortfolioBidsSuggestion, names: dict, ccys: dict | None = None) ->
             "units_hint": round(s.amount / s.price, 4) if s.price else None,
             "created_on": s.created_on, "status": s.status, "txn_id": s.txn_id,
             "resolved_at": s.resolved_at.isoformat() if s.resolved_at else None}
+
+
+# ------------------------------------------------------------------ the AUTO half (phase 2)
+# The ``bids`` deployment (strategies/bids.py) reads its per-holding rules from here and, after
+# each decision, writes its ladders and fills back — so the tab and the run are one ladder.
+# Read and write the PORTFOLIO tables only; the order path is the run's, never this module's.
+def _account_holdings(db: Session, account_id: int | None) -> dict[str, PortfolioHolding]:
+    """{SYMBOL: holding} for the broker-quoted holdings on one account."""
+    out: dict[str, PortfolioHolding] = {}
+    for h in db.execute(select(PortfolioHolding)).scalars().all():
+        if (h.sync_source == "broker" and h.broker_account_id == account_id
+                and str(h.sync_ref or "").strip()):
+            out.setdefault(str(h.sync_ref).strip().upper(), h)
+    return out
+
+
+def auto_rules(db: Session, account_id: int | None, symbols: list[str]) -> dict[str, dict]:
+    """Each watched symbol's rule as the tab has it: enabled (its class is switched on, the
+    holding is not excluded, it is not the fund), X / y / N and the ladder built so far. A
+    symbol that is not a holding on this account is left out — the run does not buy it."""
+    d = defaults(db)
+    included = set(d["classes"])
+    fund = fund_holding(db, d)
+    rules = _rules(db)
+    hs = _account_holdings(db, account_id)
+    out: dict[str, dict] = {}
+    for sym in symbols:
+        h = hs.get(str(sym).upper())
+        if h is None:
+            continue
+        r = rules.get(h.id)
+        rule = rule_for(h, r, d)
+        out[str(sym).upper()] = {
+            "enabled": (eligible(h, included) and (fund is None or h.id != fund.id)
+                        and currency_of(h) == "INR" and (r is None or bool(r.enabled))),
+            "dip_pct": rule.dip_pct, "amount": rule.amount, "max_levels": rule.max_levels,
+            "peak": r.peak if r else None, "levels_fired": int(r.levels_fired or 0) if r else 0,
+            "peak_source": r.peak_source if r else None, "peak_asof": r.peak_asof if r else None,
+        }
+    return out
+
+
+def record_auto(db: Session, account_id: int | None, run_id: int, events: list[dict],
+                ladders: dict[str, dict], today: date) -> dict:
+    """After a LIVE bids decision: every fill becomes a ledger row on its holding (the ETF
+    bought, the fund sold or parked back — the typed position carried in first), and the
+    run's ladders are mirrored onto the holdings' rule rows so the tab shows the same peak
+    and levels. Adopting broker units produces no event, so it never reaches the ledger."""
+    hs = _account_holdings(db, account_id)
+    fund = fund_holding(db)
+    written = 0
+    for ev in events or []:
+        sym = str(ev.get("ticker") or "").upper()
+        h = hs.get(sym)
+        action = str(ev.get("action") or "").upper()
+        units, price = float(ev.get("units") or 0.0), float(ev.get("price") or 0.0)
+        if h is None or units <= 0 or price <= 0 or action not in ("BUY", "SELL"):
+            continue
+        is_fund = fund is not None and h.id == fund.id
+        carry_typed_position(db, h, before=today.isoformat())
+        note = (f"{BIDS_NOTE} auto · run {run_id} · "
+                + ("fund sale" if is_fund and action == "SELL"
+                   else "fund park" if is_fund else "dip buy"))
+        db.add(PortfolioTransaction(holding_id=h.id, on_date=today.isoformat(),
+                                    kind="buy" if action == "BUY" else "sell",
+                                    units=units, price=price, fees=0.0, note=note))
+        written += 1
+    rules = _rules(db)
+    for sym, st in (ladders or {}).items():
+        h = hs.get(str(sym).upper())
+        if h is None or not st.get("peak"):
+            continue
+        r = rules.get(h.id)
+        if r is None:
+            r = PortfolioBidsRule(holding_id=h.id, enabled=True)
+            db.add(r)
+        r.peak = float(st["peak"])
+        r.levels_fired = int(st.get("levels_fired") or 0)
+        r.peak_source = st.get("peak_source")
+        r.peak_asof = st.get("peak_asof")
+        r.last_eval_asof = today.isoformat()
+    db.flush()
+    return {"ledger_rows": written}

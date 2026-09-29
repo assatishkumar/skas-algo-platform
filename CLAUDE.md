@@ -606,6 +606,30 @@ template) is the phase-2 fix. No deploy path — there is no US broker.
   auction raises a WARNING alert (never a 422 — a non-F&O-only watchlist is fine at 15:20).
   `decision_time` is DEPLOY-level and edit-blocklisted: stop + redeploy to change it, and
   `recovery.py`'s literal "15:20" fallback is untouched so existing deploys are unchanged (§1).
+- **bids** (`strategies/bids.py`, equity, 2026-09-29) — the AUTOMATIC half of Portfolio →
+  BIDS (§8a): broker ETFs on ONE account bought at 15:05 at each further X% below their
+  peak, through the SAME `services/bids_ladder.evaluate` the tab uses. Four load-bearing
+  choices. (1) **Deploy capital = the cash FLOAT, not the fund** — `on_fund_adopted` is
+  overridden to a no-op; with the mixin's "capital = ETF + float" rule a capital below the
+  fund's value read as zero settled cash and every level queued forever. Funding is the
+  shared `EntryFundingMixin` in `park` mode (float = `float_parts` × the first-level
+  amount, the fund sold T+1 to refill it); a level it cannot cover is QUEUED, retried daily
+  at that day's price, cancelled when the price recovers to its peak. (2) **Rules come
+  from the tab live** (`set_bids_rules_fn` → `services.bids.auto_rules`, read-only, every
+  decision): enabled (class on, not excluded, not the fund), X/y/N, and the tab's ladder —
+  a holding moving SUGGEST→AUTO carries its peak and fired levels; a typed manual peak is
+  adopted. A failed read buys NOTHING (never buy a holding the owner switched off). No
+  hook (backtest) = ctor knobs for every symbol. (3) **It adopts the account's units of
+  every watched ETF + the fund** (`adoptable_symbols`): reconciliation compares a run's
+  symbols against the broker's WHOLE holding, so the first 10-unit buy of an ETF held
+  75,000 would halt it otherwise — and so a MANUAL sale of one in the broker now halts it
+  (flagged on the deploy card). (4) **Only a run whose orders reach the broker counts**:
+  `_bids_auto_accounts` requires `order_broker() == "live"` (a paper run would silence the
+  suggestions for holdings it is not buying), and `manager._maybe_record_bids` writes fills
+  into the holdings' ledgers + mirrors the ladders onto the tab in its OWN transaction
+  after the trade log commits, LIVE only. Deploy from Portfolio → BIDS → "Deploy automatic
+  buying" (prefills the watchlist). Coverage: `tests/test_bids_strategy.py` (incl. a real
+  BacktestRunner replay).
 - **supertrend_momentum entry FUNDING (`_funding.EntryFundingMixin`, owner 2026-09-08).**
   The strategy sized every buy off the run's own cash ledger — live that is whatever
   `capital` was typed, so the first signal would place a ₹1L order the account cannot pay,

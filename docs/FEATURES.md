@@ -45,7 +45,7 @@ live. The invariant is guarded by golden tests (`tests/test_sst_parity.py`,
 
 ## 3. Strategy catalog
 
-Strategies register in `strategies/registry.py` (39 IDs across 36 files) and onboard there,
+Strategies register in `strategies/registry.py` (40 IDs across 37 files) and onboard there,
 never by editing the engine. `intraday=True` means "decide every tick"; otherwise the run
 decides once per day at a set time. "Backtest" notes whether a strategy runs the FULL shared
 engine, a dedicated Black-Scholes service, or is deploy-only.
@@ -97,6 +97,21 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   price); live deploys fail closed until the live indicator seeding lands. The spec's short
   leg (gap-down + RSI>90) awaits a sell-CE options variant — cash equity can't hold
   overnight shorts.
+
+- **`bids` — Buy In Dips, bought automatically (2026-09-29).** The automatic half of
+  Portfolio → BIDS: a watchlist of ETFs held on one broker account, each bought again at
+  every further X% below its recent high (level k invests k × y, up to N levels, a new
+  high resets). Once a day at 15:05 it runs the SAME ladder the tab uses, with each
+  holding's rule from the tab (its X / y / N, whether it is switched on, and the ladder
+  already built, so a holding moving from suggested to automatic carries its fired levels
+  across). The deploy **capital is a cash float** (3 × the first-level amount by default)
+  so a level buys the day it fires; after each spend it sells just enough of the fund ETF
+  (LIQUIDCASE) to refill the float for tomorrow, T+1 (the shared `EntryFundingMixin` in
+  `park` mode). A level the float cannot cover is queued and retried daily, and cancelled
+  if the price recovers to its high first. It never sells a watched ETF. The run adopts the
+  account's existing units of every listed ETF and of the fund so reconciliation matches
+  the broker. A LIVE run writes its fills into the holdings' ledgers and its ladders onto
+  the tab; a PAPER run touches nothing on /portfolio and leaves the holdings suggested.
 
 - **`value_investing` — a daily rupee drip into a watchlist, funded by an ETF.** The platform's
   only pure **accumulation** system: it buys and never sells. Each trading day it sorts the

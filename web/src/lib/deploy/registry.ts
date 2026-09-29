@@ -628,6 +628,32 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       + "close, every change reads 0.00%, and the strategy refuses the day.",
   },
   {
+    id: "bids",
+    name: "BIDS — buy ETFs on dips",
+    group: "positional", cadence: "DAILY 15:05 · NEVER SELLS",
+    blurb: "Buys your broker ETFs at each further X% below their high, funded from LIQUIDCASE",
+    instrument: "STOCK", needsBroker: true, universe: "",
+    fields: [
+      f("watchlist", "ETFs to buy on dips (comma-separated)", "text", "", {
+        wide: true,
+        hint: "Portfolio → BIDS → 'Deploy automatic buying' fills this with the ETFs on the account. Each must be a holding on the SAME broker account",
+      }),
+      f("dip_pct", "Dip per level %", "number", 2, { step: "any",
+        hint: "the fallback only — each holding's rule on Portfolio → BIDS outranks it live" }),
+      f("amount", "First level (₹) — level k invests k × this", "number", 5000, { step: "any" }),
+      f("max_levels", "Max levels", "number", 10),
+      f("fund_source", "Fund source (ETF sold to pay)", "text", "LIQUIDCASE"),
+      f("float_parts", "Cash float (× the first-level amount)", "number", 3, { step: "any",
+        hint: "settled cash kept so a level buys the day it fires; the fund is sold to refill it for tomorrow (T+1). Deploy CAPITAL = this float in rupees" }),
+      f("funding_buffer_pct", "Pre-sale buffer %", "number", 5, { step: "any" }),
+      f("settlement_days", "Settlement days (T+1)", "number", 1),
+    ],
+    fixed: { lookback: 1, tax_rate: 0, funding: "park", fund_seed: "never" },
+    warn: "Capital is the CASH FLOAT only (e.g. ₹15,000 = 3 × ₹5,000), not the fund. The run adopts the "
+      + "account's existing units of every listed ETF and of the fund, so a manual sale of one "
+      + "of them in the broker will show as a book mismatch and halt it. Needs a BROKER quote source.",
+  },
+  {
     id: "short_premium",
     name: "Short premium (stock)",
     group: "monthly", cadence: "MONTHLY",

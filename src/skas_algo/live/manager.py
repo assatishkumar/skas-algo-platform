@@ -679,6 +679,21 @@ class LiveRun:
                     logger.exception("strategy alert failed for run %s", self.run_id)
 
             notify_hook(_strategy_notify)
+        # BIDS (strategies/bids.py): the per-holding rules from Portfolio → BIDS, read-only.
+        # Read at every decision, so a class switched off or a holding excluded on the tab
+        # takes effect the same day. A failed read raises into the strategy, which buys
+        # nothing that day rather than buy a holding the owner switched off.
+        rules_hook = getattr(strategy, "set_bids_rules_fn", None)
+        if rules_hook is not None:
+            account_id = self.config.broker_account_id
+
+            def _bids_rules(symbols):
+                from skas_algo.services.bids import auto_rules
+
+                with session_scope() as db:
+                    return auto_rules(db, account_id, list(symbols))
+
+            rules_hook(_bids_rules)
         # Vol-premium entry filter (ratio family): realized-vol leg from BROKER-first daily
         # bars (the live invariant — never depend on a manually refreshed cache), cache
         # fallback. Called only at a monthly entry; the implied leg is the strategy's ATM-IV.
@@ -1386,6 +1401,7 @@ class LiveRun:
             if events:
                 record_trades(db, self.algo_id, events)
             sync_positions(db, self.algo_id, snap)
+        self._maybe_record_bids(events)
         if events:
             self.broadcaster.publish(
                 {
@@ -1673,6 +1689,24 @@ class LiveRun:
                 " Resume the strategy once the book is flat.", AlertLevel.WARNING))
         except Exception:  # pragma: no cover
             pass
+
+    def _maybe_record_bids(self, events: list[dict]) -> None:
+        """A LIVE bids run writes its fills and ladders back to /portfolio (services/bids.
+        record_auto) right after its trade log commits — in its OWN transaction, so a
+        failure here can never roll the trade log back. A PAPER run never writes: its fills
+        are simulated and the real portfolio must not record them. A failure is logged and
+        dropped: the trade log is the durable record, the portfolio a view of it."""
+        mirror = getattr(getattr(self.session, "strategy", None), "bids_state", None)
+        if mirror is None or self.order_broker() != "live":
+            return
+        try:
+            from skas_algo.services.bids import record_auto
+
+            with session_scope() as db:
+                record_auto(db, self.config.broker_account_id, self.run_id, events,
+                            mirror(), datetime.now(IST).date())
+        except Exception:
+            logger.exception("bids: portfolio write-back failed for run %s", self.run_id)
 
     def _after_manual(self, events: list[dict]) -> None:
         """Persist + broadcast after a manual flatten/order (mirrors run_decision)."""
@@ -2706,9 +2740,9 @@ class LiveRunManager:
 
     def _run_bids_evaluation(self, db) -> None:
         """BIDS over the portfolio (services/bids.py): after each repricing pass, run every
-        suggest-mode holding's ladder on its fresh price. Evaluated once per price DATE, so
-        the 09:30 pass (US close, overnight NAVs) and the 16:00 pass (the Indian close) never
-        double-count a close. Never an order path; a failure never breaks maintenance."""
+        suggest-mode holding's ladder on its fresh price (every pass — the ladder is
+        idempotent; see evaluate_portfolio). Never an order path; a failure never breaks
+        maintenance."""
         try:
             from skas_algo.api.routes.portfolio import _bids_auto_accounts
             from skas_algo.services.bids import evaluate_portfolio

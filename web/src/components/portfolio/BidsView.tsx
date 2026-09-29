@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { portfolio as papi } from "../../api/client";
 import {
   money, pct, signedMoney,
@@ -315,6 +316,53 @@ function RuleModal({ r, d, onClose, onDone }: { r: BidsRow; d: BidsDefaults; onC
   );
 }
 
+/** Phase 2 (owner 2026-09-29): the broker ETFs of an included class can be BOUGHT by a
+ *  `bids` deployment instead of suggested. This card lists them per broker account and opens
+ *  the deploy page with the watchlist and the defaults filled in; the owner picks the account,
+ *  PAPER or LIVE, and deploys. The holdings flip to AUTO only once a run whose orders reach
+ *  the broker is running — a paper run leaves them suggested. */
+function AutoCard({ d, candidates, fundName, autoCount }: {
+  d: BidsDefaults; candidates: Record<string, string[]>; fundName: string; autoCount: number;
+}) {
+  const navigate = useNavigate();
+  const accounts = Object.entries(candidates).filter(([, syms]) => syms.length > 0);
+  if (accounts.length === 0) return null;
+  const deploy = (syms: string[]) => navigate("/trade", {
+    state: { prefill: {
+      strategy_id: "bids", name: "BIDS auto", capital: d.amount * 3,
+      params: { watchlist: syms.join(","), dip_pct: d.dip_pct, amount: d.amount,
+                max_levels: d.max_levels, fund_source: fundName || d.fund_source, float_parts: 3 },
+    } },
+  });
+  return (
+    <Card className="mb-4">
+      <div className="mb-2 flex flex-wrap items-baseline gap-2">
+        <div className="text-[15px] font-bold text-[var(--strong)]">Automatic buying</div>
+        <div className="text-[12px] font-semibold text-[var(--faint)]">
+          {autoCount > 0
+            ? `${autoCount} holding${autoCount === 1 ? "" : "s"} bought automatically by a live BIDS run`
+            : "broker ETFs can be bought by a BIDS deployment instead of suggested"}
+        </div>
+      </div>
+      {accounts.map(([acct, syms]) => (
+        <div key={acct} className="flex flex-wrap items-center gap-3 border-t border-[var(--divider)] py-2.5 text-[13px]">
+          <span className="font-bold text-[var(--strong)]">Broker account {acct}</span>
+          <span className="min-w-0 flex-1 truncate text-[var(--muted)]" title={syms.join(", ")}>{syms.length} · {syms.join(", ")}</span>
+          <button onClick={() => deploy(syms)}
+            className="rounded-[10px] bg-[var(--accent)] px-4 py-1.5 text-[12.5px] font-extrabold text-white">
+            Deploy automatic buying
+          </button>
+        </div>
+      ))}
+      <div className="mt-2 text-[12px] font-semibold text-[var(--faint)]">
+        Buys at 15:05 from a settled-cash float (capital = the float, 3 × the first-level amount by default)
+        and sells {fundName || d.fund_source} to refill it for the next day. Each holding keeps its rule from this tab.
+        Deploy PAPER first; a paper run buys nothing real and the holdings stay suggested.
+      </div>
+    </Card>
+  );
+}
+
 const GRID = "grid-cols-[2.1fr_.8fr_.9fr_.9fr_1fr_1.1fr_.9fr_.7fr_.6fr_1.5fr_.4fr]";
 const MIN_W = "min-w-[1180px]";
 
@@ -499,6 +547,9 @@ export default function BidsView() {
       )}
 
       <DefaultsCard d={d} classes={classes ?? []} onSaved={refresh} />
+
+      <AutoCard d={d} candidates={q.data.auto_candidates ?? {}} fundName={fund?.found ? fund.name : ""}
+        autoCount={rows.filter((r) => r.mode === "auto").length} />
 
       {groups.length === 0 && (
         <Card><div className="py-2 text-[13px] font-semibold text-[var(--faint)]">No holdings in the classes switched on under Defaults.</div></Card>
