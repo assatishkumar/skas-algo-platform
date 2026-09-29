@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { portfolio as papi } from "../../api/client";
 import {
   money, pct, signedMoney,
-  type BidsDefaults, type BidsRow, type BidsSuggestion,
+  type BidsClass, type BidsDefaults, type BidsRow, type BidsSuggestion,
 } from "../../lib/portfolio";
 import { Card, ConfirmAction, inputClass, Kpi, Modal, Notice, Pill } from "./primitives";
 
@@ -17,7 +17,7 @@ import { Card, ConfirmAction, inputClass, Kpi, Modal, Notice, Pill } from "./pri
  *  peak, trigger, amounts and suggestions are all $, and an accepted fill is booked in the
  *  rupee ledger at the holding's last-sync rate. Every figure here carries its own symbol. */
 
-const GROUP_ORDER = ["US stocks", "Mutual funds", "ETFs", "Stocks"];
+const GROUP_ORDER = ["US stocks", "Mutual funds", "ETFs", "Crypto", "Stocks"];
 
 const MODE_PILL: Record<BidsRow["mode"], { label: string; bg: string; color: string; title: string }> = {
   auto: { label: "AUTO", bg: "var(--ok-bg)", color: "var(--ok-text)",
@@ -113,11 +113,15 @@ function KnobBlock({ title, ccy, k, set }: {
   );
 }
 
-function DefaultsCard({ d, onSaved }: { d: BidsDefaults; onSaved: () => void }) {
+function DefaultsCard({ d, classes, onSaved }: { d: BidsDefaults; classes: BidsClass[]; onSaved: () => void }) {
   const [inr, setInr] = useState<Knobs>(knobsOf(d, false));
   const [usd, setUsd] = useState<Knobs>(knobsOf(d, true));
   const [fund, setFund] = useState(d.fund_source);
-  useEffect(() => { setInr(knobsOf(d, false)); setUsd(knobsOf(d, true)); setFund(d.fund_source); }, [d]);
+  const [inc, setInc] = useState<string[]>(d.classes);
+  useEffect(() => {
+    setInr(knobsOf(d, false)); setUsd(knobsOf(d, true)); setFund(d.fund_source); setInc(d.classes);
+  }, [d]);
+  const toggle = (k: string) => setInc((xs) => (xs.includes(k) ? xs.filter((x) => x !== k) : [...xs, k]));
   const save = useMutation({
     mutationFn: () => papi.bidsDefaults({
       dip_pct: num(inr.dip_pct) ?? undefined, amount: num(inr.amount) ?? undefined,
@@ -125,6 +129,7 @@ function DefaultsCard({ d, onSaved }: { d: BidsDefaults; onSaved: () => void }) 
       usd_dip_pct: num(usd.dip_pct) ?? undefined, usd_amount: num(usd.amount) ?? undefined,
       usd_max_levels: num(usd.max_levels) ?? undefined,
       fund_source: fund.trim().toUpperCase(),
+      classes: inc,
     }),
     onSuccess: onSaved,
   });
@@ -136,8 +141,26 @@ function DefaultsCard({ d, onSaved }: { d: BidsDefaults; onSaved: () => void }) 
           every holding uses its currency's defaults unless you set its own
         </div>
       </div>
+      <div className="mb-3 flex flex-wrap items-center gap-2"
+        title="Only these kinds of holding are watched for dips. Switching one off expires its pending suggestions; switching it back on restarts its holdings from that day's price.">
+        <span className="mr-1 text-[11px] font-extrabold tracking-[.04em] text-[var(--faint)]">BUY DIPS IN</span>
+        {classes.map((c) => {
+          const on = inc.includes(c.key);
+          return (
+            <button key={c.key} onClick={() => toggle(c.key)} aria-pressed={on}
+              className="rounded-full border px-3 py-1 text-[12.5px] font-bold"
+              style={{
+                borderColor: on ? "var(--accent)" : "var(--border)",
+                background: on ? "var(--accent)" : "transparent",
+                color: on ? "#fff" : "var(--muted)",
+              }}>
+              {on ? "✓ " : ""}{c.label} · {c.count}
+            </button>
+          );
+        })}
+      </div>
       <div className="grid gap-3 lg:grid-cols-2">
-        <KnobBlock title="Rupee holdings · stocks, ETFs, mutual funds" ccy="INR" k={inr} set={setInr} />
+        <KnobBlock title="Rupee holdings · ETFs, mutual funds, crypto, stocks" ccy="INR" k={inr} set={setInr} />
         <KnobBlock title="Dollar holdings · US stocks" ccy="USD" k={usd} set={setUsd} />
       </div>
       <div className="mt-3 flex flex-wrap items-end gap-3">
@@ -355,7 +378,7 @@ export default function BidsView() {
 
   if (q.isLoading) return <Card><div className="py-6 text-center text-[13px] font-semibold text-[var(--faint)]">Loading…</div></Card>;
   if (q.isError || !q.data) return <Notice tone="warn">Could not load BIDS: {String(q.error ?? "no data")}</Notice>;
-  const { defaults: d, rows, pending, recent } = q.data;
+  const { defaults: d, classes, rows, pending, recent } = q.data;
 
   const active = rows.filter((r) => r.mode !== "excluded");
   const pendingInr = pending.filter((p) => p.currency.toUpperCase() === "INR").reduce((s, p) => s + p.amount, 0);
@@ -382,7 +405,7 @@ export default function BidsView() {
           help="Dip levels that fired on holdings with no order path here. Accept records the buy you placed; skip consumes the level." />
         <Kpi label="IN BIDS" value={String(active.length)}
           sub={`${rows.filter((r) => r.mode === "auto").length} auto · ${rows.filter((r) => r.mode === "suggest").length} suggest · ${rows.filter((r) => r.mode === "excluded").length} excluded`}
-          help="Stocks, ETFs, mutual funds and US stocks. AUTO needs a running BIDS deployment on the holding's broker account." />
+          help="Holdings of the classes switched on under Defaults. AUTO needs a running BIDS deployment on the holding's broker account." />
         <Kpi label="DEEPEST DIP" value={deepest?.drawdown_pct != null ? pct(deepest.drawdown_pct) : "—"}
           sub={deepest ? deepest.name : "no ladder yet"} valueColor={deepest && (deepest.drawdown_pct ?? 0) < 0 ? "var(--danger)" : "var(--strong)"}
           help="The holding furthest below its recent high right now." />
@@ -413,10 +436,10 @@ export default function BidsView() {
         </Card>
       )}
 
-      <DefaultsCard d={d} onSaved={refresh} />
+      <DefaultsCard d={d} classes={classes ?? []} onSaved={refresh} />
 
       {groups.length === 0 && (
-        <Card><div className="py-2 text-[13px] font-semibold text-[var(--faint)]">No stocks, ETFs, mutual funds or US stocks on the portfolio yet.</div></Card>
+        <Card><div className="py-2 text-[13px] font-semibold text-[var(--faint)]">No holdings in the classes switched on under Defaults.</div></Card>
       )}
       {groups.map((g) => (
         <GroupTable key={g} group={g} rows={sortRows(byGroup.get(g) ?? [])} onEdit={setEditing} />

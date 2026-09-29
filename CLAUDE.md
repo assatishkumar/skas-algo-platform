@@ -1601,7 +1601,11 @@ that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` ma
   same-day reprice; SOUTHBANK sat through its L1 unsuggested). The ladder is idempotent
   (`levels_fired` persisted), so re-evaluating a price fires nothing twice; a second ladder
   the same day REVIVES the expired (holding, peak date, level) row instead of tripping the
-  unique key. Mode is
+  unique key. **Which classes run is a setting** (`classes`, default etf/mf/us/btc — owner
+  2026-09-29 took Indian stocks OUT): an excluded class shows no rows and its pending
+  suggestions expire; re-including one REJOINS its holdings at that day's price
+  (`save_defaults` clears their peaks) so the levels crossed while out never fire as a lump.
+  Mode is
   derived: AUTO only when a RUNNING `bids` deployment trades the symbol on the holding's
   quote account (`_bids_auto_accounts`), else SUGGEST — a dip is never dropped because no
   run exists. Accept appends a ledger BUY through `portfolio_history.carry_typed_position`

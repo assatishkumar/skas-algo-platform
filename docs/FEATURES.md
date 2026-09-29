@@ -1049,6 +1049,11 @@ holdings as US stocks, Mutual funds, ETFs and Stocks, each with a group total, a
 shows units, average price, LTP, current value and returns beside its ladder (peak, dip,
 levels fired, next level).
 
+Which kinds of holding BIDS watches is a switch per class on the Defaults card — ETFs,
+mutual funds, US stocks and crypto by default, Indian stocks off. Switching a class off
+expires its pending suggestions; switching it back on restarts its holdings from that day's
+price.
+
 ## 13. Web application (`web/`)
 
 - **Analyze workbench (`/analyze`, 2026-07)**: per-run backtest analytics for options runs —

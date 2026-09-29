@@ -1355,6 +1355,8 @@ class BidsDefaultsInput(BaseModel):
     usd_dip_pct: float | None = Field(default=None, gt=0, le=50)
     usd_amount: float | None = Field(default=None, gt=0)
     usd_max_levels: int | None = Field(default=None, ge=1, le=20)
+    # asset classes BIDS runs on (stk / etf / mf / us / btc); unknown keys are dropped
+    classes: list[str] | None = None
 
 
 class BidsRuleInput(BaseModel):

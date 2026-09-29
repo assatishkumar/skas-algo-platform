@@ -21,6 +21,7 @@ from skas_algo.db.models import (
 from skas_algo.services import bids
 
 D0 = date(2026, 9, 1)
+WITH_STOCKS = {"classes": ["stk", "etf", "mf", "us", "btc"]}   # stocks are off by default
 
 
 @pytest.fixture(autouse=True)
@@ -74,6 +75,7 @@ def test_a_holding_joins_at_todays_price_whatever_its_old_high():
         stk = _holding(db, "TCS", "stk", 3000.0, source="broker", ref="TCS", account=3)
         mf = _holding(db, "Flexi", "mf", 50.0, source="amfi", ref="INF1")
         db.commit()
+        bids.save_defaults(db, WITH_STOCKS)
         assert bids.evaluate_portfolio(db, D0, notify=False)["new"] == []
         rules = {r.holding_id: r for r in db.execute(select(PortfolioBidsRule)).scalars()}
         assert rules[stk.id].peak == 3000.0 and rules[stk.id].peak_source == "joined"
@@ -213,6 +215,7 @@ def test_rows_carry_group_and_an_inr_position():
                  invested=25000.0)
         _holding(db, "Flexi", "mf", 50.0, source="amfi", ref="INF9", units=10.0, invested=400.0)
         db.commit()
+        bids.save_defaults(db, WITH_STOCKS)
         rows = {r["name"]: r for r in bids.view(db)["rows"]}
         assert rows["ITC"]["group"] == "Stocks" and rows["Flexi"]["group"] == "Mutual funds"
         p = rows["ITC"]["position"]
@@ -228,7 +231,7 @@ def test_a_same_day_reprice_through_a_trigger_fires_the_09_28_southbank_case():
         h = _holding(db, "SOUTHBANK", "stk", 49.95, source="broker", ref="SOUTHBANK",
                      asof="2026-09-28")
         db.commit()
-        bids.save_defaults(db, {"dip_pct": 2.0, "amount": 5000.0, "max_levels": 10})
+        bids.save_defaults(db, {"dip_pct": 2.0, "amount": 5000.0, "max_levels": 10, **WITH_STOCKS})
         day = date(2026, 9, 28)
         assert bids.evaluate_portfolio(db, day, notify=False)["new"] == []     # joins
         _reprice(db, h.id, 48.94, "2026-09-28")                               # same date
@@ -255,3 +258,37 @@ def test_a_second_ladder_the_same_day_revives_the_expired_row_instead_of_crashin
         assert [n["level"] for n in bids.evaluate_portfolio(db, day, notify=False)["new"]] == [1]
         v = bids.view(db)
         assert len(v["pending"]) == 1 and v["pending"][0]["price"] == 105.0
+
+
+def test_indian_stocks_are_off_by_default_and_excluding_a_class_expires_its_suggestions():
+    """Owner 2026-09-29: "exclude all the Indian stocks … just ETF, Mutual Funds, US Stocks
+    and Crypto". Stocks are out by default; switching a class off expires what it had
+    pending; switching it back on rejoins its holdings at the next price, never firing the
+    levels it crossed while it was out."""
+    with session_scope() as db:
+        stk = _holding(db, "ITC", "stk", 300.0, source="broker", ref="ITC")
+        btc = _holding(db, "BTC", "btc", 100.0, source="global", ref="BTC-INR")
+        db.commit()
+        assert bids.defaults(db)["classes"] == ["etf", "mf", "us", "btc"]
+        bids.evaluate_portfolio(db, D0, notify=False)
+        v = bids.view(db)
+        assert [r["name"] for r in v["rows"]] == ["BTC"] and v["rows"][0]["group"] == "Crypto"
+        assert {c["key"]: c["included"] for c in v["classes"]}["stk"] is False
+        # stocks in: ITC joins at 300 and fires L1 at 5% down
+        bids.save_defaults(db, {"dip_pct": 5.0, **WITH_STOCKS})
+        bids.evaluate_portfolio(db, D0, notify=False)
+        _reprice(db, stk.id, 284.0, "2026-09-02")
+        bids.evaluate_portfolio(db, date(2026, 9, 2), notify=False)
+        assert [p["holding"] for p in bids.view(db)["pending"]] == ["ITC"]
+        # stocks out: the pending L1 expires, nothing new while out
+        bids.save_defaults(db, {"classes": ["etf", "mf", "us", "btc"]})
+        assert bids.view(db)["pending"] == []
+        assert db.get(PortfolioBidsSuggestion, 1).status == "expired"
+        _reprice(db, stk.id, 240.0, "2026-09-03")
+        assert bids.evaluate_portfolio(db, date(2026, 9, 3), notify=False)["new"] == []
+        # stocks back in: ITC rejoins at 240 — no lump for the 20% it fell while out
+        bids.save_defaults(db, WITH_STOCKS)
+        assert bids.evaluate_portfolio(db, date(2026, 9, 3), notify=False)["new"] == []
+        row = next(r for r in bids.view(db)["rows"] if r["name"] == "ITC")
+        assert row["peak"] == 240.0 and row["peak_source"] == "joined"
+        assert btc.id  # crypto stayed in throughout

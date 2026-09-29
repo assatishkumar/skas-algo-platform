@@ -719,6 +719,14 @@ export interface BidsDefaults {
   usd_dip_pct: number;            // the same knobs for dollar-quoted holdings, in dollars
   usd_amount: number;
   usd_max_levels: number;
+  classes: string[];              // asset classes BIDS runs on: stk / etf / mf / us / btc
+}
+
+export interface BidsClass {
+  key: string;
+  label: string;
+  count: number;                  // holdings of this class on the portfolio
+  included: boolean;
 }
 
 /** Units, average cost, LTP, value and return — in the holding's own currency where its
@@ -782,6 +790,7 @@ export interface BidsSuggestion {
 
 export interface BidsPayload {
   defaults: BidsDefaults;
+  classes: BidsClass[];
   rows: BidsRow[];
   pending: BidsSuggestion[];
   recent: BidsSuggestion[];

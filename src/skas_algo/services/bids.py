@@ -54,9 +54,15 @@ DEFAULTS = {
     "usd_dip_pct": 5.0,
     "usd_amount": 100.0,
     "usd_max_levels": 5,
+    # which asset classes BIDS runs on at all (owner 2026-09-29: "exclude all the Indian
+    # stocks for now … just ETF, Mutual Funds, US Stocks and Crypto"). Excluding a class
+    # expires its pending suggestions; re-including one REJOINS its holdings at that day's
+    # price (the joining rule) instead of firing every level the ladder missed meanwhile.
+    "classes": ["etf", "mf", "us", "btc"],
 }
-CLASS_GROUPS = {"us": "US stocks", "mf": "Mutual funds", "etf": "ETFs", "stk": "Stocks"}
-ELIGIBLE_CLASSES = ("stk", "etf", "mf", "us")
+CLASS_GROUPS = {"us": "US stocks", "mf": "Mutual funds", "etf": "ETFs", "stk": "Stocks",
+                "btc": "Crypto"}
+ELIGIBLE_CLASSES = ("stk", "etf", "mf", "us", "btc")    # what CAN be included
 BIDS_NOTE = "BIDS"
 
 
@@ -74,14 +80,28 @@ def save_defaults(db: Session, values: dict) -> dict:
     if row is None:
         row = PortfolioSetting(key=SETTINGS_KEY, value={})
         db.add(row)
-    merged = {**defaults(db), **{k: v for k, v in values.items() if k in DEFAULTS}}
+    before = defaults(db)
+    merged = {**before, **{k: v for k, v in values.items() if k in DEFAULTS}}
+    merged["classes"] = [c for c in ELIGIBLE_CLASSES if c in set(merged.get("classes") or [])]
     row.value = merged
+    old, new = set(before["classes"]), set(merged["classes"])
+    rules = _rules(db)
+    for h in db.execute(select(PortfolioHolding)).scalars().all():
+        cls = str(h.asset_class or "").lower()
+        if cls in old - new:
+            _expire_pending(db, h.id)
+        elif cls in new - old and h.id in rules:
+            r = rules[h.id]                  # rejoin at the next check's price
+            r.peak, r.peak_asof, r.peak_source = None, None, None
+            r.levels_fired, r.last_eval_asof = 0, None
     db.commit()
     return merged
 
 
-def eligible(h: PortfolioHolding) -> bool:
-    return str(h.asset_class or "").lower() in ELIGIBLE_CLASSES
+def eligible(h: PortfolioHolding, classes=None) -> bool:
+    """A class BIDS can run on AND — when ``classes`` is given — one the owner included."""
+    cls = str(h.asset_class or "").lower()
+    return cls in ELIGIBLE_CLASSES and (classes is None or cls in classes)
 
 
 def currency_of(h: PortfolioHolding) -> str:
@@ -205,8 +225,12 @@ def evaluate_portfolio(db: Session, today: date | None = None, *, auto_accounts=
     if not d.get("enabled", True):
         return out
     rules = _rules(db)
+    included = set(d["classes"])
     for h in db.execute(select(PortfolioHolding)).scalars().all():
         px = ladder_price(h)
+        if eligible(h) and not eligible(h, included):
+            _expire_pending(db, h.id)        # a class the owner left out suggests nothing
+            continue
         if not eligible(h) or px <= 0:
             continue
         r = rules.get(h.id)
@@ -363,8 +387,14 @@ def view(db: Session, *, auto_accounts=None) -> dict:
     rules = _rules(db)
     recs = {v["id"]: v for v in current_views(db)}
     rows = []
+    included = set(d["classes"])
+    counts: dict[str, int] = {}
     for h in db.execute(select(PortfolioHolding).order_by(PortfolioHolding.name)).scalars().all():
         if not eligible(h):
+            continue
+        cls = str(h.asset_class or "").lower()
+        counts[cls] = counts.get(cls, 0) + 1
+        if cls not in included:
             continue
         r = rules.get(h.id)
         rule = rule_for(h, r, d)
@@ -396,13 +426,19 @@ def view(db: Session, *, auto_accounts=None) -> dict:
     hs = db.execute(select(PortfolioHolding)).scalars().all()
     names = {h.id: h.name for h in hs}
     ccys = {h.id: currency_of(h) for h in hs}
+    shown = {h.id for h in hs if eligible(h, included)}
     sugg = db.execute(select(PortfolioBidsSuggestion).order_by(
         PortfolioBidsSuggestion.created_on.desc(), PortfolioBidsSuggestion.id.desc())
     ).scalars().all()
     return {
         "defaults": d,
+        # every class BIDS can run on, with how many holdings each has and whether it is in
+        "classes": [{"key": c, "label": CLASS_GROUPS[c], "count": counts.get(c, 0),
+                     "included": c in included} for c in ELIGIBLE_CLASSES],
         "rows": rows,
-        "pending": [_sdict(s, names, ccys) for s in sugg if s.status == "pending"],
+        # an excluded class's pending rows are expired at the next check; never shown before
+        "pending": [_sdict(s, names, ccys) for s in sugg
+                    if s.status == "pending" and s.holding_id in shown],
         "recent": [_sdict(s, names, ccys) for s in sugg if s.status != "pending"][:30],
     }
 
