@@ -1054,6 +1054,13 @@ mutual funds, US stocks and crypto by default, Indian stocks off. Switching a cl
 expires its pending suggestions; switching it back on restarts its holdings from that day's
 price.
 
+Rupee buys are **funded from the fund ETF** (LIQUIDCASE on the VPS): each suggestion says how
+many whole units of it to sell, and accepting records both the buy and that sale in the
+ledger, so the fund shrinks as it is spent. You still place both orders. A fund that can't
+cover what is pending marks the suggestions "fund short by ₹X" and says so in the alert;
+the dip is still suggested. Dollar buys are not funded from it, and the fund ETF itself is
+never bought on a dip.
+
 ## 13. Web application (`web/`)
 
 - **Analyze workbench (`/analyze`, 2026-07)**: per-run backtest analytics for options runs —

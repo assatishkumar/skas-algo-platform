@@ -782,15 +782,30 @@ export interface BidsSuggestion {
   price: number;
   amount: number;
   units_hint: number | null;
+  fund_units?: number | null;     // fund-ETF units to sell for it (rupee buys only)
+  fund_short?: number;            // ₹ of it the fund cannot cover, walking oldest first
   created_on: string;
   status: "pending" | "accepted" | "skipped" | "expired";
   txn_id: number | null;
   resolved_at: string | null;
 }
 
+/** The fund-source ETF against what is pending (rupee suggestions only). */
+export interface BidsFund {
+  found: boolean;
+  name: string;
+  holding_id?: number;
+  units?: number;
+  price?: number | null;
+  value?: number;
+  need?: number;
+  short?: number;
+}
+
 export interface BidsPayload {
   defaults: BidsDefaults;
   classes: BidsClass[];
+  fund?: BidsFund;
   rows: BidsRow[];
   pending: BidsSuggestion[];
   recent: BidsSuggestion[];

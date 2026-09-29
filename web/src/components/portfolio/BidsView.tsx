@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { portfolio as papi } from "../../api/client";
 import {
   money, pct, signedMoney,
-  type BidsClass, type BidsDefaults, type BidsRow, type BidsSuggestion,
+  type BidsClass, type BidsDefaults, type BidsFund, type BidsRow, type BidsSuggestion,
 } from "../../lib/portfolio";
 import { Card, ConfirmAction, inputClass, Kpi, Modal, Notice, Pill } from "./primitives";
 
@@ -178,15 +178,29 @@ function DefaultsCard({ d, classes, onSaved }: { d: BidsDefaults; classes: BidsC
   );
 }
 
-function AcceptModal({ s, onClose, onDone }: { s: BidsSuggestion; onClose: () => void; onDone: () => void }) {
+function AcceptModal({ s, fund, onClose, onDone }: {
+  s: BidsSuggestion; fund?: BidsFund; onClose: () => void; onDone: () => void;
+}) {
   const [qty, setQty] = useState(s.units_hint != null ? String(Number(s.units_hint.toFixed(3))) : "");
   const [price, setPrice] = useState(String(s.price));
   const [onDate, setOnDate] = useState(new Date().toISOString().slice(0, 10));
+  const foreign = s.currency.toUpperCase() !== "INR";
+  const canFund = !foreign && !!fund?.found && !!fund.price;
+  const [funded, setFunded] = useState(canFund);
+  const fundPrice0 = fund?.price ?? 0;
+  const need = (Number(qty) || 0) * (Number(price) || 0);
+  const autoUnits = fundPrice0 > 0 ? Math.ceil(need / fundPrice0 - 1e-9) : 0;
+  const [fUnits, setFUnits] = useState<string>("");
+  const [fPrice, setFPrice] = useState<string>(fundPrice0 ? String(fundPrice0) : "");
+  const fundUnits = fUnits.trim() === "" ? autoUnits : Number(fUnits);
   const go = useMutation({
-    mutationFn: () => papi.bidsAccept(s.id, { units: Number(qty), price: Number(price), on_date: onDate }),
+    mutationFn: () => papi.bidsAccept(s.id, {
+      units: Number(qty), price: Number(price), on_date: onDate,
+      fund: canFund && funded,
+      ...(canFund && funded ? { fund_units: fundUnits, fund_price: Number(fPrice) || undefined } : {}),
+    }),
     onSuccess: () => { onDone(); onClose(); },
   });
-  const foreign = s.currency.toUpperCase() !== "INR";
   return (
     <Modal title={`Record the buy · ${s.holding} · level ${s.level}`} onClose={onClose} width={520}>
       <div className="mb-3 text-[12.5px] font-semibold text-[var(--muted)]">
@@ -205,6 +219,32 @@ function AcceptModal({ s, onClose, onDone }: { s: BidsSuggestion; onClose: () =>
       <div className="mt-2 text-[12px] font-semibold text-[var(--faint)]">
         = {exact((Number(qty) || 0) * (Number(price) || 0), s.currency)} against the level's {exact(s.amount, s.currency)}
       </div>
+      {canFund && fund && (
+        <div className="mt-4 rounded-[12px] border border-[var(--divider)] p-3">
+          <label className="flex items-center gap-2 text-[13px] font-bold text-[var(--strong)]">
+            <input type="checkbox" checked={funded} onChange={(e) => setFunded(e.target.checked)} />
+            Also record the {fund.name} sale that paid for it
+          </label>
+          {funded && (
+            <div className="mt-2 grid grid-cols-2 gap-3">
+              <label><span className="text-[11px] font-extrabold text-[var(--faint)]">{fund.name} UNITS SOLD</span>
+                <input className={`${inputClass} mt-[5px]`} placeholder={String(autoUnits)} value={fUnits}
+                  onChange={(e) => setFUnits(e.target.value)} /></label>
+              <label><span className="text-[11px] font-extrabold text-[var(--faint)]">SALE PRICE (₹)</span>
+                <input className={`${inputClass} mt-[5px]`} value={fPrice} onChange={(e) => setFPrice(e.target.value)} /></label>
+              <div className="col-span-2 text-[12px] font-semibold text-[var(--faint)]">
+                = {exact(fundUnits * (Number(fPrice) || 0), "INR")} · {fund.name} holds {units(fund.units ?? 0)} units
+                {fundUnits > (fund.units ?? 0) && <b className="text-[var(--danger)]"> — more than it holds</b>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {!foreign && !canFund && (
+        <div className="mt-3 text-[12px] font-semibold text-[var(--note)]">
+          The fund {fund?.name || "(none set)"} is not on the portfolio, so no sale is recorded.
+        </div>
+      )}
       {go.isError && <div className="mt-2 text-[12px] font-bold text-[var(--danger)]">{String(go.error)}</div>}
       <div className="mt-4 flex justify-end gap-2">
         <button onClick={onClose} className="rounded-[11px] px-4 py-2 text-[13px] font-bold text-[var(--muted)]">Cancel</button>
@@ -378,7 +418,7 @@ export default function BidsView() {
 
   if (q.isLoading) return <Card><div className="py-6 text-center text-[13px] font-semibold text-[var(--faint)]">Loading…</div></Card>;
   if (q.isError || !q.data) return <Notice tone="warn">Could not load BIDS: {String(q.error ?? "no data")}</Notice>;
-  const { defaults: d, classes, rows, pending, recent } = q.data;
+  const { defaults: d, classes, rows, pending, recent, fund } = q.data;
 
   const active = rows.filter((r) => r.mode !== "excluded");
   const pendingInr = pending.filter((p) => p.currency.toUpperCase() === "INR").reduce((s, p) => s + p.amount, 0);
@@ -425,6 +465,15 @@ export default function BidsView() {
               <span className="tabular-nums text-[var(--muted)]">at {px(s.price, s.currency)} · trigger {px(s.trigger_price, s.currency)} · high {px(s.peak, s.currency)}</span>
               <span className="tabular-nums font-bold text-[var(--strong)]">{exact(s.amount, s.currency)}</span>
               {s.units_hint != null && <span className="tabular-nums text-[var(--faint)]">≈ {units(s.units_hint)} units</span>}
+              {s.fund_units != null && fund?.found && (
+                <span className="tabular-nums text-[var(--muted)]">sell {units(s.fund_units)} {fund.name}</span>
+              )}
+              {(s.fund_short ?? 0) > 0 && (
+                <Pill bg="var(--warn-bg, var(--chip))" color="var(--danger)"
+                  title="The fund cannot cover this after the older suggestions. Top the fund up, or accept without recording the sale.">
+                  fund short {exact(s.fund_short ?? 0, "INR")}
+                </Pill>
+              )}
               <span className="text-[var(--faint)]">{s.created_on}</span>
               <span className="ml-auto flex items-center gap-3">
                 <button onClick={() => setAccepting(s)} className="rounded-[10px] bg-[var(--accent)] px-4 py-1.5 text-[12.5px] font-extrabold text-white">Accept</button>
@@ -434,6 +483,19 @@ export default function BidsView() {
             </div>
           ))}
         </Card>
+      )}
+
+      {fund && (
+        <div className="mb-4">
+        <Notice tone={!fund.found || (fund.short ?? 0) > 0 ? "warn" : "info"}>
+          {!fund.found
+            ? <>The fund <b>{fund.name || "(none set)"}</b> is not on the portfolio, so rupee suggestions carry no sale to record. Set "Funded from" to a holding you own.</>
+            : <>Rupee buys are funded by selling <b>{fund.name}</b>: {units(fund.units ?? 0)} units · {money(fund.value ?? 0)} held,
+              {" "}{money(fund.need ?? 0)} needed for what is pending
+              {(fund.short ?? 0) > 0 ? <> — <b>short by {exact(fund.short ?? 0, "INR")}</b>. The suggestions stay; top the fund up or accept without the sale.</> : "."}
+              {" "}{fund.name} itself is never bought on a dip. US buys are not funded from it.</>}
+        </Notice>
+        </div>
       )}
 
       <DefaultsCard d={d} classes={classes ?? []} onSaved={refresh} />
@@ -459,7 +521,7 @@ export default function BidsView() {
         </Card>
       )}
 
-      {accepting && <AcceptModal s={accepting} onClose={() => setAccepting(null)} onDone={refresh} />}
+      {accepting && <AcceptModal s={accepting} fund={fund} onClose={() => setAccepting(null)} onDone={refresh} />}
       {editing && <RuleModal r={editing} d={d} onClose={() => setEditing(null)} onDone={refresh} />}
     </div>
   );

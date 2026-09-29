@@ -897,7 +897,8 @@ def bids_accept(sid: int, body: BidsAcceptInput, db: Session = Depends(get_db)) 
 
     try:
         return bids.accept(db, sid, units=body.units, price=body.price, on_date=body.on_date,
-                           fees=body.fees)
+                           fees=body.fees, fund=body.fund, fund_units=body.fund_units,
+                           fund_price=body.fund_price)
     except KeyError:
         raise HTTPException(404, "suggestion not found") from None
     except ValueError as exc:

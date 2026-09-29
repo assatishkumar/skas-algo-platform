@@ -1375,4 +1375,9 @@ class BidsAcceptInput(BaseModel):
     price: float = Field(gt=0)
     on_date: date
     fees: float = Field(default=0.0, ge=0)
+    # also record the fund-source ETF sale that paid for it (rupee buys only); the units and
+    # price default to what the buy needs at the fund's last price, editable to the real fill
+    fund: bool = True
+    fund_units: float | None = Field(default=None, ge=0)
+    fund_price: float | None = Field(default=None, gt=0)
 

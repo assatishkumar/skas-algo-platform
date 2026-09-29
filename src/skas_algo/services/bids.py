@@ -39,6 +39,8 @@ from skas_algo.db.models import (
     PortfolioSetting,
     PortfolioTransaction,
 )
+import math
+
 from skas_algo.services.bids_ladder import LadderRule, LadderState, evaluate, next_trigger
 
 logger = logging.getLogger("skas_algo.bids")
@@ -125,6 +127,46 @@ def fx_to_inr(h: PortfolioHolding) -> float:
     if currency_of(h) == "INR":
         return 1.0
     return float(h.last_price or 0.0) / float(h.native_price)
+
+
+# ------------------------------------------------------------------ the fund (owner 2026-09-29)
+# Every RUPEE buy BIDS suggests is funded by selling the fund-source ETF (LIQUIDCASE…): the
+# suggestion names the units to sell, Accept records the buy AND that sale in the ledger (the
+# owner places both orders — this module never does), and a fund that cannot cover what is
+# pending is flagged, never used to drop a dip. Dollar buys are NOT funded (the owner pays
+# them from US broker cash). The fund holding itself is never a BIDS holding: watching the
+# fund for dips would suggest buying the fund with the fund.
+def fund_holding(db: Session, d: dict | None = None) -> PortfolioHolding | None:
+    name = str((d or defaults(db)).get("fund_source") or "").strip().upper()
+    if not name:
+        return None
+    for h in db.execute(select(PortfolioHolding)).scalars().all():
+        if name in (str(h.sync_ref or "").strip().upper(), str(h.name or "").strip().upper()):
+            return h
+    return None
+
+
+def _held_units(db: Session, h: PortfolioHolding) -> float:
+    """Units held now — the ledger's count when one exists (§8a), else the typed units."""
+    rows = db.execute(select(PortfolioTransaction).where(
+        PortfolioTransaction.holding_id == h.id)).scalars().all()
+    if not rows:
+        return float(h.units or 0.0)
+    held = 0.0
+    for t in rows:
+        k = str(t.kind or "").lower()
+        if k in ("buy", "bonus"):
+            held += float(t.units or 0.0)
+        elif k == "sell":
+            held -= float(t.units or 0.0)
+    return max(held, 0.0)
+
+
+def fund_units_for(amount: float, fund_price: float) -> int:
+    """Whole ETF units to sell to raise ``amount`` — rounded UP, an ETF trades in units."""
+    if fund_price <= 0 or amount <= 0:
+        return 0
+    return int(math.ceil(amount / fund_price - 1e-9))
 
 
 def rule_for(h: PortfolioHolding, r: PortfolioBidsRule | None, d: dict) -> LadderRule:
@@ -226,8 +268,12 @@ def evaluate_portfolio(db: Session, today: date | None = None, *, auto_accounts=
         return out
     rules = _rules(db)
     included = set(d["classes"])
+    fund = fund_holding(db, d)
     for h in db.execute(select(PortfolioHolding)).scalars().all():
         px = ladder_price(h)
+        if fund is not None and h.id == fund.id:
+            _expire_pending(db, h.id)        # the fund is spent, never bought
+            continue
         if eligible(h) and not eligible(h, included):
             _expire_pending(db, h.id)        # a class the owner left out suggests nothing
             continue
@@ -280,7 +326,7 @@ def evaluate_portfolio(db: Session, today: date | None = None, *, auto_accounts=
         r.last_eval_asof = asof
     db.commit()
     if notify and out["new"]:
-        _notify(out["new"])
+        _notify(out["new"], _fund_line(db, d))
     return out
 
 
@@ -288,7 +334,21 @@ def _sym(ccy: str | None) -> str:
     return {"INR": "₹", "USD": "$"}.get(str(ccy or "INR").upper(), f"{ccy} ")
 
 
-def _notify(new: list[dict]) -> None:
+def _fund_line(db: Session, d: dict) -> str:
+    """One line on the fund for the alert: what the pending rupee levels need vs what it holds."""
+    try:
+        f = view(db)["fund"]
+    except Exception:  # pragma: no cover - the alert never fails over its footnote
+        return ""
+    if not f or not f.get("found"):
+        return f"Fund {d.get('fund_source')} is not on the portfolio — nothing to sell."
+    if f["short"] > 0:
+        return (f"Fund {f['name']} is SHORT by ₹{f['short']:,.0f}: pending needs "
+                f"₹{f['need']:,.0f}, it holds ₹{f['value']:,.0f}.")
+    return f"Funded from {f['name']} (₹{f['value']:,.0f} held, ₹{f['need']:,.0f} pending)."
+
+
+def _notify(new: list[dict], fund_line: str = "") -> None:
     try:
         from skas_algo.notify import Alert, AlertLevel, build_notifier
 
@@ -297,7 +357,8 @@ def _notify(new: list[dict]) -> None:
         more = f"\n… +{len(new) - 12} more" if len(new) > 12 else ""
         build_notifier().send(Alert(
             f"BIDS · {len(new)} dip level(s) to review",
-            "\n".join(lines) + more + "\nAccept or skip them on Portfolio → BIDS.",
+            "\n".join(lines) + more + (f"\n{fund_line}" if fund_line else "")
+            + "\nAccept or skip them on Portfolio → BIDS.",
             AlertLevel.INFO))
     except Exception:  # pragma: no cover - a failed push never loses a suggestion
         logger.exception("bids: notification failed")
@@ -305,7 +366,8 @@ def _notify(new: list[dict]) -> None:
 
 # ------------------------------------------------------------------ accept / skip
 def accept(db: Session, sid: int, *, units: float, price: float, on_date: date,
-           fees: float = 0.0) -> dict:
+           fees: float = 0.0, fund: bool = True, fund_units: float | None = None,
+           fund_price: float | None = None) -> dict:
     """Record the owner's buy for a suggestion: a BUY row in the holding's ledger (the typed
     position carried in first when the ledger is empty — §8a), and the suggestion closed.
     ``price`` is in the holding's currency; a foreign fill is booked in rupees at the rate of
@@ -325,17 +387,44 @@ def accept(db: Session, sid: int, *, units: float, price: float, on_date: date,
     note = f"{BIDS_NOTE} L{s.level} · dip {_sym(ccy)}{s.trigger_price:,.2f}"
     if ccy != "INR":
         note += f" · {_sym(ccy)}{float(price):,.2f} at {fx:,.2f}"
+    # the fund sale, decided and validated BEFORE anything is written — a refused sale must
+    # not leave the buy recorded without it
+    sale = None
+    if fund and ccy == "INR":
+        f = fund_holding(db)
+        if f is not None and f.id != h.id:
+            fp = float(fund_price or f.last_price or 0.0)
+            fu = float(fund_units if fund_units is not None
+                       else fund_units_for(float(units) * float(price), fp))
+            if fu > 0:
+                if fp <= 0:
+                    raise ValueError(f"{f.name} has no price to record the sale at")
+                held = _held_units(db, f)
+                if fu > held + 1e-9:
+                    raise ValueError(f"{f.name} holds {held:,.3f} units — cannot record a sale "
+                                     f"of {fu:,.3f}. Untick the fund sale or top the fund up.")
+                sale = (f, fu, fp)
     carry_typed_position(db, h, before=on_date.isoformat())
     row = PortfolioTransaction(
         holding_id=s.holding_id, on_date=on_date.isoformat(), kind="buy", units=float(units),
         price=round(float(price) * fx, 4), fees=float(fees or 0.0), note=note)
     db.add(row)
     db.flush()
+    fund_txn = None
+    if sale is not None:
+        f, fu, fp = sale
+        carry_typed_position(db, f, before=on_date.isoformat())
+        fund_txn = PortfolioTransaction(
+            holding_id=f.id, on_date=on_date.isoformat(), kind="sell", units=fu, price=fp,
+            fees=0.0, note=f"{BIDS_NOTE} fund · {h.name} L{s.level}")
+        db.add(fund_txn)
+        db.flush()
     s.status = "accepted"
     s.resolved_at = datetime.now(UTC)
     s.txn_id = row.id
     db.commit()
-    return {"id": s.id, "status": s.status, "txn_id": row.id}
+    return {"id": s.id, "status": s.status, "txn_id": row.id,
+            "fund_txn_id": fund_txn.id if fund_txn is not None else None}
 
 
 def skip(db: Session, sid: int) -> dict:
@@ -388,9 +477,10 @@ def view(db: Session, *, auto_accounts=None) -> dict:
     recs = {v["id"]: v for v in current_views(db)}
     rows = []
     included = set(d["classes"])
+    fund = fund_holding(db, d)
     counts: dict[str, int] = {}
     for h in db.execute(select(PortfolioHolding).order_by(PortfolioHolding.name)).scalars().all():
-        if not eligible(h):
+        if not eligible(h) or (fund is not None and h.id == fund.id):
             continue
         cls = str(h.asset_class or "").lower()
         counts[cls] = counts.get(cls, 0) + 1
@@ -426,10 +516,13 @@ def view(db: Session, *, auto_accounts=None) -> dict:
     hs = db.execute(select(PortfolioHolding)).scalars().all()
     names = {h.id: h.name for h in hs}
     ccys = {h.id: currency_of(h) for h in hs}
-    shown = {h.id for h in hs if eligible(h, included)}
+    shown = {h.id for h in hs if eligible(h, included) and (fund is None or h.id != fund.id)}
     sugg = db.execute(select(PortfolioBidsSuggestion).order_by(
         PortfolioBidsSuggestion.created_on.desc(), PortfolioBidsSuggestion.id.desc())
     ).scalars().all()
+    pending = [_sdict(s, names, ccys) for s in sugg
+               if s.status == "pending" and s.holding_id in shown]
+    fund_view = _fund_view(db, d, fund, recs, pending)
     return {
         "defaults": d,
         # every class BIDS can run on, with how many holdings each has and whether it is in
@@ -437,10 +530,37 @@ def view(db: Session, *, auto_accounts=None) -> dict:
                      "included": c in included} for c in ELIGIBLE_CLASSES],
         "rows": rows,
         # an excluded class's pending rows are expired at the next check; never shown before
-        "pending": [_sdict(s, names, ccys) for s in sugg
-                    if s.status == "pending" and s.holding_id in shown],
+        "pending": pending,
+        "fund": fund_view,
         "recent": [_sdict(s, names, ccys) for s in sugg if s.status != "pending"][:30],
     }
+
+
+def _fund_view(db: Session, d: dict, fund: PortfolioHolding | None, recs: dict,
+               pending: list[dict]) -> dict:
+    """The fund against what is pending: each RUPEE suggestion gets the units to sell and,
+    walking oldest first, how much of it the fund cannot cover (``fund_short``). Dollar
+    suggestions are not funded (``fund_units`` None)."""
+    name = str(d.get("fund_source") or "")
+    if fund is None:
+        for p in pending:
+            p["fund_units"], p["fund_short"] = None, 0.0
+        return {"found": False, "name": name}
+    price = float(fund.last_price or 0.0)
+    units = _held_units(db, fund)
+    value = units * price
+    left, need = value, 0.0
+    for p in sorted(pending, key=lambda x: (x["created_on"] or "", x["id"])):
+        if str(p["currency"]).upper() != "INR":
+            p["fund_units"], p["fund_short"] = None, 0.0
+            continue
+        need += p["amount"]
+        p["fund_units"] = fund_units_for(p["amount"], price)
+        p["fund_short"] = round(max(p["amount"] - max(left, 0.0), 0.0), 2)
+        left -= p["amount"]
+    return {"found": True, "name": fund.name, "holding_id": fund.id, "units": units,
+            "price": price or None, "value": round(value, 2), "need": round(need, 2),
+            "short": round(max(need - value, 0.0), 2)}
 
 
 def _sdict(s: PortfolioBidsSuggestion, names: dict, ccys: dict | None = None) -> dict:

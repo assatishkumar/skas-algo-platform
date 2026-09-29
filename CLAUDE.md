@@ -1605,6 +1605,14 @@ that way — nothing in `services/portfolio*.py` or `api/routes/portfolio.py` ma
   2026-09-29 took Indian stocks OUT): an excluded class shows no rows and its pending
   suggestions expire; re-including one REJOINS its holdings at that day's price
   (`save_defaults` clears their peaks) so the levels crossed while out never fire as a lump.
+  **Rupee buys are FUNDED from the fund-source ETF** (owner 2026-09-29, `fund_holding` /
+  `_fund_view`): each INR suggestion names the whole units of `fund_source` to sell (rounded
+  UP), Accept records the buy AND that SELL in the fund's ledger (typed position carried in
+  first; an oversized sale is refused BEFORE anything is written, and the owner can untick
+  it), and a fund that cannot cover what is pending marks the suggestions `fund_short` +
+  names the gap in the alert — the dip is never held back. Dollar buys are NOT funded (US
+  broker cash). The fund holding is never a BIDS row: watching it would buy the fund with
+  the fund. No order is ever placed here; the owner places both.
   Mode is
   derived: AUTO only when a RUNNING `bids` deployment trades the symbol on the holding's
   quote account (`_bids_auto_accounts`), else SUGGEST — a dip is never dropped because no

@@ -614,8 +614,11 @@ export const portfolio = {
     request<{ evaluated: number; new: unknown[]; resets: number }>("/portfolio/bids/evaluate", {
       method: "POST",
     }),
-  bidsAccept: (sid: number, body: { units: number; price: number; on_date: string; fees?: number }) =>
-    request<{ id: number; status: string; txn_id: number }>(
+  bidsAccept: (sid: number, body: {
+    units: number; price: number; on_date: string; fees?: number;
+    fund?: boolean; fund_units?: number; fund_price?: number;
+  }) =>
+    request<{ id: number; status: string; txn_id: number; fund_txn_id: number | null }>(
       `/portfolio/bids/suggestions/${sid}/accept`, { method: "POST", body: JSON.stringify(body) }),
   bidsSkip: (sid: number) =>
     request<{ id: number; status: string }>(`/portfolio/bids/suggestions/${sid}/skip`, {

@@ -292,3 +292,72 @@ def test_indian_stocks_are_off_by_default_and_excluding_a_class_expires_its_sugg
         row = next(r for r in bids.view(db)["rows"] if r["name"] == "ITC")
         assert row["peak"] == 240.0 and row["peak_source"] == "joined"
         assert btc.id  # crypto stayed in throughout
+
+
+def test_accept_records_the_fund_sale_and_the_fund_is_never_a_bids_holding():
+    """Owner 2026-09-29: a rupee buy is funded by selling the fund ETF — the suggestion names
+    the units, Accept records the buy AND the sale. The fund ETF is never watched for dips."""
+    with session_scope() as db:
+        fund = _holding(db, "LIQUIDCASE", "etf", 100.0, source="broker", ref="LIQUIDCASE",
+                        units=500.0, invested=50000.0)
+        h = _holding(db, "Fund", "mf", 100.0, source="amfi", ref="INF8")
+        db.commit()
+        bids.save_defaults(db, {"dip_pct": 5.0, "amount": 1000.0, "max_levels": 3,
+                                "fund_source": "LIQUIDCASE"})
+        bids.evaluate_portfolio(db, D0, notify=False)
+        v = bids.view(db)
+        assert [r["name"] for r in v["rows"]] == ["Fund"]            # the fund is not a row
+        _reprice(db, h.id, 94.0, "2026-09-02")
+        bids.evaluate_portfolio(db, date(2026, 9, 2), notify=False)
+        v = bids.view(db)
+        p = v["pending"][0]
+        assert p["fund_units"] == 10 and p["fund_short"] == 0.0      # 1,000 / 100, rounded up
+        assert v["fund"]["value"] == 50000.0 and v["fund"]["need"] == 1000.0
+        r = bids.accept(db, p["id"], units=10.5, price=94.0, on_date=date(2026, 9, 2))
+        sale = db.get(PortfolioTransaction, r["fund_txn_id"])
+        assert (sale.holding_id, sale.kind, sale.units, sale.price) == (fund.id, "sell", 10.0, 100.0)
+        assert sale.note == "BIDS fund · Fund L1"
+        # the fund's ledger starts from its typed 500 units, so it now holds 490
+        assert bids.view(db)["fund"]["units"] == 490.0
+
+
+def test_a_fund_that_cannot_cover_flags_the_suggestion_and_refuses_an_oversized_sale():
+    with session_scope() as db:
+        _holding(db, "LIQUIDCASE", "etf", 100.0, source="broker", ref="LIQUIDCASE",
+                 units=15.0, invested=1500.0)
+        h = _holding(db, "Fund", "mf", 100.0, source="amfi", ref="INF10")
+        db.commit()
+        bids.save_defaults(db, {"dip_pct": 5.0, "amount": 1000.0, "max_levels": 3,
+                                "fund_source": "LIQUIDCASE"})
+        bids.evaluate_portfolio(db, D0, notify=False)
+        _reprice(db, h.id, 89.0, "2026-09-02")                        # L1 1,000 + L2 2,000
+        bids.evaluate_portfolio(db, date(2026, 9, 2), notify=False)
+        v = bids.view(db)
+        short = {p["level"]: p["fund_short"] for p in v["pending"]}
+        assert short == {1: 0.0, 2: 1500.0}          # the fund's ₹1,500 covers L1, half of L2
+        assert v["fund"]["short"] == 1500.0          # suggested anyway — never dropped
+        l2 = next(p for p in v["pending"] if p["level"] == 2)
+        with pytest.raises(ValueError, match="holds 15.000 units"):
+            bids.accept(db, l2["id"], units=22.0, price=89.0, on_date=date(2026, 9, 2))
+        assert db.execute(select(PortfolioTransaction)).scalars().all() == []   # nothing half-written
+        r = bids.accept(db, l2["id"], units=22.0, price=89.0, on_date=date(2026, 9, 2), fund=False)
+        assert r["fund_txn_id"] is None
+
+
+def test_a_dollar_buy_is_not_funded_from_the_rupee_fund():
+    with session_scope() as db:
+        _holding(db, "LIQUIDCASE", "etf", 100.0, source="broker", ref="LIQUIDCASE",
+                 units=500.0, invested=50000.0)
+        h = _holding(db, "MSFT", "us", 400.0 * 85, source="global", ref="MSFT")
+        h.native_currency, h.native_price = "USD", 400.0
+        db.commit()
+        bids.save_defaults(db, {"usd_dip_pct": 5.0, "fund_source": "LIQUIDCASE"})
+        bids.evaluate_portfolio(db, D0, notify=False)
+        h.native_price, h.last_price, h.price_asof = 378.0, 378.0 * 85, "2026-09-02"
+        db.commit()
+        bids.evaluate_portfolio(db, date(2026, 9, 2), notify=False)
+        v = bids.view(db)
+        assert v["pending"][0]["fund_units"] is None and v["fund"]["need"] == 0.0
+        r = bids.accept(db, v["pending"][0]["id"], units=0.3, price=378.0,
+                        on_date=date(2026, 9, 2))
+        assert r["fund_txn_id"] is None
