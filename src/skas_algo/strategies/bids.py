@@ -217,15 +217,26 @@ class BidsStrategy(EntryFundingMixin):
         if seed:
             return seed
         self._lot_taken: dict[int, int] = {}
-        present = set(ctx.present_symbols())
+        # PRICED = has a live quote today, nothing more. NOT ctx.present_symbols(): live, that
+        # also demands `lookback` days of CACHED history, and the VPS cache had no daily bars
+        # for these ETFs — run 38's first 15:05 decision (2026-09-29) read all six as "no
+        # price" with their live prices on the tile, and bought nothing. BIDS needs today's
+        # price only (the ladder's history is its own peak).
+        present = set()
+        for sym in dict.fromkeys(self._symbols() + list(self.queued)):
+            try:
+                if float(ctx.close(sym)) > 0:
+                    present.add(sym)
+            except (KeyError, TypeError, ValueError):
+                continue
         symbols = self._symbols()
         rules = self._rules(symbols)
         if self._rules_error:
             self._alert(self._rules_error)
         unpriced = [s for s in symbols if s not in present]
         if unpriced:
-            self._alert(f"no price for {', '.join(unpriced[:6])} — deploy them in the run's "
-                        f"symbols (a watchlist edit cannot add a price)")
+            self._alert(f"no live price for {', '.join(unpriced[:6])} — a name must be in the "
+                        f"run's symbols to be quoted (a watchlist edit cannot add one)")
 
         def enabled(sym: str) -> bool:
             if rules is None:

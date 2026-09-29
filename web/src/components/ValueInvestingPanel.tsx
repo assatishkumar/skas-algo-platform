@@ -35,12 +35,25 @@ function Stat({ label, value, sub, cls }: { label: string; value: string; sub?: 
   );
 }
 
-function StatusChip({ r }: { r: LiveHoldingRow }) {
+/** One chip per row, and it must say something TRUE about the day (the owner reported a
+ *  wrong strip three times). After the 15:05 walk the row shows what it BOUGHT today, from
+ *  the fills; the preview is then for the next session and is labelled with that day —
+ *  it used to read "buys 7 today" beside "Bought today: nothing". */
+function StatusChip({ r, shopped, nextDay }: { r: LiveHoldingRow; shopped: boolean; nextDay: string }) {
+  if (r.bought_today) {
+    return (
+      <span className="ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-bold" style={{ background: "var(--pos)", color: "#fff" }}
+        title={`Bought today: ${r.bought_today.units} @ ${r.bought_today.price.toFixed(2)} = ${formatInr(r.bought_today.cost)}`}>
+        bought {r.bought_today.units} today
+      </span>
+    );
+  }
   if (r.buys_today) {
+    const when = shopped ? `next ${nextDay}` : "today";
     return (
       <span className="ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-bold" style={{ background: "var(--pos-fill)", color: "var(--pos)" }}
-        title={`Today's decision would buy ${r.buys_today.units} @ ${r.buys_today.price.toFixed(2)} = ${formatInr(r.buys_today.cost)}`}>
-        buys {r.buys_today.units} today
+        title={`${shopped ? `The ${nextDay} 15:05 decision` : "Today's 15:05 decision"} would buy ${r.buys_today.units} @ ${r.buys_today.price.toFixed(2)} = ${formatInr(r.buys_today.cost)}`}>
+        buys {r.buys_today.units} {when}
       </span>
     );
   }
@@ -102,13 +115,13 @@ function Body({ h }: { h: LiveHoldings }) {
       {/* today's decision, before it happens */}
       <div className="rounded-[12px] border border-[var(--border)] bg-[var(--field)] px-3 py-2.5 text-[12.5px]">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 tabular-nums">
-          <span><span className="text-[var(--faint)]">Spendable today</span>{" "}
+          <span><span className="text-[var(--faint)]">{today.shopped_today ? `Spendable ${planDayLabel(today.plan_for)}` : "Spendable today"}</span>{" "}
             <b>{formatInr(today.spendable ?? 0)}</b>{today.projected ? <span className="text-[var(--faint)]"> · projected</span> : null}
             {/* Say where the money came from: a T+1 drip spends yesterday's sale, which
                 lands this morning, so the settled ledger alone reads far too poor. */}
             {today.settling_today ? (
               <span className="text-[var(--faint)]">
-                {" "}({formatInr(today.settled_now ?? 0)} settled + {formatInr(today.settling_today)} landed today)
+                {" "}({formatInr(today.settled_now ?? 0)} settled + {formatInr(today.settling_today)} {today.shopped_today ? `landing ${planDayLabel(today.plan_for)}` : "landed today"})
               </span>
             ) : null}</span>
           <span><span className="text-[var(--faint)]">Settling later</span> <b>{formatInr(today.settling ?? 0)}</b></span>
@@ -177,7 +190,7 @@ function Body({ h }: { h: LiveHoldings }) {
             {h.rows.map((r) => (
               <tr key={r.symbol} className={`border-t border-[var(--divider)] text-right ${r.status === "held" ? "" : "text-[var(--muted)]"}`}>
                 <td className="py-1.5 pr-3 text-left font-medium text-[var(--strong)] whitespace-nowrap">
-                  {r.symbol}<StatusChip r={r} />
+                  {r.symbol}<StatusChip r={r} shopped={!!today.shopped_today} nextDay={planDayLabel(today.plan_for)} />
                 </td>
                 <td className={`py-1.5 pr-3 ${sign(r.change_pct)}`}>{r.change_pct == null ? "—" : pct(r.change_pct, 2)}</td>
                 <td className="py-1.5 pr-3">{r.units || "—"}</td>

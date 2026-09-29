@@ -21,15 +21,23 @@ from skas_algo.services.holdings import holdings_report
 MIN_XIRR_DAYS = 90   # younger than this, an annualised return is noise
 
 
+# The engine labels a buy of a symbol ALREADY held "AVG_BUY" (execution.py) — which is every
+# daily buy of a name value_investing has bought before. Matching "BUY" alone read run 28's
+# ten fills on 2026-09-29 as "Bought today: nothing" (the third report of a wrong strip; the
+# test fixture had used first-time BUYs only). Same vocabulary as holdings.py / live_cycles.
+_SIDES = {"BUY": {"BUY", "AVG_BUY"}, "SELL": {"SELL"}}
+
+
 def _fills_on(txns: list[dict], day: date, *, side: str, exclude: str | None = None,
               only: str | None = None) -> list[dict[str, Any]]:
     """The day's fills of one side, aggregated per symbol (units, average price, cost),
     in fill order. A trade's ``date`` is ``"YYYY-MM-DD HH:MM"`` over the wire and a
     datetime in-process; only the day matters here."""
+    actions = _SIDES.get(side, {side})
     agg: dict[str, dict[str, float]] = {}
     for t in txns:
         sym = str(t.get("ticker") or "").upper()
-        if not sym or str(t.get("action") or "").upper() != side:
+        if not sym or str(t.get("action") or "").upper() not in actions:
             continue
         if (exclude and sym == exclude) or (only and sym != only):
             continue
@@ -131,6 +139,7 @@ def value_investing_report(live, today: date | None = None) -> dict[str, Any]:
         except Exception:  # pragma: no cover - a preview must never break the tile
             preview = {}
     plan = {sym: (px, units, cost) for sym, px, units, cost in preview.get("plan", [])}
+    got = {b["symbol"]: b for b in bought}
     afford = {sym: (px, units, cost) for sym, px, units, cost in preview.get("affordable", [])}
     ranked = {sym: (chg, px) for sym, chg, px in preview.get("ranked", [])}
     pots = preview.get("pots") or {}
@@ -162,6 +171,13 @@ def value_investing_report(live, today: date | None = None) -> dict[str, Any]:
             "first_buy": h["first_buy"] if h else None,
             "buys": h["buys"] if h else 0,
             "pot": round(float(pots.get(sym, 0.0)), 2),
+            # what the decision ACTUALLY bought today (its fills) …
+            "bought_today": (
+                {"units": got[sym]["units"], "price": got[sym]["price"],
+                 "cost": got[sym]["cost"]} if sym in got else None
+            ),
+            # … and what the plan for `plan_for` would buy — TODAY before 15:05, the NEXT
+            # session after it (the key keeps its name; `today.plan_for` says which)
             "buys_today": (
                 {"units": plan[sym][1], "price": plan[sym][0], "cost": plan[sym][2]}
                 if sym in plan else None
@@ -174,7 +190,8 @@ def value_investing_report(live, today: date | None = None) -> dict[str, Any]:
         }
         rows.append(row)
     # sort: today's buys first, then held by value, then pending by rank
-    rows.sort(key=lambda r: (0 if r["buys_today"] else 1 if r["affordable"] else 2,
+    rows.sort(key=lambda r: (0 if (r["bought_today"] or r["buys_today"]) else
+                             1 if r["affordable"] else 2,
                              0 if r["status"] == "held" else 1,
                              -(r["value"] or 0.0), r["rank"] or 10_000))
 

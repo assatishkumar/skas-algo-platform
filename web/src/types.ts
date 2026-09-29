@@ -124,7 +124,10 @@ export interface LiveHoldingRow extends HoldingRow {
   change_pct: number | null;          // today's change — the ranking key
   rank: number | null;                // 1 = biggest faller
   pot: number;                        // rupees this name has saved up
+  // the plan for `today.plan_for` — today before the 15:05 walk, the NEXT session after it
   buys_today: { units: number; price: number; cost: number } | null;
+  // what today's walk actually bought (its fills, BUY and AVG_BUY alike)
+  bought_today?: { units: number; price: number; cost: number } | null;
   affordable: { units: number; price: number; cost: number } | null;  // what its pot could buy, cash aside
 }
 export interface LiveHoldings {

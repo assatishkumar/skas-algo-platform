@@ -348,3 +348,17 @@ def test_bids_replays_through_the_real_engine():
     cash = [float(h["cash"]) for h in result.history if "cash" in h]
     assert cash and min(cash) >= 0
     assert st.ladders["AAA"]["peak"] == 101.0 and st.ladders["AAA"]["levels_fired"] == 1
+
+
+def test_a_live_quote_is_enough_no_cached_history_needed():
+    """2026-09-29, run 38: the VPS cache had no daily bars for the ETFs, so the live view's
+    present_symbols() (quote AND cached history) listed none of them and the 15:05 decision
+    bought nothing, alerting "no price" beside live prices. BIDS needs today's price only."""
+    s, ctx = _run()
+    ctx.present_symbols = lambda: [FUND]          # what the live view said: history-gated
+    s.on_slice(ctx)
+    assert set(s.ladders) == {"HDFCMOMENT", "BANKBEES"}      # both priced, both joined
+    assert "no live price" not in (s.strategy_alert or "")
+    ctx.next_day()
+    ctx.closes["HDFCMOMENT"] = 29.40
+    assert _buys(s.on_slice(ctx)) == [("HDFCMOMENT", 170)]

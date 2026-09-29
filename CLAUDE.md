@@ -620,7 +620,10 @@ template) is the phase-2 fix. No deploy path — there is no US broker.
   retried daily WITHOUT selling again, cancelled when the price recovers to its peak; a dry
   fund buys from cash + alerts. **Pledged = held**: `ZerodhaAdapter.holdings()` adds
   `collateral_quantity` (adoption, reconciliation, Brokers page and portfolio sync all read
-  it) — a fully pledged ETF used to be dropped entirely. (2) **Rules come
+  it) — a fully pledged ETF used to be dropped entirely. **A symbol is priced by its live
+  quote alone** (`ctx.close`), never `ctx.present_symbols()` — live that also demands
+  cached daily history, and the VPS cache had none for the ETFs, so run 38's first
+  decision read six live-quoted ETFs as "no price" and bought nothing. (2) **Rules come
   from the tab live** (`set_bids_rules_fn` → `services.bids.auto_rules`, read-only, every
   decision): enabled (class on, not excluded, not the fund), X/y/N, and the tab's ladder —
   a holding moving SUGGEST→AUTO carries its peak and fired levels; a typed manual peak is
@@ -1939,7 +1942,12 @@ weekly / monthly / positional), a summary panel, and only that strategy's own kn
   header reads "Stocks · market value", the collapsed tiles Invested / Market value /
   Gain, the expanded body the panel (which absorbed the old FundingLedger). Money-weighted
   CAGR is BLANK under 90 days of holding — annualised over eight days a −2% dip read
-  −72%. The Analysis page shows the same panel for a value_investing deployment above
+  −72%. **A buy of a name already held is `AVG_BUY`, not `BUY`** (execution.py labels it)
+  — every daily buy after a name's first. The strip's "Bought today" matched `BUY` only and
+  read "nothing" on a ten-name day (2026-09-29, the THIRD wrong-strip report): count both,
+  as holdings.py / live_cycles do, and write fixtures with AVG_BUY fills. After 15:05 each
+  row's chip is its real fill ("bought N today"); the plan preview is the NEXT session's
+  and says so ("buys N next 30 Sept"), as does the spendable line. The Analysis page shows the same panel for a value_investing deployment above
   its fills. Coverage: `tests/test_vi_live.py`.
 - **The equity trade chart is lightweight-charts (TradingView's library, `SuperTrendChart.tsx`,
   2026-09-08).** The recharts one drew ~30 bars whatever range was picked, sat a log axis

@@ -4,7 +4,7 @@ rupees each name is saving, and a dry run of today's buys that credits and spend
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 from skas_algo.engine.portfolio import Portfolio
@@ -226,3 +226,30 @@ def test_after_the_walk_the_strip_shows_the_real_fills_and_previews_the_next_ses
     before = value_investing_report(_run(st, mkt, [], pf), today=D)["today"]
     assert not before["shopped_today"] and before["bought"] == []
     assert before["plan_for"] == D.isoformat()
+
+
+def test_a_buy_of_a_name_already_held_counts_as_bought_today():
+    """2026-09-29, run 28: ten names bought at 15:05, every fill labelled AVG_BUY (the engine's
+    label for a buy of a symbol already held) — and the strip read "Bought today: nothing"
+    while each row read "buys N today" off the NEXT session's plan. The third report of a
+    wrong strip; the fixtures had only ever used first-time BUYs."""
+    st = _strat()
+    st.settled_cash = 300.0
+    st.pot = {"AAA": 2.0, "BBB": 5.0, "CCC": 1.0}
+    st.pot_day = D.isoformat()
+    st.last_shop_day = D.isoformat()
+    pf = Portfolio(cash=50_000.0)
+    yesterday = D - timedelta(days=1)
+    txns = [_tx(yesterday, "AAA", "BUY", 5, 101.0), _tx(yesterday, "BBB", "BUY", 1, 200.0),
+            _tx(D, FUND, "SELL", 45, 116.12),
+            _tx(D, "AAA", "AVG_BUY", 3, 99.0), _tx(D, "BBB", "AVG_BUY", 1, 190.0)]
+    mkt = Market(prev={"AAA": 100, "BBB": 200, "CCC": 50}, last={"AAA": 99, "BBB": 190, "CCC": 51})
+    out = value_investing_report(_run(st, mkt, txns, pf), today=D)
+    today = out["today"]
+    assert [(b["symbol"], b["units"]) for b in today["bought"]] == [("AAA", 3), ("BBB", 1)]
+    assert today["bought_total"] == 487.0
+    rows = {r["symbol"]: r for r in out["rows"]}
+    assert rows["AAA"]["bought_today"] == {"units": 3, "price": 99.0, "cost": 297.0}
+    assert rows["BBB"]["bought_today"]["units"] == 1
+    assert rows["CCC"]["bought_today"] is None        # not bought today, whatever the plan says
+    assert today["plan_for"] != D.isoformat()         # the plan is the next session's
