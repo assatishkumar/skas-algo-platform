@@ -307,14 +307,65 @@ class BidsStrategy(EntryFundingMixin):
                 self.queued[sym] = {"amount": rupees, "levels": levels, "funded": True,
                                     "since": today.isoformat()}
 
-        if self.queued:
-            owed = sum(float(q["amount"]) for q in self.queued.values())
-            self._alert(f"WAITING FOR CASH — {', '.join(sorted(self.queued))} (₹{owed:,.0f}); "
-                        f"the {self.fund_source} sale settles T+1 and the buy is retried then")
+        # (a queued buy is NOT written into the alert here — `strategy_alert` derives that line
+        # from the queue and today's date every time it is read; see _queue_note)
         self.last_shop_day = today.isoformat()
         # ORDER: fund sales first, then buys — a rejected BUY halts the run and abandons the
         # rest of the decision, and the sale must never sit behind it
         return sales + buys
+
+    # ------------------------------------------------------------------ the tile's status
+    # The banner used to be text written AT the decision and repeated verbatim until the next
+    # one — so at 09:56 the day after, it still read "WAITING FOR CASH … retried then" while
+    # the sale had settled and the buy was due at 15:05 (owner, 2026-10-01). The decision's
+    # own notes stay stored text; the line about a QUEUED buy is computed each time it is
+    # read, from the queue, the settlement date and whether today's decision has run.
+    @property
+    def strategy_alert(self) -> str | None:
+        parts = [p for p in (self.__dict__.get("_decision_alert"), self._queue_note()) if p]
+        return " · ".join(parts) or None
+
+    @strategy_alert.setter
+    def strategy_alert(self, value: str | None) -> None:
+        self.__dict__["_decision_alert"] = value
+
+    def _alert(self, message: str) -> None:            # the mixin's, on the stored part only
+        base = self.__dict__.get("_decision_alert")
+        self.__dict__["_decision_alert"] = message if not base else f"{base} · {message}"
+
+    def _queue_note(self, today: date | None = None) -> str | None:
+        if not self.queued:
+            return None
+        if today is None:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
+            today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        from skas_algo.live.holidays import next_trading_day
+
+        def day(d: date) -> str:
+            return f"{d.day} {d.strftime('%b')}"
+
+        fund = self.fund_source
+        decided_today = self.last_shop_day == today.isoformat()
+        notes = []
+        for sym, q in sorted(self.queued.items()):
+            since = date.fromisoformat(str(q.get("since") or today.isoformat()))
+            lands = next_trading_day(since, max(1, self.settlement_days))
+            what = f"{sym} ₹{float(q['amount']):,.0f}"
+            if today < lands:
+                notes.append(f"{what}: paid for by the {day(since)} {fund} sale, which settles "
+                             f"{day(lands)} — bought at that day's 15:05 decision")
+            elif decided_today:
+                notes.append(f"{what}: the {fund} sale has settled, but the broker's available "
+                             f"cash did not cover it at today's 15:05 decision — retried at "
+                             f"the next one")
+            else:
+                notes.append(f"{what}: the {day(since)} {fund} sale has settled — bought at "
+                             f"today's 15:05 decision")
+        # the heading says the state: SHORT only after a decision found too little cash
+        short = any("did not cover it" in n for n in notes)
+        return ("WAITING FOR CASH — " if short else "QUEUED BUY — ") + "; ".join(notes)
 
     # ------------------------------------------------------------------ (de)serialize
     def initial_state(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -327,6 +378,8 @@ class BidsStrategy(EntryFundingMixin):
             "last_shop_day": self.last_shop_day,
             "last_fired": [dict(x) for x in self.last_fired],
             **self.funding_state(),
+            # the STORED part only — the queue line is derived on read, never persisted
+            "strategy_alert": self.__dict__.get("_decision_alert"),
         }
 
     def load_state(self, state: dict[str, Any]) -> None:
@@ -335,6 +388,14 @@ class BidsStrategy(EntryFundingMixin):
         self.last_shop_day = state.get("last_shop_day")
         self.last_fired = [dict(x) for x in (state.get("last_fired") or [])]
         self.load_funding_state(state)
+        # snapshots written before the queue line was derived stored it as text — drop it, or
+        # the banner would carry yesterday's wording beside today's
+        base = self.__dict__.get("_decision_alert")
+        if base and ("WAITING FOR CASH" in base or "QUEUED BUY" in base):
+            kept = [p for p in base.split(" · ") if "WAITING FOR CASH" not in p
+                    and "QUEUED BUY" not in p
+                    and "sale settles T+1" not in p]
+            self.__dict__["_decision_alert"] = " · ".join(kept) or None
 
     def exit_rules(self) -> list[str]:
         return [

@@ -128,7 +128,7 @@ def test_a_level_the_float_cannot_cover_is_queued_retried_and_cancelled_when_the
     ctx.closes["HDFCMOMENT"] = 29.40
     sig = s.on_slice(ctx)
     assert _buys(sig) == [] and s.queued["HDFCMOMENT"]["amount"] == 5000.0
-    assert "WAITING FOR CASH" in (s.strategy_alert or "")
+    assert "QUEUED BUY" in (s.strategy_alert or "") or "WAITING FOR CASH" in (s.strategy_alert or "")
     fund_sale = [x for x in sig if x.symbol == FUND]
     assert sum(x.quantity for x in fund_sale) == 50           # sold NOW for 4,998, rounded up
     ctx.apply(sig)                                            # the fund sale settles tomorrow
@@ -362,3 +362,26 @@ def test_a_live_quote_is_enough_no_cached_history_needed():
     ctx.next_day()
     ctx.closes["HDFCMOMENT"] = 29.40
     assert _buys(s.on_slice(ctx)) == [("HDFCMOMENT", 170)]
+
+
+def test_the_waiting_banner_says_what_happens_next_not_what_happened_yesterday():
+    """2026-10-01 09:56: the banner still read yesterday's "WAITING FOR CASH … retried then"
+    while the sale had settled and the buy was due at 15:05. The queue line is derived on
+    read from the queue, the settlement day and whether today's decision has run."""
+    s, ctx = _run(cash=4_000.0)
+    s.on_slice(ctx)
+    ctx.next_day()                                            # Tue 29 Sept
+    ctx.closes["HDFCMOMENT"] = 29.40
+    s.on_slice(ctx)
+    assert "HDFCMOMENT" in s.queued
+    assert "settles 30 Sep" in s._queue_note(date(2026, 9, 29))          # same day
+    note = s._queue_note(date(2026, 9, 30))                               # settled, not yet decided
+    assert note.startswith("QUEUED BUY") and "bought at today's 15:05" in note
+    s.last_shop_day = "2026-09-30"
+    short = s._queue_note(date(2026, 9, 30))
+    assert short.startswith("WAITING FOR CASH") and "did not cover it at today's 15:05" in short
+    # the stored part never carries the queue line, so it can't go stale across a restart
+    stored = s.export_state()["strategy_alert"] or ""
+    assert "WAITING" not in stored and "QUEUED" not in stored
+    s.queued = {}
+    assert s._queue_note(date(2026, 9, 30)) is None
