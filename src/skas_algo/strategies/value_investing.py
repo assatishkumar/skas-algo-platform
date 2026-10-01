@@ -148,6 +148,14 @@ class ValueInvestingStrategy:
         # historical behaviour — §1: the running deploy's capital is not a fund size);
         # the deploy card sets True, and then capital IS the run's share of the pool.
         fund_size_cap: bool = False,
+        # CATCH-UP (owner 2026-10-01): a session the run never decided — the broker key
+        # expired, the box was down — still owes its budget. On, each decision credits the
+        # pots for EVERY trading session since they were last credited (at most
+        # ``catch_up_max_days``), and the usual rules spend it: settled cash today, the rest
+        # banked in the pots and funded by a pre-sale sized to them. equal_value only (the
+        # only mode with pots). Off = one session per decision, the historical behaviour (§1).
+        catch_up_missed: bool = False,
+        catch_up_max_days: int = 10,
         **_ignored,
     ):
         self.universe = list(universe or [])
@@ -169,6 +177,8 @@ class ValueInvestingStrategy:
         self.max_skew_pct = float(max_skew_pct)
         self.fund_seed = str(fund_seed or "never").lower()
         self.fund_size_cap = bool(fund_size_cap)
+        self.catch_up_missed = bool(catch_up_missed)
+        self.catch_up_max_days = max(1, int(catch_up_max_days or 1))
         # ---- the settlement ledger (persisted) ----
         # `settled_cash` is what is spendable NOW; `pending_credits` are sale proceeds and the
         # trading day they land. The strategy owns this rather than reading ctx.cash because
@@ -178,6 +188,7 @@ class ValueInvestingStrategy:
         self.settled_cash: float | None = None
         self.pending_credits: list[list] = []          # [[iso_date, amount], …]
         self.pot_day: str | None = None                # the day each pot was last credited
+        self.last_credit_sessions = 1                  # sessions the last credit paid for
         self._broker_funds: float | None = None        # manager push; transient, not persisted
         # Has the manager actually READ the broker's holding yet? Adoption is market-hours
         # gated, so before the first open tick the platform ledger is legitimately empty
@@ -541,6 +552,25 @@ class ValueInvestingStrategy:
             spent[sym] = spent.get(sym, 0.0) + px
         return plan
 
+    def _sessions_owed(self, day: str) -> int:
+        """How many sessions' budget the pots are owed on ``day``: 1, or — with catch-up on —
+        every trading session since they were last credited, capped. A first credit (no
+        pot_day yet) is one session: a fresh deploy never back-fills."""
+        if not self.catch_up_missed or not self.pot_day or self.pot_day >= day:
+            return 1
+        try:
+            d = date.fromisoformat(self.pot_day)
+            end = date.fromisoformat(day)
+        except ValueError:
+            return 1
+        n = 0
+        while n < self.catch_up_max_days:
+            d = next_trading_day(d)
+            if d > end:
+                break
+            n += 1
+        return max(1, n)
+
     def _equal_value_plan(self, ranked, cap: float | None, day: str) -> list[tuple[str, float, int]]:
         """Credit every name an equal share of the budget, then spend what each pot affords.
 
@@ -559,7 +589,10 @@ class ValueInvestingStrategy:
         # set last_shop_day — added another full day's budget to every pot. sum(pot) drives
         # the pre-sale float target, so the error compounds into real ETF selling.
         if self.pot_day != day:
-            slice_ = self.daily_budget / len(names)
+            # one session's slice — or, with catch-up, every session missed since the last
+            # credit (sessions_owed), so a day without a decision is bought late, not lost
+            self.last_credit_sessions = self._sessions_owed(day)
+            slice_ = self.daily_budget * self.last_credit_sessions / len(names)
             for n in names:                   # credited even when the name did not print —
                 self.pot[n] = self.pot.get(n, 0.0) + slice_   # its money waits, not lost
             self.pot_day = day
@@ -758,8 +791,10 @@ class ValueInvestingStrategy:
             self.pot, self.pot_day, self.invested, self.epoch_base, self.epoch_names = saved
         # pots AS THEY WILL BE credited today (before the walk spends them)
         pots_today = dict(self.pot)
+        owed = 1
         if self.sizing == "equal_value" and names and self.pot_day != today.isoformat():
-            slice_ = self.daily_budget / len(names)
+            owed = self._sessions_owed(today.isoformat())
+            slice_ = self.daily_budget * owed / len(names)
             for n in names:
                 pots_today[n] = pots_today.get(n, 0.0) + slice_
         # What the pots could buy with NO cash cap — the same walk unconstrained. When the
@@ -785,6 +820,8 @@ class ValueInvestingStrategy:
             "broker_funds": (round(self._broker_funds, 2)
                              if self._broker_funds is not None else None),
             "projected": projected,
+            # sessions the pots are credited for at this decision (>1 = catching up)
+            "credit_sessions": owed,
         }
 
     # ------------------------------------------------------------------ status

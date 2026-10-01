@@ -1106,3 +1106,33 @@ def test_the_runway_banner_follows_the_live_fund_not_the_last_decision():
     assert "something else the decision said" in st.strategy_alert
     assert "covers about 2 more day(s)" in st.strategy_alert
     assert st.strategy_alert.count("covers about") == 1
+
+
+def test_missed_sessions_are_credited_at_the_next_decision_when_catch_up_is_on():
+    """Owner 2026-10-01: the Dhan key expired and 30 Sept had no decision. "Whenever a day or
+    more is missed, the amount gets aggregated and purchased when the connection is
+    restored." On, the pots are credited for every session since the last credit (capped);
+    off, one session — the historical behaviour."""
+    from skas_algo.strategies.value_investing import ValueInvestingStrategy
+
+    def strat(**kw):
+        s = ValueInvestingStrategy(universe=["AAA", "BBB", "LIQUIDCASE"], watchlist="AAA,BBB",
+                                   fund_source="LIQUIDCASE", daily_budget=5000.0,
+                                   sizing="equal_value", settlement_days=1, **kw)
+        s.pot = {"AAA": 0.0, "BBB": 0.0}
+        s.pot_day = "2026-09-29"                     # Tue; Wed 30 Sept was missed
+        return s
+
+    on = strat(catch_up_missed=True)
+    assert on._sessions_owed("2026-10-01") == 2      # Wed + Thu
+    assert on._sessions_owed("2026-09-29") == 1      # same day: never re-credited
+    on._equal_value_plan([], 0.0, "2026-10-01")
+    assert on.pot == {"AAA": 5000.0, "BBB": 5000.0}  # two sessions' ₹5,000 split two ways
+    off = strat()
+    off._equal_value_plan([], 0.0, "2026-10-01")
+    assert off.pot == {"AAA": 2500.0, "BBB": 2500.0}
+    capped = strat(catch_up_missed=True, catch_up_max_days=3)
+    assert capped._sessions_owed("2026-10-30") == 3  # a long outage stacks at most 3
+    fresh = strat(catch_up_missed=True)
+    fresh.pot_day = None
+    assert fresh._sessions_owed("2026-10-01") == 1   # a fresh deploy never back-fills

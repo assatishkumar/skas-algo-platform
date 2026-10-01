@@ -114,7 +114,10 @@ engine, a dedicated Black-Scholes service, or is deploy-only.
   the broker. A LIVE run writes its fills into the holdings' ledgers and its ladders onto
   the tab; a PAPER run touches nothing on /portfolio and leaves the holdings suggested.
 
-- **`value_investing` — a daily rupee drip into a watchlist, funded by an ETF.** The platform's
+- **`value_investing` — a daily rupee drip into a watchlist, funded by an ETF.** (Since
+  2026-10-01 a session the run could not decide — an expired broker key, a box restart — is
+  **caught up**: its budget is credited at the next decision and bought as settled cash
+  allows, `catch_up_missed`, on by default for new deploys.) The platform's
   only pure **accumulation** system: it buys and never sells. Each trading day it sorts the
   watchlist by **today's change %, biggest faller first**, and walks that list from the top
   spending the configured **daily budget** — a name the remaining budget can't afford is skipped

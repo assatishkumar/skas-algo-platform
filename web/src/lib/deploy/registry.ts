@@ -617,6 +617,12 @@ export const DEPLOY_REGISTRY: DeploySpec[] = [
       f("funding_buffer_pct", "Pre-sale buffer %", "number", 10, {
         step: "any", hint: "sell this much above tomorrow's budget so a price move cannot leave it short",
       }),
+      f("catch_up_missed", "Catch up missed sessions", "toggle", true, {
+        hint: "a session with no decision (broker key expired, box down) still owes its budget — it is credited at the next decision and bought as cash allows",
+        showIf: (p) => p.sizing === "equal_value",
+      }),
+      f("catch_up_max_days", "…at most this many sessions", "number", 10,
+        { showIf: (p) => p.sizing === "equal_value" && !!p.catch_up_missed }),
       f("fund_yield_pct", "Fund source yield %/yr (reported only)", "number", 0, { step: "any" }),
       f("watchlist", "Watchlist (comma-separated; blank = every symbol)", "text", "", {
         wide: true,

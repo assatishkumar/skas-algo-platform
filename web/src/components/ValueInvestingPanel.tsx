@@ -109,7 +109,10 @@ function Body({ h }: { h: LiveHoldings }) {
             cls={fund.checked !== false && runway != null && runway <= 2 ? "text-[var(--warn-text)]" : undefined} />
         )}
         <Stat label="Pooled buckets" value={formatInr(today.pots_total)}
-          sub={`₹${(today.daily_budget ?? 0).toLocaleString("en-IN")}/day split across the list`} />
+          sub={(today.credit_sessions ?? 1) > 1
+            ? `includes ${(today.credit_sessions ?? 1) - 1} missed session${(today.credit_sessions ?? 1) > 2 ? "s" : ""} (catch-up)`
+            : `₹${(today.daily_budget ?? 0).toLocaleString("en-IN")}/day split across the list${today.catch_up ? " · catch-up on" : ""}`}
+          cls={(today.credit_sessions ?? 1) > 1 ? "text-[var(--accent-deep)]" : undefined} />
       </div>
 
       {/* today's decision, before it happens */}

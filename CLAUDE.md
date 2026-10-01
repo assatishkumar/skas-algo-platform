@@ -1947,7 +1947,13 @@ weekly / monthly / positional), a summary panel, and only that strategy's own kn
   read "nothing" on a ten-name day (2026-09-29, the THIRD wrong-strip report): count both,
   as holdings.py / live_cycles do, and write fixtures with AVG_BUY fills. After 15:05 each
   row's chip is its real fill ("bought N today"); the plan preview is the NEXT session's
-  and says so ("buys N next 30 Sept"), as does the spendable line. The Analysis page shows the same panel for a value_investing deployment above
+  and says so ("buys N next 30 Sept"), as does the spendable line.
+  **Missed sessions are caught up** (`catch_up_missed`, owner 2026-10-01 — the Dhan key
+  expired and 30 Sept never decided): on, a decision credits the pots for EVERY trading
+  session since `pot_day` (≤ `catch_up_max_days`, `_sessions_owed`), and the normal rules
+  spend it — settled cash today, the rest banked and funded by a pre-sale sized to the pots
+  — so a missed day is bought within a day or two of reconnecting. A fresh deploy (no
+  pot_day) never back-fills. Ctor default OFF (§1); deploy card ON; equal_value only. The Analysis page shows the same panel for a value_investing deployment above
   its fills. Coverage: `tests/test_vi_live.py`.
 - **The equity trade chart is lightweight-charts (TradingView's library, `SuperTrendChart.tsx`,
   2026-09-08).** The recharts one drew ~30 bars whatever range was picked, sat a log axis

@@ -142,6 +142,8 @@ export interface LiveHoldings {
     settling_today?: number;  // landed today — already inside `spendable`
     settled_now?: number | null;
     daily_budget: number | null; pots_total: number;
+    credit_sessions?: number;  // >1 = this decision credits sessions the run missed
+    catch_up?: boolean;
     plan: { symbol: string; price: number; units: number; cost: number }[];
     plan_total: number;
     plan_for?: string;                    // the session the plan is for (the next one, once shopped)
