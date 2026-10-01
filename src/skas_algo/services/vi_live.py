@@ -234,6 +234,7 @@ def value_investing_report(live, today: date | None = None) -> dict[str, Any]:
             # >1 = this decision credits sessions the run MISSED (catch-up on)
             "credit_sessions": int(preview.get("credit_sessions", 1) or 1),
             "catch_up": bool(getattr(strategy, "catch_up_missed", False)),
+            "catch_up_borrow": float(preview.get("catch_up_borrow", 0.0) or 0.0),
             "plan": [{"symbol": s, "price": px, "units": u, "cost": c}
                      for s, px, u, c in preview.get("plan", [])],
             "plan_total": round(sum(c for _s, _p, _u, c in preview.get("plan", [])), 2),

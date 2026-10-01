@@ -126,6 +126,9 @@ function Body({ h }: { h: LiveHoldings }) {
               <span className="text-[var(--faint)]">
                 {" "}({formatInr(today.settled_now ?? 0)} settled + {formatInr(today.settling_today)} {today.shopped_today ? `landing ${planDayLabel(today.plan_for)}` : "landed today"})
               </span>
+            ) : null}
+            {(today.catch_up_borrow ?? 0) > 0 ? (
+              <span className="text-[var(--accent-deep)]"> · incl. {formatInr(today.catch_up_borrow ?? 0)} of the account's free cash to catch up missed sessions (repaid by the next {fund?.symbol ?? "fund"} sale)</span>
             ) : null}</span>
           <span><span className="text-[var(--faint)]">Settling later</span> <b>{formatInr(today.settling ?? 0)}</b></span>
           {today.shopped_today && (

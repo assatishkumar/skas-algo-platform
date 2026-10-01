@@ -1136,3 +1136,43 @@ def test_missed_sessions_are_credited_at_the_next_decision_when_catch_up_is_on()
     fresh = strat(catch_up_missed=True)
     fresh.pot_day = None
     assert fresh._sessions_owed("2026-10-01") == 1   # a fresh deploy never back-fills
+
+
+def test_a_catch_up_buys_the_whole_backlog_today_with_free_broker_cash_and_repays_it():
+    """Owner 2026-10-01: a missed day should be bought in full when the connection returns,
+    not split over two days. The run's own settled cash (₹5,545) is short of two sessions'
+    ₹10,000; the account's free cash covers the gap, the ledger goes negative by what was
+    borrowed, and the pre-sale sells enough fund to repay it AND refill the float."""
+    view = _view({"AAA": (102, 100), "BBB": (49, 50), FUND: (100, 100)})   # real moves
+    ctx, pf = _ctx(view, cash=0.0)
+    _fund_lots(pf, 1000)
+    st = _t1(watchlist="AAA,BBB", daily_budget=5_000.0, sizing="equal_value",
+             catch_up_missed=True)
+    st.settled_cash = 5_545.0
+    st.pot = {"AAA": 0.0, "BBB": 0.0}
+    st.pot_day = "2025-12-30"                 # last credited Tue 30 Dec; today is Fri 2 Jan
+    st.set_broker_funds(25_214.63)
+    owed = st._sessions_owed("2026-01-02")
+    assert owed >= 2
+    sigs = st.on_slice(ctx)
+    spent = sum(s.quantity * (100 if s.symbol == "AAA" else 50) for s in sigs
+                if s.action is SignalAction.ENTER_LONG and s.symbol != FUND)
+    assert spent == pytest.approx(owed * 5_000.0, abs=100)     # the whole backlog, today
+    assert st.settled_cash < 0                                  # the borrowed part is a debt
+    sold = sum(s.quantity for s in sigs if s.action is SignalAction.EXIT and s.symbol == FUND)
+    assert sold * 100 >= -st.settled_cash                       # the sale repays it
+    assert "free cash" in (st.strategy_alert or "")
+
+
+def test_a_normal_day_never_borrows_even_with_catch_up_on():
+    view = _view({"AAA": (102, 100), FUND: (100, 100)})
+    ctx, pf = _ctx(view, cash=0.0)
+    _fund_lots(pf, 1000)
+    st = _t1(watchlist="AAA", daily_budget=5_000.0, sizing="equal_value", catch_up_missed=True)
+    st.settled_cash = 1_000.0
+    st.pot = {"AAA": 0.0}
+    st.pot_day = "2026-01-01"                 # yesterday: nothing missed
+    st.set_broker_funds(50_000.0)
+    assert st._catch_up_borrow("2026-01-02", 1_000.0) == 0.0
+    st.on_slice(ctx)
+    assert st.settled_cash >= 0

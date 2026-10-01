@@ -1953,7 +1953,14 @@ weekly / monthly / positional), a summary panel, and only that strategy's own kn
   session since `pot_day` (≤ `catch_up_max_days`, `_sessions_owed`), and the normal rules
   spend it — settled cash today, the rest banked and funded by a pre-sale sized to the pots
   — so a missed day is bought within a day or two of reconnecting. A fresh deploy (no
-  pot_day) never back-fills. Ctor default OFF (§1); deploy card ON; equal_value only. The Analysis page shows the same panel for a value_investing deployment above
+  pot_day) never back-fills. Ctor default OFF (§1); deploy card ON; equal_value only.
+  **A catch-up spends the whole backlog the day it reconnects** (owner: "buy all today"):
+  `_catch_up_borrow` lets that ONE decision spend beyond the run's own settled cash by at
+  most the missed sessions' budget, bounded by the broker's free balance; the ledger goes
+  NEGATIVE by what was borrowed and `_presell` (no longer floored at 0) sells enough fund
+  to repay it plus the float. Never on a normal day, never without a broker balance (so a
+  backtest never borrows) — a deliberate, bounded exception to "a run never spends cash
+  it does not own". The Analysis page shows the same panel for a value_investing deployment above
   its fills. Coverage: `tests/test_vi_live.py`.
 - **The equity trade chart is lightweight-charts (TradingView's library, `SuperTrendChart.tsx`,
   2026-09-08).** The recharts one drew ~30 bars whatever range was picked, sat a log axis

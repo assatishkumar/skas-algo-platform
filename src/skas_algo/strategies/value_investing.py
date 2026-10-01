@@ -277,8 +277,10 @@ class ValueInvestingStrategy:
         # equal_value's POTS already do the budgeting (a name may only spend its own pot), so
         # its cap is purely the cash. one_share/balanced have no pots, so the day's budget is
         # the discipline. cap=None → the historical unbounded walk.
+        borrow = self._catch_up_borrow(day, spendable)
         if self.settlement_days:
-            cap = spendable if self.sizing == "equal_value" else min(self.daily_budget, spendable)
+            cap = (spendable + borrow if self.sizing == "equal_value"
+                   else min(self.daily_budget, spendable))
         else:
             cap = None
 
@@ -303,10 +305,17 @@ class ValueInvestingStrategy:
 
         if self.settlement_days:
             # BUY from settled cash…
-            entries, remaining = self._emit(plan, spendable)
+            entries, remaining = self._emit(plan, spendable + borrow)
             # Debit what was actually SPENT. Assigning `remaining` would silently discard any
-            # ledger balance the broker cap held back this tick (see _settle).
-            self.settled_cash = max(0.0, (self.settled_cash or 0.0) - (spendable - remaining))
+            # ledger balance the broker cap held back this tick (see _settle). A catch-up
+            # that BORROWED leaves the ledger NEGATIVE on purpose: that is the debt, and the
+            # pre-sale below counts it, so tomorrow's sale repays the account's free cash.
+            spent = (spendable + borrow) - remaining
+            left = (self.settled_cash or 0.0) - spent
+            self.settled_cash = left if borrow > 0 else max(0.0, left)
+            if borrow > 0 and left < 0:
+                self._alert(f"caught up missed sessions with ₹{-left:,.0f} of the account's "
+                            f"free cash — repaid by tomorrow's {fund} sale")
             running_cash = self.settled_cash
             # …then raise TOMORROW's float.
             exits, fund_units = self._presell(fund, fund_px, fund_lots, fund_units, today)
@@ -447,7 +456,9 @@ class ValueInvestingStrategy:
         # naturally rather than growing.
         claims = sum(self.pot.values()) if self.sizing == "equal_value" else 0.0
         target = max(self.daily_budget, claims) * (1.0 + self.funding_buffer_pct / 100.0)
-        need = target - max(0.0, self.settled_cash or 0.0) - self._pending_total()
+        # settled_cash is negative only after a catch-up borrowed (see the decision) — then
+        # the sale must repay it as well as fund the float, so it is NOT floored here
+        need = target - float(self.settled_cash or 0.0) - self._pending_total()
         if need <= 0:
             return [], fund_units                        # the float is already covered
         want = ceil(need / fund_px)
@@ -570,6 +581,22 @@ class ValueInvestingStrategy:
                 break
             n += 1
         return max(1, n)
+
+    def _catch_up_borrow(self, day: str, spendable: float) -> float:
+        """Rupees a CATCH-UP decision may spend beyond the run's own settled cash (owner
+        2026-10-01: "buy all today" rather than split a missed day over two). At most the
+        missed sessions' budget, and never beyond the broker's free balance; repaid by the
+        next pre-sale. 0 on every normal day, in a backtest (no broker balance, and a
+        backtest never misses a session) and with catch-up off — so §1 / parity hold."""
+        if (not self.catch_up_missed or not self.settlement_days
+                or self.sizing != "equal_value" or self._broker_funds is None
+                or self.pot_day == day):
+            return 0.0
+        owed = self._sessions_owed(day)
+        if owed <= 1:
+            return 0.0
+        free = max(0.0, float(self._broker_funds) - float(spendable))
+        return min((owed - 1) * self.daily_budget, free)
 
     def _equal_value_plan(self, ranked, cap: float | None, day: str) -> list[tuple[str, float, int]]:
         """Credit every name an equal share of the budget, then spend what each pot affords.
@@ -780,6 +807,8 @@ class ValueInvestingStrategy:
         if projected and self._broker_funds is not None and cap is not None:
             cap = min(cap, self._broker_funds)
         cap = max(0.0, float(cap or 0.0))
+        borrow = 0.0 if projected else self._catch_up_borrow(today.isoformat(), cap)
+        cap += borrow
         # the planner mutates pots / epoch state — run it on a copy and put everything back
         saved = (dict(self.pot), self.pot_day, dict(self.invested),
                  dict(self.epoch_base), list(self.epoch_names))
@@ -822,6 +851,7 @@ class ValueInvestingStrategy:
             "projected": projected,
             # sessions the pots are credited for at this decision (>1 = catching up)
             "credit_sessions": owed,
+            "catch_up_borrow": round(borrow, 2),     # free broker cash a catch-up may use
         }
 
     # ------------------------------------------------------------------ status
