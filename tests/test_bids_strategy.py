@@ -385,3 +385,46 @@ def test_the_waiting_banner_says_what_happens_next_not_what_happened_yesterday()
     assert "WAITING" not in stored and "QUEUED" not in stored
     s.queued = {}
     assert s._queue_note(date(2026, 9, 30)) is None
+
+
+def test_a_suggestion_raised_before_the_run_took_over_is_bought_by_the_run():
+    """2026-10-01: MIDSMALL/NIFTYBEES/BANKBEES/HDFCMOMENT had L1 suggestions from before run
+    38 went live. The run carried their fired level across, so its ladder never bought them,
+    and they sat on the tab with an Accept button. The run now buys them (fund sold first)
+    and reports each outcome for the tab; a price back at its high expires it."""
+    s, ctx = _run()
+    rule = lambda peak, pend: {"enabled": True, "dip_pct": 2.0, "amount": 5000.0,
+                               "max_levels": 10, "peak": peak, "levels_fired": 1,
+                               "peak_source": "joined", "peak_asof": "2026-09-28",
+                               "pending": pend}
+    s.set_bids_rules_fn(lambda syms: {
+        "HDFCMOMENT": rule(30.51, [{"id": 7, "level": 1, "amount": 5000.0}]),
+        "BANKBEES": rule(490.0, [{"id": 8, "level": 1, "amount": 5000.0}]),   # 500 ≥ peak
+    })
+    sig = s.on_slice(ctx)
+    assert _buys(sig) == [("HDFCMOMENT", 166)]                # 5,000 // 30.00
+    assert any(x.symbol == FUND and x.action is SignalAction.EXIT for x in sig)
+    assert s.handed_suggestions == {7: "bought", 8: "expired"}
+    ctx.next_day()                                            # never bought twice
+    assert _buys(s.on_slice(ctx)) == []
+
+
+def test_record_auto_resolves_the_handed_over_suggestions(_clean):
+    with session_scope() as db:
+        h = _h(db, "HDFCMOMENT", "etf", 30.0)
+        g = _h(db, "BANKBEES", "etf", 500.0)
+        a = PortfolioBidsSuggestion(holding_id=h.id, peak=30.5, peak_asof="2026-09-28", level=1,
+                                    trigger_price=29.9, price=29.8, amount=5000.0,
+                                    created_on="2026-09-28", status="pending")
+        b = PortfolioBidsSuggestion(holding_id=g.id, peak=490.0, peak_asof="2026-09-28", level=1,
+                                    trigger_price=480.2, price=479.0, amount=5000.0,
+                                    created_on="2026-09-28", status="pending")
+        db.add_all([a, b])
+        db.commit()
+        r = bids.auto_rules(db, 1, ["HDFCMOMENT"])
+        assert r["HDFCMOMENT"]["pending"] == [{"id": a.id, "level": 1, "amount": 5000.0}]
+        bids.record_auto(db, 1, 38, [], {}, date(2026, 10, 1),
+                         handed={a.id: "bought", b.id: "expired"})
+        db.commit()
+        assert (db.get(PortfolioBidsSuggestion, a.id).status,
+                db.get(PortfolioBidsSuggestion, b.id).status) == ("accepted", "expired")

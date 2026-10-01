@@ -521,6 +521,11 @@ def view(db: Session, *, auto_accounts=None) -> dict:
     ).scalars().all()
     pending = [_sdict(s, names, ccys) for s in sugg
                if s.status == "pending" and s.holding_id in shown]
+    # a pending row on a holding a LIVE run now buys is the run's to buy at its next decision
+    # (the handover) — the tab must not offer Accept too, or the dip is bought twice
+    auto_ids = {r["holding_id"] for r in rows if r["mode"] == "auto"}
+    for p in pending:
+        p["auto"] = p["holding_id"] in auto_ids
     fund_view = _fund_view(db, d, fund, recs, pending)
     # what an automatic run could trade, per broker account: broker-quoted stocks/ETFs of an
     # included class, rupee-quoted, not excluded, not the fund — the deploy card's watchlist
@@ -607,6 +612,14 @@ def auto_rules(db: Session, account_id: int | None, symbols: list[str]) -> dict[
     fund = fund_holding(db, d)
     rules = _rules(db)
     hs = _account_holdings(db, account_id)
+    # suggestions still PENDING on these holdings — raised while they were SUGGEST, before a
+    # live run took them over. The run buys them (handover, 2026-10-01): left on the tab they
+    # fell between the two halves, the run having carried their fired levels across.
+    pend: dict[int, list[dict]] = {}
+    for sg in db.execute(select(PortfolioBidsSuggestion).where(
+            PortfolioBidsSuggestion.status == "pending")).scalars().all():
+        pend.setdefault(sg.holding_id, []).append(
+            {"id": sg.id, "level": sg.level, "amount": float(sg.amount)})
     out: dict[str, dict] = {}
     for sym in symbols:
         h = hs.get(str(sym).upper())
@@ -620,12 +633,14 @@ def auto_rules(db: Session, account_id: int | None, symbols: list[str]) -> dict[
             "dip_pct": rule.dip_pct, "amount": rule.amount, "max_levels": rule.max_levels,
             "peak": r.peak if r else None, "levels_fired": int(r.levels_fired or 0) if r else 0,
             "peak_source": r.peak_source if r else None, "peak_asof": r.peak_asof if r else None,
+            "pending": sorted(pend.get(h.id, []), key=lambda x: x["level"]),
         }
     return out
 
 
 def record_auto(db: Session, account_id: int | None, run_id: int, events: list[dict],
-                ladders: dict[str, dict], today: date) -> dict:
+                ladders: dict[str, dict], today: date,
+                handed: dict[int, str] | None = None) -> dict:
     """After a LIVE bids decision: every fill becomes a ledger row on its holding (the ETF
     bought, the fund sold or parked back — the typed position carried in first), and the
     run's ladders are mirrored onto the holdings' rule rows so the tab shows the same peak
@@ -663,5 +678,13 @@ def record_auto(db: Session, account_id: int | None, run_id: int, events: list[d
         r.peak_source = st.get("peak_source")
         r.peak_asof = st.get("peak_asof")
         r.last_eval_asof = today.isoformat()
+    # suggestions the run took over: bought (or queued, already paid for) → accepted, a
+    # price that had recovered to its high → expired. Only rows still pending are touched.
+    for sid, outcome in (handed or {}).items():
+        sg = db.get(PortfolioBidsSuggestion, int(sid))
+        if sg is None or sg.status != "pending":
+            continue
+        sg.status = "accepted" if outcome in ("bought", "queued") else "expired"
+        sg.resolved_at = datetime.now(UTC)
     db.flush()
     return {"ledger_rows": written}

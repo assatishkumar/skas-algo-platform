@@ -90,6 +90,9 @@ class BidsStrategy(EntryFundingMixin):
         self.queued: dict[str, dict[str, Any]] = {}
         self.last_shop_day: str | None = None
         self.last_fired: list[dict[str, Any]] = []      # the last decision's levels, for the tile
+        # tab suggestions this run took over: {suggestion id: "bought" | "queued" | "expired"}
+        # — the manager marks them on the tab; kept so one is never bought twice
+        self.handed_suggestions: dict[int, str] = {}
         # ---- transient ----
         self._rules_fn = None
         self._rules_error: str | None = None
@@ -276,6 +279,34 @@ class BidsStrategy(EntryFundingMixin):
                 continue
             buy(sym, float(self.queued[sym]["amount"]), close, funded=True)   # sold already
 
+        # 1b. HANDOVER: suggestions the tab raised before this run took the holding over. The
+        # run carried their fired levels across, so its ladder will not buy them again —
+        # left alone they sat on the tab with an Accept button forever (2026-10-01). Bought
+        # now, the normal way (fund sold first); expired if the price is back at its high.
+        for sym in symbols:
+            r = (rules or {}).get(sym) or {}
+            todo = [p for p in (r.get("pending") or [])
+                    if int(p["id"]) not in self.handed_suggestions]
+            if not todo or sym not in present or not enabled(sym) or sym in self.queued:
+                continue
+            close = float(ctx.close(sym))
+            peak = float((self.ladders.get(sym) or {}).get("peak") or r.get("peak") or 0.0)
+            if peak and close >= peak:
+                for p in todo:
+                    self.handed_suggestions[int(p["id"])] = "expired"
+                continue
+            rupees = sum(float(p["amount"]) for p in todo)
+            levels = [int(p["level"]) for p in todo]
+            self.last_fired.append({"symbol": sym, "levels": levels, "amount": rupees,
+                                    "price": close, "day": today.isoformat(),
+                                    "handover": True})
+            outcome = "bought" if buy(sym, rupees, close, funded=False) else "queued"
+            if outcome == "queued":
+                self.queued[sym] = {"amount": rupees, "levels": levels, "funded": True,
+                                    "since": today.isoformat()}
+            for p in todo:
+                self.handed_suggestions[int(p["id"])] = outcome
+
         # 2. today's ladders
         for sym in symbols:
             if sym not in present or sym in self.queued or not enabled(sym):
@@ -377,6 +408,7 @@ class BidsStrategy(EntryFundingMixin):
             "queued": {s: dict(v) for s, v in self.queued.items()},
             "last_shop_day": self.last_shop_day,
             "last_fired": [dict(x) for x in self.last_fired],
+            "handed_suggestions": {str(k): v for k, v in self.handed_suggestions.items()},
             **self.funding_state(),
             # the STORED part only — the queue line is derived on read, never persisted
             "strategy_alert": self.__dict__.get("_decision_alert"),
@@ -387,6 +419,8 @@ class BidsStrategy(EntryFundingMixin):
         self.queued = {s: dict(v) for s, v in (state.get("queued") or {}).items()}
         self.last_shop_day = state.get("last_shop_day")
         self.last_fired = [dict(x) for x in (state.get("last_fired") or [])]
+        self.handed_suggestions = {int(k): str(v) for k, v in
+                                   (state.get("handed_suggestions") or {}).items()}
         self.load_funding_state(state)
         # snapshots written before the queue line was derived stored it as text — drop it, or
         # the banner would carry yesterday's wording beside today's

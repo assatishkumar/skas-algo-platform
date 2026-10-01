@@ -776,6 +776,7 @@ export interface BidsSuggestion {
   holding_id: number;
   holding: string | null;
   currency: string;
+  auto?: boolean;                 // a live BIDS run buys it at its next decision (handover)
   level: number;
   peak: number;
   trigger_price: number;

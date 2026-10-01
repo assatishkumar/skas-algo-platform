@@ -525,7 +525,14 @@ export default function BidsView() {
               )}
               <span className="text-[var(--faint)]">{s.created_on}</span>
               <span className="ml-auto flex items-center gap-3">
-                <button onClick={() => setAccepting(s)} className="rounded-[10px] bg-[var(--accent)] px-4 py-1.5 text-[12.5px] font-extrabold text-white">Accept</button>
+                {s.auto ? (
+                  <span className="text-[12px] font-bold text-[var(--accent-deep)]"
+                    title="This holding is now bought by a live BIDS run. It buys this level at its next 15:05 decision (LIQUIDCASE sold first), or expires it if the price is back at its high. Skip to cancel it.">
+                    BIDS auto buys this at 15:05
+                  </span>
+                ) : (
+                  <button onClick={() => setAccepting(s)} className="rounded-[10px] bg-[var(--accent)] px-4 py-1.5 text-[12.5px] font-extrabold text-white">Accept</button>
+                )}
                 <ConfirmAction label="Skip" onConfirm={() => skip.mutate(s.id)}
                   className="text-[12.5px] font-extrabold text-[var(--faint)] hover:text-[var(--strong)]" />
               </span>

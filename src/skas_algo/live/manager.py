@@ -1703,8 +1703,10 @@ class LiveRun:
             from skas_algo.services.bids import record_auto
 
             with session_scope() as db:
+                strat = self.session.strategy
                 record_auto(db, self.config.broker_account_id, self.run_id, events,
-                            mirror(), datetime.now(IST).date())
+                            mirror(), datetime.now(IST).date(),
+                            handed=getattr(strat, "handed_suggestions", None))
         except Exception:
             logger.exception("bids: portfolio write-back failed for run %s", self.run_id)
 

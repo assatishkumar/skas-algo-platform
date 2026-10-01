@@ -623,7 +623,12 @@ template) is the phase-2 fix. No deploy path — there is no US broker.
   it) — a fully pledged ETF used to be dropped entirely. **A symbol is priced by its live
   quote alone** (`ctx.close`), never `ctx.present_symbols()` — live that also demands
   cached daily history, and the VPS cache had none for the ETFs, so run 38's first
-  decision read six live-quoted ETFs as "no price" and bought nothing. (2) **Rules come
+  decision read six live-quoted ETFs as "no price" and bought nothing. **Pending suggestions are HANDED OVER**: a
+  suggestion raised while a holding was SUGGEST, still pending when a live run takes it
+  over, is bought by the run at its next decision (`auto_rules` carries `pending`, the run
+  records `handed_suggestions`, `record_auto` marks them accepted/expired) — the run had
+  carried the fired level across, so otherwise the dip fell between the two halves. The
+  tab shows "BIDS auto buys this at 15:05" instead of Accept on those rows. (2) **Rules come
   from the tab live** (`set_bids_rules_fn` → `services.bids.auto_rules`, read-only, every
   decision): enabled (class on, not excluded, not the fund), X/y/N, and the tab's ladder —
   a holding moving SUGGEST→AUTO carries its peak and fired levels; a typed manual peak is
