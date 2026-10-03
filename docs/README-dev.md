@@ -148,8 +148,11 @@ npm run dev      # Vite dev server on :5173, proxies /api → :8080 (WebSocket i
 ### Connecting Zerodha
 
 Add an account in the **Brokers** tab (label, user_id, api_key, api_secret). The api_secret is
-stored encrypted. You log in to Kite yourself, paste the `request_token`, and it's exchanged for the
-daily access token. Real orders additionally require `SKAS_LIVE_TRADING_ENABLED=true` and arming the
+stored encrypted. You log in to Kite yourself and the `request_token` is exchanged for the daily
+access token. **One-tap** (2026-10-03): set the Kite app's Redirect URL (Kite developer console)
+to `https://<vps>.<tailnet>.ts.net/brokers/callback`; "Open Kite login" then brings you straight
+back to that page, which finishes the login — no copy-paste (a login started on another box, e.g.
+the Mac's localhost UI, is handed back to it via `return_to`). The paste box stays as the fallback. Real orders additionally require `SKAS_LIVE_TRADING_ENABLED=true` and arming the
 account.
 
 ### Docker (VPS)

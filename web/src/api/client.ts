@@ -143,7 +143,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       onUnauthorized();
     } else if (resp.status === 401 && window.location.pathname !== "/login") {
       clearToken();
-      window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+      window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
     }
     let detail = resp.statusText;
     try {
@@ -733,7 +733,11 @@ export const brokers = {
   book: (id: number) => request<BrokerBook>(`/brokers/${id}/book`),
   connect: (body: BrokerConnectRequest) =>
     request<BrokerAccount>("/brokers", { method: "POST", body: JSON.stringify(body) }),
-  loginUrl: (id: number) => request<{ login_url: string }>(`/brokers/${id}/login-url`),
+  // returnTo = this browser's origin: Kite then redirects to /brokers/callback, which
+  // finishes the login itself (no request_token copy-paste)
+  loginUrl: (id: number, returnTo?: string) =>
+    request<{ login_url: string }>(
+      `/brokers/${id}/login-url${returnTo ? `?return_to=${encodeURIComponent(returnTo)}` : ""}`),
   login: (id: number, requestToken: string) =>
     request<BrokerAccount>(`/brokers/${id}/login`, {
       method: "POST",
@@ -764,7 +768,7 @@ async function downloadCsv(path: string, filename: string): Promise<void> {
   if (!resp.ok) {
     if (resp.status === 401 && window.location.pathname !== "/login") {
       clearToken();
-      window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+      window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
     }
     throw new Error(`${resp.status}: ${resp.statusText}`);
   }

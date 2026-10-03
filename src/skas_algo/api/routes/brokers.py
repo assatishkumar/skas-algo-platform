@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import re
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from skas_algo.api.deps import get_db
@@ -72,12 +74,31 @@ def delete(account_id: int, db: Session = Depends(get_db)) -> dict:
     return {"deleted": account_id}
 
 
+# Origins the one-tap callback may send a token back to: this box, a browser on the same
+# machine, and our own tailnet — never an arbitrary site (the callback page redirects to it
+# with the request_token in the URL, so an unchecked value would be an open redirect).
+_RETURN_TO = re.compile(r"^(https://[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net"
+                        r"|http://(localhost|127\.0\.0\.1)(:\d{1,5})?)$")
+
+
+def _allowed_return_to(value: str, request: Request) -> bool:
+    own = f"{request.url.scheme}://{request.url.netloc}"
+    return value == own or bool(_RETURN_TO.match(value))
+
+
 @router.get("/{account_id}/login-url")
-def login_url(account_id: int, db: Session = Depends(get_db)) -> dict:
-    """The Kite URL to open and authenticate; the redirect yields a request_token."""
+def login_url(account_id: int, request: Request, return_to: str | None = None,
+              db: Session = Depends(get_db)) -> dict:
+    """The Kite URL to open and authenticate; the redirect yields a request_token. With
+    ``return_to`` (the browser's origin) the URL carries the account and that origin through
+    Kite, so the redirect lands on /brokers/callback, which finishes the login itself."""
     account = _get(db, account_id)
+    if return_to is not None:
+        return_to = return_to.rstrip("/")
+        if not _allowed_return_to(return_to, request):
+            raise HTTPException(status_code=422, detail=f"return_to {return_to!r} is not allowed")
     try:
-        return {"login_url": broker_svc.login_url(account)}
+        return {"login_url": broker_svc.login_url(account, return_to=return_to)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

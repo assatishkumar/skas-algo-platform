@@ -123,8 +123,15 @@ def make_data_session(account: BrokerAccount) -> SkasData:
     return SkasData(provider=provider)
 
 
-def login_url(account: BrokerAccount) -> str:
-    return make_adapter(account).login_url()
+def login_url(account: BrokerAccount, return_to: str | None = None) -> str:
+    """The broker's login URL. With ``return_to`` (an origin the route has validated) a
+    Zerodha URL carries the account id and that origin through Kite, for the one-tap
+    callback page; other brokers ignore it."""
+    adapter = make_adapter(account)
+    if return_to and account.broker == "zerodha":
+        return adapter.login_url(redirect_params={"account": str(account.id),
+                                                  "return_to": return_to})
+    return adapter.login_url()
 
 
 def exchange_token(session: Session, account: BrokerAccount, request_token: str) -> BrokerAccount:

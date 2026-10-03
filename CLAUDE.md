@@ -2166,6 +2166,14 @@ come from this box or from the console in replay; a Live-page shot must be the P
 - **Relative SQLite path.** `SKAS_DATABASE_URL=sqlite:///./skas_algo.db` is relative to the CWD —
   start the backend from the **repo root** or it opens/creates a *different, empty* DB (no accounts /
   sessions / runs). The real DB is `./skas_algo.db` at the root.
+- **Zerodha login is one-tap from any browser on the tailnet (2026-10-03).** The Kite app's
+  Redirect URL is the VPS's `/brokers/callback`; `GET /brokers/{id}/login-url?return_to=<origin>`
+  appends Kite `redirect_params` (account + origin — kiteconnect's `login_url()` cannot), and
+  `KiteCallbackPage` exchanges the token itself, or hands the query to the asking box's own
+  callback when `return_to` is another origin (the Mac shares the Kite app). `return_to` is
+  ALLOW-LISTED (own origin, localhost/127.0.0.1, `*.ts.net`) — the page redirects with the
+  token in the URL, so an unchecked value is an open redirect. The 401 → `/login?next=` keeps
+  the query, and the page stashes the token in sessionStorage. Paste box = fallback.
 - **Broker sessions persist in the DB**, not in memory — `make_adapter` resumes the encrypted
   `session_token` on restart, and Kite tokens are valid until ~06:00 IST next day. A restart does **not**
   lose a still-valid session. If the UI shows "no session" right after a restart, suspect a dead/wrong-CWD

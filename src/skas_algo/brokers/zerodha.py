@@ -86,9 +86,19 @@ class ZerodhaAdapter:
         return self._kite
 
     # ----------------------------------------------------------------- login
-    def login_url(self) -> str:
-        """The Kite URL the user visits to authenticate and obtain a request_token."""
-        return self._kite_client().login_url()
+    def login_url(self, redirect_params: dict | None = None) -> str:
+        """The Kite URL the user visits to authenticate and obtain a request_token.
+
+        ``redirect_params`` ride through Kite and come back as query params on the redirect
+        (Kite's documented ``redirect_params``; kiteconnect's ``login_url()`` takes none, so
+        it is appended here) — the one-tap callback uses them to know which account the
+        token is for and which box asked (owner 2026-10-03: no copy-paste on the phone)."""
+        url = self._kite_client().login_url()
+        if redirect_params:
+            from urllib.parse import quote, urlencode
+
+            url += "&redirect_params=" + quote(urlencode(redirect_params), safe="")
+        return url
 
     def exchange_request_token(self, request_token: str) -> Session:
         """Exchange a user-supplied request_token for the daily access token."""

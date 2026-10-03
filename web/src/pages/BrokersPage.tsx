@@ -253,8 +253,15 @@ function LoginFlow({ id, broker, onDone }: { id: number; broker: string; onDone:
   async function openLogin() {
     setErr(null);
     try {
-      const { login_url } = await brokers.loginUrl(id);
-      window.open(login_url, "_blank", "noopener");
+      // Zerodha: ask for the one-tap flow — Kite redirects back to /brokers/callback on
+      // THIS origin, which exchanges the token itself. On a phone open it in the same tab
+      // so the redirect lands back in the app; a desktop keeps its new tab.
+      const { login_url } = await brokers.loginUrl(id, isDhan ? undefined : window.location.origin);
+      if (!isDhan && window.matchMedia("(max-width: 820px)").matches) {
+        window.location.assign(login_url);
+      } else {
+        window.open(login_url, "_blank", "noopener");
+      }
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -278,7 +285,7 @@ function LoginFlow({ id, broker, onDone }: { id: number; broker: string; onDone:
       <div className="text-[12.5px] text-[var(--muted)]">
         {isDhan
           ? <>Generate an access token on Dhan (My Profile → DhanHQ Trading APIs) and paste it — valid ~24h.</>
-          : <>Open the Kite login, sign in there, and copy the <code>request_token</code> from the redirected URL, then paste it.</>}
+          : <>Open the Kite login and sign in — you come straight back here, logged in. (If the Kite app's redirect URL is not yet set to this app's <code>/brokers/callback</code>, copy the <code>request_token</code> from the redirected URL and paste it below.)</>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <button onClick={openLogin}

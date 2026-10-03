@@ -8,6 +8,7 @@ import { applyTheme, getTheme, type Theme } from "./lib/theme";
 import AnalysisPage from "./pages/AnalysisPage";
 import BacktestPage from "./pages/BacktestPage";
 import BrokersPage from "./pages/BrokersPage";
+import KiteCallbackPage from "./pages/KiteCallbackPage";
 import ComparePage from "./pages/ComparePage";
 import ConsolePage from "./pages/ConsolePage";
 import SimulatorPage from "./pages/SimulatorPage";
@@ -215,6 +216,7 @@ export default function App() {
           <Route path="/portfolio" element={<PortfolioPage />} />
           <Route path="/research" element={<ResearchPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
+          <Route path="/brokers/callback" element={<KiteCallbackPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
           <Route path="/runs/:id/cycle/:index" element={<CycleDetailPage />} />
           <Route path="/compare" element={<ComparePage />} />
