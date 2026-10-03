@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { brokers } from "@shared/api/client";
+import { brokers, getApiOrigin } from "@shared/api/client";
 import type { BrokerAccount } from "@shared/types";
 
 /** 06 · Brokers — live-arm card, account cards with session pills, the daily Kite login
@@ -120,9 +120,13 @@ function AccountCard({ a, onChanged }: { a: BrokerAccount; onChanged: () => void
 
   async function startLogin() {
     try {
-      const { login_url } = await brokers.loginUrl(a.id);
-      // In-app browser when native; new tab in browser dev. The Kite redirect carries
-      // ?request_token=... — paste it back below (deep-link capture is a later step).
+      // return_to = the SERVER's origin (the VPS over Tailscale): Kite then redirects to its
+      // /brokers/callback page, which finishes the login itself (2026-10-03). Natively the
+      // app runs from capacitor://, so the API origin — not window.location — is the one.
+      const origin = getApiOrigin() || window.location.origin;
+      const { login_url } = await brokers.loginUrl(a.id, origin.startsWith("http") ? origin : undefined);
+      // In-app browser when native; new tab in browser dev. The callback page logs in; the
+      // paste box below stays as the fallback.
       try {
         const mod = await import("@capacitor/browser");
         await mod.Browser.open({ url: login_url });
