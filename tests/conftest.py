@@ -27,6 +27,12 @@ os.environ["SKAS_WS_FEED_ENABLED"] = "false"
 # tmp_path destination via monkeypatch.
 os.environ["SKAS_BACKUP_OFFBOX_DIR"] = ""
 os.environ["SKAS_BACKUP_REMOTE_CMD"] = ""
+# Never the REAL peer: the Mac's .env points SKAS_PEER_API_URL/TOKEN at the VPS (option-bar
+# auto-restore, 2026-10-03), and the console-fork tests then asked the live VPS for a run's
+# cycles. Tests that need a peer set their own fake. Same for the auto-restore switch.
+os.environ["SKAS_PEER_API_URL"] = ""
+os.environ["SKAS_PEER_API_TOKEN"] = ""
+os.environ["SKAS_OPTION_BARS_AUTO_RESTORE"] = "false"
 # The official-constituent store is per box (~/.skas_data/universes); tests must neither
 # read the owner's captures nor write into them.
 os.environ["SKAS_UNIVERSE_DIR"] = tempfile.mkdtemp(prefix="skas-universes-")

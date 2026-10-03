@@ -60,7 +60,15 @@ def compute_metrics(
                     if initial_capital > 0 else 0.0)
     cagr = 0.0
     if years > 0 and total_value > 0 and initial_capital > 0:
-        cagr = (total_value / initial_capital) ** (1 / years) - 1
+        try:
+            cagr = (total_value / initial_capital) ** (1 / years) - 1
+        except OverflowError:
+            # A huge ratio over a few days — a live run that ADOPTED ₹1.07Cr of broker
+            # holdings on ₹30k of capital, four days in (BIDS run 38, 2026-10-03): 357**90
+            # overflows and took the whole report down with it (every cycles/analysis read
+            # of the run 500'd). An annual rate is meaningless there anyway; 0 like the
+            # zero-capital guard above. Every finite case is byte-identical.
+            cagr = 0.0
 
     # Average monthly figures over the months the run spans.
     months = max(
@@ -132,5 +140,8 @@ def _deployed_idle_metrics(history, years, total_value, initial_capital, idle_re
         idle_total = total_value + idle_interest
         if years > 0 and idle_total > 0 and initial_capital > 0:   # see the guard above
             label = f"CAGR (idle @ {round(idle_return * 100)}%) %"
-            out[label] = ((idle_total / initial_capital) ** (1 / years) - 1) * 100
+            try:
+                out[label] = ((idle_total / initial_capital) ** (1 / years) - 1) * 100
+            except OverflowError:       # same guard as the headline CAGR above
+                out[label] = 0.0
     return out
