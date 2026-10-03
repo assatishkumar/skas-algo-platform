@@ -183,6 +183,14 @@ class Settings(BaseSettings):
     # (copy new/changed day-files, never delete). Point it at a Google Drive for Desktop
     # folder and the Drive app ships it to the cloud. Unset → local-only.
     option_bars_backup_dir: str | None = None  # SKAS_OPTION_BARS_BACKUP_DIR
+    # AUTO-RESTORE from the peer (owner 2026-10-03: "I might not switch the Mac on for 15
+    # days"). On the Mac data box: at boot and once a day, pull every day-file the VPS has
+    # and this store lacks (services/option_restore.restore_from — gap-fill, never
+    # overwrites), then mirror them to the backup dir and extend the ATM IV history. Uses
+    # SKAS_PEER_API_URL + SKAS_PEER_API_TOKEN (a long-lived operator JWT minted on the VPS).
+    # The VPS must keep at least as many days as the longest absence (SKAS_OPTION_BARS_KEEP_DAYS).
+    option_bars_auto_restore: bool = False  # SKAS_OPTION_BARS_AUTO_RESTORE
+    option_bars_restore_days: int = 45  # how far back to look on the peer
 
     # --- Backups ---
     db_backup_keep: int = 7  # rolling on-box snapshots of the sqlite DB to retain

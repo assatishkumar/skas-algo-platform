@@ -2097,6 +2097,15 @@ misses that day (the sweep can't help); an all-errors day (dead historical subsc
 NO file so the sweep retries, but the day-latch still stops same-day hammering. The store keeps
 ALL listed strikes (incl. NIFTY 50s) — the 100s rule is a TRADING rule, not a data rule. Readers:
 `load_contract_bars(u, expiry, strike, right, d1, d2, minutes=1|5)` aggregates on the fly.
+**Two capturing boxes, one store (2026-10-03).** The VPS captures daily too (batched,
+`SKAS_OPTION_BARS_BATCH_CONTRACTS=200`, 2 GB swap) and keeps `SKAS_OPTION_BARS_KEEP_DAYS=30`
+— long enough to cover the Mac being off for a fortnight (owner). The Mac pulls whatever it
+lacks automatically: `manager._maybe_restore_option_bars` (on with
+`SKAS_OPTION_BARS_AUTO_RESTORE` + `SKAS_PEER_API_URL` / `SKAS_PEER_API_TOKEN`, a 365-day
+operator JWT minted on the VPS) runs `option_restore.restore_from` at the first maintenance
+tick after boot and daily after 16:30, gap-fill only, then mirrors to Drive and extends the
+ATM IV history. If the Mac is away longer than KEEP_DAYS, the oldest days are lost — raise
+it first. The hand command `skas-algo restore-option-bars` remains.
 **Off-box backup:** `SKAS_OPTION_BARS_BACKUP_DIR` (a Google Drive for Desktop folder) →
 `mirror_store` runs after every capture + `import-gfd` — COPY new/changed day-files only,
 NEVER deletes (a local mistake can't propagate to the backup). Data-page panel:

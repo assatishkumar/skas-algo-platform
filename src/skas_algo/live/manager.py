@@ -2620,6 +2620,7 @@ class LiveRunManager:
                 self._rebind_order_sweep()
                 await self._maybe_refresh_universes()
                 await self._maybe_daily_cache_refresh()
+                await self._maybe_restore_option_bars()
                 await self._maybe_daily_option_capture()
                 from skas_algo.config import get_settings as _gs
 
@@ -2982,6 +2983,64 @@ class LiveRunManager:
 
         asyncio.create_task(_bg())
         return {"started": True, "target_day": target.isoformat()}
+
+    async def _maybe_restore_option_bars(self) -> None:
+        """Fill this store's gaps from the peer (the VPS), off-loop: at the first maintenance
+        tick after boot, then once a day after the peer's own capture (≥16:30 IST). A Mac
+        that was off for days catches up the moment it is back, before its own capture's
+        3-day sweep — which could not recover an expired weekly anyway (expired contracts
+        leave the instruments dump), whereas the VPS captured it on the day."""
+        from skas_algo.config import get_settings
+
+        s = get_settings()
+        if not (s.option_bars_auto_restore and s.peer_api_url and s.peer_api_token):
+            return
+        now = datetime.now(IST)
+        last = getattr(self, "_last_option_restore", None)
+        if last is not None and (last.date() == now.date() or now.time() < time(16, 30)):
+            return
+        if getattr(self, "option_restore_running", False):
+            return
+        self.option_restore_running = True
+        self._last_option_restore = now
+        try:
+            result = await asyncio.to_thread(self._run_option_restore)
+        except Exception:  # pragma: no cover - a peer outage must never break maintenance
+            logger.exception("option-bar auto-restore failed")
+            result = None
+        finally:
+            self.option_restore_running = False
+        if result is not None:
+            self.last_option_restore = {"at": now.isoformat(), **result}
+            if result.get("restored"):
+                logger.info("option bars restored from the peer: %s", result["restored"])
+
+    def _run_option_restore(self) -> dict:
+        """Worker-thread body of the auto-restore: pull, then mirror + IV history."""
+        from skas_algo.config import get_settings
+        from skas_algo.services.option_restore import restore_from
+
+        s = get_settings()
+        result = restore_from(str(s.peer_api_url), token=str(s.peer_api_token),
+                              days=int(s.option_bars_restore_days))
+        if result.get("restored"):
+            if s.option_bars_backup_dir:
+                try:
+                    from skas_algo.data.option_intraday_store import mirror_store
+
+                    result["backup"] = mirror_store(s.option_bars_backup_dir)
+                except Exception:  # pragma: no cover - best-effort
+                    logger.exception("mirror after restore failed")
+            try:
+                from skas_algo.services.atm_iv_history import build as build_iv_history
+
+                unders = [u.strip().upper() for u in s.option_bars_underlyings.split(",")
+                          if u.strip()]
+                n = len(result["restored"]) + 5
+                result["iv_history"] = {u: build_iv_history(u, limit=n) for u in unders}
+            except Exception:  # pragma: no cover - best-effort
+                logger.exception("ATM IV history after restore failed")
+        return result
 
     def _run_option_capture(self, today: date) -> dict | None:
         """Worker-thread body: capture today's bars + sweep recent missing days (only
