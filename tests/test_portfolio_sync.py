@@ -794,3 +794,32 @@ def test_a_name_priced_at_another_account_is_not_offered_as_untracked(fake_broke
             db.delete(db.get(PortfolioHolding, r.id))
         db.delete(db.get(BrokerAccount, other.id))
         db.commit()
+
+
+def test_the_nav_files_are_parsed_once_and_a_new_file_invalidates_it(tmp_path, monkeypatch):
+    """Every fund-search keystroke, NAV refresh and sync calls ``load``. Each used to re-parse
+    all ten cached files (~70 MB, ~15 s on the VPS), concurrently, and on 2026-11-15 a NAV
+    refresh swap-thrashed the box into a hung API. One parse per set of files, then memory."""
+    monkeypatch.setenv("SKAS_DATA_HOME", str(tmp_path))
+    d = tmp_path / "amfi"
+    d.mkdir(parents=True)
+    (d / "NAVAll-2026-08-30.txt").write_text(NAVALL_PRIOR, encoding="utf-8")
+    (d / "NAVAll-2026-08-31.txt").write_text(NAVALL, encoding="utf-8")
+
+    calls = []
+    real = amfi.parse_navall
+    monkeypatch.setattr(amfi, "parse_navall", lambda t: calls.append(1) or real(t))
+
+    first = amfi.load(fetch=False)
+    parsed = len(calls)
+    assert parsed == 2
+    for _ in range(5):
+        amfi.search("parag")
+        assert amfi.load(fetch=False)[0] is first[0]
+    assert len(calls) == parsed                       # served from memory
+
+    (d / "NAVAll-2026-09-01.txt").write_text(
+        NAVALL.replace("28-Aug-2026", "01-Sep-2026"), encoding="utf-8")
+    latest, _ = amfi.load(fetch=False)
+    assert len(calls) > parsed                        # a new day's file re-parses
+    assert latest["INF879O01027"].as_of == date(2026, 9, 1)

@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -45,7 +46,7 @@ _TIMEOUT = 30
 _DATE_RE = re.compile(r"^\d{2}-[A-Za-z]{3}-\d{4}$")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class NavRow:
     isin: str
     scheme_code: str
@@ -249,14 +250,38 @@ def load(
     change of zero. Falling through per ISIN lets a fund missing from Sunday find its Friday
     NAV, while a liquid fund still gets Sunday's.
 
-    Empty when nothing older is cached; callers must treat a missing prior as unknown."""
+    Empty when nothing older is cached; callers must treat a missing prior as unknown.
+
+    **Parsed ONCE per set of files, then served from memory.** A full parse of the ten cached
+    files is ~70 MB and ~15 s on the VPS, and every fund-search keystroke, NAV refresh and
+    sync used to redo it — concurrently, one per request thread. On a ~911 MB box with a
+    ~420 MB backend that swap-thrashed the process into a hung API (2026-11-15, the owner's
+    NAV refresh). The cache is keyed on each file's path, size and mtime, so a new day's
+    file (or a backfill) invalidates it, and the lock makes concurrent callers wait for the
+    one parse instead of each starting their own. The dicts are SHARED — read them, never
+    mutate them."""
+    global _LOAD_CACHE
     if fetch:
         try:
             refresh(today=today, session=session)
         except Exception:  # pragma: no cover - a stale cache still beats no NAVs
             logger.warning("AMFI NAV fetch failed; falling back to the cache", exc_info=True)
 
-    files = _cached_files()
+    with _LOAD_LOCK:
+        files = _cached_files()
+        key = tuple((str(f), f.stat().st_size, f.stat().st_mtime_ns) for f in files)
+        if _LOAD_CACHE is not None and _LOAD_CACHE[0] == key:
+            return _LOAD_CACHE[1], _LOAD_CACHE[2]
+        latest, previous = _parse_cached(files)
+        _LOAD_CACHE = (key, latest, previous)
+        return latest, previous
+
+
+_LOAD_LOCK = threading.Lock()
+_LOAD_CACHE: tuple[tuple, dict[str, NavRow], dict[str, NavRow]] | None = None
+
+
+def _parse_cached(files: list[Path]) -> tuple[dict[str, NavRow], dict[str, NavRow]]:
     if not files:
         return {}, {}
     latest = parse_navall(files[-1].read_text(encoding="utf-8"))
