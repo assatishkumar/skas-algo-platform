@@ -641,6 +641,10 @@ export const portfolio = {
     request<{ id: number }>(`/portfolio/holdings/${holdingId}/transactions`, {
       method: "POST", body: JSON.stringify(body),
     }),
+  // USD/INR close on a trade date (or the last one before it) — "Add one" converts a
+  // dollar price at it, so a US buy is costed at the rupees paid that day.
+  usdInrOn: (on: string) =>
+    request<{ rate: number; as_of: string }>(`/portfolio/fx/usd-inr?on=${on}`),
   deleteTransaction: (txnId: number) =>
     request<{ deleted: number }>(`/portfolio/transactions/${txnId}`, { method: "DELETE" }),
   // A ledger that began before 2026-09-23 replaced the typed position with its first row;

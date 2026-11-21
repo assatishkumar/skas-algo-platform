@@ -86,6 +86,48 @@ class SyncReport:
         }
 
 
+# A split row dated a few days off the exchange's ex-date still counts as recorded — the
+# owner types the date they noticed, not the one in a corporate-action notice.
+_SPLIT_DATE_SLACK_DAYS = 7
+# A TYPED holding has no rows to check against, so its warning cannot clear itself; it is
+# raised only in the first days after the split rather than for the whole fetch window.
+_TYPED_SPLIT_WARN_DAYS = 5
+
+
+def _unrecorded_splits(db: Session, h: PortfolioHolding, splits, today: date) -> list[str]:
+    """Splits the quote has already absorbed but the holding's units have not.
+
+    Yahoo split-adjusts the price the morning a split goes ex, so a ledger still in
+    pre-split units reads a loss of (1 − 1/ratio) of its value — SOXX's 3:1 on 2026-11-05
+    showed +38% as −54%. A ledger records it as a ``bonus`` row (which re-bases the open
+    lots); a typed position just needs its units multiplied. Nothing is changed here: only
+    the owner knows whether the units were entered before or after the split."""
+    if not splits:
+        return []
+    rows = db.execute(
+        select(PortfolioTransaction.on_date, PortfolioTransaction.kind)
+        .where(PortfolioTransaction.holding_id == h.id)
+    ).all()
+    out = []
+    for ex, num, den in splits:
+        ratio = f"{num:g}:{den:g}"
+        if rows:
+            if min(r.on_date for r in rows) >= ex.isoformat():
+                continue                    # the ledger starts after it — already post-split
+            since = date.fromordinal(ex.toordinal() - _SPLIT_DATE_SLACK_DAYS).isoformat()
+            if any(r.kind == "bonus" and r.on_date >= since for r in rows):
+                continue
+            fix = "add it on the ledger: Add one → Split"
+        else:
+            if (today - ex).days > _TYPED_SPLIT_WARN_DAYS:
+                continue
+            fix = f"if its typed units are pre-split, multiply them by {num / den:g}"
+        if num < den:
+            fix = "a REVERSE split — the units went down; correct them by hand"
+        out.append(f"{h.sync_ref} split {ratio} on {ex.isoformat()} — {fix}")
+    return out
+
+
 def _ledger_units(db: Session, holding_id: int) -> float | None:
     rows = db.execute(
         select(PortfolioTransaction).where(PortfolioTransaction.holding_id == holding_id)
@@ -205,6 +247,8 @@ def _sync_global(db: Session, holdings: list[PortfolioHolding], report: SyncRepo
         h.native_currency = quote.currency or None
         h.native_price = quote.price
         report.updated.append(h.name)
+        for reason in _unrecorded_splits(db, h, quote.splits, date.today()):
+            report.issues.append({"holding": h.name, "reason": reason, "severity": "warning"})
 
 
 def _slice_accounts(h: PortfolioHolding) -> set[int]:

@@ -468,7 +468,9 @@ export interface HoldingInput {
 export interface TransactionRow {
   id: number;
   on_date: string;
-  kind: "buy" | "sell";
+  // "bonus" is a split or bonus issue: units appear at no cost and the ledger re-bases the
+  // open lots (services/portfolio.build_ledger).
+  kind: "buy" | "sell" | "bonus";
   units: number;
   price: number;
   fees: number;
@@ -477,7 +479,7 @@ export interface TransactionRow {
 
 export interface TransactionInput {
   on_date: string;
-  kind: "buy" | "sell";
+  kind: "buy" | "sell" | "bonus";
   units: number;
   price: number;
   fees: number;

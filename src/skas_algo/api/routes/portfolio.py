@@ -805,6 +805,30 @@ def search_funds(q: str, limit: int = 20) -> dict:
     }
 
 
+# Past days' closes never change, so they are kept for the process's life; today's is not
+# (it moves until the close). One entry per date the form asks about — a handful a session.
+_FX_ON: dict[str, tuple[float, str]] = {}
+
+
+@router.get("/fx/usd-inr")
+def usd_inr_on(on: date) -> dict:
+    """USD/INR on a trade date — what the ledger's "Add one" converts a dollar price at, so
+    a US buy is costed at the rupees actually paid that day, not at today's rate."""
+    from skas_algo.data import global_quotes as gq
+
+    key = on.isoformat()
+    if key not in _FX_ON:
+        try:
+            rate, as_of = gq.usd_inr_on(on)
+        except Exception as exc:
+            raise HTTPException(502, f"USD/INR for {key} unavailable: {exc}") from exc
+        if on >= date.today():
+            return {"rate": rate, "as_of": as_of.isoformat()}
+        _FX_ON[key] = (rate, as_of.isoformat())
+    rate, as_of_s = _FX_ON[key]
+    return {"rate": rate, "as_of": as_of_s}
+
+
 @router.post("/funds/refresh")
 def refresh_funds() -> dict:
     """Pull today's AMFI NAV file. Separate from ``/sync`` so the fund list can be populated

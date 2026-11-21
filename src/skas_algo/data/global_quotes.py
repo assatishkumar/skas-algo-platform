@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 
 import requests
 
@@ -45,6 +46,11 @@ class Quote:
     price: float
     prev_close: float | None
     currency: str
+    # ``(ex_date, numerator, denominator)`` for every split Yahoo reports in the fetch
+    # window — 3:1 is (…, 3.0, 1.0). The sync compares them with the ledger: the quote is
+    # split-adjusted the morning it happens, and a ledger still holding PRE-split units
+    # then reads a two-thirds loss (SOXX 3:1, 2026-11-02: +38% shown as −54%).
+    splits: tuple[tuple[date, float, float], ...] = ()
 
     @property
     def day_move(self) -> float | None:
@@ -76,13 +82,30 @@ def _previous_close(meta: dict, closes: list, price: float) -> float | None:
     return float(prev) if prev is not None else None
 
 
-def _fetch(symbol: str, session: requests.Session | None = None) -> Quote:
+def _local_date(ts: int | float, meta: dict) -> date:
+    """A candle/event timestamp as the EXCHANGE's calendar date. Yahoo stamps a USDINR=X
+    daily candle at 23:00 UTC the evening BEFORE (London midnight in summer), so a plain UTC
+    date reads one day early; ``gmtoffset`` is the exchange's offset in seconds."""
+    off = int(meta.get("gmtoffset") or 0)
+    return datetime.fromtimestamp(int(ts) + off, tz=UTC).date()
+
+
+def _splits(node: dict, meta: dict) -> tuple[tuple[date, float, float], ...]:
+    out = []
+    for ev in ((node.get("events") or {}).get("splits") or {}).values():
+        try:
+            num, den = float(ev["numerator"]), float(ev["denominator"])
+            if num > 0 and den > 0:
+                out.append((_local_date(ev["date"], meta), num, den))
+        except (KeyError, TypeError, ValueError):  # a malformed event is skipped, not fatal
+            continue
+    return tuple(sorted(out))
+
+
+def _chart(symbol: str, params: dict, session: requests.Session | None) -> dict:
     http = session or requests
     resp = http.get(
-        CHART_URL.format(symbol=symbol),
-        params={"range": "5d", "interval": "1d"},
-        headers=_HEADERS,
-        timeout=_TIMEOUT,
+        CHART_URL.format(symbol=symbol), params=params, headers=_HEADERS, timeout=_TIMEOUT,
     )
     resp.raise_for_status()
     body = resp.json()
@@ -90,7 +113,13 @@ def _fetch(symbol: str, session: requests.Session | None = None) -> Quote:
     if not result:
         err = ((body.get("chart") or {}).get("error") or {}).get("description", "no result")
         raise QuoteUnavailable(f"{symbol}: {err}")
-    node = result[0]
+    return result[0]
+
+
+def _fetch(symbol: str, session: requests.Session | None = None) -> Quote:
+    # A month, not five days, so a split stays visible through a week the box was off. The
+    # price and the previous close read the series' TAIL, which the range does not change.
+    node = _chart(symbol, {"range": "1mo", "interval": "1d", "events": "split"}, session)
     meta = node.get("meta") or {}
     price = meta.get("regularMarketPrice")
     if price is None:
@@ -102,12 +131,37 @@ def _fetch(symbol: str, session: requests.Session | None = None) -> Quote:
         price=price,
         prev_close=_previous_close(meta, quote_block.get("close") or [], price),
         currency=str(meta.get("currency") or "").upper(),
+        splits=_splits(node, meta),
     )
 
 
 def usd_inr(session: requests.Session | None = None) -> Quote:
     """The USD/INR rate, with its own previous close so a day change can be computed in INR."""
     return _fetch(FX_SYMBOL, session)
+
+
+def usd_inr_on(day: date, session: requests.Session | None = None) -> tuple[float, date]:
+    """``(rate, rate_date)`` — the USD/INR close ON ``day``, or the last one before it.
+
+    For entering a US trade in its own currency: the ledger is INR, and the honest rupee
+    cost of a dollar purchase is at the rate of the day it was paid — today's rate would
+    move the cost basis by every rupee the currency has moved since. A weekend or US holiday
+    falls back to the prior close, and ``rate_date`` says which close was used."""
+    start = datetime(day.year, day.month, day.day, tzinfo=UTC) - timedelta(days=10)
+    end = datetime(day.year, day.month, day.day, tzinfo=UTC) + timedelta(days=2)
+    node = _chart(FX_SYMBOL, {
+        "period1": int(start.timestamp()), "period2": int(end.timestamp()), "interval": "1d",
+    }, session)
+    meta = node.get("meta") or {}
+    closes = (((node.get("indicators") or {}).get("quote") or [{}])[0]).get("close") or []
+    best: tuple[date, float] | None = None
+    for ts, c in zip(node.get("timestamp") or [], closes, strict=False):
+        d = _local_date(ts, meta)
+        if c is not None and d <= day and (best is None or d >= best[0]):
+            best = (d, float(c))
+    if best is None:
+        raise QuoteUnavailable(f"no USD/INR close on or before {day.isoformat()}")
+    return best[1], best[0]
 
 
 def quotes(

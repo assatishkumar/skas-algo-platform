@@ -823,3 +823,106 @@ def test_the_nav_files_are_parsed_once_and_a_new_file_invalidates_it(tmp_path, m
     latest, _ = amfi.load(fetch=False)
     assert len(calls) > parsed                        # a new day's file re-parses
     assert latest["INF879O01027"].as_of == date(2026, 9, 1)
+
+
+# ------------------------------------------------------------------ splits + trade-date FX
+
+
+def _chart_session(payload):
+    import requests
+
+    class _Resp:
+        status_code = 200
+        def raise_for_status(self): return None
+        def json(self): return payload
+
+    class _Sess(requests.Session):
+        def get(self, *a, **k): return _Resp()
+
+    return _Sess()
+
+
+def test_a_split_event_is_read_on_the_exchanges_own_calendar_date():
+    """SOXX 3:1 went ex on 2026-11-05: Yahoo stamps it 13:30 UTC, NYSE is UTC−5."""
+    from skas_algo.data import global_quotes as gq
+
+    q = gq.quotes(["SOXX"], session=_chart_session({"chart": {"result": [{
+        "meta": {"regularMarketPrice": 123.4, "currency": "USD", "gmtoffset": -18000},
+        "indicators": {"quote": [{"close": [157.17, 123.4]}]},
+        "events": {"splits": {"1793889000": {
+            "date": 1793889000, "numerator": 3.0, "denominator": 1.0, "splitRatio": "3:1"}}},
+    }]}}))[0]["SOXX"]
+    assert q.splits == ((date(2026, 11, 5), 3.0, 1.0),)
+
+
+def test_usd_inr_on_a_trade_date_is_that_days_close_or_the_last_before_it():
+    """The ledger is INR, so a dollar buy is costed at the rate of the day it was paid. Yahoo
+    stamps a USDINR=X candle at 23:00 UTC the evening before (London midnight in BST); read
+    as plain UTC every rate would land on the wrong day."""
+    from skas_algo.data import global_quotes as gq
+
+    def ts(y, m, d):  # 23:00 UTC the evening before = 00:00 London (BST, +3600)
+        from datetime import UTC, datetime, timedelta
+        return int((datetime(y, m, d, tzinfo=UTC) - timedelta(hours=1)).timestamp())
+
+    payload = {"chart": {"result": [{
+        "meta": {"currency": "INR", "gmtoffset": 3600},
+        "timestamp": [ts(2026, 10, 29), ts(2026, 10, 30), ts(2026, 11, 2)],
+        "indicators": {"quote": [{"close": [94.8, 95.15, None]}]},
+    }]}}
+    assert gq.usd_inr_on(date(2026, 10, 30), _chart_session(payload)) == (
+        pytest.approx(95.15), date(2026, 10, 30))
+    # A Sunday falls back to Friday's close, and says so.
+    assert gq.usd_inr_on(date(2026, 11, 1), _chart_session(payload))[1] == date(2026, 10, 30)
+    with pytest.raises(gq.QuoteUnavailable):
+        gq.usd_inr_on(date(2026, 10, 1), _chart_session(payload))
+
+
+@pytest.fixture
+def split_feed(monkeypatch):
+    from skas_algo.data import global_quotes as gq
+
+    fx = gq.Quote(symbol="USDINR=X", price=90.0, prev_close=90.0, currency="INR")
+    q = gq.Quote("SOXX", price=123.4, prev_close=125.0, currency="USD",
+                 splits=((date(2026, 11, 5), 3.0, 1.0),))
+    monkeypatch.setattr(gq, "usd_inr", lambda *a, **k: fx)
+    monkeypatch.setattr(gq, "quotes", lambda syms, **k: ({s: q for s in syms}, {}))
+
+
+def test_a_split_the_ledger_has_not_recorded_is_raised_until_a_split_row_exists(split_feed):
+    """The quote is split-adjusted the morning of the split, so a ledger still in pre-split
+    units reads a two-thirds loss — SOXX showed +38% as −54% (2026-11-21). The sync names
+    it, and the warning clears itself once a split (bonus) row is in the ledger."""
+    with session_scope() as db:
+        hid = _global_holding(db, "SOXX", "SOXX", 0.0)
+        db.add(PortfolioTransaction(holding_id=hid, on_date="2025-06-01", kind="buy",
+                                    units=12.81, price=21850.0, fees=0.0))
+        db.commit()
+        report = sync_portfolio(db, holding_ids=[hid])
+        assert any("split 3:1 on 2026-11-05" in i["reason"] for i in report.issues)
+
+        # Dated a few days off the ex-date still counts — owners type the day they noticed.
+        db.add(PortfolioTransaction(holding_id=hid, on_date="2026-11-02", kind="bonus",
+                                    units=25.62, price=0.0, fees=0.0, note="3:1 split"))
+        db.commit()
+        report = sync_portfolio(db, holding_ids=[hid])
+        assert not any("split" in i["reason"] for i in report.issues)
+        assert db.get(PortfolioHolding, hid).value == pytest.approx(38.43 * 123.4 * 90.0)
+        for t in db.query(PortfolioTransaction).filter_by(holding_id=hid):
+            db.delete(t)
+        db.delete(db.get(PortfolioHolding, hid))
+        db.commit()
+
+
+def test_a_ledger_that_starts_after_the_split_is_already_post_split(split_feed):
+    with session_scope() as db:
+        hid = _global_holding(db, "SOXX", "SOXX", 0.0)
+        db.add(PortfolioTransaction(holding_id=hid, on_date="2026-11-10", kind="buy",
+                                    units=10.0, price=11000.0, fees=0.0))
+        db.commit()
+        report = sync_portfolio(db, holding_ids=[hid])
+        assert not any("split" in i["reason"] for i in report.issues)
+        for t in db.query(PortfolioTransaction).filter_by(holding_id=hid):
+            db.delete(t)
+        db.delete(db.get(PortfolioHolding, hid))
+        db.commit()

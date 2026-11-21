@@ -8,7 +8,7 @@ import TagPicker from "./TagPicker";
 import { ConfirmAction, inputClass, Modal, Notice, Segments } from "./primitives";
 
 interface ParsePreview {
-  rows: { on_date: string; kind: "buy" | "sell"; units: number; price: number; fees: number }[];
+  rows: TransactionInput[];
   errors: string[];
   summary: {
     rows: number; buys: number; sells: number;
@@ -38,6 +38,17 @@ export default function LedgerModal({
     on_date: new Date().toISOString().slice(0, 10),
     kind: "buy", units: 0, price: 0, fees: 0,
   });
+  // A dollar-quoted holding takes its price in DOLLARS by default: the ledger is INR, so the
+  // form converts at USD/INR on the TRADE date and keeps the dollar figure in the note.
+  // Typing rupees by hand invited the 2026-11-21 near-miss — "474" in a ₹ box for a $474 buy.
+  const foreign = !!holding.native_currency && holding.native_currency !== "INR";
+  const [ccy, setCcy] = useState<"native" | "inr">(foreign ? "native" : "inr");
+  const inNative = foreign && ccy === "native" && entry.kind !== "bonus";
+  const [fx, setFx] = useState<{ rate: number; as_of: string } | null>(null);
+  const [fxError, setFxError] = useState("");
+  // A split is entered as its RATIO (3 for 1 → 3 : 1); the extra units are derived from the
+  // units held on that date, so nobody does the multiplication by hand.
+  const [ratio, setRatio] = useState<{ num: number; den: number }>({ num: 2, den: 1 });
   const [paste, setPaste] = useState("");
   const [replace, setReplace] = useState(true);
   const [preview, setPreview] = useState<ParsePreview | null>(null);
@@ -52,6 +63,52 @@ export default function LedgerModal({
     }
   };
   useEffect(() => { void reload(); /* eslint-disable-next-line */ }, [holding.id]);
+
+  useEffect(() => {
+    if (!inNative || !entry.on_date) { setFx(null); setFxError(""); return; }
+    let live = true;
+    setFx(null);
+    setFxError("");
+    const t = window.setTimeout(async () => {
+      try {
+        const r = await papi.usdInrOn(entry.on_date);
+        if (live) setFx(r);
+      } catch (e) {
+        if (live) setFxError(e instanceof Error ? e.message : String(e));
+      }
+    }, 250);
+    return () => { live = false; window.clearTimeout(t); };
+  }, [inNative, entry.on_date]);
+
+  // Units held at the END of the split date — the rows the ledger would apply before it.
+  const heldOn = (day: string) =>
+    rows.reduce((u, r) => (r.on_date > day ? u
+      : r.kind === "sell" ? u - r.units : u + r.units), 0);
+  const splitHeld = heldOn(entry.on_date);
+  const splitAdds = ratio.num > ratio.den && ratio.den > 0
+    ? +(splitHeld * (ratio.num / ratio.den - 1)).toFixed(6) : 0;
+  const sym = holding.native_currency === "USD" ? "$" : `${holding.native_currency ?? ""} `;
+
+  const submitEntry = async () => {
+    let body: TransactionInput = entry;
+    if (entry.kind === "bonus") {
+      body = {
+        on_date: entry.on_date, kind: "bonus", units: splitAdds, price: 0, fees: 0,
+        note: `${ratio.num}:${ratio.den} split — ${splitHeld} held → ${+(splitHeld + splitAdds).toFixed(6)}`,
+      };
+    } else if (inNative && fx) {
+      body = {
+        ...entry,
+        price: +(entry.price * fx.rate).toFixed(4),
+        fees: +(entry.fees * fx.rate).toFixed(2),
+        note: `${sym}${entry.price}${entry.fees ? ` + ${sym}${entry.fees} fees` : ""}`
+          + ` @ USD/INR ${fx.rate.toFixed(4)} (${fx.as_of})`,
+      };
+    }
+    await papi.addTransaction(holding.id, body);
+    setEntry((s) => ({ ...s, units: 0, price: 0, fees: 0 }));
+    setTab("list");
+  };
 
   // Parsed on the SERVER — the same code that performs the import, so the preview shown
   // here cannot disagree with what actually lands. Debounced because it is a network call.
@@ -175,10 +232,12 @@ export default function LedgerModal({
                   <span className="font-semibold text-[var(--strong)]">{dayLabel(t.on_date)}</span>
                   <span
                     className="text-[11px] font-extrabold"
-                    style={{ color: t.kind === "buy" ? "var(--accent-deep)" : "var(--note)" }}
+                    style={{ color: t.kind === "sell" ? "var(--note)" : "var(--accent-deep)" }}
                     title={t.note ?? undefined}
                   >
-                    {t.note?.startsWith("opening balance") ? "OPENING" : t.kind.toUpperCase()}
+                    {t.note?.startsWith("opening balance") ? "OPENING"
+                      : t.kind === "bonus" ? (t.note?.includes("split") ? "SPLIT" : "BONUS")
+                      : t.kind.toUpperCase()}
                   </span>
                   <span className="text-right font-semibold tabular-nums text-[var(--muted)]">
                     {t.units.toLocaleString("en-IN")}
@@ -205,51 +264,131 @@ export default function LedgerModal({
 
       {tab === "add" && (
         <div className="grid grid-cols-5 gap-2.5">
-          {([
-            ["DATE", "date", "on_date"],
-            ["UNITS", "number", "units"],
-            ["PRICE (₹)", "number", "price"],
-            ["FEES (₹)", "number", "fees"],
-          ] as const).map(([label, type, key]) => (
-            <label key={key} className={key === "on_date" ? "col-span-2" : ""}>
-              <span className="text-[11px] font-extrabold tracking-[.04em] text-[var(--faint)]">
-                {label}
-              </span>
-              <input
-                type={type}
-                className={`${inputClass} mt-[5px]`}
-                value={String(entry[key] ?? "")}
-                onChange={(e) =>
-                  setEntry((s) => ({
-                    ...s,
-                    [key]: type === "number" ? Number(e.target.value) : e.target.value,
-                  }))}
-              />
-            </label>
-          ))}
-          <label>
-            <span className="text-[11px] font-extrabold tracking-[.04em] text-[var(--faint)]">
-              TYPE
-            </span>
-            <div className="mt-[5px]">
-              <Segments
-                size="sm" value={entry.kind}
-                onChange={(v) => setEntry((s) => ({ ...s, kind: v }))}
-                options={[{ value: "buy", label: "Buy" }, { value: "sell", label: "Sell" }]}
-              />
-            </div>
+          <label className="col-span-2">
+            <span className="text-[11px] font-extrabold tracking-[.04em] text-[var(--faint)]">DATE</span>
+            <input
+              type="date" className={`${inputClass} mt-[5px]`} value={entry.on_date}
+              onChange={(e) => setEntry((s) => ({ ...s, on_date: e.target.value }))}
+            />
           </label>
+
+          {entry.kind === "bonus" ? (
+            <label className="col-span-2">
+              <span className="text-[11px] font-extrabold tracking-[.04em] text-[var(--faint)]">
+                RATIO (NEW : OLD)
+              </span>
+              <div className="mt-[5px] flex items-center gap-2">
+                <input
+                  type="number" min={1} className={inputClass} value={ratio.num}
+                  onChange={(e) => setRatio((r) => ({ ...r, num: Number(e.target.value) }))}
+                />
+                <span className="font-extrabold text-[var(--muted)]">:</span>
+                <input
+                  type="number" min={1} className={inputClass} value={ratio.den}
+                  onChange={(e) => setRatio((r) => ({ ...r, den: Number(e.target.value) }))}
+                />
+              </div>
+            </label>
+          ) : (
+            ([
+              ["UNITS", "units"],
+              [`PRICE (${inNative ? sym.trim() : "₹"})`, "price"],
+              [`FEES (${inNative ? sym.trim() : "₹"})`, "fees"],
+            ] as const).map(([label, key]) => (
+              <label key={key}>
+                <span className="text-[11px] font-extrabold tracking-[.04em] text-[var(--faint)]">
+                  {label}
+                </span>
+                <input
+                  type="number"
+                  className={`${inputClass} mt-[5px]`}
+                  value={String(entry[key] ?? "")}
+                  onChange={(e) => setEntry((s) => ({ ...s, [key]: Number(e.target.value) }))}
+                />
+              </label>
+            ))
+          )}
+
+          <div className="col-span-5 flex flex-wrap items-end gap-5">
+            <label>
+              <span className="text-[11px] font-extrabold tracking-[.04em] text-[var(--faint)]">
+                TYPE
+              </span>
+              <div className="mt-[5px]">
+                <Segments
+                  size="sm" value={entry.kind}
+                  onChange={(v) => setEntry((s) => ({ ...s, kind: v }))}
+                  options={[
+                    { value: "buy", label: "Buy" },
+                    { value: "sell", label: "Sell" },
+                    { value: "bonus", label: "Split / bonus" },
+                  ]}
+                />
+              </div>
+            </label>
+            {foreign && entry.kind !== "bonus" && (
+              <label>
+                <span className="text-[11px] font-extrabold tracking-[.04em] text-[var(--faint)]">
+                  PRICE IN
+                </span>
+                <div className="mt-[5px]">
+                  <Segments
+                    size="sm" value={ccy} onChange={setCcy}
+                    options={[
+                      { value: "native", label: sym.trim() || String(holding.native_currency) },
+                      { value: "inr", label: "₹" },
+                    ]}
+                  />
+                </div>
+              </label>
+            )}
+          </div>
+
+          {entry.kind === "bonus" ? (
+            <div className="col-span-5 text-[12.5px] font-semibold text-[var(--muted)]">
+              {ratio.num > ratio.den && ratio.den > 0 ? (
+                <>
+                  Held <b>{splitHeld.toLocaleString("en-IN")}</b> on {dayLabel(entry.on_date)} →
+                  adds <b>{splitAdds.toLocaleString("en-IN")}</b> units at no cost, for{" "}
+                  <b>{(+(splitHeld + splitAdds).toFixed(6)).toLocaleString("en-IN")}</b>. Total
+                  cost is unchanged; each open lot's cost per unit is divided by{" "}
+                  {+(ratio.num / ratio.den).toFixed(4)}.
+                </>
+              ) : (
+                <span className="text-[var(--danger)]">
+                  The new count must be larger than the old — a reverse split can't be recorded here.
+                </span>
+              )}
+            </div>
+          ) : inNative && (
+            <div className="col-span-5 text-[12.5px] font-semibold text-[var(--muted)]">
+              {fxError ? (
+                <span className="text-[var(--danger)]">{fxError} — switch to ₹ to enter it by hand.</span>
+              ) : !fx ? (
+                "Reading USD/INR for that date…"
+              ) : (
+                <>
+                  {sym}{entry.price || 0} × USD/INR {fx.rate.toFixed(2)}
+                  {fx.as_of !== entry.on_date && <> (close of {dayLabel(fx.as_of)})</>} ={" "}
+                  <b>{exactMoney(entry.price * fx.rate)}</b> a unit
+                  {entry.fees ? <> · fees {exactMoney(entry.fees * fx.rate)}</> : null}. The
+                  ledger records rupees; the {sym.trim()} price is kept in the row's note.
+                </>
+              )}
+            </div>
+          )}
+
           <div className="col-span-5 flex justify-end">
             <button
-              disabled={busy || !(entry.units > 0)}
-              onClick={() => act(async () => {
-                await papi.addTransaction(holding.id, entry);
-                setEntry((s) => ({ ...s, units: 0, price: 0, fees: 0 }));
-                setTab("list");
-              })}
+              disabled={
+                busy
+                || (entry.kind === "bonus" ? !(splitAdds > 0) : !(entry.units > 0))
+                || (inNative && !fx)
+              }
+              onClick={() => act(submitEntry)}
               className="rounded-[11px] bg-[var(--accent)] px-[22px] py-2.5 text-[13px] font-extrabold text-white disabled:opacity-50"
             >
-              Add transaction
+              {entry.kind === "bonus" ? "Add split" : "Add transaction"}
             </button>
           </div>
         </div>
