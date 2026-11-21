@@ -926,3 +926,94 @@ def test_a_ledger_that_starts_after_the_split_is_already_post_split(split_feed):
             db.delete(t)
         db.delete(db.get(PortfolioHolding, hid))
         db.commit()
+
+
+# ------------------------------------------------------------------ slice cost
+
+
+def test_a_live_slice_carries_its_own_cost_so_the_average_stays_true(fake_broker):
+    """value_investing adds Dhan units daily; the sync moved the UNITS but never the cost, so
+    WIPRO read ₹20.86 average against a ₹185 price (2026-11-21). Each broker slice is now
+    costed at that broker's average and the typed cost stays with the static slice."""
+    holder, account_id = fake_broker
+    with session_scope() as db:
+        row = PortfolioHolding(
+            name="ITC", asset_class="stk", sync="auto", sync_source="broker",
+            sync_ref="ITC", broker_account_id=account_id, units=22.0, units_locked=True,
+            invested=2_000.0,                                   # the 10 static units' cost
+            broker_units={"static": 10.0, f"account:{account_id}": 12.0},
+        )
+        db.add(row)
+        db.commit()
+
+        holder["adapter"] = _FakeAdapter(units=20.0)           # bought 8 more at the broker
+        sync_portfolio(db, holding_ids=[row.id])
+        row = db.get(PortfolioHolding, row.id)
+        assert row.broker_cost == {"static": 2_000.0, f"account:{account_id}": 20 * 400.0}
+        assert row.invested == pytest.approx(2_000.0 + 8_000.0)
+        assert row.units == pytest.approx(30.0)
+
+        # A second pass re-costs the broker slice and never re-seeds the static one.
+        holder["adapter"] = _FakeAdapter(units=25.0)
+        sync_portfolio(db, holding_ids=[row.id])
+        row = db.get(PortfolioHolding, row.id)
+        assert row.invested == pytest.approx(2_000.0 + 25 * 400.0)
+        db.delete(row)
+        db.commit()
+
+
+def test_a_holding_made_only_of_broker_slices_takes_the_brokers_cost(fake_broker):
+    """IDFCFIRSTB was added from Dhan with 8 units at ₹667.52 and grew to 218 — that typed
+    figure was the broker's cost on the day it was added, not a static slice to keep."""
+    holder, account_id = fake_broker
+    with session_scope() as db:
+        row = PortfolioHolding(
+            name="ITC", asset_class="stk", sync="auto", sync_source="broker",
+            sync_ref="ITC", broker_account_id=account_id, units=8.0, units_locked=True,
+            invested=667.52, broker_units={f"account:{account_id}": 8.0},
+        )
+        db.add(row)
+        db.commit()
+        holder["adapter"] = _FakeAdapter(units=218.0)
+        sync_portfolio(db, holding_ids=[row.id])
+        row = db.get(PortfolioHolding, row.id)
+        assert row.invested == pytest.approx(218 * 400.0)
+        db.delete(row)
+        db.commit()
+
+
+def test_a_typed_cost_on_a_sliced_holding_lands_on_the_static_slice(fake_broker):
+    """The sync rebuilds invested from the slices, so an edit must move the static slice's
+    cost — written straight to invested it would vanish at the next pass."""
+    from fastapi.testclient import TestClient
+
+    from skas_algo.api.app import create_app
+
+    holder, account_id = fake_broker
+    with session_scope() as db:
+        row = PortfolioHolding(
+            name="ITC", asset_class="stk", sync="auto", sync_source="broker",
+            sync_ref="ITC", broker_account_id=account_id, units=22.0, units_locked=True,
+            invested=2_000.0, broker_units={"static": 10.0, f"account:{account_id}": 12.0},
+        )
+        db.add(row)
+        db.commit()
+        sync_portfolio(db, holding_ids=[row.id])               # static 2,000 + 12 × 400
+        hid = row.id
+
+    client = TestClient(create_app())
+    body = client.get("/api/v1/portfolio").json()
+    h = next(x for x in body["holdings"] if x["id"] == hid)
+    payload = {k: h[k] for k in (
+        "name", "asset_class", "sync", "sync_source", "sync_ref", "broker_account_id",
+        "units", "units_locked", "broker_units") if k in h}
+    payload["invested"] = 3_000.0 + 12 * 400.0                 # the static units cost 3,000
+    assert client.put(f"/api/v1/portfolio/holdings/{hid}", json=payload).status_code == 200
+
+    with session_scope() as db:
+        sync_portfolio(db, holding_ids=[hid])
+        row = db.get(PortfolioHolding, hid)
+        assert row.broker_cost["static"] == pytest.approx(3_000.0)
+        assert row.invested == pytest.approx(3_000.0 + 12 * 400.0)
+        db.delete(row)
+        db.commit()

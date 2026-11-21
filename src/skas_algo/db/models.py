@@ -311,6 +311,11 @@ class PortfolioHolding(Base, TimestampMixin):
     # what lets value_investing's daily Dhan buys flow in without the Zerodha and IIFL
     # positions, which no sync can see, being wiped to zero. Empty = the whole row is static.
     broker_units: Mapped[dict] = mapped_column(JSON, default=dict)
+    # The COST of each slice in ``broker_units``, same keys: a broker slice is re-costed every
+    # sync at that broker's average price, the "static" slice keeps what was typed, and
+    # ``invested`` is their sum. Without it units grew daily while cost stood still — the
+    # value_investing names read averages of ₹3–₹96 against ₹80–₹340 prices (2026-11-21).
+    broker_cost: Mapped[dict] = mapped_column(JSON, default=dict)
     excluded_from_buckets: Mapped[bool] = mapped_column(Boolean, default=False)
     # Expected annual distribution as a % of current value. TYPED, never guessed: no free feed
     # publishes Indian dividend yields, and an invented one would put fictitious income on a

@@ -325,6 +325,21 @@ def _sync_broker(
         updated[key] = float(held["units"]) if held else 0.0
         h.broker_units = updated
         h.units = round(sum(float(v) for v in updated.values()), 4)
+
+        # Cost moves with the slice it belongs to. The first costed pass seeds the STATIC
+        # slice with the typed cost (a holding that is all broker slices has none — its typed
+        # figure was only the broker's cost on the day it was added, and is replaced). A held
+        # slice with no average leaves its previous cost alone rather than reading it as free.
+        costs = dict(h.broker_cost or {})
+        if not costs:
+            costs["static"] = float(h.invested or 0.0) if "static" in updated else 0.0
+        avg = float(held.get("avg_price") or 0.0) if held else 0.0
+        if not held:
+            costs[key] = 0.0
+        elif avg > 0:
+            costs[key] = round(updated[key] * avg, 2)
+        h.broker_cost = costs
+        h.invested = round(sum(float(v) for v in costs.values()), 2)
         if h not in prices_here:
             report.updated.append(h.name)
 

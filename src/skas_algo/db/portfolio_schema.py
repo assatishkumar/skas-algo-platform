@@ -30,6 +30,7 @@ _COLUMNS: dict[str, dict[str, str]] = {
         "native_invested": "FLOAT",
         "units_locked": "BOOLEAN DEFAULT 0",
         "broker_units": "JSON DEFAULT '{}'",
+        "broker_cost": "JSON DEFAULT '{}'",
         "dividend_yield_pct": "FLOAT",
         "interest_rate_pct": "FLOAT",
         "maturity_date": "VARCHAR(10)",

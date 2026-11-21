@@ -254,6 +254,14 @@ def update_holding(
     row = db.get(PortfolioHolding, holding_id)
     if row is None:
         raise HTTPException(404, "holding not found")
+    # On a sliced holding the sync rebuilds ``invested`` from the slice costs, so a typed
+    # cost would be overwritten at the next pass. A change to it is a change to what the
+    # STATIC slice cost — the broker slices are the broker's, and are re-costed anyway.
+    if row.broker_cost and body.invested is not None and body.invested != row.invested:
+        costs = dict(row.broker_cost)
+        others = sum(float(v) for k, v in costs.items() if k != "static")
+        costs["static"] = round(max(body.invested - others, 0.0), 2)
+        row.broker_cost = costs
     for key, value in body.model_dump().items():
         setattr(row, key, value)
     db.commit()
